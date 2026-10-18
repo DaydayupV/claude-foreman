@@ -195,7 +195,9 @@ function runCodex({ agent, args, cwd, prompt, runDir, timeoutMin, stallMin, sess
       // 续接时会话记录里还有前几轮的调用，只取这一轮开始之后的（留 2 秒余量）。
       const file = (out.images.length || /image_gen|referenced_image_paths/.test(prompt)) && sessionFile(out.sessionId || sessionId, startedAt);
       out.imageCalls = file ? readImageCalls(file, startedAt - 2000) : [];
-      if (/referenced_image_paths/.test(prompt) && missingReferences(out.imageCalls)) out.warnings.push(M.imageRefsMissing);
+      // 只有任务说明里真的给了参考图（参数名后面跟着非空的路径数组，中间可以换行）才算要求传参考图；
+      // "不传 referenced_image_paths"这类只提到参数名的写法、空数组都不算，否则全新出图也会被误报。
+      if (/referenced_image_paths["'`]?\s*(?::|=|设为|改为|传入|为|set to|to)?\s*\[\s*["'`]/i.test(prompt) && missingReferences(out.imageCalls)) out.warnings.push(M.imageRefsMissing);
       // 沙箱坏了时 Codex 照样正常结束，只在报告里说命令起不来；提示 Claude 这不是任务本身的问题。
       if (out.sandboxError) out.notes.push(M.codexSandboxFailed(out.sandboxError));
       events.end();

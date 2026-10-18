@@ -1,6 +1,6 @@
 // assets 子命令：出图之后的确定性处理，不调用任何模型。
 // template 画编号格子模板；cut 去背景、切部件、按格子命名、出 manifest 和对照拼图（--vector 再转 SVG）；
-// check 重新读出 cut 的判定；diff 比较改图前后每一格的变化；setup 把矢量化要用的原生包装到用户目录。
+// check 重新读出 cut 的判定；diff 比较改图前后每一格的变化；align 把取出的部件对回参考图；setup 把矢量化要用的原生包装到用户目录。
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -309,6 +309,53 @@ function cmdDiff(o) {
   print({ size: [w, h], overall: measure([0, 0, w, h]), slots: slots.map((s) => ({ slot: s.slot, name: s.name, ...measure(s.box) })) });
 }
 
+// 从参考图里取出的部件（透明底，常被放大、挪了位置）对回参考图：输出缩放和偏移、整体和各区域的色差、
+// 和参考图同一画布的 aligned.png，以及"参考图 / 叠上部件 / 差异"三联对照图 check.png。
+function cmdAlign(o) {
+  const refFile = path.resolve(need(o, 'ref')), imgFile = path.resolve(need(o, 'image')), out = path.resolve(need(o, 'out'));
+  const ref = readImage(refFile), piece = readImage(imgFile);
+  const regions = o.regions ? String(o.regions).split(';').map((s) => s.trim()).filter(Boolean).map((s) => {
+    const v = s.split(',').map(Number);
+    if (v.length !== 4 || !v.every(Number.isFinite) || v[0] >= v[2] || v[1] >= v[3]) die(M.assetsBadRegion(s));
+    return v;
+  }) : [];
+  const minScale = num(o, 'min-scale', 0.25), maxScale = num(o, 'max-scale', 4);
+  if (minScale > maxScale) die(M.assetsBadScaleRange(minScale, maxScale));
+  const r = P.alignPiece(ref, piece, { minScale, maxScale });
+  if (!r) die(M.assetsAlignEmpty(imgFile));
+  const { width: w, height: h } = ref, s = +r.scale.toFixed(4), [tx, ty] = r.offset.map((v) => +v.toFixed(1));
+  const aligned = P.placeScaled(piece.data, piece.width, piece.height, w, h, r.scale, r.offset[0], r.offset[1]);
+  writePng(path.join(out, 'aligned.png'), w, h, aligned);
+  // 对照图：三格，每格缩到宽 640 以内
+  const over = Buffer.from(ref.data);
+  P.composite(over, w, h, aligned, w, h, 0, 0);
+  const heat = Buffer.alloc(w * h * 4);
+  for (let p = 0; p < w * h; p++) {
+    heat[p * 4 + 3] = 255;
+    const a = aligned[p * 4 + 3];
+    if (a < 128) { heat[p * 4] = heat[p * 4 + 1] = heat[p * 4 + 2] = 32; continue; }
+    const d = P.dE(P.lab(aligned[p * 4], aligned[p * 4 + 1], aligned[p * 4 + 2]), P.lab(ref.data[p * 4], ref.data[p * 4 + 1], ref.data[p * 4 + 2]));
+    // 灰：对得上（色差 < 10）；橙：有出入（10–25）；红：明显不一样（> 25）
+    const c = d < 10 ? [120, 120, 120] : d < 25 ? [245, 150, 40] : [235, 40, 40];
+    heat[p * 4] = c[0]; heat[p * 4 + 1] = c[1]; heat[p * 4 + 2] = c[2];
+  }
+  const tiles = [ref.data, over, heat].map((d) => P.downscale(d, w, h, 640, 640));
+  const W = tiles.reduce((a, t) => a + t.width + 8, 8), H = tiles[0].height + 16, sheet = Buffer.alloc(W * H * 4, 255);
+  let x = 8;
+  for (const t of tiles) { P.composite(sheet, W, H, t.data, t.width, t.height, x, 8); x += t.width + 8; }
+  writePng(path.join(out, 'check.png'), W, H, sheet);
+  const result = {
+    ref: { file: refFile, size: [w, h] }, image: { file: imgFile, size: [piece.width, piece.height] },
+    scale: s, offset: [tx, ty], placement: M.assetsAlignPlacement(s, tx, ty),
+    mean_delta: +r.mean_delta.toFixed(2), matched: +r.matched.toFixed(3), ambiguous: r.ambiguous,
+    ...(r.ambiguous ? { note: M.assetsAlignAmbiguous } : {}),
+    regions: regions.map((box) => ({ box, ...r.region(box) })),
+    files: { aligned: path.join(out, 'aligned.png'), check: path.join(out, 'check.png') },
+  };
+  fs.writeFileSync(path.join(out, 'align.json'), JSON.stringify(result, null, 2) + '\n');
+  print(result);
+}
+
 // 用 node 自带的 npm 装到用户目录；Windows 上 npm.cmd 不能直接 spawn，优先找 node 旁边的 npm-cli.js。
 function cmdSetup() {
   fs.mkdirSync(TOOLING_DIR, { recursive: true });
@@ -325,7 +372,7 @@ function cmdSetup() {
 }
 
 export async function cmdAssets(o) {
-  const actions = { template: cmdTemplate, cut: cmdCut, check: cmdCheck, diff: cmdDiff, setup: cmdSetup };
+  const actions = { template: cmdTemplate, cut: cmdCut, check: cmdCheck, diff: cmdDiff, align: cmdAlign, setup: cmdSetup };
   if (!actions[o.action]) die(M.assetsUsage);
   await actions[o.action](o);
 }

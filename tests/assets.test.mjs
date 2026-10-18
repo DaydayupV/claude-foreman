@@ -126,6 +126,14 @@ test('结果的 image_calls 列出每次出图的参数，要求传参考图却�
   const ok = output(await h.bridge(taskArgs(h, 'run', ['--no-snapshot']), { env: passed.env, input: brief }));
   assert.deepEqual(ok.image_calls.map((c) => [c.referenced_image_paths, c.saved_path]), [[['O:/ref.png', 'O:/tpl.png'], 'a.png'], ['unknown', 'b.png']]);
   assert.ok(!ok.warnings.includes(M.imageRefsMissing));
+  // 全新出图的任务说明里写"不传 referenced_image_paths"，不该提示没传参考图
+  const fresh = output(await h.bridge(taskArgs(h, 'run', ['--no-snapshot']), { env: missing.env, input: '全新出图：只调用一次 image_gen，不传 referenced_image_paths，也不要用 num_last_images_to_include' }));
+  assert.ok(!fresh.warnings.includes(M.imageRefsMissing));
+  // 参数值换行写也算要求了参考图；空数组不算
+  const wrapped = output(await h.bridge(taskArgs(h, 'run', ['--no-snapshot']), { env: missing.env, input: '调用时传 referenced_image_paths:\n  ["O:/ref.png"]' }));
+  assert.ok(wrapped.warnings.includes(M.imageRefsMissing));
+  const empty = output(await h.bridge(taskArgs(h, 'run', ['--no-snapshot']), { env: missing.env, input: 'referenced_image_paths: []，全新出图' }));
+  assert.ok(!empty.warnings.includes(M.imageRefsMissing));
 });
 
 test('名单里的重名和只差大小写的名字各自得到不同文件，核对按同一份名单', async (t) => {
@@ -201,4 +209,47 @@ test('格子文件合并过、编号不连续时仍按格子号命名', async (t
   assert.ok(r.ok);
   const byList = output(await h.bridge(['assets', 'cut', '--image', image, '--out', path.join(h.cwd, 'cut2'), '--slots', merged, '--names', 'long,short']));
   assert.deepEqual(byList.parts.map((p) => [p.slot, p.name]), [[1, 'long'], [3, 'short']]);
+});
+
+test('assets align 找回取出部件的缩放和偏移，输出同画布的对齐图、对照图和区域色差', async (t) => {
+  const h = sandbox(t);
+  // 参考图：白底上几块不同颜色的方块；部件：参考图 (100,50)–(200,150) 这一块放大 1.5 倍、挪到 (30,40)，其余透明
+  const blocks = [[60, 30, 140, 90, ORANGE], [120, 70, 190, 140, TEAL], [150, 40, 180, 60, DARK], [105, 100, 135, 145, [200, 60, 60]], [20, 120, 80, 180, [90, 160, 70]]];
+  const ref = canvas(300, 200, [255, 255, 255], 3);
+  for (const [x0, y0, x1, y1, c] of blocks) ref.rect(x0, y0, x1, y1, c);
+  const f = 1.5, map = (v, o, p) => Math.round(p + (v - o) * f);
+  const piece = canvas(400, 300, [0, 0, 0, 0]).rect(30, 40, 30 + 150, 40 + 150, [255, 255, 255, 255]);
+  for (const [x0, y0, x1, y1, c] of blocks) {
+    const X0 = Math.max(x0, 100), Y0 = Math.max(y0, 50), X1 = Math.min(x1, 200), Y1 = Math.min(y1, 150);
+    if (X0 < X1 && Y0 < Y1) piece.rect(map(X0, 100, 30), map(Y0, 50, 40), map(X1, 100, 30), map(Y1, 50, 40), [...c, 255]);
+  }
+  const out = path.join(h.cwd, 'aligned');
+  const r = output(await h.bridge(['assets', 'align', '--ref', h.write('ref.png', ref.png()), '--image', h.write('piece.png', piece.png()), '--out', out, '--regions', '120,70,190,140;0,0,40,40']));
+  assert.ok(Math.abs(r.scale - 1 / f) < 0.02, `scale ${r.scale}`);
+  assert.ok(Math.abs(r.offset[0] - (100 - 30 / f)) < 2 && Math.abs(r.offset[1] - (50 - 40 / f)) < 2, `offset ${r.offset}`);
+  assert.ok(r.mean_delta < 5 && r.matched > 0.9, `${r.mean_delta} ${r.matched}`);
+  assert.equal(r.regions.length, 2);
+  assert.ok(r.regions[0].pixels > 0 && r.regions[0].mean_delta < 5);
+  assert.equal(r.regions[1].pixels, 0);
+  for (const f2 of ['aligned.png', 'check.png']) assert.ok(isPng(path.join(out, f2)), f2);
+  assert.deepEqual(json(path.join(out, 'align.json')).offset, r.offset);
+  failed(await h.bridge(['assets', 'align', '--ref', path.join(h.cwd, 'ref.png'), '--image', path.join(h.cwd, 'piece.png'), '--out', out, '--regions', '5,5,1,1']), M.assetsBadRegion('5,5,1,1'));
+});
+
+test('assets align 不把缩小的部件塞进同色区域，细线部件也能对齐，缩放上下限是硬约束', async (t) => {
+  const h = sandbox(t);
+  // 白底上一块红色方块；部件就是这块方块本身（同一画布，其余透明），正确答案是缩放 1、偏移 0
+  const ref = h.write('ref.png', canvas(300, 200, [255, 255, 255], 3).rect(80, 40, 220, 160, [220, 40, 40]).png());
+  const block = h.write('block.png', canvas(300, 200, [0, 0, 0, 0]).rect(80, 40, 220, 160, [220, 40, 40, 255]).png());
+  const a = output(await h.bridge(['assets', 'align', '--ref', ref, '--image', block, '--out', path.join(h.cwd, 'a')]));
+  assert.ok(Math.abs(a.scale - 1) < 0.02 && Math.abs(a.offset[0]) < 2 && Math.abs(a.offset[1]) < 2, `${a.scale} ${a.offset}`);
+  // 第 0 行的一条细线：参考图和部件一样，必须能对上（不能因为抽样漏掉而报"没有不透明像素"）
+  const lineRef = h.write('line-ref.png', canvas(300, 200, [255, 255, 255], 3).rect(20, 0, 280, 1, [30, 30, 30]).rect(0, 120, 300, 200, [90, 160, 70]).png());
+  const line = h.write('line.png', canvas(300, 200, [0, 0, 0, 0]).rect(20, 0, 280, 1, [30, 30, 30, 255]).png());
+  const b = output(await h.bridge(['assets', 'align', '--ref', lineRef, '--image', line, '--out', path.join(h.cwd, 'b')]));
+  assert.ok(Number.isFinite(b.scale) && Number.isFinite(b.mean_delta));
+  // 上下限相等时缩放就是它
+  const c = output(await h.bridge(['assets', 'align', '--ref', ref, '--image', block, '--out', path.join(h.cwd, 'c'), '--min-scale', 0.7, '--max-scale', 0.7]));
+  assert.equal(c.scale, 0.7);
+  failed(await h.bridge(['assets', 'align', '--ref', ref, '--image', block, '--out', path.join(h.cwd, 'd'), '--min-scale', 2, '--max-scale', 1]), M.assetsBadScaleRange(2, 1));
 });

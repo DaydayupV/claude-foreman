@@ -242,3 +242,146 @@ export function dashedRect(buf, w, h, x0, y0, x1, y1, t, dash, gap, rgb) {
     fillRect(buf, w, h, x1 - t, s, x1, Math.min(s + dash, y1), rgb);
   }
 }
+
+// 整张图转成 Lab（每像素 3 个数）。
+export function labImage(data, w, h) {
+  const out = new Float32Array(w * h * 3);
+  for (let p = 0; p < w * h; p++) { const c = lab(data[p * 4], data[p * 4 + 1], data[p * 4 + 2]); out[p * 3] = c[0]; out[p * 3 + 1] = c[1]; out[p * 3 + 2] = c[2]; }
+  return out;
+}
+
+// 把部件图对回参考图：找等比缩放 s 和平移 (tx, ty)。坐标约定和 placeScaled、SVG 的 translate(tx ty) scale(s) 一致：
+// 部件像素 (x, y) 覆盖参考图的 [tx + s·x, tx + s·(x+1)) × [ty + s·y, ty + s·(y+1))，中心在 (tx + s·(x+0.5), ty + s·(y+0.5))。
+// 打分看部件不透明像素和参考图同一处的色差，每点截到 CAP，补画的、被挡住的少数区域不会把结果拉偏。
+// 部件缩小后塞进一片同色区域里也会"吻合"，所以分数差不多时偏向更大的缩放（BIAS：缩放翻倍分数减 0.3），
+// 这样会落在部件边缘开始对不上之前的最大尺寸，也就是原来的大小；真正拿不准时标 ambiguous。
+// 先在缩小的参考图上粗搜，再在原图上细搜；缩放始终限制在 [minScale, maxScale] 里。
+const CAP = 40, BIAS = 0.3;
+const biased = (c) => c.cost - BIAS * Math.log2(c.s);
+export function alignPiece(ref, piece, { minScale = 0.25, maxScale = 4 } = {}) {
+  const { width: pw0, height: ph0, data: pd } = piece;
+  const inside = [];
+  let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
+  for (let p = 0; p < pw0 * ph0; p++) if (pd[p * 4 + 3] >= 200) {
+    inside.push(p);
+    const x = p % pw0, y = (p - x) / pw0;
+    if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+  }
+  if (!inside.length) return null;
+  // 从实际的像素集合里等间隔抽样，细线、贴边的部件也一定有样本
+  const pick = (list, n) => {
+    const step = Math.max(1, list.length / n), out = [];
+    for (let i = 0; i < list.length; i += step) {
+      const p = list[Math.floor(i)], x = p % pw0, y = (p - x) / pw0;
+      out.push([x + 0.5, y + 0.5, ...lab(pd[p * 4], pd[p * 4 + 1], pd[p * 4 + 2])]);
+    }
+    return out;
+  };
+  const coarse = pick(inside, 220), fine = pick(inside, 1500);
+  const pw = x1 - x0 + 1, ph = y1 - y0 + 1;
+
+  const alphaOf = (img) => { const a = new Uint8Array(img.width * img.height); for (let p = 0; p < a.length; p++) a[p] = img.data[p * 4 + 3]; return a; };
+  // 打分：样本落到 refL（宽 rw、高 rh，坐标是原图坐标乘 k）；limit 用于提前退出
+  const score = (refL, refA, rw, rh, k, S, s, tx, ty, limit = Infinity) => {
+    let sum = 0;
+    const stop = limit * S.length;
+    for (const [x, y, L, A, B] of S) {
+      const X = Math.floor((tx + s * x) * k), Y = Math.floor((ty + s * y) * k);
+      let d = CAP;
+      if (X >= 0 && Y >= 0 && X < rw && Y < rh && refA[Y * rw + X] >= 128) {
+        const o = (Y * rw + X) * 3, dl = L - refL[o], da = A - refL[o + 1], db = B - refL[o + 2];
+        d = Math.sqrt(Math.min(CAP * CAP, dl * dl + da * da + db * db));
+      }
+      sum += d;
+      if (sum > stop) return Infinity;
+    }
+    return sum / S.length;
+  };
+
+  // 缩放范围：用户给的上下限是硬约束；在此之内再排除缩到不足 8 像素、放大到超过参考图 1.5 倍的情况
+  const lo = Math.max(minScale, 8 / Math.max(pw, ph)), hi = Math.min(maxScale, 1.5 * Math.min(ref.width / pw, ref.height / ph));
+  const sLo = lo <= hi ? lo : minScale, sHi = lo <= hi ? hi : maxScale;
+  const clamp = (s) => Math.min(maxScale, Math.max(minScale, s));
+
+  // 粗搜：参考图缩到长边 320，缩放按对数分 40 档，平移步长 3 个工作像素
+  const k = Math.min(1, 320 / Math.max(ref.width, ref.height));
+  const small = downscale(ref.data, ref.width, ref.height, ref.width * k, ref.height * k);
+  const kx = small.width / ref.width, sL = labImage(small.data, small.width, small.height), sA = alphaOf(small);
+  const top = [];
+  const keep = (c) => { top.push(c); top.sort((a, b) => biased(a) - biased(b)); if (top.length > 6) top.pop(); };
+  const steps = sHi > sLo ? 40 : 1;
+  for (let i = 0; i < steps; i++) {
+    const s = steps > 1 ? sLo * (sHi / sLo) ** (i / (steps - 1)) : sLo, step = 3 / kx;
+    for (let ty = -(y0 + ph / 2) * s; ty <= ref.height - (y0 + ph / 2) * s; ty += step) {
+      for (let tx = -(x0 + pw / 2) * s; tx <= ref.width - (x0 + pw / 2) * s; tx += step) {
+        // 提前退出的门槛换算回未加偏置的分数
+        const cost = score(sL, sA, small.width, small.height, kx, coarse, s, tx, ty, top.length === 6 ? biased(top[5]) + BIAS * Math.log2(s) : Infinity);
+        if (cost < Infinity) keep({ s, tx, ty, cost });
+      }
+    }
+  }
+  if (!top.length) return null;
+
+  // 细搜：原图分辨率，缩放 ±4%、平移 ±1 个粗搜步长，再逐级缩小范围
+  const fL = labImage(ref.data, ref.width, ref.height), fA = alphaOf(ref);
+  const results = top.map((c) => {
+    let cur = { ...c, cost: score(fL, fA, ref.width, ref.height, 1, fine, c.s, c.tx, c.ty) };
+    for (const [ds, dt, n] of [[0.04, 3 / kx, 4], [0.008, 1.5, 3], [0.002, 0.5, 2]]) {
+      const base = { ...cur };
+      for (let a = -n; a <= n; a++) for (let b = -n; b <= n; b++) for (let e = -n; e <= n; e++) {
+        const s = clamp(base.s * (1 + ds * a / n)), tx = base.tx + dt * b / n, ty = base.ty + dt * e / n;
+        const cost = score(fL, fA, ref.width, ref.height, 1, fine, s, tx, ty, biased(cur) + BIAS * Math.log2(s));
+        if (cost < Infinity && biased({ s, cost }) < biased(cur)) cur = { s, tx, ty, cost };
+      }
+    }
+    return cur;
+  }).sort((a, b) => biased(a) - biased(b));
+  const best = results[0];
+  // 拿不准：另一个明显不同的变换（缩放差 10% 以上，或位置差出部件尺寸的一成）分数差不多；或者结果顶在缩放范围的边上
+  const far = (c) => Math.abs(Math.log(c.s / best.s)) > Math.log(1.1) || Math.hypot(c.tx + c.s * (x0 + pw / 2) - best.tx - best.s * (x0 + pw / 2), c.ty + c.s * (y0 + ph / 2) - best.ty - best.s * (y0 + ph / 2)) > 0.1 * best.s * Math.max(pw, ph);
+  const rival = results.slice(1).find((c) => far(c) && c.cost <= best.cost * 1.1 + 0.5);
+  const atBound = (sHi > sLo) && (best.s <= sLo * 1.02 || best.s >= sHi / 1.02);
+
+  // 区域打分：落在给定矩形（参考图像素）里的全部部件像素的平均色差和吻合比例
+  const center = (x, y) => [Math.floor(best.tx + best.s * (x + 0.5)), Math.floor(best.ty + best.s * (y + 0.5))];
+  const region = ([rx0, ry0, rx1, ry1]) => {
+    let sum = 0, n = 0, ok = 0;
+    for (const p of inside) {
+      const x = p % pw0, y = (p - x) / pw0, [X, Y] = center(x, y);
+      if (X < rx0 || Y < ry0 || X >= rx1 || Y >= ry1 || X < 0 || Y < 0 || X >= ref.width || Y >= ref.height) continue;
+      let d = CAP;
+      if (fA[Y * ref.width + X] >= 128) { const o = (Y * ref.width + X) * 3, c = lab(pd[p * 4], pd[p * 4 + 1], pd[p * 4 + 2]); d = Math.min(CAP, Math.hypot(c[0] - fL[o], c[1] - fL[o + 1], c[2] - fL[o + 2])); }
+      sum += d; n++; if (d < 10) ok++;
+    }
+    return { pixels: n, mean_delta: n ? +(sum / n).toFixed(2) : null, matched: n ? +(ok / n).toFixed(3) : null };
+  };
+  let ok = 0;
+  for (const [x, y, L, A, B] of fine) {
+    const X = Math.floor(best.tx + best.s * x), Y = Math.floor(best.ty + best.s * y);
+    if (X >= 0 && Y >= 0 && X < ref.width && Y < ref.height && fA[Y * ref.width + X] >= 128) {
+      const o = (Y * ref.width + X) * 3;
+      if (Math.hypot(L - fL[o], A - fL[o + 1], B - fL[o + 2]) < 10) ok++;
+    }
+  }
+  return { scale: best.s, offset: [best.tx, best.ty], mean_delta: best.cost, matched: ok / fine.length, ambiguous: Boolean(rival || atBound), region };
+}
+
+// 把 src 按 s、(tx, ty) 双线性缩放后画到 w×h 的透明画布上（预乘 alpha，边缘不发黑）。
+export function placeScaled(src, sw, sh, w, h, s, tx, ty) {
+  const out = Buffer.alloc(w * h * 4);
+  const X0 = Math.max(0, Math.floor(tx)), Y0 = Math.max(0, Math.floor(ty)), X1 = Math.min(w, Math.ceil(tx + s * sw)), Y1 = Math.min(h, Math.ceil(ty + s * sh));
+  for (let Y = Y0; Y < Y1; Y++) for (let X = X0; X < X1; X++) {
+    const fx = (X + 0.5 - tx) / s - 0.5, fy = (Y + 0.5 - ty) / s - 0.5, ix = Math.floor(fx), iy = Math.floor(fy), ax = fx - ix, ay = fy - iy;
+    const acc = [0, 0, 0, 0];
+    for (const [dx, dy, wgt] of [[0, 0, (1 - ax) * (1 - ay)], [1, 0, ax * (1 - ay)], [0, 1, (1 - ax) * ay], [1, 1, ax * ay]]) {
+      const x = ix + dx, y = iy + dy;
+      if (x < 0 || y < 0 || x >= sw || y >= sh || !wgt) continue;
+      const i = (y * sw + x) * 4, a = src[i + 3] * wgt;
+      acc[0] += src[i] * a; acc[1] += src[i + 1] * a; acc[2] += src[i + 2] * a; acc[3] += a;
+    }
+    const o = (Y * w + X) * 4;
+    if (acc[3] > 0) { out[o] = Math.round(acc[0] / acc[3]); out[o + 1] = Math.round(acc[1] / acc[3]); out[o + 2] = Math.round(acc[2] / acc[3]); }
+    out[o + 3] = Math.round(acc[3]);
+  }
+  return out;
+}
