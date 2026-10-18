@@ -50,7 +50,7 @@ Participants can only come from this level's configured list (`resolved_levels.d
 2. **Tier**: never go below a role's minimum tier. Model tiers are in `references/model-tiers.md`.
 3. **Strengths**: among participants of the same tier, pick by the strengths the role looks for.
 4. **Different models first**: one model per role.
-5. **Not enough strong models: give a strong model another session**: when more roles need a strong model than there are strong participants, have a strong model open another session for another role rather than handing it to a weak model. Only strong models get extra sessions. The number of tasks one agent runs at once is capped by `max_parallel` (tasks from other groups and sessions count too); if it's full, start the extra one once earlier tasks finish.
+5. **No free qualifying participant: give a strong model another session**: when a role has no free participant that meets its tier and tool needs (whether the role needs a strong or a mid model), have a strong model open another session for it rather than handing it to a model below the role's tier. Only strong models get extra sessions. The number of tasks one agent runs at once is capped by `max_parallel` (tasks from other groups and sessions count too); if it's full, start the extra one once earlier tasks finish.
 6. **Seat count**: no more seats than the level's configured participants.
 
 Weak models only get roles like "Edge-case lister", where mistakes are cheap and Claude checks every item. If no role fits, leave that model out of this discussion rather than handing it an expert part. Participants configured for the level but given no role this time are shown in the pop-up as "not in this discussion".

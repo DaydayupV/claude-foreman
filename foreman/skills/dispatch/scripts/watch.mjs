@@ -594,7 +594,9 @@ function panelHead(run, stats, width, withTitle) {
   }
   if (!withTitle || !m.title) return [first];
   const title = oneLine(m.title);
-  const round = m.round > 1 && !title.includes(M.watchRound(m.round)) ? ` · ${M.watchRound(m.round)}` : '';
+  // 标题以全角右括号结尾时（比如"多角色模式［边界清单员］"），括号本身带留白，"·"前不再加空格
+  const gap = /[）］】》〉」』]$/.test(title) ? '' : ' ';
+  const round = m.round > 1 && !title.includes(M.watchRound(m.round)) ? `${gap}· ${M.watchRound(m.round)}` : '';
   return [first, color(fitWidth(`  ${title}${round}`, width))];
 }
 
