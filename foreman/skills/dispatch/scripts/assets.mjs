@@ -1,6 +1,8 @@
 // assets 子命令：出图之后的确定性处理，不调用任何模型。
 // template 画编号格子模板；cut 去背景、切部件、按格子命名、出 manifest 和对照拼图（--vector 再转 SVG）；
-// check 重新读出 cut 的判定；diff 比较改图前后每一格的变化；align 把取出的部件对回参考图；setup 把矢量化要用的原生包装到用户目录。
+// check 重新读出 cut 的判定；diff 比较改图前后每一格的变化；align 把取出的部件对回参考图；
+// patch 从改图里只取变了的区域做成补丁；trace 照参考图描出一个部件的形状；capture、playback 用本机浏览器截图和检查播放；
+// setup 把矢量化要用的原生包装到用户目录。
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -8,6 +10,9 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { decodePng, encodePng } from './png.mjs';
 import * as P from './assets-pixels.mjs';
+import { print, names, safeName, num, readImage, writePng, boxes } from './assets-io.mjs';
+import { cmdPatch, cmdTrace } from './assets-extra.mjs';
+import { cmdCapture, cmdPlayback } from './assets-capture.mjs';
 import { USER_CONFIG } from './config.mjs';
 import { M, die, need } from './util.mjs';
 
@@ -17,22 +22,6 @@ const TOOLING_PACKAGES = ['@neplex/vectorizer@0.1.0', '@resvg/resvg-js@2.6.2'];
 const ASPECTS = { '1:1': [1254, 1254], '3:2': [1536, 1024], '2:3': [1024, 1536], '3:1': [2172, 724] };
 const GRAY = [154, 160, 166];
 
-const print = (value) => process.stdout.write(JSON.stringify(value, null, 2) + '\n');
-const names = (v) => (v ? String(v).split(',').map((s) => s.trim()).filter(Boolean) : []);
-const safeName = (s) => s.replace(/[\\/:*?"<>|\s]+/g, '-');
-function num(o, key, fallback, int = false) {
-  if (o[key] == null) return fallback;
-  const v = Number(o[key]);
-  if (!Number.isFinite(v) || v <= 0 || (int && !Number.isInteger(v))) die(M.assetsBadNumber(key, o[key]));
-  return v;
-}
-function readImage(file) {
-  try { const bytes = fs.readFileSync(file); return { ...decodePng(bytes), bytes }; } catch (e) { die(M.assetsBadImage(file, e.message)); }
-}
-function writePng(file, w, h, data) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, encodePng(w, h, data));
-}
 function readSlots(file, w, h) {
   let doc;
   try { doc = JSON.parse(fs.readFileSync(file, 'utf8')); if (!Array.isArray(doc.slots)) throw new Error('no slots'); } catch (e) { die(M.assetsBadSlots(file, e.message)); }
@@ -314,11 +303,7 @@ function cmdDiff(o) {
 function cmdAlign(o) {
   const refFile = path.resolve(need(o, 'ref')), imgFile = path.resolve(need(o, 'image')), out = path.resolve(need(o, 'out'));
   const ref = readImage(refFile), piece = readImage(imgFile);
-  const regions = o.regions ? String(o.regions).split(';').map((s) => s.trim()).filter(Boolean).map((s) => {
-    const v = s.split(',').map(Number);
-    if (v.length !== 4 || !v.every(Number.isFinite) || v[0] >= v[2] || v[1] >= v[3]) die(M.assetsBadRegion(s));
-    return v;
-  }) : [];
+  const regions = boxes(o.regions, M.assetsBadRegion);
   const minScale = num(o, 'min-scale', 0.25), maxScale = num(o, 'max-scale', 4);
   if (minScale > maxScale) die(M.assetsBadScaleRange(minScale, maxScale));
   const r = P.alignPiece(ref, piece, { minScale, maxScale });
@@ -372,7 +357,7 @@ function cmdSetup() {
 }
 
 export async function cmdAssets(o) {
-  const actions = { template: cmdTemplate, cut: cmdCut, check: cmdCheck, diff: cmdDiff, align: cmdAlign, setup: cmdSetup };
+  const actions = { template: cmdTemplate, cut: cmdCut, check: cmdCheck, diff: cmdDiff, align: cmdAlign, patch: cmdPatch, trace: cmdTrace, capture: cmdCapture, playback: cmdPlayback, setup: cmdSetup };
   if (!actions[o.action]) die(M.assetsUsage);
   await actions[o.action](o);
 }

@@ -103,3 +103,44 @@ export function encodePng(width, height, rgba) {
   ihdr[8] = 8; ihdr[9] = 6;
   return Buffer.concat([SIGNATURE, chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw, { level: 6 })), chunk('IEND', Buffer.alloc(0))]);
 }
+
+// 动画 PNG（APNG）：frames 是同尺寸的 RGBA 帧，每帧 delayMs 毫秒，无限循环。浏览器都能直接播放。
+// 第一帧存整张，之后每帧只存和上一帧不同的那个矩形（背景不动时文件小得多），结果和逐帧整张存一样。
+export function encodeApng(width, height, frames, delayMs) {
+  const encodeRect = (rgba, x0, y0, w, h) => {
+    const stride = w * 4, raw = Buffer.alloc((stride + 1) * h);
+    for (let y = 0; y < h; y++) {
+      const o = y * (stride + 1), s = ((y + y0) * width + x0) * 4;
+      raw[o] = 1;
+      for (let i = 0; i < stride; i++) raw[o + 1 + i] = (rgba[s + i] - (i >= 4 ? rgba[s + i - 4] : 0)) & 0xff;
+    }
+    return zlib.deflateSync(raw, { level: 6 });
+  };
+  const changedRect = (a, b) => {
+    let x0 = width, y0 = height, x1 = -1, y1 = -1;
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      const p = (y * width + x) * 4;
+      if (a[p] !== b[p] || a[p + 1] !== b[p + 1] || a[p + 2] !== b[p + 2] || a[p + 3] !== b[p + 3]) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    }
+    return x1 < 0 ? [0, 0, 1, 1] : [x0, y0, x1 - x0 + 1, y1 - y0 + 1];
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0); ihdr.writeUInt32BE(height, 4); ihdr[8] = 8; ihdr[9] = 6;
+  const actl = Buffer.alloc(8);
+  actl.writeUInt32BE(frames.length, 0); actl.writeUInt32BE(0, 4);
+  const parts = [SIGNATURE, chunk('IHDR', ihdr), chunk('acTL', actl)];
+  let seq = 0;
+  frames.forEach((rgba, i) => {
+    const [x0, y0, w, h] = i === 0 ? [0, 0, width, height] : changedRect(frames[i - 1], rgba);
+    const fctl = Buffer.alloc(26);
+    fctl.writeUInt32BE(seq++, 0); fctl.writeUInt32BE(w, 4); fctl.writeUInt32BE(h, 8);
+    fctl.writeUInt32BE(x0, 12); fctl.writeUInt32BE(y0, 16);
+    fctl.writeUInt16BE(Math.round(delayMs), 20); fctl.writeUInt16BE(1000, 22); fctl[24] = 0; fctl[25] = 0;
+    parts.push(chunk('fcTL', fctl));
+    const data = encodeRect(rgba, x0, y0, w, h);
+    if (i === 0) parts.push(chunk('IDAT', data));
+    else { const sq = Buffer.alloc(4); sq.writeUInt32BE(seq++, 0); parts.push(chunk('fdAT', Buffer.concat([sq, data]))); }
+  });
+  parts.push(chunk('IEND', Buffer.alloc(0)));
+  return Buffer.concat(parts);
+}

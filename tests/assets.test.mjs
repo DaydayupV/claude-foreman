@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { sandbox, output, failed, json, taskArgs, MESSAGES } from './helpers.mjs';
+import { sandbox, output, failed, json, taskArgs, MESSAGES, ROOT } from './helpers.mjs';
 import { canvas } from './fixtures/png.mjs';
+import * as P from '../foreman/skills/dispatch/scripts/assets-pixels.mjs';
 
 const M = MESSAGES.zh;
 const MAGENTA = [255, 0, 255], DARK = [34, 34, 34], ORANGE = [245, 165, 36], TEAL = [29, 91, 121];
@@ -252,4 +253,84 @@ test('assets align 不把缩小的部件塞进同色区域，细线部件也能�
   const c = output(await h.bridge(['assets', 'align', '--ref', ref, '--image', block, '--out', path.join(h.cwd, 'c'), '--min-scale', 0.7, '--max-scale', 0.7]));
   assert.equal(c.scale, 0.7);
   failed(await h.bridge(['assets', 'align', '--ref', ref, '--image', block, '--out', path.join(h.cwd, 'd'), '--min-scale', 2, '--max-scale', 1]), M.assetsBadScaleRange(2, 1));
+});
+
+test('assets patch 只取改了的区域做羽化补丁，轮廓的细微位移和外轮廓不算', async (t) => {
+  const h = sandbox(t);
+  // 原图：透明底上一张"脸"（深色描边、浅色填充、两只深色眼睛）；改图：眼睛换成红色横条，外轮廓整圈往外多 1 像素
+  const face = (eye, grow) => {
+    const c = canvas(240, 180, [0, 0, 0, 0]).rect(30 - grow, 20 - grow, 210 + grow, 160 + grow, [40, 30, 30, 255]).rect(34, 24, 206, 156, [250, 215, 190, 255]);
+    return eye(c).png();
+  };
+  const base = h.write('base.png', face((c) => c.rect(70, 60, 100, 85, [30, 30, 40, 255]).rect(140, 60, 170, 85, [30, 30, 40, 255]), 0));
+  const variant = h.write('variant.png', face((c) => c.rect(66, 70, 104, 76, [200, 40, 40, 255]).rect(136, 70, 174, 76, [200, 40, 40, 255]), 1));
+  const out = path.join(h.cwd, 'patch');
+  const r = output(await h.bridge(['assets', 'patch', '--base', base, '--variant', variant, '--out', out]));
+  assert.ok(r.patch_pixels > 500, `${r.patch_pixels}`);
+  const [x0, y0, x1, y1] = r.box;
+  assert.ok(x0 >= 55 && x1 <= 190 && y0 >= 45 && y1 <= 100, `box ${r.box}`);
+  for (const f of ['patch.png', 'preview.png', 'check.png']) assert.ok(isPng(path.join(out, f)), f);
+  assert.deepEqual(json(path.join(out, 'patch.json')).box, r.box);
+  // 只取左眼
+  const left = output(await h.bridge(['assets', 'patch', '--base', base, '--variant', variant, '--out', path.join(h.cwd, 'left'), '--keep', '50,40,120,110']));
+  assert.ok(left.box[2] <= 125, `${left.box}`);
+});
+
+test('assets trace 照参考图描出部件的描边、底色和阴影，种子不对时报错', async (t) => {
+  const h = sandbox(t);
+  // 白底上一块带 3 像素深色描边的肤色块，左边一条阴影，中间一条深色细线
+  const img = h.write('ref.png', canvas(220, 160, [255, 255, 255], 3).rect(37, 27, 183, 133, [40, 25, 20]).rect(40, 30, 180, 130, [252, 214, 186]).rect(40, 30, 80, 130, [235, 165, 130]).rect(110, 60, 112, 100, [40, 25, 20]).png());
+  const out = path.join(h.cwd, 'trace');
+  const r = output(await h.bridge(['assets', 'trace', '--image', img, '--seed', '140,80;60,80', '--out', out]));
+  assert.deepEqual(r.layers.map((l) => l.name), ['outline', 'base', 'shadow1']);
+  const near = (hex, rgb) => P.parseHex(hex).every((v, i) => Math.abs(v - rgb[i]) < 12);
+  assert.ok(near(r.layers[1].color, [252, 214, 186]) && near(r.layers[2].color, [235, 165, 130]), JSON.stringify(r.layers));
+  assert.ok(near(r.layers[0].color, [40, 25, 20]));
+  const svg = fs.readFileSync(path.join(out, 'trace.svg'), 'utf8');
+  assert.equal((svg.match(/<path /g) || []).length, 3);
+  assert.ok(isPng(path.join(out, 'check.png')));
+  failed(await h.bridge(['assets', 'trace', '--image', img, '--seed', '5000,1', '--out', out]), M.assetsBadSeed('5000,1'));
+  failed(await h.bridge(['assets', 'trace', '--image', img, '--seed', '38,28', '--out', out]), M.assetsTraceEmpty('38,28'));
+});
+
+test('assets capture 和 playback 用指定的浏览器截图，检查静止区域、首尾衔接并写出 APNG', async (t) => {
+  const h = sandbox(t);
+  const browser = path.join(ROOT, 'tests', 'fake', 'browser.mjs'), page = 'http://localhost:9/page.html';
+  const cap = output(await h.bridge(['assets', 'capture', '--url', page, '--times', '0,0.5', '--size', '200x100', '--scale', 2, '--zoom', 'corner=160,60,200,100', '--browser', browser, '--out', path.join(h.cwd, 'cap')]));
+  assert.deepEqual(cap.frames.map((f) => [f.t, f.size]), [[0, [400, 200]], [0.5, [400, 200]]]);
+  assert.ok(isPng(cap.frames[0].zooms[0].file) && isPng(cap.sheet));
+  const pb = output(await h.bridge(['assets', 'playback', '--url', page, '--loop', 1, '--fps', 4, '--size', '200x100', '--static', 'corner=165,65,195,95', '--browser', browser, '--out', path.join(h.cwd, 'pb')]));
+  assert.equal(pb.frames, 4);
+  assert.deepEqual(pb.seam, { mean_delta: 0, changed: 0 });
+  assert.equal(pb.static[0].max_changed, 0);
+  assert.deepEqual(pb.jumps, []);
+  const apng = fs.readFileSync(pb.files.playback);
+  assert.ok(apng.includes(Buffer.from('acTL')) && apng.includes(Buffer.from('fdAT')));
+  assert.ok(isPng(pb.files.flipbook));
+  failed(await h.bridge(['assets', 'capture', '--url', page, '--times', 'a', '--browser', browser, '--out', path.join(h.cwd, 'x')]), M.assetsBadTimes('a'));
+});
+
+test('审查发现的问题：时刻参数替换旧值且不落进 #片段、首尾帧正好在一圈的终点、补丁不带回外轮廓、种子要在框里、细线保留、截图不重名', async (t) => {
+  const h = sandbox(t);
+  const browser = path.join(ROOT, 'tests', 'fake', 'browser.mjs');
+  const a = output(await h.bridge(['assets', 'capture', '--url', 'http://localhost:9/p.html', '--times', '0.5', '--size', '200x100', '--scale', 1, '--browser', browser, '--out', path.join(h.cwd, 'a')]));
+  const b = output(await h.bridge(['assets', 'capture', '--url', 'http://localhost:9/p.html?t=9#scene', '--times', '0.5', '--size', '200x100', '--scale', 1, '--browser', browser, '--out', path.join(h.cwd, 'b')]));
+  assert.ok(fs.readFileSync(a.frames[0].file).equals(fs.readFileSync(b.frames[0].file)));
+  const twin = output(await h.bridge(['assets', 'capture', '--url', 'http://localhost:9/p.html', '--times', '0,0.0004', '--size', '200x100', '--scale', 1, '--browser', browser, '--out', path.join(h.cwd, 'twin')]));
+  assert.notEqual(twin.frames[0].file, twin.frames[1].file);
+  // 假页面 1 秒一圈；fps 2.6 时一圈分 3 段，最后一帧要正好是 1 秒
+  const pb = output(await h.bridge(['assets', 'playback', '--url', 'http://localhost:9/p.html', '--loop', 1, '--fps', 2.6, '--size', '200x100', '--browser', browser, '--out', path.join(h.cwd, 'pb')]));
+  assert.deepEqual(pb.seam, { mean_delta: 0, changed: 0 });
+  // 补丁：改动挨着外轮廓时，外扩和羽化也不能超出原图外轮廓往里 --edge 的范围
+  const face = (eyeY, grow) => canvas(160, 120, [0, 0, 0, 0]).rect(20 - grow, 20 - grow, 140 + grow, 100 + grow, [40, 30, 30, 255]).rect(23, 23, 137, 97, [250, 215, 190, 255]).rect(40, eyeY, 70, eyeY + 12, [30, 30, 40, 255]).png();
+  const base = h.write('pbase.png', face(30, 0)), variant = h.write('pvar.png', face(34, 1));
+  const r = output(await h.bridge(['assets', 'patch', '--base', base, '--variant', variant, '--out', path.join(h.cwd, 'patch')]));
+  const { decodePng } = await import('../foreman/skills/dispatch/scripts/png.mjs');
+  const patch = decodePng(fs.readFileSync(r.files.patch));
+  for (let y = 0; y < 120; y++) for (let x = 0; x < 160; x++) if (x < 26 || y < 26 || x >= 134 || y >= 94) assert.equal(patch.data[(y * 160 + x) * 4 + 3], 0, `alpha at ${x},${y}`);
+  // trace：种子不在框里时报错；填色里 2 像素宽的细线留成底色层里的洞
+  const img = h.write('tr.png', canvas(220, 160, [255, 255, 255], 3).rect(37, 27, 183, 133, [40, 25, 20]).rect(40, 30, 180, 130, [252, 214, 186]).rect(110, 60, 112, 100, [40, 25, 20]).png());
+  failed(await h.bridge(['assets', 'trace', '--image', img, '--seed', '140,80', '--box', '0,0,100,100', '--out', path.join(h.cwd, 'tr')]), M.assetsBadSeed('140,80'));
+  const tr = output(await h.bridge(['assets', 'trace', '--image', img, '--seed', '140,80', '--colors', 1, '--out', path.join(h.cwd, 'tr2')]));
+  assert.ok(tr.layers.find((l) => l.name === 'base').paths >= 2, JSON.stringify(tr.layers));
 });
