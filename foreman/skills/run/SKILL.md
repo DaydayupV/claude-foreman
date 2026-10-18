@@ -1,6 +1,8 @@
 ---
+name: run
 description: 把一个执行任务派给配置的协作方（按任务复杂度选等级，交给谁、模型和推理强度见配置）
 argument-hint: <任务描述> [--level simple|normal|complex | --effort <推理强度>] [--model <模型>]
+disable-model-invocation: true
 ---
 
 用户要求把下面的任务派给协作方：

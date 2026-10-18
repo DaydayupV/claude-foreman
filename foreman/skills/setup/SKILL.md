@@ -1,6 +1,8 @@
 ---
+name: setup
 description: 设置引导：检测本机的工具，列出能用的模型和推理强度，给出一份完整的推荐，按你的选择改好配置，最后给出总配置情况
 argument-hint: [可选：只做某一部分，例如"加 DeepSeek"、"用 opencode 的 GLM"、"用 pi 的 DeepSeek"、"讨论加一个模型"]
+disable-model-invocation: true
 ---
 
 用户要设置 foreman。参数：

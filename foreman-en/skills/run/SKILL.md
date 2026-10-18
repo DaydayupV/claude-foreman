@@ -1,6 +1,8 @@
 ---
+name: run
 description: Hand a task off to the configured agent (pick a level by task complexity; who gets it, the model and effort come from the config)
 argument-hint: <task> [--level simple|normal|complex | --effort <effort>] [--model <model>]
+disable-model-invocation: true
 ---
 
 The user wants this task handed off to an agent:

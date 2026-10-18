@@ -1,6 +1,8 @@
 ---
+name: status
 description: 查看最近的任务记录，或某次任务的详细结果
 argument-hint: [run_id | last | 组名]
+disable-model-invocation: true
 ---
 
 运行 `node "${CLAUDE_PLUGIN_ROOT}/skills/dispatch/scripts/cli.mjs" status`。参数是 `$ARGUMENTS`：如果给了 run_id 或 `last`，就加上 `--run <参数>` 查看那一次的详细结果；如果给的是任务组名，就加上 `--group <参数>` 查看整组。

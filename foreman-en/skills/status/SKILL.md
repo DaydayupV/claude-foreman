@@ -1,6 +1,8 @@
 ---
+name: status
 description: Show recent runs, or the details of one run
 argument-hint: [run_id | last | group name]
+disable-model-invocation: true
 ---
 
 Run `node "${CLAUDE_PLUGIN_ROOT}/skills/dispatch/scripts/cli.mjs" status`. The argument is `$ARGUMENTS`: if it's a run_id or `last`, add `--run <argument>` to see that run's details; if it's a group name, add `--group <argument>` to see the whole group.

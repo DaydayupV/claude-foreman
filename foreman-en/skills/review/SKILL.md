@@ -1,6 +1,8 @@
 ---
+name: review
 description: Have a configured agent (such as Codex) review code changes independently
 argument-hint: [--base <branch> | --commit <sha>] [--level simple|normal|complex | --effort <effort>] [--model <model>] [focus]
+disable-model-invocation: true
 ---
 
 The user wants an agent to review code. Arguments:

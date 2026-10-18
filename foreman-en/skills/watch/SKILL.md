@@ -1,6 +1,8 @@
 ---
+name: watch
 description: Watch a run live in a terminal
 argument-hint: [run_id | last | group name]
+disable-model-invocation: true
 ---
 
 Open the live progress view. The argument is `$ARGUMENTS`.
