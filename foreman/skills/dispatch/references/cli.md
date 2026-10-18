@@ -28,5 +28,6 @@ SKILL.md 里只留了决策流程和常用命令。排查环境、帮用户选�
 - token 消耗：`usage` 是本次调用的输入、缓存、输出 token（`usage_scope` 为 `session_total` 时是整个会话的累计量）；`last_request` 是最近一次请求的用量和模型上下文窗口；`rate_limit` 是 Codex 额度的已用比例；`quota_resets_at` 是额度预计恢复的时间。
 - `agent`、`model_shown`、`effort`：这次交给了哪个协作方、实际用的模型和推理强度。API、opencode 和 pi 协作方的讨论结果没有改动追踪（`changes.available` 为 `false`）；API 协作方的 `files` 列出附带了哪些文件，opencode 和 pi 协作方多一个 `cost_usd`。
 - `isolation`、`run_access`：opencode 和 pi 做执行时，写明没有系统沙箱（`tools`）和这次的权限档位。
-- `generated_images`：这一轮生成的图片原文件。
+- `generated_images`：这一轮在 Codex 图片目录里新出现的图片原文件。
+- `image_calls`：这一轮每次出图实际传的参数和结果（读自 Codex 的会话记录）：`transparent_background`、`referenced_image_paths`（没传为 null；用变量传、解析不出来，或者几次调用分不清各自对应哪张图时为 "unknown"）、`num_last_images_to_include`（同样可能是 "unknown"）、`status`（代码里写了调用、但没执行到时为 "not_run"）、`saved_path`、`failure`。任务说明里写了 `referenced_image_paths`、但这一轮的调用都没传参考图时，`warnings` 会提示。
 - `review_scope`：审查的范围、文件数和指纹。

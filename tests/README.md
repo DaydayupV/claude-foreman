@@ -14,7 +14,8 @@
 - `fake/codex.mjs`、`fake/opencode.mjs`：通过 `agents.<名字>.bin` 指定，`FAKE_SCENARIO` 指向合成 JSON 剧本。
 - 剧本的 `capture` 指定 JSONL 调用日志；记录工具、操作、argv、stdin、cwd、pid 及指定的环境变量。`calls` 按同一工具/操作的调用序号覆盖基础剧本，用于续接和报告修复。
 - `steps` 中每步支持 `event`、`delay_ms`、`wait_for`（临时放行文件）、`files`、`stderr`。根级支持 `files`、`last_message`、`exit_code`、`stderr` 和 `hold`。
-- Codex 另支持 `logged_in`、`version`、`session_id`、`stats`、`usage`、`images`；`stats` 生成带 `token_count` 的合成会话 JSONL，图片为合成的单像素 PNG。
+- Codex 另支持 `logged_in`、`version`、`session_id`、`stats`、`usage`、`images`、`rollout`；`stats` 生成带 `token_count` 的合成会话 JSONL，`rollout` 往同一份会话记录里追加原始记录（没写时间的按当时补上），图片为合成的单像素 PNG。
+- `fixtures/png.mjs`：在内存里画纯色矩形并写成 PNG（RGB 或 RGBA），给 assets 测试用。
 - opencode 另支持 `models`、`session_id`、`export_messages`、`export_error` 和可选 `step_finish`。导出的消息可以用 `created: "old"` 模拟本轮开始前的历史。
 - `fake/api-server.mjs`：按请求序号提供 SSE 剧本，支持正常流、保活排队、401/402、拒绝 `response_format`、报告修复、残缺流和取消；请求保存在测试内存中。
 - `fixtures/`：完全合成的报告、用量和四类 watch 记录。`expected/`：五份已人工核对的非 TTY 文本；仅替换临时路径为 `<HOME>`/`<CWD>`，事件时刻为 `<TIME>`，状态、用量、文案和排版均保留。
@@ -93,6 +94,7 @@
 | 20 pi 协作方 | pi.test.mjs、generalization.test.mjs | 配置校验（模型写法、run_access、推理强度、执行授权按能力判断）；讨论的隔离参数、只读工具、守卫策略、事件翻译、用量和费用、续接同一会话；审查的补丁材料和不能续接；edit / shell 两档执行的工具、守卫策略、改动归属、被挡的操作、命令计数和 watch；报告修复同会话不开工具；出错、限流、截断、自动重试和推理强度被改；check 按清单核对推理强度并写明会换成哪一档；models 按 pi 的规则算推理强度；守卫扩展按档位放行工具、路径按 pi 的规则解析（@、~、file://、/c/…）并按真实路径判断（符号链接、junction）；拦截钩子按 pi 的参数语义判断；环境检测带隔离参数；check 按覆盖的模型核对；自动压缩的用量；会话头之后才失败时保留 stderr；流式输出期间定期写进度，status 显示思考或回答了多少字 |
 | 21 Codex 沙箱 | check.test.mjs、run.test.mjs | check 按各类任务实际用的沙箱模式用 codex sandbox 探测（不调模型），坏了判不通过并给出修法，Windows 上顺带试 unelevated，danger-full-access 不探测；运行时命令因为沙箱失败时 notes 里说明，成功的命令不误判 |
 | 22 watch 启动动画 | intro.test.mjs | 按模型名的关键字认头像（先看最后一段、取最先出现的、没有模型名时 Codex 用 ChatGPT、认不出用 ???）；头像数据的尺寸和调色板下标；按终端大小选大头像加 Claude、只画目标、中头像、轮流登场或文字徽章；每帧不超出终端、窄窗口的徽章和文字折行、名单太长时只写人数；macOS 自带终端没声明支持 24 位色时改用 256 色；中英文笑话齐全、占位符都换掉；任务提前结束马上收尾、接着用备用屏幕时不退出；dispatch.intro 默认开且只接受布尔值 |
+| 23 出图素材 | assets.test.mjs | template 写出模板和按比例的格子坐标；cut 抠品红底、按名单命名、写出部件、manifest 和对照拼图；透明图清理光晕，soft 保留柔边；按格子命名并合并同格碎片；贴边和格外部件判失败、check 退出码为 1；diff 逐格比较；没装矢量化原生包时 --vector 先停下；参数错误；结果的 image_calls 和没传参考图的提示；名单重名和只差大小写；一个部件都没有时判失败；diff 发现被删掉的部件；出图参数按代码结构解析（字符串里的参数名、显式 null、带引号的键、变量传参、没执行的调用） |
 | 10 共用文件同步 | sync.test.mjs | 中英文插件的共用文件、schema 结构和版本号一致 |
 
 ## 说明

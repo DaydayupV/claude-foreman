@@ -6,6 +6,7 @@ import path from 'node:path';
 import { SCHEMA, DISCUSS_SCHEMA } from '../config.mjs';
 import { newRunDir } from '../records.mjs';
 import { execute, eventWriter, watchCancellation, spawnCli, validateSchema } from '../runner.mjs';
+import { readImageCalls, missingReferences } from '../image-calls.mjs';
 import { M, die, isObject, binCommand, pathCommand, npmEntry, killTree, isReconnect, readAttachments, focusFiles, closestMatches } from '../util.mjs';
 
 const capabilities = { modes: ['run', 'review', 'discuss'], isolation: 'os', reads_code: true, native_schema: true, native_review: true, images: true, resume: true, command_start_events: true };
@@ -90,7 +91,8 @@ function runCodex({ agent, args, cwd, prompt, runDir, timeoutMin, stallMin, sess
     const events = fs.createWriteStream(path.join(runDir, 'events.jsonl'));
     const errLog = fs.createWriteStream(path.join(runDir, 'stderr.log'));
     const event = eventWriter(runDir, events);
-    const out = { code: null, sessionId: null, usage: null, errors: [], warnings: [], notes: [], sandboxError: null, fileChanges: new Set(), images: [], quotaExhausted: false, timedOut: false, stalled: false, cancelled: false, commands: 0, messages: [], questions: [] };
+    const out = { code: null, sessionId: null, usage: null, errors: [], warnings: [], notes: [], sandboxError: null, fileChanges: new Set(), images: [], imageCalls: [], quotaExhausted: false, timedOut: false, stalled: false, cancelled: false, commands: 0, messages: [], questions: [] };
+    const startedAt = Date.now();
     const runningCommands = new Set();
     let lastEventAt = Date.now();
     const child = spawnCli(file, [...pre, ...args], {
@@ -189,6 +191,11 @@ function runCodex({ agent, args, cwd, prompt, runDir, timeoutMin, stallMin, sess
       process.removeListener('SIGTERM', onSignal);
       if (buf.trim()) record(buf);
       scanImages();
+      // 出了图、或者任务说明提到 image_gen 或参考图时，从会话记录读出每次出图的参数（会话记录可能很大，其他任务不读）。
+      // 续接时会话记录里还有前几轮的调用，只取这一轮开始之后的（留 2 秒余量）。
+      const file = (out.images.length || /image_gen|referenced_image_paths/.test(prompt)) && sessionFile(out.sessionId || sessionId, startedAt);
+      out.imageCalls = file ? readImageCalls(file, startedAt - 2000) : [];
+      if (/referenced_image_paths/.test(prompt) && missingReferences(out.imageCalls)) out.warnings.push(M.imageRefsMissing);
       // 沙箱坏了时 Codex 照样正常结束，只在报告里说命令起不来；提示 Claude 这不是任务本身的问题。
       if (out.sandboxError) out.notes.push(M.codexSandboxFailed(out.sandboxError));
       events.end();
@@ -203,19 +210,26 @@ function runCodex({ agent, args, cwd, prompt, runDir, timeoutMin, stallMin, sess
   });
 }
 
+// Codex 的会话记录按开始日期放在 sessions/年/月/日 下；续接的会话还在最初那天的目录里，所以从开始日期往前找。
+function sessionFile(sessionId, startedAt) {
+  if (!sessionId) return null;
+  const root = path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'sessions');
+  const day = new Date(startedAt || Date.now());
+  for (let i = -1; i <= 60; i++) {
+    const d = new Date(day.getTime() - i * 86400000);
+    const dir = path.join(root, String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0'));
+    try {
+      const file = fs.readdirSync(dir).find((f) => f.includes(sessionId));
+      if (file) return path.join(dir, file);
+    } catch { /* 没有这天的目录 */ }
+  }
+  return null;
+}
+
 // 从 Codex 自己的会话记录里读最后一次 token 统计：累计用量、最近一次请求、窗口和额度。
 // exec --json 只在结尾给一次总用量，这些数只有会话记录里有。找不到就返回 null。
 function codexSessionStats(sessionId, startedAt) {
-  if (!sessionId) return null;
-  const root = path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'sessions');
-  let file = null;
-  // 会话记录按开始日期放在 sessions/年/月/日 下；续接的会话还在最初那天的目录里，所以从开始日期往前找。
-  const day = new Date(startedAt || Date.now());
-  for (let i = -1; i <= 60 && !file; i++) {
-    const d = new Date(day.getTime() - i * 86400000);
-    const dir = path.join(root, String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0'));
-    try { file = fs.readdirSync(dir).filter((f) => f.includes(sessionId)).map((f) => path.join(dir, f))[0] || null; } catch { /* 没有这天的目录 */ }
-  }
+  const file = sessionFile(sessionId, startedAt);
   if (!file) return null;
   const st = fs.statSync(file);
   const len = Math.min(st.size, 1024 * 1024);

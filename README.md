@@ -67,14 +67,16 @@ flowchart TD
     rlevel -- "0 级" --> rself
     rlevel -- "1–3 级" --> rrun["按配置派给协作方"]
     rrun --> rcheck["验收：看 diff<br/>亲自运行验证"]
-    rimg --> rcheck
+    rimg --> rasset["assets 去背景、切部件<br/>按格子命名、检查"]
+    rasset --> rimgcheck["Claude Code 看对照拼图"]
+    rimgcheck -- "不合格" --> rimgredo["返工一次<br/>再不行交给你决定"]
     rcheck -- "不合格" --> rrework["返工一次<br/>再不行 Claude Code 接手"]
     rrework --> rcheck
 
     classDef claude fill:#EEEDFE,stroke:#534AB7,color:#3C3489
     classDef agent fill:#E1F5EE,stroke:#0F6E56,color:#085041
-    class r0,rself,rlevel,rcheck claude
-    class rimg,rrun,rrework agent
+    class r0,rself,rlevel,rcheck,rasset,rimgcheck claude
+    class rimg,rrun,rrework,rimgredo agent
 ```
 
 **审查**
@@ -129,6 +131,18 @@ flowchart TD
 - 自定义角色、某类议题默认用多角色模式、对某个模型档位的不同看法，都可以写进偏好文件。角色表和分配规则见 [references/roles.md](foreman/skills/dispatch/references/roles.md)。
 
 为了不让 Claude Code 忘了这些（项目里有自己的 skill 时尤其容易漏），插件会在每个会话开始时提醒它一次，并附上你的偏好文件。
+
+### 出图素材
+
+位图交给 Codex 的内置出图工具画，画完由 Claude Code 在本机用 `assets` 子命令处理成下游能直接用的素材：透明背景的部件 PNG、按名字列出的 manifest、对照拼图，需要时再转成 SVG（每个部件一个图层，可以导入 Figma、Illustrator）。
+
+- **多个部件按格子命名**：先画一张编号格子模板交给 Codex，让它把第 N 个部件画在第 N 格，切图时按格子命名，不会因为模型打乱顺序而张冠李戴。
+- **改图和照参考图出图**：任务说明会写明把参考图通过 `referenced_image_paths` 传给出图工具；没传的话，结果里的 `image_calls` 会显示出来并提示。局部修改只替换被改的那个部件。
+- **背景**：默认要透明背景，脚本清理边缘的淡光晕；主体是白色或浅色时改用品红纯色底。
+- **矢量化要额外装两个原生包**：第一次用到时 Claude Code 会先问你，同意后装到 `~/.claude/foreman/tooling`，不进插件目录和你的项目；不装也能用，只是不出 SVG。
+- 做不到的：像素风、指定精确像素尺寸、超过约 157 万像素的高清图；拆好的部件也还不能直接做骨骼动画。
+
+提示词模板、命令选项和各项检查见 [references/image-assets.md](foreman/skills/dispatch/references/image-assets.md)。
 
 ### 实时查看
 

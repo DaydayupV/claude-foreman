@@ -67,14 +67,16 @@ flowchart TD
     rlevel -- "Level 0" --> rself
     rlevel -- "Levels 1–3" --> rrun["Handed off per the config"]
     rrun --> rcheck["Check: read the diff<br/>run it"]
-    rimg --> rcheck
+    rimg --> rasset["assets removes backgrounds,<br/>splits and names parts, checks"]
+    rasset --> rimgcheck["Claude Code looks at<br/>the contact sheet"]
+    rimgcheck -- "Not good enough" --> rimgredo["One rework<br/>then it's your call"]
     rcheck -- "Not good enough" --> rrework["One rework<br/>then Claude Code takes over"]
     rrework --> rcheck
 
     classDef claude fill:#EEEDFE,stroke:#534AB7,color:#3C3489
     classDef agent fill:#E1F5EE,stroke:#0F6E56,color:#085041
-    class r0,rself,rlevel,rcheck claude
-    class rimg,rrun,rrework agent
+    class r0,rself,rlevel,rcheck,rasset,rimgcheck claude
+    class rimg,rrun,rrework,rimgredo agent
 ```
 
 **Review**
@@ -129,6 +131,18 @@ When a topic has several goals pulling against each other (such as security and 
 - Custom roles, using role mode by default for some kinds of topics, and a different view of a model's tier can all go in the preference files. The role table and assignment rules are in [references/roles.md](foreman-en/skills/dispatch/references/roles.md).
 
 So that Claude Code doesn't forget (easy when a project has its own skills), the plugin reminds it once at the start of every session and includes your preference files.
+
+### Image assets
+
+Bitmaps are drawn by Codex's built-in image tool, then Claude Code turns them into assets ready for downstream use with the `assets` subcommand on your machine: transparent PNG parts, a manifest listing them by name, a contact sheet, and SVG when needed (one layer per part, which opens in Figma or Illustrator).
+
+- **Several parts are named by slot**: Codex gets a numbered slot template and draws part N in slot N, and the cut names parts by slot, so a model reshuffling the layout can't mislabel them.
+- **Edits and images from a reference**: the brief says to pass the reference through `referenced_image_paths`; if it wasn't passed, `image_calls` in the result shows it and a warning points it out. A partial change replaces only the part that changed.
+- **Backgrounds**: transparent by default, with the script cleaning the faint halo at the edges; a flat magenta background when the subject is white or pale.
+- **Vectorizing needs two extra native packages**: the first time, Claude Code asks you; if you agree they go into `~/.claude/foreman/tooling`, not the plugin folder or your project. Without them everything else works, just without SVG.
+- Not supported: pixel art, exact pixel sizes, high-resolution images above about 1.57 megapixels; the parts aren't ready for skeletal animation yet either.
+
+Prompt templates, command options and the checks are in [references/image-assets.md](foreman-en/skills/dispatch/references/image-assets.md).
 
 ### The live view
 

@@ -333,6 +333,7 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
       ? { ...changes, files: changes.files.slice(0, 300), files_total: changes.files.length, note: M.trackNote }
       : changes,
     generated_images: r.images.length ? r.images : undefined, // 只列这一轮生成的
+    image_calls: r.imageCalls?.length ? r.imageCalls : undefined, // 每次出图实际传的参数，读自 Codex 会话记录
     run_dir: dir,
   };
   return finishRun(run, result, ok ? 0 : 1, { messages: r.messages, questions: r.questions, last });

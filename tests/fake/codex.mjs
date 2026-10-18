@@ -26,10 +26,12 @@ if (operation === 'version') {
   console.log(JSON.stringify({ type: 'thread.started', thread_id: session }));
   await replay(s.steps, cwd);
   for (const [name, content] of Object.entries(s.files || {})) write(path.resolve(cwd, name), content);
-  if (s.stats) {
+  // 会话记录：stats 写一条用量；rollout 是额外的原始记录（比如出图调用），没写时间的按现在补上。
+  if (s.stats || s.rollout) {
     const d = new Date();
     const dir = path.join(process.env.CODEX_HOME, 'sessions', String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0'));
-    write(path.join(dir, `rollout-${session}.jsonl`), JSON.stringify({ type: 'event_msg', payload: { type: 'token_count', ...s.stats } }) + '\n');
+    const records = [...(s.rollout || []).map((r) => ({ timestamp: d.toISOString(), ...r })), ...(s.stats ? [{ type: 'event_msg', payload: { type: 'token_count', ...s.stats } }] : [])];
+    write(path.join(dir, `rollout-${session}.jsonl`), records.map((r) => JSON.stringify(r)).join('\n') + '\n');
   }
   for (const name of s.images || []) {
     write(path.join(process.env.CODEX_HOME, 'generated_images', session, name), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6iQAAAABJRU5ErkJggg==', 'base64'));
