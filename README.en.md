@@ -62,7 +62,7 @@ flowchart TD
 ```mermaid
 flowchart TD
     r0{"Who does what"} -- "Decisions, design, text" --> rself["Claude Code does it"]
-    r0 -- "Images" --> rimg["An image-capable agent"]
+    r0 -- "Drawing (incl. illustrations in SVG animations)" --> rimg["An image-capable agent"]
     r0 -- "Other hands-on work" --> rlevel{"Level the work"}
     rlevel -- "Level 0" --> rself
     rlevel -- "Levels 1–3" --> rrun["Handed off per the config"]
@@ -136,6 +136,7 @@ So that Claude Code doesn't forget (easy when a project has its own skills), the
 
 Bitmaps are drawn by Codex's built-in image tool, then Claude Code turns them into assets ready for downstream use with the `assets` subcommand on your machine: transparent PNG parts, a manifest listing them by name, a contact sheet, and SVG when needed (one layer per part, which opens in Figma or Illustrator).
 
+- **Illustrations in SVG, HTML and animations work the same way**: characters, scenes and illustrated icons are drawn by Codex and vectorized into SVG parts, and Claude Code assembles and animates them; only shapes simulated by physics every frame, things tied to mechanics, text and UI controls are drawn in code. A character that moves is split at its joints, with extra images for expressions and states.
 - **Several parts are named by slot**: Codex gets a numbered slot template and draws part N in slot N, and the cut names parts by slot, so a model reshuffling the layout can't mislabel them.
 - **Edits and images from a reference**: the brief says to pass the reference through `referenced_image_paths`; if it wasn't passed, `image_calls` in the result shows it and a warning points it out. A partial change replaces only the part that changed.
 - **Backgrounds**: transparent by default, with the script cleaning the faint halo at the edges; a flat magenta background when the subject is white or pale.

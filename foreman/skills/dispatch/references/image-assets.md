@@ -78,13 +78,29 @@ Each part is drawn complete and whole on its own (including the areas normally h
 - 嵌在组件里的小图标（导航栏里的图标）单独列一格或单独出一张，不要指望从整页里再拆一层。
 - 扩充现有素材集：把现有的一组作为参考图，要求 "exactly the same drawing style, outline weight, corner rounding, level of detail, proportions and palette as Image 1"，并写 "Do not copy any item from Image 1"。
 
-## 六、改图和分层
+## 六、用在 SVG、HTML 和动画里
+作品最后是代码时，插画同样由 Codex 画，转成 SVG 部件后再写进代码，不出"只作参考"的图让 Claude 照着手画。
+1. **先出整张设定图并验收**：角色的正面、侧面，或者整个场景。之后的部件都以它为参考图，保证同一个设计。
+2. **列元素清单，按元素分**：作品要求按物理逐帧模拟形状的（模拟的头发和布料、程序生成的绳子）、要和机械或物理对齐的（链条、齿轮、曲柄）、文字和 UI 控件、几何图形，用代码画；其余都进部件表。用代码画的照设定图的配色和线宽。
+3. **出部件表**：格子模板作 Image 1，设定图作 Image 2，透明背景。动画用的部件这样拆：
+   - 关节处拆开，提示词加上 "with rounded overlap ends at the joints so it can pivot"，并要求 "drawn complete and whole on its own"，被遮住的部分也画全。
+   - 会弯会飘、但不用逐帧模拟的部位拆成几段（头发、尾巴、披风各 3–4 段，这是默认做法），每段单独一格，按顺序转动。
+   - 表情和状态各占一格，和基础部件同样大小、同样角度：
+```text
+slot 9: the same head as slot 1 with the mouth open, drawn at exactly the same size, angle and position in its slot
+slot 10: the same head as slot 1 with the eyes closed (blink), drawn at exactly the same size, angle and position in its slot
+```
+   - 一张图放不下就分几张，每张都带上设定图作参考。
+4. **转 SVG**：`assets cut --slots … --vector`。生成时写扁平风格、少阴影，矢量化时加 `--colors 8` 到 `12`，路径数能少一半左右；动漫角色部件不减色时每件几十到五百条路径，网页上部件多时会卡。要固定配色时用 `--palette … --snap`。
+5. **组装**：`layers.svg` 是每个部件一个 `<g id>`、按源图位置排好的整体；也可以单独引用 `parts/<名字>.svg`。`manifest.json` 的 `crop` 只是部件在源图上的位置，组装位置和旋转中心（关节的圆头中心）要在代码里定。
+
+## 七、改图和分层
 - **局部修改**：原图作为 Image 1，提示词写 "Change ONLY <目标和位置>: <怎么改>. Keep every other part exactly unchanged: same parts, same positions, same sizes, same colors, same line art, and the same background."。改图会让其他区域有轻微变化（实测平均色差 2–3），用 `assets diff --before 原图 --after 新图 --slots 模板` 确认只有目标格变了，交付时只替换那个部件。
 - **场景分层**：背景板（`transparent_background: false`）写 "Remove <主体> completely and fill that area with the background that would be behind them … Change nothing else: same canvas size, same composition and framing"；主体层（`true`）写 "keep only <主体> exactly as they appear: same pose, same position in the frame, same scale … Same canvas size"。实测两层叠回去和原图几乎一样，但地面阴影两层都不带，要阴影就在任务说明里写明归哪一层或单独出一层。
 - **给现成图去背景**：原图作为 Image 1，"Remove only the background and make it fully transparent. Keep <主体> exactly as they are … Do not redraw or restyle anything."
 - 连续多轮改同一张图会累积变化，改了两三轮后从源图重新出。
 
-## 七、assets 子命令
+## 八、assets 子命令
 都在本机运行，不调用模型；输出 JSON。
 
 | 命令 | 作用 |
@@ -121,8 +137,8 @@ Each part is drawn complete and whole on its own (including the areas normally h
 
 其他指标：`halo`（清理前光晕占比）、`transparent`、`edge_width`（边缘半透明宽度，1–3 像素正常）、`background_p99`、每个部件的 `colors95`（覆盖 95% 像素要几种颜色，越少越好矢量化）、`on_palette`、`paths`、`iou`、`color_error`。这些数是 2026 年 10 月几十张图上的经验值，不是硬标准。
 
-## 八、做不到或没验证的
+## 九、做不到或没验证的
 - 像素风、精确像素尺寸、超出约 157 万像素的高清图。
-- 拆成部件不等于能直接做骨骼动画：关节、层级、遮挡补全、旋转中心都没有。
+- 部件不带骨骼数据：层级、遮挡顺序和旋转中心要在代码里定，manifest 里没有。
 - 半透明素材（玻璃、烟雾）只能用 `--matte soft` 粗略处理，没有系统验证。
 - 图层 SVG 导入 Figma、Illustrator 后的分组和可编辑性没有实际验证过。

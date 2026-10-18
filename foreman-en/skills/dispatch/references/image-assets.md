@@ -78,13 +78,29 @@ Each part is drawn complete and whole on its own (including the areas normally h
 - Give small icons inside a component (the icons in a navigation bar) their own slots or their own image; don't expect a second level of splitting out of a full page.
 - Extending an existing set: pass the existing set as the reference, ask for "exactly the same drawing style, outline weight, corner rounding, level of detail, proportions and palette as Image 1", and add "Do not copy any item from Image 1".
 
-## 6. Edits and layers
+## 6. Using it in SVG, HTML and animations
+When the final work is code, illustrations are still drawn by Codex and vectorized into SVG parts before going into the code; don't generate a "reference only" image for Claude to redraw by hand.
+1. **Generate the whole design sheet first and check it**: the character from the front and the side, or the whole scene. Every part afterwards uses it as the reference, so the design stays the same.
+2. **List the elements and decide each one**: shapes the work needs simulated by physics every frame (simulated hair and cloth, procedural ropes), things tied to mechanics or physics (chains, gears, cranks), text and UI controls, and geometric shapes are drawn in code; everything else goes on the parts sheet. Elements drawn in code follow the design sheet's colors and line weight.
+3. **Generate the parts sheet**: the slot template as Image 1, the design sheet as Image 2, transparent background. Split parts for animation like this:
+   - Split at the joints, add "with rounded overlap ends at the joints so it can pivot" to the prompt, and ask for each part "drawn complete and whole on its own", including what's normally hidden.
+   - Cut parts that bend or flow but don't need per-frame simulation into segments (hair, a tail or a cape into 3–4 each, the default), one slot per segment, turned in sequence.
+   - Give each expression or state its own slot, at the same size and angle as the base part:
+```text
+slot 9: the same head as slot 1 with the mouth open, drawn at exactly the same size, angle and position in its slot
+slot 10: the same head as slot 1 with the eyes closed (blink), drawn at exactly the same size, angle and position in its slot
+```
+   - If one image can't hold everything, use several, each with the design sheet as a reference.
+4. **Vectorize**: `assets cut --slots … --vector`. Ask for a flat style with little shading when generating, and add `--colors 8` to `12` when vectorizing, which roughly halves the path count; without color reduction an anime character part has tens to five hundred paths, and many parts on a web page can stutter. Use `--palette … --snap` to fix the colors.
+5. **Assemble**: `layers.svg` has every part in its own `<g id>` at its place in the source image; individual `parts/<name>.svg` files can be used too. `crop` in `manifest.json` is only the part's place in the source image; the assembly position and the pivot (the center of the round joint end) are set in code.
+
+## 7. Edits and layers
 - **A partial change**: the original as Image 1, and "Change ONLY <target and position>: <change>. Keep every other part exactly unchanged: same parts, same positions, same sizes, same colors, same line art, and the same background." An edit slightly changes other areas too (an average color difference of 2–3 in testing); check with `assets diff --before <original> --after <new> --slots <template>` that only the target slot changed, and when delivering replace only that part.
 - **Scene layers**: the background plate (`transparent_background: false`) says "Remove <subject> completely and fill that area with the background that would be behind them … Change nothing else: same canvas size, same composition and framing"; the subject layer (`true`) says "keep only <subject> exactly as they appear: same pose, same position in the frame, same scale … Same canvas size". In testing the two layers put back together matched the original closely, but the ground shadow was in neither layer; say in the brief which layer it belongs to, or make it a layer of its own.
 - **Removing the background from an existing image**: the original as Image 1, "Remove only the background and make it fully transparent. Keep <subject> exactly as they are … Do not redraw or restyle anything."
 - Changes build up over several rounds of edits to the same image; after two or three, regenerate from the source.
 
-## 7. The assets subcommand
+## 8. The assets subcommand
 Runs locally, calls no model, and prints JSON.
 
 | Command | What it does |
@@ -121,8 +137,8 @@ Outputs of `cut`: `alpha.png` (the whole image with the background removed), `pa
 
 Other figures: `halo` (halo share before cleaning), `transparent`, `edge_width` (width of the semi-transparent edge, 1–3 pixels is normal), `background_p99`, and per part `colors95` (how many colors cover 95% of the pixels; fewer vectorizes better), `on_palette`, `paths`, `iou`, `color_error`. These figures come from a few dozen images in October 2026 and are rules of thumb, not hard limits.
 
-## 8. What it can't do or hasn't been verified
+## 9. What it can't do or hasn't been verified
 - Pixel art, exact pixel sizes, and high-resolution images above about 1.57 megapixels.
-- Splitting into parts doesn't make them ready for skeletal animation: there are no joints, layer order, filled-in hidden areas or pivots.
+- Parts carry no rig data: layer order, draw order and pivots are set in code; the manifest doesn't have them.
 - Semi-transparent assets (glass, smoke) only get the rough `--matte soft` treatment and haven't been tested systematically.
 - How the layered SVG behaves after import into Figma or Illustrator (groups, editability) hasn't been checked in practice.
