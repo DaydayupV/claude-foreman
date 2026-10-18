@@ -12,43 +12,82 @@ A Claude Code plugin that makes Claude Code the foreman: it plans, decides and c
 
 ## How it works
 
-1. **Pick a level**: a request goes through stages of discussion, hands-on work and review, and each gets a level by that kind's own criteria. Small things not worth an outside model are level 0, which Claude Code does itself; the rest are simple, normal or complex (`simple` / `normal` / `complex`).
-2. **Hand it off as configured**: who gets levels 1–3, and with what effort, is up to you in the config; a level set to `"claude code"` is done by Claude Code itself.
-3. **Watch live**: once it's handed off, a live view opens in the terminal and shows each step the model takes.
-4. **Check the result**: Claude Code reviews the changes, runs them to verify, and reports which model did the work and how many tokens it used.
+The plugin has three modules: **discuss**, **run** and **review**. They have no fixed order: after each step Claude Code decides what comes next and goes into whichever module it needs, so one request can use them in any order and more than once. For example "discuss the approach → run → discuss the result → rework → review", or "run → review → discuss a design problem the review raised → run again".
 
-The whole path of a request, from start to finish:
+```mermaid
+flowchart LR
+    start(["A request comes in"]) --> hub{"Claude Code<br/>decides the next step"}
+    hub -- "settle an approach or judge a result" --> discuss["Discuss"]
+    hub -- "do the work" --> run["Run"]
+    hub -- "deliver changes" --> review["Review"]
+    discuss --> hub
+    run --> hub
+    review --> hub
+    hub -- "done" --> report(["Report"])
+
+    classDef claude fill:#EEEDFE,stroke:#534AB7,color:#3C3489
+    classDef module fill:#E1F5EE,stroke:#0F6E56,color:#085041
+    class hub claude
+    class discuss,run,review module
+```
+
+Each time it enters a module, Claude Code levels that step by the module's own criteria. Small things not worth an outside model are level 0, which Claude Code does itself; the rest are simple, normal or complex (`simple` / `normal` / `complex`). Who gets levels 1–3, and with what effort, is up to you in the config, and a level set to `"claude code"` is done by Claude Code itself too. Once something is handed off, a live view in the terminal shows each step the model takes, and at the end Claude Code reports which model did the work and how many tokens it used.
+
+Inside each module (purple steps are done by Claude Code; green ones involve an agent):
+
+**Discuss**
 
 ```mermaid
 flowchart TD
-    start(["A request comes in"]) --> plan{"Settle the approach first?<br/>Level it as a discussion"}
-    plan -- "Level 0: approach is clear" --> split
-    plan -- "Levels 1–3" --> discuss["Several models discuss<br/>Claude Code decides"]
-    discuss --> advice{"Only asking for advice?"}
-    advice -- "Yes" --> report
-    advice -- "No, carry out the plan" --> split
-    split{"Who does what"} -- "Decisions, design, text" --> self["Claude Code does it"]
-    split -- "Images" --> image["An image-capable agent"]
-    split -- "Other hands-on work" --> level{"Level the hands-on work"}
-    level -- "Level 0" --> self
-    level -- "Levels 1–3" --> run["Handed off per the config<br/>watched live in a terminal"]
-    run --> check["Check: read the diff, run it"]
-    image --> check
-    check -- "Not good enough" --> rework["One rework<br/>then Claude Code takes over"]
-    rework --> check
-    check -- "Passes" --> review{"Before delivering,<br/>level the review"}
-    self --> review
-    review -- "Level 0" --> report(["Report"])
-    review -- "Levels 1–3" --> reviewer["Another model reviews in a new session<br/>verify, fix, check again"]
-    reviewer --> report
+    d0{"Level the discussion"} -- "Level 0" --> dself["Claude Code thinks it through"]
+    d0 -- "Level 1" --> dqa["One model gives a second opinion"]
+    d0 -- "Levels 2–3" --> dmode{"Choose the mode"}
+    dmode -- "Normal" --> dnormal["Same brief for everyone<br/>independent proposals"]
+    dmode -- "Role mode" --> droles["Roles assigned by ability<br/>you confirm in a pop-up"]
+    droles --> dcards["Each proposes from its role"]
+    dnormal --> dcross["Round 2 critique<br/>when they really disagree"]
+    dcards --> dcross
+    dcross --> ddecide["Claude Code rules on each point<br/>writes the decision record"]
 
     classDef claude fill:#EEEDFE,stroke:#534AB7,color:#3C3489
     classDef agent fill:#E1F5EE,stroke:#0F6E56,color:#085041
-    class plan,advice,split,self,level,check,review claude
-    class discuss,image,run,rework,reviewer agent
+    class d0,dself,dmode,droles,ddecide claude
+    class dqa,dnormal,dcards,dcross agent
 ```
 
-Purple steps are done by Claude Code; green ones involve an agent. Who gets levels 1–3 is up to your config, and a level configured as `"claude code"` is done by Claude Code itself too.
+**Run**
+
+```mermaid
+flowchart TD
+    r0{"Who does what"} -- "Decisions, design, text" --> rself["Claude Code does it"]
+    r0 -- "Images" --> rimg["An image-capable agent"]
+    r0 -- "Other hands-on work" --> rlevel{"Level the work"}
+    rlevel -- "Level 0" --> rself
+    rlevel -- "Levels 1–3" --> rrun["Handed off per the config"]
+    rrun --> rcheck["Check: read the diff<br/>run it"]
+    rimg --> rcheck
+    rcheck -- "Not good enough" --> rrework["One rework<br/>then Claude Code takes over"]
+    rrework --> rcheck
+
+    classDef claude fill:#EEEDFE,stroke:#534AB7,color:#3C3489
+    classDef agent fill:#E1F5EE,stroke:#0F6E56,color:#085041
+    class r0,rself,rlevel,rcheck claude
+    class rimg,rrun,rrework agent
+```
+
+**Review**
+
+```mermaid
+flowchart TD
+    v0{"Level by the change's risk"} -- "Level 0" --> vself["Claude Code's check is enough"]
+    v0 -- "Levels 1–3" --> vnew["Another model reviews<br/>in a new session"]
+    vnew --> vfix["Claude Code verifies each finding<br/>fixes, checks again"]
+
+    classDef claude fill:#EEEDFE,stroke:#534AB7,color:#3C3489
+    classDef agent fill:#E1F5EE,stroke:#0F6E56,color:#085041
+    class v0,vself,vfix claude
+    class vnew agent
+```
 
 ## What it does
 
@@ -56,7 +95,7 @@ Purple steps are done by Claude Code; green ones involve an agent. Who gets leve
 |---|---|
 | `/foreman-en:run <task>` | Hands a task to the configured agent. When it finishes, Claude Code reviews the diff, runs it to verify, and sends it back for rework if needed |
 | `/foreman-en:review` | Has an agent review uncommitted changes, a branch or a commit. Claude Code checks each finding and filters out false positives |
-| `/foreman-en:discuss <topic>` | Several models each propose an approach to a complex design and critique each other's; Claude Code rules on each point and writes up a decision record |
+| `/foreman-en:discuss <topic>` | Several models each propose an approach to a complex design and critique each other's; Claude Code rules on each point and writes up a decision record; topics with competing goals can use role mode, see below |
 | `/foreman-en:watch` | Shows what each model is doing, live, in a terminal; see below |
 | `/foreman-en:status` | Lists recent runs, or shows the details of one, including token use and Codex quota |
 | `/foreman-en:setup` | Setup guide: detects this machine's tools, lists the models available, gives one complete recommendation, and changes the config the way you choose |
@@ -66,14 +105,26 @@ You can also just ask Claude Code to "check the environment" (`check`: whether e
 
 ### Without commands
 
-The bundled skill has Claude Code level each stage (discussion, hands-on work, review) and start what crosses the threshold on its own:
+The bundled skill has Claude Code level each discussion, piece of hands-on work and review as it comes up, and start what crosses the threshold on its own:
 
-- Before giving an approach, talk complex, uncertain questions through with other models first; Claude Code rules on the conclusion.
+- Before giving an approach, and when judging the result of work already done to decide what to adjust, talk complex, uncertain questions through with other models first; Claude Code rules on the conclusion.
 - Before starting work, hand off hands-on work as the levels and config say; work only Claude Code does (decisions, design, text) and level 0 small things aren't handed off.
 - Before delivering, decide by the risk of the change whether another model should review it.
 - When a big task splits into parts that don't touch each other, hand them to several sessions at once to cut the wait (each agent's limit is `max_parallel`).
 
 If you'd rather Claude Code didn't start these on its own, set `dispatch.auto` to `false`: it asks you before handing off work, starting a discussion or asking for a review.
+
+Only you type the commands in the table above; Claude Code doesn't call them itself. They mean "you asked for this by name" and skip the level 0 check. When Claude Code starts something on its own, it goes through the plugin's skill, which still levels the step and follows `dispatch.auto`.
+
+### Role-mode discussions
+
+When a topic has several goals pulling against each other (such as security and convenience, implementation cost and user experience, compatibility and a rewrite), or it's an evidence review before research conclusions are recorded, a level 2 or 3 discussion can use role mode: each model gets a role card and checks the same topic from one angle, such as architect, math / correctness, fact checker, maintenance and compatibility, user experience or edge-case lister, plus an overall reviewer with no role.
+
+- **Assigned by ability**: first whether the tools can do it (the fact checker has to run commands, so only Codex can take it), then the model tier (roles that need hard thinking only go to strong models), then strengths within the tier. Models are sorted into strong, mid and weak tiers from a third-party leaderboard; see [references/model-tiers.md](foreman-en/skills/dispatch/references/model-tiers.md).
+- **One model per role first**: when there aren't enough qualifying models, a strong model opens another session for another role rather than handing it to a model below the role's tier; weak models only take roles where mistakes are cheap, or sit the discussion out.
+- **You always confirm first**: before it starts, a pop-up lists the "model → role" assignment, even with `dispatch.auto` on; you can start as suggested, adjust it, or use a normal discussion instead.
+- A role only sets what each model checks most closely, not its conclusion; decisions still go by evidence, and several roles agreeing doesn't count as more evidence.
+- Custom roles, using role mode by default for some kinds of topics, and a different view of a model's tier can all go in the preference files. The role table and assignment rules are in [references/roles.md](foreman-en/skills/dispatch/references/roles.md).
 
 So that Claude Code doesn't forget (easy when a project has its own skills), the plugin reminds it once at the start of every session and includes your preference files.
 
@@ -81,7 +132,7 @@ So that Claude Code doesn't forget (easy when a project has its own skills), the
 
 - The default view is a timeline: times down the left, with what the model says, folded commands and file changes in order, a bottom line that keeps showing elapsed time, command count and progress, and the result at the end.
 - While the run is going, the view re-flows when the window is resized. Scroll back with ↑↓, PgUp/PgDn or the mouse wheel, press End to jump to the latest, and q to stop watching; the run keeps going.
-- A discussion or task group is shown in one window with a block per model: its status, elapsed time and latest few lines. When an API model is queued because its service is busy, press x to stop it.
+- A discussion or task group is shown in one window with a block per model: its status, elapsed time and latest few lines. When the blocks have different titles (a role-mode discussion, split hands-on work), each block's first line is the model and its status and the second is that block's title, with the round for a resumed discussion. When an API model is queued because its service is busy, press x to stop it.
 - Add `--verbose` for every detail: reasoning, each command and its output, token use.
 - The first time it opens for a newly dispatched conversation, a few seconds of intro play first: the model's pixel avatar, "Starting …" and a few jokes (5 seconds for one model, 10 for a discussion). Any key skips it, and setting `dispatch.intro` to `false` turns it off. The avatar is picked by the model name, with a ??? avatar for anything it doesn't recognize.
 - In the Claude desktop app, the live view opens in the terminal panel by itself after each handoff; in the CLI, Claude Code sends you the command to run in another terminal.
@@ -173,7 +224,7 @@ You can have several agents of one type, each with a different model. Codex isn'
 
 ### Task levels
 
-A request often goes through stages of discussion, hands-on work and review, and Claude Code levels each stage by that kind's own criteria when it gets there. The criteria differ by kind:
+Each time Claude Code enters a discussion, hands-on work or a review, it levels that step by the kind's own criteria; when the same kind comes up again in one request, it's levelled again. The criteria differ by kind:
 
 | Level | Discussion (how uncertain, how costly a wrong choice) | Hands-on work (how much judgement, how costly a mistake) | Review (risk of the change) |
 |---|---|---|---|
@@ -334,7 +385,10 @@ Preference files win over the plugin's built-in rules, and project level wins ov
 - Treat billing and reconciliation code in this project as high-risk: hand it off as complex, and always have Codex review the changes.
 - Don't hand off database migration scripts; Claude Code writes them.
 - Ask Codex for a review when a change is over 200 lines.
+- Use role mode for discussions where performance and maintainability pull against each other; treat kimi-k2.6 as a strong model.
 ```
+
+Custom roles for role-mode discussions go here too; the format is under "Custom roles" in [references/roles.md](foreman-en/skills/dispatch/references/roles.md).
 
 ## Safety notes
 
@@ -407,7 +461,8 @@ node tools/sync-shared.mjs
 
 - Before committing, `node tools/sync-shared.mjs --check` checks that both copies of the scripts, the structure of both sets of schemas and both plugin versions match.
 - Tests: `npm test` (Node built-ins only, nothing to install); see [tests/README.md](tests/README.md).
-- Terminal messages, the rules and prompts sent to agents and other text live in `messages.mjs`, with a Chinese and an English set; each plugin has its own SKILL.md, `references/`, command docs and schemas.
+- Terminal messages, the rules and prompts sent to agents and other text live in `messages.mjs`, with a Chinese and an English set; each plugin has its own skill `SKILL.md` files (slash commands are skills too, in `skills/<command>/SKILL.md`), `references/` and schemas.
+- The model tiers in `references/model-tiers.md` come from a third-party leaderboard that changes within months; update them against the latest results before each release.
 - The intro's avatar data is generated by `node tools/make-avatars.mjs` from `tools/avatars/source.webp`.
 
 ## License

@@ -12,43 +12,82 @@
 
 ## 工作方式
 
-1. **定等级**：一个请求按讨论、执行、审查几个阶段，各自按这一类的标准定级。不值得找外部模型的小事是 0 级，由 Claude Code 自己做；其余分简单、常规、复杂三级（`simple` / `normal` / `complex`）。
-2. **按配置派出**：1–3 级交给谁、用什么推理强度，由你在配置里决定；写成 `"claude code"` 的那一级由 Claude Code 自己做。
-3. **实时查看**：派出后终端里打开实时画面，能看到模型的每一步。
-4. **验收**：Claude Code 审查改动、运行验证，再向你汇报用了哪个模型、花了多少 token。
+插件分三个模块：**讨论**、**执行**、**审查**。它们没有固定顺序：Claude Code 每做完一步，都判断下一步该做什么，需要哪个模块就进哪个，一个请求里可以按任意顺序、多次进入。比如"讨论方案 → 执行 → 讨论实现效果 → 返工 → 审查"，或者"执行 → 审查 → 讨论审查指出的设计问题 → 再执行"。
 
-一个请求从开始到结束的完整流程：
+```mermaid
+flowchart LR
+    start(["收到请求"]) --> hub{"Claude Code<br/>判断下一步"}
+    hub -- "要定方案或评估效果" --> discuss["讨论"]
+    hub -- "要动手" --> run["执行"]
+    hub -- "要交付改动" --> review["审查"]
+    discuss --> hub
+    run --> hub
+    review --> hub
+    hub -- "做完了" --> report(["汇报"])
+
+    classDef claude fill:#EEEDFE,stroke:#534AB7,color:#3C3489
+    classDef module fill:#E1F5EE,stroke:#0F6E56,color:#085041
+    class hub claude
+    class discuss,run,review module
+```
+
+每次进入一个模块，都按这一类的标准单独定级：不值得找外部模型的小事是 0 级，由 Claude Code 自己做；其余分简单、常规、复杂三级（`simple` / `normal` / `complex`），交给谁、用什么推理强度由你在配置里决定，写成 `"claude code"` 的那一级同样由 Claude Code 自己做。派出去之后终端里能实时看到模型的每一步，结束后 Claude Code 向你汇报用了哪个模型、花了多少 token。
+
+三个模块各自的内部流程如下，紫色的步骤由 Claude Code 做，绿色的有协作方参与。
+
+**讨论**
 
 ```mermaid
 flowchart TD
-    start(["收到请求"]) --> plan{"要先定方案吗？<br/>按讨论定级"}
-    plan -- "0 级：方案已明确" --> split
-    plan -- "1–3 级" --> discuss["多模型讨论<br/>Claude Code 裁决"]
-    discuss --> advice{"只是来要建议？"}
-    advice -- "是" --> report
-    advice -- "否，按最终方案做" --> split
-    split{"分工"} -- "决策、设计、文字" --> self["Claude Code 自己做"]
-    split -- "生成图片" --> image["交给能出图的协作方"]
-    split -- "其余执行工作" --> level{"按执行定级"}
-    level -- "0 级" --> self
-    level -- "1–3 级" --> run["按配置派给协作方<br/>终端里实时查看"]
-    run --> check["验收：看 diff，亲自运行验证"]
-    image --> check
-    check -- "不合格" --> rework["返工一次<br/>再不行 Claude Code 接手"]
-    rework --> check
-    check -- "通过" --> review{"交付前，按审查定级"}
-    self --> review
-    review -- "0 级" --> report(["汇报"])
-    review -- "1–3 级" --> reviewer["另一个模型开新会话审查<br/>逐条核实、修复、重新验证"]
-    reviewer --> report
+    d0{"按讨论定级"} -- "0 级" --> dself["Claude Code 自己想清楚"]
+    d0 -- "1 级" --> dqa["请一个模型给第二意见"]
+    d0 -- "2–3 级" --> dmode{"选模式"}
+    dmode -- "普通" --> dnormal["同一份议题<br/>各方独立出方案"]
+    dmode -- "多角色" --> droles["按能力分配角色<br/>弹窗请你确认"]
+    droles --> dcards["各方从自己的角色出方案"]
+    dnormal --> dcross["有实质分歧时<br/>第 2 轮交叉挑错"]
+    dcards --> dcross
+    dcross --> ddecide["Claude Code 逐条裁决<br/>写决策记录"]
 
     classDef claude fill:#EEEDFE,stroke:#534AB7,color:#3C3489
     classDef agent fill:#E1F5EE,stroke:#0F6E56,color:#085041
-    class plan,advice,split,self,level,check,review claude
-    class discuss,image,run,rework,reviewer agent
+    class d0,dself,dmode,droles,ddecide claude
+    class dqa,dnormal,dcards,dcross agent
 ```
 
-紫色的步骤由 Claude Code 做，绿色的有协作方参与。1–3 级交给谁看你的配置，配置里写成 `"claude code"` 的那一级同样由 Claude Code 自己做。
+**执行**
+
+```mermaid
+flowchart TD
+    r0{"分工"} -- "决策、设计、文字" --> rself["Claude Code 自己做"]
+    r0 -- "生成图片" --> rimg["交给能出图的协作方"]
+    r0 -- "其余执行工作" --> rlevel{"按执行定级"}
+    rlevel -- "0 级" --> rself
+    rlevel -- "1–3 级" --> rrun["按配置派给协作方"]
+    rrun --> rcheck["验收：看 diff<br/>亲自运行验证"]
+    rimg --> rcheck
+    rcheck -- "不合格" --> rrework["返工一次<br/>再不行 Claude Code 接手"]
+    rrework --> rcheck
+
+    classDef claude fill:#EEEDFE,stroke:#534AB7,color:#3C3489
+    classDef agent fill:#E1F5EE,stroke:#0F6E56,color:#085041
+    class r0,rself,rlevel,rcheck claude
+    class rimg,rrun,rrework agent
+```
+
+**审查**
+
+```mermaid
+flowchart TD
+    v0{"按改动的风险定级"} -- "0 级" --> vself["Claude Code 验收就够"]
+    v0 -- "1–3 级" --> vnew["另一个模型开新会话审查"]
+    vnew --> vfix["Claude Code 逐条核实<br/>修复、重新验证"]
+
+    classDef claude fill:#EEEDFE,stroke:#534AB7,color:#3C3489
+    classDef agent fill:#E1F5EE,stroke:#0F6E56,color:#085041
+    class v0,vself,vfix claude
+    class vnew agent
+```
 
 ## 能做什么
 
@@ -56,7 +95,7 @@ flowchart TD
 |---|---|
 | `/foreman:run <任务>` | 把一个执行任务派给配置的协作方，完成后 Claude Code 审查改动、实际运行验证，不合格就返工 |
 | `/foreman:review` | 请协作方审查未提交的改动、某个分支或某次提交，Claude Code 逐条核实，排除误报 |
-| `/foreman:discuss <议题>` | 几个模型就复杂方案各出方案、互相挑错，Claude Code 逐条裁决，给出决策记录 |
+| `/foreman:discuss <议题>` | 几个模型就复杂方案各出方案、互相挑错，Claude Code 逐条裁决，给出决策记录；目标互相拉扯的议题可以用多角色模式，见下文 |
 | `/foreman:watch` | 在终端里实时查看各个模型正在做什么，见下文 |
 | `/foreman:status` | 查看最近的任务或某次任务的详细结果，包括 token 消耗和 Codex 额度 |
 | `/foreman:setup` | 设置引导：检测本机的工具，列出能用的模型，给出一份完整推荐，按你的选择改好配置 |
@@ -66,14 +105,26 @@ flowchart TD
 
 ### 不用命令也行
 
-插件自带的 skill 会让 Claude Code 按讨论、执行、审查分别定级，达到门槛的自己发起：
+插件自带的 skill 会让 Claude Code 每次进入讨论、执行或审查时分别定级，达到门槛的自己发起：
 
-- 给出方案之前，复杂、不确定的问题先找其他模型讨论，结论由 Claude Code 裁决。
+- 给出方案之前，以及执行之后要评估效果、决定下一步怎么调时，复杂、不确定的问题先找其他模型讨论，结论由 Claude Code 裁决。
 - 动手之前，执行类工作按等级和配置派出；只由 Claude Code 做的工作（决策、设计、文字）和 0 级的小事不派。
 - 交付之前，按改动的风险判断要不要请另一个模型审查。
 - 大任务能拆成互不相干的几份时，同时派给几个会话，缩短等待（每个协作方的并发上限见 `max_parallel`）。
 
 不想让 Claude Code 自己发起，把 `dispatch.auto` 设成 `false`：派活、讨论和审查之前它都会先问你。
+
+上面表格里的命令只由你来输入，Claude Code 不会自己调用它们：这些命令表示"你点名要做"，会跳过 0 级判断。Claude Code 自己发起时走插件的 skill，照样定级、照样遵守 `dispatch.auto`。
+
+### 多角色讨论
+
+议题里有几个目标互相拉扯时（比如安全和便利、实现成本和体验、兼容和重构），或者是研究结论落地前的证据审查，2、3 级讨论可以改用多角色模式：每个模型带一张角色卡，从一个视角检查同一个议题，比如架构师、数学/正确性、实证核查员、维护与兼容、用户体验、边界清单员，再留一个不带角色的综合对照位。
+
+- **按能力分配**：先看工具能不能做到（比如实证核查员要跑命令，只能给 Codex），再看模型档位（需要复杂思考的角色只给强档模型），最后在同档里挑长处合适的。模型档位按第三方评测分强、中、弱三档，见 [references/model-tiers.md](foreman/skills/dispatch/references/model-tiers.md)。
+- **优先一个模型一个角色**：合格的模型不够时，让强档模型多开一个会话扮另一个角色，不降级给档位不够的模型；弱档模型只扮出错代价低的角色，没有合适的就这一场不参加。
+- **一定先请你确认**：启动前弹窗列出"模型 → 角色"的分配，`dispatch.auto` 开着也一样；你可以按推荐开始、调整，或者改用普通讨论。
+- 角色只决定各方重点检查什么，不决定结论；裁决照样按证据，几个角色意见一致不算多一份证据。
+- 自定义角色、某类议题默认用多角色模式、对某个模型档位的不同看法，都可以写进偏好文件。角色表和分配规则见 [references/roles.md](foreman/skills/dispatch/references/roles.md)。
 
 为了不让 Claude Code 忘了这些（项目里有自己的 skill 时尤其容易漏），插件会在每个会话开始时提醒它一次，并附上你的偏好文件。
 
@@ -81,7 +132,7 @@ flowchart TD
 
 - 默认是一条时间线：左边是时间，模型说的话、折叠后的命令、文件改动依次往下排，最底下一行实时显示用时、命令数和进度，结束时写出结果。
 - 运行中画面随窗口大小重排。↑↓、PgUp/PgDn 或鼠标滚轮往回翻，End 回到最新，q 退出查看，任务照常运行。
-- 多方讨论或任务组在一个窗口里按模型分块，每块显示状态、用时和最新几行。某个 API 模型因为服务繁忙在排队时，按 x 可以终止它。
+- 多方讨论或任务组在一个窗口里按模型分块，每块显示状态、用时和最新几行。同组各块标题不同时（多角色讨论、拆开的执行任务），每块第一行是模型和状态，第二行是这一块的标题，续接的讨论会注明第几轮。某个 API 模型因为服务繁忙在排队时，按 x 可以终止它。
 - 加 `--verbose` 看全部细节：思考过程、每条命令和输出、token 用量。
 - 新派出的对话第一次打开时，先放几秒启动动画：模型的像素头像、"正在启动"和几句玩笑（单个模型 5 秒，讨论 10 秒），按任意键跳过，`dispatch.intro` 设成 `false` 可以关掉。头像按模型名认，认不出的用 ??? 头像。
 - Claude 桌面版里，实时画面开在终端面板里，派活后自动打开；命令行版里，Claude Code 会把命令发给你，在另一个终端里运行。
@@ -173,7 +224,7 @@ flowchart TD
 
 ### 任务等级
 
-一个请求往往要经过讨论、执行、审查几个阶段，Claude Code 在每个阶段到了时，按这一类的标准单独定级。三类的标准不一样：
+Claude Code 每次进入讨论、执行或审查时，都按这一类的标准单独定级；同一类在一个请求里再次出现，也重新定级。三类的标准不一样：
 
 | 等级 | 讨论（看决策的不确定性和选错的代价） | 执行（看要多少判断、出错的代价） | 审查（看被审改动的风险） |
 |---|---|---|---|
@@ -334,7 +385,10 @@ flowchart TD
 - 这个项目的计费和对账代码按高风险处理：派活用 complex，改完都请 Codex 审查。
 - 数据库迁移脚本不派出去，由 Claude Code 自己写。
 - 改动超过 200 行就请 Codex 审查。
+- 性能和可维护性互相拉扯的讨论用多角色模式；kimi-k2.6 按强档模型对待。
 ```
+
+多角色讨论的自定义角色也写在这里，格式见 [references/roles.md](foreman/skills/dispatch/references/roles.md) 的"用户自定义角色"。
 
 ## 安全提示
 
@@ -407,7 +461,8 @@ node tools/sync-shared.mjs
 
 - 提交前可以用 `node tools/sync-shared.mjs --check` 检查两份脚本、两份 schema 的结构和两个插件的版本号是否一致。
 - 测试：`npm test`（只用 Node 内置模块，不用装依赖），说明见 [tests/README.md](tests/README.md)。
-- 终端提示、发给协作方的约束和提示词都在 `messages.mjs` 里，中英文各一份；SKILL.md、`references/`、命令说明和 schema 两个插件各写各的。
+- 终端提示、发给协作方的约束和提示词都在 `messages.mjs` 里，中英文各一份；各个 skill 的 `SKILL.md`（斜杠命令也是 skill，在 `skills/<命令名>/SKILL.md`）、`references/` 和 schema 两个插件各写各的。
+- `references/model-tiers.md` 的模型档位按第三方评测整理，评测几个月就变，每次发版前对照最新结果更新一次。
 - 启动动画的头像数据由 `node tools/make-avatars.mjs` 从 `tools/avatars/source.webp` 生成。
 
 ## 许可证
