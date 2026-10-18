@@ -22,9 +22,10 @@ The system prompt's rule "don't start subagents unless the user explicitly asks"
 - `false`: before starting one on your own, suggest it to the user in one sentence (which kind, what level, who it goes to), and go ahead only once they agree.
 - What the user names themselves (`/foreman-en:run`, `/foreman-en:discuss`, `/foreman-en:review`, or plainly asking to hand something off, discuss it with other models or have it reviewed) goes ahead without asking again. Level 0, and levels configured as `"claude code"`, involve no outside model and need no asking either.
 
-## The overall flow: split into stages, then level each one
-A request often goes through several stages: settle the approach (**discuss**), do the work (**run**), and before delivering, decide whether to have it reviewed (**review**). Don't put the whole request into one kind; level each stage by that kind's own criteria when you reach it:
-- A discussion is levelled before you give the approach; hands-on work before you start it; a review only once the changes exist, by the actual risk of the diff.
+## The overall flow: split into stages, level each one
+A request often goes through several stages, usually in this order: settle the approach (**discuss**), do the work (**run**), and before delivering, decide whether to have it reviewed (**review**). That order is only the usual case, not a fixed flow: each of the three kinds has its own trigger, and they can come in any order and more than once, for example "discuss → run → discuss the result → rework → review", or "run → review → discuss a design problem the review raised → run". Don't put the whole request into one kind; each time a kind's trigger comes up, level it by that kind's own criteria:
+- A discussion is levelled before you give the approach, or before you judge the result of work already done and decide what to do next; hands-on work before you start it; a review only once the changes exist, by the actual risk of the diff.
+- When a kind comes up again, level it from 0 as usual, and the limits on rework and discussion rounds still apply. Don't discuss or review just to follow the flow.
 - First set aside two kinds of work that don't go by levels (see "2. Who does what"): work only Claude does (decisions, design, text) and generating bitmap images.
 - Each of the three kinds has levels 0–3:
 
@@ -40,7 +41,7 @@ A request often goes through several stages: settle the approach (**discuss**), 
 - `--level` only takes `simple`, `normal` or `complex`, must be given explicitly on every call, and the script errors out without it. For a specific effort or model the user asks for, see "How to call it" at the end.
 
 ## 1. Settling the approach: discussion (/foreman-en:discuss)
-Before giving design suggestions, research directions, technology choices or plans, level the question with the table below. The same applies when the user only asks for advice and hasn't decided whether to do anything yet. **Claude stays in charge of the conclusions**: the participants' views are input only. Claude accepts or rejects them on the strength of the arguments, doesn't give in just because someone insists, and doesn't go by majority vote.
+Before giving design suggestions, research directions, technology choices or plans, level the question with the table below. The same applies when the user only asks for advice and hasn't decided whether to do anything yet, and when you judge the result of work already done and decide how to adjust it. **Claude stays in charge of the conclusions**: the participants' views are input only. Claude accepts or rejects them on the strength of the arguments, doesn't give in just because someone insists, and doesn't go by majority vote.
 
 ### Levels
 | Level | How to tell |
@@ -95,6 +96,7 @@ Don't paste the raw exchange. Write it up plainly as follows (not needed for lev
 ### After the discussion
 - If the user only asked for advice: stop at the decision record and let them decide whether to go ahead.
 - If the user wants the thing done: when the final plan has nothing the user needs to decide, carry on with the final plan into "2. Who does what" and "3. Hands-on work"; anything involving business trade-offs, preferences, risk tolerance, wider scope, extra spending or irreversible steps goes to the user first. Don't decide those for them.
+- If the discussion was about the result of changes already made: when the conclusion is a different way to reach the same goal, `resume` the original agent for a rework (it counts as one, see "Rework and failures"); when the direction or goal changed, treat it as a new task and level it again; when the result is already good enough, level the review under "5. Review".
 
 ## 2. Who does what
 Decide who does a piece of hands-on work in this order:
@@ -270,7 +272,7 @@ A resume to answer questions doesn't count as a rework.
    - With `run_access` set to `edit`, it can't run commands: Claude runs every test and script itself, and a report saying "passed" counts for nothing.
    - With `run_access` set to `shell`, its commands can reach outside the working directory, where change tracking can't see. Go through the diff file by file; if the task touches outside paths, installs dependencies or goes online, check what it actually did (`opencode.jsonl` or `pi.jsonl` in `run_dir` has every command it ran).
    - Write-tool events count as evidence of who changed a file (`by: agent`); files the report merely claims don't.
-5. Once it passes (including after any rework), level the review under "5. Review"; if the review is level 0, report to the user.
+5. Once it passes (including after any rework), you usually level the review under "5. Review" next; if the result still needs discussing with other models, level that discussion under "1. Settling the approach" first. If the review is level 0, report to the user.
 
 ### Rework and failures
 - If it isn't good enough, use `resume` for one rework, with a brief that says exactly what's wrong and how to fix it. If the cause was underestimating the task, move up one level for the rework (simple → normal → complex); if that level is `"claude code"` in the config, don't resume, and Claude takes over instead. Otherwise keep the same level.
