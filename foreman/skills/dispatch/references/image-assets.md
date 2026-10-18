@@ -80,8 +80,22 @@ Do NOT draw the dashed slot outlines or the slot numbers.
 
 ## 六、用在 SVG、HTML 和动画里
 作品最后是代码时，每个部件按 SKILL.md 的"按部件分"判断：整块动、接缝被盖住或相对不动的出图；本身要弯、转动时接缝会露出来、要和代码画的东西精确接触的由 Claude 手画；物理模拟、机械、文字、UI 控件和几何图形用代码画。同一个角色可以混合。
-1. **列部件清单**：每个看得见的部件写明怎么动（不动、整块平移或转动、弯曲）、和谁相接、接缝被什么盖住、要不要和代码画的东西接触，据此定出图、手画还是代码画。动手前把结论用一两句话告诉用户。接缝放在参考图里本来就有遮挡的地方，跟着动的衣物和配件（袖子、裤脚、手套）和会动的部件归在一起；不要从出图部件里删掉插在它里面或挡在它前面的部件，模型会把本来看不见的开口、内沿画出来。
-2. **出整体参考图**：整个角色或整幅画面，最终的构图、配色和画风；风格写扁平、细节适中（第三节的积木，加一句 "moderate detail: simple shapes and few fine lines"），给定色板。要拆部件的角色，在提示词里让部件之间的接缝自然被盖住（领口盖住脖子、袖口盖住手腕、前面的物体挡住腰以下）。验收后它就是所有部件的参考。
+1. **列部件清单**：每个看得见的部件写明怎么动（不动、整块平移或转动、弯曲）、和谁相接、接缝被什么盖住、要不要和代码画的东西接触，据此定出图、手画还是代码画。动手前把结论用一两句话告诉用户。接缝放在参考图里本来就有遮挡的地方，跟着动的衣物和配件（袖子、裤脚、手套）和会动的部件归在一起；不要从出图部件里删掉插在它里面或挡在它前面的部件，模型会把本来看不见的开口、内沿画出来；也不要让它删掉一个部件再把边收好（去掉手臂后收成圆肩），它不照做。接缝放在参考图里已有的遮挡物边上（衣服的带子、领口、袖口、柜台），取出时那一侧照原样保留，接缝旁边露出来的一小段由手画部分照参考图描出来盖住。
+2. **出整体参考图**：整个角色或整幅画面，最终的构图、配色和画风。提示词按下面的模板写，每一条都从第 1 步的部件清单推出来，写成画面上的要求；不要在提示词里写部件名单、拆分方法，也不要写 puppet、parts、joint、pivot、separate 这类词，模型会画成部件表或带断面的关节。验收后它就是所有部件的参考。
+```text
+<主体、动作和构图>
+Composition for animation:
+- <每个会动的部件> is fully visible and does not overlap <它附近要分开的部件>.            （第 1 步里会动的部件逐个写）
+- <接缝处的遮挡>, e.g. the collar covers the neck, the cuff wraps the wrist, <前面的物体> hides everything below the waist.
+- <每个会动的部件> is drawn in the middle of its motion: <中间姿势>.
+- <会动的部件> cast no shadow on other parts; no glow, light rays or sparkles cross between objects.
+- Do not draw <代码画的东西：热气、粒子、反光、文字、UI>; leave <要写字的地方> blank.
+Style: clean anime cel shading as flat vector art (按第三节的风格积木), bold outline of the same weight everywhere (<描边色>).
+Detail: the same level of detail everywhere: <头发、衣服等细节多的地方> drawn with a few large simple shapes, not many thin strands or fine lines. <要手画的部件> are flat colors with exactly one hard-edged shadow tone, no gradients.
+Palette: <色板>.
+<背景积木；整幅画面时不透明>
+No text, no letters, no numbers, no labels, no grid lines, no frames, no watermark.
+```
 3. **出图部件**：
    - 留在参考图原位置的部件（背景板、角色身上不动的部分）：参考图作 Image 1，用第七节的分层写法逐个取出，补上 "complete the parts hidden behind <挡住它的东西> naturally"，和别的部件相接的一端写 "continue it a little past the join, where <相邻部件> will cover it"。不透明的背景板取出后基本保持原位；透明底的单个部件常被放大、重新居中（实测放大 1.16–1.86 倍），所以每件都用 `assets align --ref <参考图> --image <部件> --out <目录> --regions <接缝处的矩形>` 对回参考图，用它给出的缩放和偏移放置，或者直接用同画布的 `aligned.png`。接缝处的区域色差明显、对照图里接缝一带发红时，说明接缝被重画了：重出，不挪手画部分去迁就。
    - 要换姿势、换状态或放到别处的部件：格子模板作 Image 1、参考图作 Image 2（第四节）。
@@ -95,6 +109,7 @@ Do NOT draw the dashed slot outlines or the slot numbers.
    - 按引导图出逐帧：同一张条带里人物一致，关节自然；但和代码画的东西的接触点对不准，8 帧里有 6 帧偏了（骑车试片里脚离脚踏零点几个鞋长），换成填色剪影引导、逐帧写动作说明也没改善。
    - 来自两次出图、又要拼在一起的两半，接缝对不上。
    - 出图的头放在手画的身体上：接缝被下巴和头发盖住，看不出来；主要问题是头比身体精细得多。
+   - 参考图提示词对照：按第 2 步模板写的参考图，头发的细节和渐变明显减少，要手画的尾尖从渐变绒毛变成平涂，出图和手画部分的细节差距缩小约六成；但两组取出身体时都没照做"去掉举起的手臂和整只袖子、收成圆肩"，一组留了空袖子，一组把袖子重画成垂下来的。
    - 两个场景测试：从参考图里"去掉挥手的手臂"取出身体，袖口被重画成带内沿的开口、位置低了约 50 像素，手画手臂只能迁就，连接处一眼看得出；透明底的单个部件取出后被放大 1.16–1.86 倍；背景条带用镜像拼接，对称能认出来。
 9. **逐帧精灵（实验性，用户明确要求时才做）**：只做不和其他东西接触的循环动作。每个动作出一条横向条带（4–8 帧），参考图和一张代码画的版式参考（格子、每帧的姿势剪影）一起作参考图；整条用一个比例切帧，不逐帧重新居中，按不动的区域对齐；每出一条立刻看，坏了只重出这一条。首尾衔接和连续播放时的闪动没有验证过，交付前让用户看实际播放。
 
