@@ -187,3 +187,18 @@ test('出图参数按代码结构解析：字符串里的参数名、显式 null
   assert.deepEqual(notRun.image_calls.map((c) => [c.referenced_image_paths, c.status, c.saved_path]), [[['O:/ref.png'], 'not_run', null], [null, 'completed', 'e.png']]);
   assert.ok(notRun.warnings.includes(M.imageRefsMissing));
 });
+
+test('格子文件合并过、编号不连续时仍按格子号命名', async (t) => {
+  const h = sandbox(t);
+  const tpl = output(await h.bridge(['assets', 'template', '--out', path.join(h.cwd, 'tpl.png'), '--cols', 3, '--rows', 1, '--names', 'a,b,c']));
+  // 把第 1、2 格合并成一格（编号还是 1），剩下第 3 格：格子号变成 1、3。
+  const doc = json(tpl.slots_file), [s1, s2, s3] = doc.slots;
+  doc.slots = [{ slot: 1, name: 'ab', box: [s1.box[0], s1.box[1], s2.box[2], s2.box[3]] }, s3];
+  const merged = h.write('merged.slots.json', doc);
+  const image = h.write('sheet.png', canvas(300, 200, MAGENTA, 3).rect(40, 60, 160, 140, DARK).rect(220, 60, 280, 140, TEAL).png());
+  const r = output(await h.bridge(['assets', 'cut', '--image', image, '--out', path.join(h.cwd, 'cut'), '--slots', merged]));
+  assert.deepEqual(r.parts.map((p) => [p.slot, p.name]), [[1, 'ab'], [3, 'c']]);
+  assert.ok(r.ok);
+  const byList = output(await h.bridge(['assets', 'cut', '--image', image, '--out', path.join(h.cwd, 'cut2'), '--slots', merged, '--names', 'long,short']));
+  assert.deepEqual(byList.parts.map((p) => [p.slot, p.name]), [[1, 'long'], [3, 'short']]);
+});

@@ -62,7 +62,7 @@ flowchart TD
 ```mermaid
 flowchart TD
     r0{"Who does what"} -- "Decisions, design, text" --> rself["Claude Code does it"]
-    r0 -- "Drawing (incl. illustrations in SVG animations)" --> rimg["An image-capable agent"]
+    r0 -- "Drawing (incl. illustrations used whole in SVG animations)" --> rimg["An image-capable agent"]
     r0 -- "Other hands-on work" --> rlevel{"Level the work"}
     rlevel -- "Level 0" --> rself
     rlevel -- "Levels 1–3" --> rrun["Handed off per the config"]
@@ -134,14 +134,15 @@ So that Claude Code doesn't forget (easy when a project has its own skills), the
 
 ### Image assets
 
-Bitmaps are drawn by Codex's built-in image tool, then Claude Code turns them into assets ready for downstream use with the `assets` subcommand on your machine: transparent PNG parts, a manifest listing them by name, a contact sheet, and SVG when needed (one layer per part, which opens in Figma or Illustrator).
+Bitmaps are drawn by Codex's built-in image tool, then Claude Code turns them into assets ready for downstream use with the `assets` subcommand on your machine: transparent PNG parts, a manifest listing them by name, a contact sheet, and SVG for flat assets with few colors (one layer per part, which opens in Figma or Illustrator).
 
-- **Illustrations in SVG, HTML and animations work the same way**: characters, scenes and illustrated icons are drawn by Codex and vectorized into SVG parts, and Claude Code assembles and animates them; only shapes simulated by physics every frame, things tied to mechanics, text and UI controls are drawn in code. A character that moves is split at its joints, with extra images for expressions and states.
+- **Illustrations in SVG, HTML and animations are drawn by Codex too, but used as whole pieces**: backgrounds, scenes, props, illustrated icons and character art are drawn by Codex and can be moved, rotated, scaled, faded or swapped for another image in the work. Characters that bend at joints, touch things drawn in code, or move as several parts put together (walking, cycling, waving) are drawn by Claude Code as SVG, and it tells you first that this part is hand-drawn. In testing, the image model couldn't place joint pivots and contact points accurately; it was often off by a sizable fraction of the part's length. Shapes simulated by physics every frame, things tied to mechanics, text and UI controls are drawn in code.
+- **Detailed images such as characters aren't turned into SVG by default**: they come out large and banded, so they stay PNG, embedded in the page.
 - **Several parts are named by slot**: Codex gets a numbered slot template and draws part N in slot N, and the cut names parts by slot, so a model reshuffling the layout can't mislabel them.
 - **Edits and images from a reference**: the brief says to pass the reference through `referenced_image_paths`; if it wasn't passed, `image_calls` in the result shows it and a warning points it out. A partial change replaces only the part that changed.
 - **Backgrounds**: transparent by default, with the script cleaning the faint halo at the edges; a flat magenta background when the subject is white or pale.
 - **Vectorizing needs two extra native packages**: the first time, Claude Code asks you; if you agree they go into `~/.claude/foreman/tooling`, not the plugin folder or your project. Without them everything else works, just without SVG.
-- Not supported: pixel art, exact pixel sizes, high-resolution images above about 1.57 megapixels; the parts aren't ready for skeletal animation yet either.
+- Not supported: pixel art, exact pixel sizes, high-resolution images above about 1.57 megapixels, and skeletal or joint animation built from generated parts.
 
 Prompt templates, command options and the checks are in [references/image-assets.md](foreman-en/skills/dispatch/references/image-assets.md).
 

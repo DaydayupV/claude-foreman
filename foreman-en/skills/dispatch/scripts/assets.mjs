@@ -105,7 +105,8 @@ async function cmdCut(o) {
   const tool = o.vector ? loadTooling() : null;
   const img = readImage(file), { width: w, height: h, data: px } = img, n = w * h;
   const template = o.slots ? readSlots(o.slots, w, h) : null;
-  // 名字优先用 --names（有模板时第 N 个名字对应第 N 格），否则用模板里写的名字。
+  // 名字优先用 --names（有模板时第 N 个名字对应格子文件里的第 N 个格子），否则用模板里写的名字。
+  // 有模板时按格子号查名字，格子文件合并过、编号不连续也不会错位。
   // 名字就是文件名：先清理、按小写去重（Windows 文件名不分大小写），命名和核对都用这一份。
   const given = names(o.names), raw = given.length ? given : template ? template.slots.map((s) => s.name) : [];
   const expected = [], expectedKeys = new Set();
@@ -118,7 +119,8 @@ async function cmdCut(o) {
     expected.push(name);
   }
   const list = expected.filter(Boolean);
-  const nameAt = (slot, i) => (template ? expected[slot - 1] : expected[i]);
+  const nameBySlot = new Map(template ? template.slots.map((s, i) => [s.slot, expected[i] ?? null]) : []);
+  const nameAt = (slot, i) => (template ? nameBySlot.get(slot) : expected[i]);
   const palette = o.palette ? names(o.palette).map((c) => P.parseHex(c) || die(M.assetsBadColor(c))) : null;
   if (o.matte != null && !['hard', 'soft'].includes(o.matte)) die(M.assetsUsage);
   const report = { version: 1, image: file, image_sha256: crypto.createHash('sha256').update(img.bytes).digest('hex'), size: [w, h] };

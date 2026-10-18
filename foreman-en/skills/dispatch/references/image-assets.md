@@ -70,29 +70,25 @@ Use stable English ids as names (they become the file names), and say whether "l
 
 ## 5. Whole image first, or a parts sheet directly
 - **A parts sheet directly**: independent assets that are never assembled, such as icon sets, buttons and badges, props.
-- **The whole image first, checked, then split**: anything that must keep one design, such as a character split into parts, a full UI page split into components, or scene layers. Pass the whole image as the reference when splitting, and list the details that must be kept. In testing, splitting with a reference kept details such as the cap, hair clip and cape, while a text-only description lost them.
-- For character parts that need to rotate, add:
-```text
-Each part is drawn complete and whole on its own (including the areas normally hidden by overlapping parts), with rounded overlap ends at the joints so it can pivot.
-```
+- **The whole image first, checked, then split**: anything that must keep one design, such as a full UI page split into components, scene layers, or the props that go with one character. Pass the whole image as the reference when splitting, and list the details that must be kept. In testing, splitting with a reference kept details such as the cap, hair clip and cape, while a text-only description lost them. Each piece is then used whole in the work, not put back together into one moving whole (see section 6).
 - Give small icons inside a component (the icons in a navigation bar) their own slots or their own image; don't expect a second level of splitting out of a full page.
 - Extending an existing set: pass the existing set as the reference, ask for "exactly the same drawing style, outline weight, corner rounding, level of detail, proportions and palette as Image 1", and add "Do not copy any item from Image 1".
 
 ## 6. Using it in SVG, HTML and animations
-When the final work is code, illustrations are still drawn by Codex and vectorized into SVG parts before going into the code; don't generate a "reference only" image for Claude to redraw by hand.
-1. **Generate the whole design sheet first and check it**: the character from the front and the side, or the whole scene. Every part afterwards uses it as the reference, so the design stays the same.
-2. **List the elements and decide each one**: shapes the work needs simulated by physics every frame (simulated hair and cloth, procedural ropes), things tied to mechanics or physics (chains, gears, cranks), text and UI controls, and geometric shapes are drawn in code; everything else goes on the parts sheet. Elements drawn in code follow the design sheet's colors and line weight.
-3. **Generate the parts sheet**: the slot template as Image 1, the design sheet as Image 2, transparent background. Split parts for animation like this:
-   - Split at the joints, add "with rounded overlap ends at the joints so it can pivot" to the prompt, and ask for each part "drawn complete and whole on its own", including what's normally hidden.
-   - Cut parts that bend or flow but don't need per-frame simulation into segments (hair, a tail or a cape into 3–4 each, the default), one slot per segment, turned in sequence.
-   - Give each expression or state its own slot, at the same size and angle as the base part:
-```text
-slot 9: the same head as slot 1 with the mouth open, drawn at exactly the same size, angle and position in its slot
-slot 10: the same head as slot 1 with the eyes closed (blink), drawn at exactly the same size, angle and position in its slot
-```
-   - If one image can't hold everything, use several, each with the design sheet as a reference.
-4. **Vectorize**: `assets cut --slots … --vector`. Ask for a flat style with little shading when generating, and add `--colors 8` to `12` when vectorizing, which roughly halves the path count; without color reduction an anime character part has tens to five hundred paths, and many parts on a web page can stutter. Use `--palette … --snap` to fix the colors.
-5. **Assemble**: `layers.svg` has every part in its own `<g id>` at its place in the source image; individual `parts/<name>.svg` files can be used too. `crop` in `manifest.json` is only the part's place in the source image; the assembly position and the pivot (the center of the round joint end) are set in code.
+When the final work is code, generated assets can only be used as whole pieces. Whether an element is generated depends on whether it has to line up exactly with something else.
+1. **List the elements and decide each one** ("Decide per element" in SKILL.md):
+   - Generated: backgrounds and scenes, standalone character art, props, illustrated icons, and characters and objects that only move as a whole (floating, swaying, bouncing, flying past, fading in and out).
+   - Drawn by Claude as SVG: characters and objects that bend at joints, touch things drawn in code, or move as several parts put together (walking, cycling, waving, a mouth opening and closing). Tell the user before starting that this part is hand-drawn.
+   - Drawn in code: shapes simulated by physics every frame, things tied to mechanics, text, UI controls, geometric shapes.
+   - Elements that aren't generated follow the generated parts' colors and line weight.
+2. **Generated assets**: when one design is used in several places, generate the whole design sheet first and check it, then use it as the reference for every later asset. Put several assets on one sheet with a slot template and cut them with `assets cut --slots …`. In the work, each one only moves as a whole: move, rotate, scale, fade, or swap for another complete image.
+3. **Why generated images aren't used for joint motion** (October 2026, cycling animation trials):
+   - Parts sheets: the model didn't follow the scale and joint positions in the slots (off by 20–40% of the slot size; a thigh ran past the knee), and it outlined every joint end. Assembled and rotated, knees and elbows looked like a ball-jointed doll; swapping the layer order only changed which seam showed.
+   - Frames from a pose guide: within one strip the character stayed consistent, the upper body could stay perfectly still from frame to frame, and the joints looked natural. But contact points such as a foot on a pedal drawn in code didn't line up: in two whole-body strips, 6 of 8 frames were off by a fraction of a shoe length, and a filled silhouette guide with a written action per frame didn't help.
+   - When the upper and lower body came from two generations, the waist didn't join.
+4. **SVG or not**: turn flat assets with few colors into SVG with `assets cut --vector`; ask for a flat style with little shading when generating, and add `--colors 8` to `12` when vectorizing, which roughly halves the path count; use `--palette … --snap` to fix the colors. Keep characters and images with gradients or much detail as PNG, embedded with `<image>` in the SVG or page: without color reduction an anime character part has tens to five hundred paths, which stutters on a web page, and reducing colors leaves bands.
+5. **Assemble**: `layers.svg` has every part in its own `<g id>` at its place in the source image; individual `parts/<name>.svg` or `parts/<name>.png` files can be used too. `crop` in `manifest.json` is only the part's place in the source image; where it goes on the page is set in code.
+6. **Frame-by-frame sprites (experimental, only when the user explicitly asks)**: only for looping motions that touch nothing else. Generate one horizontal strip per action (4–8 frames), with the design sheet and a layout guide drawn in code (the cells and a pose silhouette per frame) as references; cut the whole strip at one scale without re-centering each frame, and align frames on parts that don't move, such as the head and torso; look at each strip as soon as it's done and redo only the bad one. The loop seam and flicker during playback haven't been verified, so let the user watch it play before delivering.
 
 ## 7. Edits and layers
 - **A partial change**: the original as Image 1, and "Change ONLY <target and position>: <change>. Keep every other part exactly unchanged: same parts, same positions, same sizes, same colors, same line art, and the same background." An edit slightly changes other areas too (an average color difference of 2–3 in testing); check with `assets diff --before <original> --after <new> --slots <template>` that only the target slot changed, and when delivering replace only that part.
@@ -112,7 +108,7 @@ Runs locally, calls no model, and prints JSON.
 | `setup` | Installs the two native packages for vectorizing into `~/.claude/foreman/tooling` (ask the user first) |
 
 Options of `cut`:
-- `--slots`, `--names`: name by slot or by the name list (with a template, the Nth name belongs to slot N).
+- `--slots`, `--names`: name by slot or by the name list (with a template, the Nth name belongs to the Nth slot in the slots file; names written in the template follow slot numbers, so merged slots or gaps in the numbering don't shift them).
 - `--matte hard|soft`: how a transparent image is cleaned; see section 2.
 - `--key auto|#rrggbb`: the key color of a flat background, by default the median color of the canvas edge; for a white or light gray background only the part connected to the edge is removed.
 - `--gap <px>` (default 6): pieces closer than twice the gap belong to one part. `--min-area <share>` (default 0.0004): smaller specks are dropped.
@@ -139,6 +135,7 @@ Other figures: `halo` (halo share before cleaning), `transparent`, `edge_width` 
 
 ## 9. What it can't do or hasn't been verified
 - Pixel art, exact pixel sizes, and high-resolution images above about 1.57 megapixels.
-- Parts carry no rig data: layer order, draw order and pivots are set in code; the manifest doesn't have them.
+- Joint motion and exact alignment: see section 6; testing showed it can't be done.
+- Parts carry no layer or draw order; that's set in code, and the manifest doesn't have it.
 - Semi-transparent assets (glass, smoke) only get the rough `--matte soft` treatment and haven't been tested systematically.
 - How the layered SVG behaves after import into Figma or Illustrator (groups, editability) hasn't been checked in practice.

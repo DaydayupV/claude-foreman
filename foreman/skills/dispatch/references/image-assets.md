@@ -70,29 +70,25 @@ Do NOT draw the dashed slot outlines or the slot numbers.
 
 ## 五、先出整图还是直接出部件表
 - **直接出部件表**：彼此独立、不用组装的素材，比如图标组、按钮和徽章、道具。
-- **先出整图、验收后再拆**：要保持同一个设计的，比如角色拆部件、整页 UI 拆组件、场景分层。拆的时候把整图作为参考图传入，提示词写明必须保留的细节。实测带参考图拆部件能保留帽子、发夹、披肩这类细节，纯文字描述会丢。
-- 角色部件要能转动时加上：
-```text
-Each part is drawn complete and whole on its own (including the areas normally hidden by overlapping parts), with rounded overlap ends at the joints so it can pivot.
-```
+- **先出整图、验收后再拆**：要保持同一个设计的，比如整页 UI 拆组件、场景分层、一个角色配套的几件道具。拆的时候把整图作为参考图传入，提示词写明必须保留的细节。实测带参考图拆部件能保留帽子、发夹、披肩这类细节，纯文字描述会丢。拆出来的每一件在作品里都是整块用的，不拼回成一个会动的整体（见第六节）。
 - 嵌在组件里的小图标（导航栏里的图标）单独列一格或单独出一张，不要指望从整页里再拆一层。
 - 扩充现有素材集：把现有的一组作为参考图，要求 "exactly the same drawing style, outline weight, corner rounding, level of detail, proportions and palette as Image 1"，并写 "Do not copy any item from Image 1"。
 
 ## 六、用在 SVG、HTML 和动画里
-作品最后是代码时，插画同样由 Codex 画，转成 SVG 部件后再写进代码，不出"只作参考"的图让 Claude 照着手画。
-1. **先出整张设定图并验收**：角色的正面、侧面，或者整个场景。之后的部件都以它为参考图，保证同一个设计。
-2. **列元素清单，按元素分**：作品要求按物理逐帧模拟形状的（模拟的头发和布料、程序生成的绳子）、要和机械或物理对齐的（链条、齿轮、曲柄）、文字和 UI 控件、几何图形，用代码画；其余都进部件表。用代码画的照设定图的配色和线宽。
-3. **出部件表**：格子模板作 Image 1，设定图作 Image 2，透明背景。动画用的部件这样拆：
-   - 关节处拆开，提示词加上 "with rounded overlap ends at the joints so it can pivot"，并要求 "drawn complete and whole on its own"，被遮住的部分也画全。
-   - 会弯会飘、但不用逐帧模拟的部位拆成几段（头发、尾巴、披风各 3–4 段，这是默认做法），每段单独一格，按顺序转动。
-   - 表情和状态各占一格，和基础部件同样大小、同样角度：
-```text
-slot 9: the same head as slot 1 with the mouth open, drawn at exactly the same size, angle and position in its slot
-slot 10: the same head as slot 1 with the eyes closed (blink), drawn at exactly the same size, angle and position in its slot
-```
-   - 一张图放不下就分几张，每张都带上设定图作参考。
-4. **转 SVG**：`assets cut --slots … --vector`。生成时写扁平风格、少阴影，矢量化时加 `--colors 8` 到 `12`，路径数能少一半左右；动漫角色部件不减色时每件几十到五百条路径，网页上部件多时会卡。要固定配色时用 `--palette … --snap`。
-5. **组装**：`layers.svg` 是每个部件一个 `<g id>`、按源图位置排好的整体；也可以单独引用 `parts/<名字>.svg`。`manifest.json` 的 `crop` 只是部件在源图上的位置，组装位置和旋转中心（关节的圆头中心）要在代码里定。
+作品最后是代码时，出图的素材在作品里只能整块用。一个元素要不要出图，看它要不要和别的东西精确对上。
+1. **列元素清单，按元素分**（SKILL.md 的"按元素分"）：
+   - 出图：背景和场景、单独的角色立绘、道具、插画风图标，以及只做整体动作的角色和物件（漂浮、摇摆、跳动、飞过、淡入淡出）。
+   - Claude 画成 SVG：要弯关节、要和代码画的东西接触、要几个部件拼在一起动的角色和物件（走路、骑车、挥手、嘴巴开合）。动手前告诉用户这部分是手画风格。
+   - 代码画：按物理逐帧模拟的形状、和机械对齐的东西、文字、UI 控件、几何图形。
+   - 不出图的元素照出图部分的配色和线宽画。
+2. **出图的素材**：一个设计要用在几处时，先出整张设定图并验收，之后的素材都以它为参考图。多件素材用格子模板出成一张，`assets cut --slots …` 切开。每件在作品里只做整体变换：平移、旋转、缩放、改透明度，或者整张换成另一张完整的图。
+3. **为什么不用出图做关节动作**（2026 年 10 月，骑车动画试片）：
+   - 部件表：模型不按格子里的比例和关节位置画（偏离格子尺寸的两到四成，大腿会画到膝盖以下），关节端头总会描一圈轮廓；装起来转动时，膝和肘像球形关节娃娃，交换上下层也只是换一条接缝露出来。
+   - 按引导图出逐帧：同一张条带里人物一致，上半身可以做到逐帧不动，关节画得自然；但脚和代码画的脚踏这种接触点对不准：两条整人条带的 8 帧里有 6 帧偏了零点几个鞋长，换成填色剪影引导、逐帧写动作说明也没改善。
+   - 上下半身来自两次出图时，腰口接不上。
+4. **转不转 SVG**：扁平少色的素材 `assets cut --vector` 转 SVG，生成时写扁平风格、少阴影，矢量化时加 `--colors 8` 到 `12`，路径数能少一半左右；要固定配色时用 `--palette … --snap`。角色、带渐变或细节多的画保留 PNG，用 `<image>` 嵌进 SVG 或页面：动漫角色不减色时每件几十到五百条路径，网页上会卡，减色又会出色带。
+5. **组装**：`layers.svg` 是每个部件一个 `<g id>`、按源图位置排好的整体；也可以单独引用 `parts/<名字>.svg` 或 `parts/<名字>.png`。`manifest.json` 的 `crop` 只是部件在源图上的位置，放在页面上的位置在代码里定。
+6. **逐帧精灵（实验性，用户明确要求时才做）**：只做不和其他东西接触的循环动作。每个动作出一条横向条带（4–8 帧），设定图和一张代码画的版式参考（格子、每帧的姿势剪影）一起作参考图；整条用一个比例切帧，不逐帧重新居中，按头和躯干这类不动的区域对齐；每出一条立刻看，坏了只重出这一条。首尾衔接和连续播放时的闪动没有验证过，交付前让用户看实际播放。
 
 ## 七、改图和分层
 - **局部修改**：原图作为 Image 1，提示词写 "Change ONLY <目标和位置>: <怎么改>. Keep every other part exactly unchanged: same parts, same positions, same sizes, same colors, same line art, and the same background."。改图会让其他区域有轻微变化（实测平均色差 2–3），用 `assets diff --before 原图 --after 新图 --slots 模板` 确认只有目标格变了，交付时只替换那个部件。
@@ -112,7 +108,7 @@ slot 10: the same head as slot 1 with the eyes closed (blink), drawn at exactly 
 | `setup` | 把矢量化用的两个原生包装到 `~/.claude/foreman/tooling`（先问用户） |
 
 `cut` 的选项：
-- `--slots`、`--names`：按格子或名单命名（有模板时第 N 个名字对应第 N 格）。
+- `--slots`、`--names`：按格子或名单命名（有模板时第 N 个名字对应格子文件里的第 N 个格子；模板里写的名字按格子号对应，合并过格子、编号不连续也不会错位）。
 - `--matte hard|soft`：透明图怎么清理，见第二节。
 - `--key auto|#rrggbb`：纯色底的底色，默认取画布边缘的中位色；白或浅灰底只去掉和边缘连通的部分。
 - `--gap <像素>`（默认 6）：相距不到两倍 gap 的碎块算同一个部件。`--min-area <比例>`（默认 0.0004）：比这还小的碎屑丢掉。
@@ -139,6 +135,7 @@ slot 10: the same head as slot 1 with the eyes closed (blink), drawn at exactly 
 
 ## 九、做不到或没验证的
 - 像素风、精确像素尺寸、超出约 157 万像素的高清图。
-- 部件不带骨骼数据：层级、遮挡顺序和旋转中心要在代码里定，manifest 里没有。
+- 关节动作和精确对位：见第六节，实测做不到。
+- 部件不带层级和遮挡顺序，要在代码里定，manifest 里没有。
 - 半透明素材（玻璃、烟雾）只能用 `--matte soft` 粗略处理，没有系统验证。
 - 图层 SVG 导入 Figma、Illustrator 后的分组和可编辑性没有实际验证过。
