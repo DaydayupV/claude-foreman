@@ -1,7 +1,7 @@
 ---
 name: config
 description: Show or change foreman settings (agents, who gets each level, model and effort, sandbox, time limits, etc.)
-argument-hint: [setting to change, e.g. "switch complex tasks to gpt-6.1-sol with ultra"]
+argument-hint: '[setting to change, e.g. "switch complex tasks to gpt-6.1-sol with ultra"]'
 disable-model-invocation: true
 ---
 

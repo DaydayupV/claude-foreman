@@ -1,7 +1,7 @@
 ---
 name: watch
 description: 在终端里实时查看任务的运行情况
-argument-hint: [run_id | last | 组名]
+argument-hint: '[run_id | last | 组名]'
 disable-model-invocation: true
 ---
 

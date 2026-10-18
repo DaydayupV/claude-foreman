@@ -1,7 +1,7 @@
 ---
 name: status
 description: Show recent runs, or the details of one run
-argument-hint: [run_id | last | group name]
+argument-hint: '[run_id | last | group name]'
 disable-model-invocation: true
 ---
 

@@ -27,7 +27,7 @@ Keep a role card under 10 lines, in this format:
 | Math / correctness | Reasoning about algorithms, money calculations, concurrency and consistency | Strong | Reasoning | — |
 | Data analyst | Data definitions, statistical methods, confounders | Strong | Data analysis | Reads data files; actual calculations only go to Codex |
 | Research mentor | Hypotheses, control groups, robustness, whether conclusions overreach | Strong | Research, reasoning | — |
-| Fact checker | Actually runs the key claims to check them | Strong | Agentic | Must run commands (Codex only) |
+| Fact checker | Actually runs the key claims to check them | Strong | Agentic | Must run commands (Codex only); discussions are read-only, so it only runs things in memory (such as `node -e`) and creates no files; don't mention "temporary scripts" in its role card |
 | Security and reliability red team | Attack surface, permissions, failure and rollback | Strong | Reasoning, coding | Reads code |
 | Overall reviewer | No role; looks at the proposal as a whole | Strong | Overall score | — |
 | Maintenance and compatibility | Old configs and data, migration, keeping both languages in step | Mid | Coding | Reads code |
@@ -58,10 +58,20 @@ Weak models only get roles like "Edge-case lister", where mistakes are cheap and
 ## The confirmation pop-up (always)
 Before starting role mode, always have the user confirm, even when `dispatch.auto` is `true`. When the user asked for role mode themselves, they still confirm the assignment.
 
-First list the assignment in the message: seat number, model (tier), role, what the role checks, and why it went to that model (tool access, tier or strengths), including participants not in this discussion. Then ask one question with AskUserQuestion:
+First list the full assignment in the message: seat number, model (tier), role, what the role checks, and why it went to that model (tool access, tier or strengths), including participants not in this discussion. Once the pop-up is open the user may not see the message, and in some interfaces `preview` only shows after an extra click, so **write the assignment into the pop-up's own text**, not only into `preview`. Ask one question with AskUserQuestion:
 
-- Question: "Start the role discussion with this assignment?"
-- Option one, "Start as suggested (Recommended)": put the full assignment table in its `preview`.
+- Question: start with "Start the role discussion with this assignment?", then one line per seat, "① model (tier) → role", and a last line for participants not in this discussion. For example:
+
+  ```
+  Start the role discussion with this assignment?
+  ① gemini-4-argon (strong) → Math / correctness
+  ② gpt-6-astra (strong) → Fact checker
+  ③ gpt-6-astra (strong, second session) → Overall reviewer
+  ④ deepseek-v4.1-flash (mid) → Maintenance and compatibility
+  ⑤ mimo-v2.6-pro (weak) → Edge-case lister
+  Not in this discussion: glm-5.3-flash (weak)
+  ```
+- Option one, "Start as suggested (Recommended)": sum it up in one sentence in its description (such as "Start the 5 seats as above; gpt-6-astra opens two sessions"); `preview` can also hold the full table with reasons.
 - Option two, "Adjust": then ask again, with at most two questions: which roles to swap out or add (multi-select, 2–4 preset roles relevant to the topic; the user writes custom roles under "Other"); and whether Claude reassigns or the user writes the assignment (under "Other": "seat number + change"). Show the new assignment and have the user confirm once more.
 - Option three, "Use a normal discussion instead".
 
@@ -70,7 +80,8 @@ First list the assignment in the message: seat number, model (tier), role, what 
 
 ## Starting it
 - One `discuss` per seat, each with its own brief (shared body + its role card), all in the same `--group`.
-- Set `--title` to "<short title> [<role name>]" so each panel in the live view shows its role. The trade-off is that the top line no longer shows the shared title and "round N"; when resuming for round 2, put the round in the title: "<short title> [<role name>] · round 2".
+- Always set `--title` to "Role mode [<role name>]", such as "Role mode [Edge-case lister]". Each panel in the live view shows the model on its first line and this title on its second.
+- Don't pass `--title` when resuming for round 2: the resume keeps the previous title, and the live view adds "· round 2" to the second line itself.
 - When one model takes several roles, each role is a new `discuss`; don't `resume` the first role into the second.
 - Tell the user each seat's model, effort and role.
 

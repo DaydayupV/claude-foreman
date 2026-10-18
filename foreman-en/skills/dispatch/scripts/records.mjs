@@ -192,6 +192,8 @@ function runEnd(dir, meta) {
 }
 
 function runOutcome(run) {
+  // 手上的记录还是"运行中"、进程却已退出时，多半是刚写完结果就退出了，先重读一次再判断是不是中断
+  if (run.meta.status === 'running' && !pidAlive(run.meta.pid)) run.meta = readMeta(run.dir) || run.meta;
   const m = run.meta;
   const running = isRunning(m);
   const status = m.status === 'running' && !running ? 'interrupted' : m.status;

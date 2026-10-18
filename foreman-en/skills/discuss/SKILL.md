@@ -1,7 +1,7 @@
 ---
 name: discuss
 description: Talk a complex plan, design or idea through with other configured models, such as Codex (discussion only, nothing is carried out; Claude Code decides)
-argument-hint: <topic> [--level simple|normal|complex | --effort <effort>] [--model <model>] [--agent <agent>]
+argument-hint: '<topic> [--level simple|normal|complex | --effort <effort>] [--model <model>] [--agent <agent>]'
 disable-model-invocation: true
 ---
 

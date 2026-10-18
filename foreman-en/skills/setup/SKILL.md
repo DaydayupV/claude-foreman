@@ -1,7 +1,7 @@
 ---
 name: setup
 description: Setup guide - detect this machine's tools, list the models and efforts available, give one complete recommendation, change the config as you choose, and finish with an overview of the whole config
-argument-hint: [optional: just one part, e.g. "add DeepSeek", "use GLM through opencode", "use DeepSeek through pi" or "add a model to discussions"]
+argument-hint: '[optional: just one part, e.g. "add DeepSeek", "use GLM through opencode", "use DeepSeek through pi" or "add a model to discussions"]'
 disable-model-invocation: true
 ---
 

@@ -1,7 +1,7 @@
 ---
 name: config
 description: 查看或修改 foreman 的配置（协作方、各等级交给谁、模型和推理强度、沙箱、超时等）
-argument-hint: [要改的设置，例如"复杂任务换成 gpt-6.1-sol、ultra"]
+argument-hint: '[要改的设置，例如"复杂任务换成 gpt-6.1-sol、ultra"]'
 disable-model-invocation: true
 ---
 

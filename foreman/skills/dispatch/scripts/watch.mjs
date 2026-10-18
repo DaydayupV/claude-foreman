@@ -573,21 +573,29 @@ function createFeed(run) {
   return { read, items, stats };
 }
 
-// 组视图一块的标题行：左边是模型，右边是状态和用时（结束后加上改动），放不下右侧时只留左侧
+// 组视图一块的标题：第一行左边是模型，右边是状态和用时（结束后加上改动），放不下右侧时只留左侧。
+// 同组标题各不相同时（比如角色讨论、拆开的执行任务），第二行写这一块的标题，续接的讨论后面写上第几轮
 function panelHead(run, stats, width, withTitle) {
   const { running, status, result: r, ok, blocked } = runOutcome(run);
   const m = run.meta;
   const elapsed = runEnd(run.dir, m) - Date.parse(m.started_at);
   const color = running ? C.cyan : ok ? C.green : blocked ? C.yellow : C.red;
-  const left = `${running ? '●' : ok ? '✔' : blocked ? '?' : '✗'} ${whoOf(m)}${withTitle && m.title ? `  ${oneLine(m.title)}` : ''}`;
+  const left = `${running ? '●' : ok ? '✔' : blocked ? '?' : '✗'} ${whoOf(m)}`;
   const s = stats;
   const right = !running ? [M.statusName(shownStatus(status, r)), M.duration(r?.duration_s ?? elapsed / 1000), changedFor(r, m)].filter(Boolean).join(' · ')
     : s.queued ? M.watchApiQueuedLive(clock(Date.now() - Date.parse(s.req)))
     : s.req ? M.watchApiLive(s.answering, clock(elapsed), (s.answering ? s.answerChars : s.chars).toLocaleString('en-US'))
     : [M.statusName('running'), clock(elapsed), s.commands ? M.panelCommands(s.commands) : ''].filter(Boolean).join(' · ');
-  if (textWidth(right) + 16 > width) return color(C.bold(fitWidth(left, width)));
-  const l = fitWidth(left, width - textWidth(right) - 2);
-  return color(C.bold(l)) + ' '.repeat(width - textWidth(l) - textWidth(right)) + C.dim(right);
+  let first;
+  if (textWidth(right) + 16 > width) first = color(C.bold(fitWidth(left, width)));
+  else {
+    const l = fitWidth(left, width - textWidth(right) - 2);
+    first = color(C.bold(l)) + ' '.repeat(width - textWidth(l) - textWidth(right)) + C.dim(right);
+  }
+  if (!withTitle || !m.title) return [first];
+  const title = oneLine(m.title);
+  const round = m.round > 1 && !title.includes(M.watchRound(m.round)) ? ` · ${M.watchRound(m.round)}` : '';
+  return [first, color(fitWidth(`  ${title}${round}`, width))];
 }
 
 // 组视图的一块：标题行加固定行数的正文。运行中显示最新的信息流，结束后显示结论。
@@ -611,7 +619,7 @@ function panelLines(run, feed, rows, width, withTitle) {
     if (!body.length && running) body.push({ l: M.noEvents, style: 'dim' });
   }
   while (body.length < rows) body.push({ l: '' });
-  return [head, ...body.map(({ l, style }) => `  ${style ? C[style](l) : l}`)];
+  return [...head, ...body.map(({ l, style }) => `  ${style ? C[style](l) : l}`)];
 }
 
 // 组的标题行右侧：运行中、完成、失败各几个，为 0 的不写
@@ -703,9 +711,10 @@ async function watchGroup(group, o, loadCfg) {
       const all = [...known.values()];
       const width = Math.max(20, W - 1);
       for (const run of all) feeds.get(run.id).read();
-      // 顶部标题一行、底部提示一行，每块有分隔线和标题行；正文行数按窗口高度平均分，最多 8 行
-      const rows = Math.max(2, Math.min(8, Math.floor((H - 2 - all.length * 2) / all.length)));
+      // 顶部标题一行、底部提示一行，每块有分隔线和标题（没有公共标题时多一行写各自的标题）；正文行数按窗口高度平均分，最多 8 行
       const title = sharedTitle();
+      const headRows = title ? 2 : 3;
+      const rows = Math.max(2, Math.min(8, Math.floor((H - 2 - all.length * headRows) / all.length)));
       const out = [groupHeadLine(group, title, all, width)];
       for (const run of all) out.push(C.dim('─'.repeat(width)), ...panelLines(run, feeds.get(run.id), rows, width, !title));
       const lines = out.slice(0, H - 1);
@@ -771,7 +780,7 @@ async function watchGroup(group, o, loadCfg) {
   const out = ['', groupHeadLine(group, title, all, width)];
   for (const run of all) {
     const { result: r, ok } = runOutcome(run);
-    out.push(C.dim('─'.repeat(width)), panelHead(run, feeds.get(run.id).stats, width, !title));
+    out.push(C.dim('─'.repeat(width)), ...panelHead(run, feeds.get(run.id).stats, width, !title));
     if (r?.usage) out.push(`  ${C.dim(fitWidth(M.tokenSummary(r.usage, r.last_request ?? r.context, M.tokenCount, (r.usage_scope ?? (run.meta.mode === 'resume' ? 'session_total' : 'this_run')) === 'session_total'), inner))}`);
     const final = r?.report?.position || r?.report?.summary;
     if (final) for (const l of wrapWidth(M.watchOpinion(final.trim()), inner)) out.push(`  ${l}`);
