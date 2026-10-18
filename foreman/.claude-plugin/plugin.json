@@ -1,6 +1,6 @@
 {
   "name": "foreman",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Claude Code 主导的多模型协作：执行类编码工作按配置派给 Codex、opencode、pi 等 CLI 工具并验收，请它们独立审查代码，复杂方案让几个模型一起讨论。",
   "author": {
     "name": "DaydayupV"
