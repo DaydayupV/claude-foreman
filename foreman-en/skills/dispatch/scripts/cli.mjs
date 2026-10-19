@@ -53,7 +53,7 @@ function dispatchProfile(o, module) {
     if (o.group != null && o.group !== plan.group) die(M.planGroupMismatch(o.plan, plan.group));
     o.cwd = plan.cwd;
     o.group = plan.group;
-    o.level = plan.cell;
+    if (module !== 'image') o.level = plan.cell;
     seat = { ...plan.seats[Number(o.seat) - 1], module, cell: plan.cell, plan: plan.plan_id };
   }
   const cwd = resolveDir(need(o, 'cwd'));
@@ -70,6 +70,17 @@ async function cmdRun(o) {
   return adapters[profile.agent.type].execute({ cfg, ...profile, mode: 'run', kind: 'exec', cwd, brief, addDirs, title: o.title, opts: o });
 }
 
+// 图像席位沿执行流程启动，路线和格子固定在计划里。
+async function cmdImage(o) {
+  if (!o.plan) die(M.imageNeedsPlan);
+  if (o.level != null) die(M.imageNoLevel);
+  const { cwd, cfg, profile, plan } = dispatchProfile(o, 'image');
+  if (!o.scope.length) die(M.imageNeedsScope);
+  const addDirs = o['add-dir'].map(resolveDir);
+  const brief = readBrief(o);
+  return adapters[profile.agent.type].execute({ cfg, ...profile, mode: 'run', kind: 'exec', step: profile.cell, route: plan.route, cwd, brief, addDirs, title: o.title, opts: o });
+}
+
 async function cmdDiscuss(o) {
   const { cwd, cfg, profile } = dispatchProfile(o, 'discuss');
   const brief = readBrief(o);
@@ -78,6 +89,8 @@ async function cmdDiscuss(o) {
 
 async function cmdResume(o) {
   const parent = findRun(need(o, 'run'));
+  const image = parent.meta.module === 'image';
+  if (image && o.level != null) die(M.imageNoLevel);
   o.track = [...(parent.meta.track || []), ...o.track];
   o.group ??= parent.meta.group ?? null;
   if (!o.scope.length) o.scope = parent.meta.scope || [];
@@ -103,8 +116,9 @@ async function cmdResume(o) {
   const cfg = load(parent.meta.cwd);
   const brief = readBrief(o);
   // 什么模型都没配置时沿用上一轮记录的模型，同一会话不中途换模型。
-  const profile = resolveProfile(cfg, { module: discuss ? 'discuss' : 'run', plan: parent.meta.plan, seat: parent.meta.seat, role: parent.meta.role }, o, adapters, parent.meta.model, parent.meta.agent || 'codex', parent.meta.cell ?? parent.meta.level);
+  const profile = resolveProfile(cfg, { module: image ? 'image' : discuss ? 'discuss' : 'run', cell: image ? parent.meta.cell : undefined, plan: parent.meta.plan, seat: parent.meta.seat, role: parent.meta.role }, o, adapters, parent.meta.model, parent.meta.agent || 'codex', parent.meta.cell ?? parent.meta.level);
   return adapters[profile.agent.type].execute({ cfg, ...profile, mode: 'resume', kind, cwd: parent.meta.cwd, brief,
+    ...(image ? { step: parent.meta.step, route: parent.meta.route } : {}),
     title: o.title || parent.meta.title, parent: parent.id, parentDir: parent.dir, sessionId: parent.meta.session_id,
     previousRunAccess: parent.meta.run_access, round, opts: o });
 }
@@ -224,8 +238,8 @@ async function cmdModels() {
 
 const { cmd, opts } = parseArgs(process.argv.slice(2));
 // 新建任务组时组名只用 ASCII：实时查看要把它写进终端命令，桌面版的终端面板只接受 ASCII 命令。
-if (['run', 'discuss', 'resume', 'review', 'plan'].includes(cmd) && opts.group != null && !/^[A-Za-z0-9._-]{1,64}$/.test(opts.group)) die(M.badGroupName(opts.group));
+if (['run', 'discuss', 'resume', 'review', 'image', 'plan'].includes(cmd) && opts.group != null && !/^[A-Za-z0-9._-]{1,64}$/.test(opts.group)) die(M.badGroupName(opts.group));
 const statsOf = (meta) => adapters[agentTypeOf(meta)]?.stats?.(meta.session_id, meta.started_at);
-const commands = { run: cmdRun, discuss: cmdDiscuss, resume: cmdResume, review: cmdReview, plan: (o) => cmdPlan(o, load, adapters), status: (o) => cmdStatus(o, statsOf), watch: (o) => cmdWatch(o, load), config: cmdConfig, check: cmdCheck, models: cmdModels, cancel: (o) => cmdCancel(o, statsOf), 'await-busy': (o) => cmdAwaitBusy(o, CONFIG), assets: cmdAssets };
+const commands = { run: cmdRun, discuss: cmdDiscuss, resume: cmdResume, review: cmdReview, image: cmdImage, plan: (o) => cmdPlan(o, load, adapters), status: (o) => cmdStatus(o, statsOf), watch: (o) => cmdWatch(o, load), config: cmdConfig, check: cmdCheck, models: cmdModels, cancel: (o) => cmdCancel(o, statsOf), 'await-busy': (o) => cmdAwaitBusy(o, CONFIG), assets: cmdAssets };
 if (!commands[cmd]) die(M.usage);
 await commands[cmd](opts);

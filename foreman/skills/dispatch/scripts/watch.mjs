@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { RUNS_ROOT, requestCancel, listRuns, findRun, readMeta, isRunning, runEnd, runOutcome, groupTally, groupRuns } from './records.mjs';
 import { describePlans } from './plan.mjs';
-import { M, die, sleep, clip, oneLine, plainCommand, RECONNECT, isReconnect, modelOf, whoOf, agentTypeOf, needsDecision, charWidth, textWidth, fitWidth, wrapWidth } from './util.mjs';
+import { M, die, sleep, clip, oneLine, plainCommand, RECONNECT, isReconnect, modelOf, whoOf, agentTypeOf, needsDecision, charWidth, textWidth, fitWidth, wrapWidth, usageLine } from './util.mjs';
 import { avatarFor, introScene, playIntro } from './watch-intro.mjs';
 
 const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
@@ -29,6 +29,13 @@ const shownStatus = (status, r) => (status === 'done' ? r?.needs_decision ? 'blo
 // 成功的任务不再列出临时的重连提示；旧记录把它记成了错误
 const realErrors = (r, ok) => (r?.errors || []).filter((e) => !(ok && isReconnect(e)));
 const SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+
+// 图像任务的标题用格子和路线代替等级，时间线和详细模式共用。
+function headerLines(meta, id, dir) {
+  const lines = M.watchHeaderLines(M.modeNames[meta.mode] || meta.mode, meta.title || id, meta.level, meta.cwd, dir);
+  if (meta.module === 'image') lines[0] = M.watchImageHead(M.modeNames[meta.mode === 'resume' ? 'resume' : 'image'], meta.title || id, meta.cell, '①②③④'[meta.route - 1]);
+  return lines;
+}
 
 function reviewConclusion(report) {
   if (!M.watchReview[report?.verdict]) return null;
@@ -63,7 +70,7 @@ function verboseRenderer(meta, rel) {
   const commands = new Set();
   const out = (sym, text, ts) => process.stdout.write(`${ts ? new Date(ts).toTimeString().slice(0, 8) : live ? new Date().toTimeString().slice(0, 8) : '        '} ${sym} ${text}\n`);
   const header = (id, dir) => {
-    const [first, ...rest] = M.watchHeaderLines(M.modeNames[meta.mode] || meta.mode, meta.title || id, meta.level, meta.cwd, dir);
+    const [first, ...rest] = headerLines(meta, id, dir);
     process.stdout.write(`\n${C.bold(`${whoOf(meta)} · ${first}`)}\n${C.dim(rest.join('\n'))}\n\n`);
   };
   const show = (ev) => {
@@ -79,6 +86,8 @@ function verboseRenderer(meta, rel) {
       o('Σ', M.watchTokens(ev.usage));
     } else if (ev.type === 'image.generated') {
       o('▣', M.watchImage(ev.path));
+    } else if (ev.type === 'image.viewed') {
+      o('◉', M.watchImageViewed(ev.path));
     } else if (ev.type === 'item.started' && it.type === 'command_execution') {
       commands.add(it.id);
       o('▶', clip(oneLine(plainCommand(it.command)), 240));
@@ -113,11 +122,12 @@ function verboseRenderer(meta, rel) {
   const finish = (r, m) => {
     if (r) {
       const blocked = r.status === 'needs_input' || shownStatus(r.status, r) === 'blocked';
-      const text = M.watchFinished(M.statusName(shownStatus(r.status, r)), M.duration(r.duration_s), changedFor(r, m));
+      const text = M.watchFinished(M.statusName(shownStatus(r.status, r)), M.duration(r.duration_s), changedFor(r, m)) + (r.stale === true ? ` · ${M.watchStale}` : '');
       out(blocked ? C.yellow('?') : '■', blocked ? C.yellow(text) : text, m?.ended_at);
     }
     else out('■', m?.status === 'running' ? M.watchInterrupted : M.watchEnded(m?.status), m?.ended_at);
-    if (r?.usage) out('Σ', M.tokenSummary(r.usage, r.last_request ?? r.context, M.tokenCount, (r.usage_scope ?? (m?.mode === 'resume' ? 'session_total' : 'this_run')) === 'session_total'), m?.ended_at);
+    const usage = usageLine(r, m);
+    if (usage) out('Σ', usage, m?.ended_at);
   };
   return { header, show, finish, goLive: () => { live = true; } };
 }
@@ -247,7 +257,7 @@ function timelineRenderer(meta, rel, { screen: useScreen = false, dir = null } =
 
   const header = (id, dir) => {
     if (!screen) process.stdout.write('\n');
-    const lines = M.watchHeaderLines(M.modeNames[meta.mode] || meta.mode, meta.title || id, meta.level, meta.cwd, dir);
+    const lines = headerLines(meta, id, dir);
     add((W) => [
       node(meta.started_at, C.cyan('┌')) + C.bold(fitWidth(whoOf(meta), inner(W))),
       ...lines.map((l, i) => rail() + (i ? C.dim(fitWidth(l, inner(W))) : fitWidth(l, inner(W)))),
@@ -379,6 +389,9 @@ function timelineRenderer(meta, rel, { screen: useScreen = false, dir = null } =
     } else if (ev.type === 'image.generated') {
       flushFolded();
       sub(`  ▣ ${M.watchImage(path.basename(ev.path))}`, C.green);
+    } else if (ev.type === 'image.viewed') {
+      flushFolded();
+      sub(`  ◉ ${M.watchImageViewed(path.basename(ev.path))}`);
     } else if (ev.type === 'item.started' && it.type === 'command_execution') {
       const text = oneLine(plainCommand(it.command));
       commands.set(it.id, text);
@@ -459,8 +472,9 @@ function timelineRenderer(meta, rel, { screen: useScreen = false, dir = null } =
     const blocked = r.status === 'needs_input' || r.status === 'done' && (r.needs_decision || r.report?.status === 'blocked');
     const ok = !blocked && r.status === 'done' && (!r.report?.status || r.report.status === 'completed');
     const color = ok ? C.green : blocked ? C.yellow : C.red;
-    write(node(m?.ended_at, color('└')) + color(C.bold(`${ok ? '✔' : blocked ? '?' : '✗'} ${M.watchFinished(M.statusName(shownStatus(r.status, r)), M.duration(r.duration_s), changedFor(r, m))}`)));
-    if (r.usage) write(' '.repeat(TIME_W + 2) + C.dim(M.tokenSummary(r.usage, r.last_request ?? r.context, M.tokenCount, (r.usage_scope ?? (m?.mode === 'resume' ? 'session_total' : 'this_run')) === 'session_total')));
+    write(node(m?.ended_at, color('└')) + color(C.bold(`${ok ? '✔' : blocked ? '?' : '✗'} ${M.watchFinished(M.statusName(shownStatus(r.status, r)), M.duration(r.duration_s), changedFor(r, m))}${r.stale === true ? ` · ${M.watchStale}` : ''}`)));
+    const usage = usageLine(r, m);
+    if (usage) write(' '.repeat(TIME_W + 2) + C.dim(usage));
     const summary = r.report?.summary || r.report?.position;
     const conclusion = reviewConclusion(r.report);
     if (conclusion) {
@@ -557,6 +571,7 @@ function createFeed(run) {
       const re = RECONNECT.exec(msg);
       push(re ? `⚠ ${M.watchReconnect(re[1], re[2])}` : `✗ ${msg}`, re ? 'yellow' : 'red');
     } else if (ev.type === 'image.generated') push(`▣ ${M.watchImage(path.basename(ev.path))}`, 'green');
+    else if (ev.type === 'image.viewed') push(`◉ ${M.watchImageViewed(path.basename(ev.path))}`, 'dim');
     else if (ev.type === 'item.started' && it.type === 'command_execution') { commands.add(it.id); push(`$ ${oneLine(plainCommand(it.command))}`, 'dim'); }
     else if (ev.type === 'item.completed') {
       if (it.type === 'agent_message') {
@@ -603,7 +618,7 @@ function panelHead(run, stats, width, withTitle) {
   const color = running ? C.cyan : ok ? C.green : blocked ? C.yellow : C.red;
   const left = `${running ? '●' : ok ? '✔' : blocked ? '?' : '✗'} ${whoOf(m)}`;
   const s = stats;
-  const right = !running ? [M.statusName(shownStatus(status, r)), M.duration(r?.duration_s ?? elapsed / 1000), changedFor(r, m)].filter(Boolean).join(' · ')
+  const right = !running ? [M.statusName(shownStatus(status, r)), M.duration(r?.duration_s ?? elapsed / 1000), changedFor(r, m), r?.stale === true ? M.watchStale : null].filter(Boolean).join(' · ')
     : s.queued ? M.watchApiQueuedLive(clock(Date.now() - Date.parse(s.req)))
     : s.req ? M.watchApiLive(s.answering, clock(elapsed), (s.answering ? s.answerChars : s.chars).toLocaleString('en-US'))
     : [M.statusName('running'), clock(elapsed), s.commands ? M.panelCommands(s.commands) : ''].filter(Boolean).join(' · ');
@@ -816,7 +831,8 @@ async function watchGroup(group, o, loadCfg) {
   for (const run of all) {
     const { result: r, ok } = runOutcome(run);
     out.push(C.dim('─'.repeat(width)), ...panelHead(run, feeds.get(run.id).stats, width, !title));
-    if (r?.usage) out.push(`  ${C.dim(fitWidth(M.tokenSummary(r.usage, r.last_request ?? r.context, M.tokenCount, (r.usage_scope ?? (run.meta.mode === 'resume' ? 'session_total' : 'this_run')) === 'session_total'), inner))}`);
+    const usage = usageLine(r, run.meta);
+    if (usage) out.push(`  ${C.dim(fitWidth(usage, inner))}`);
     const conclusion = reviewConclusion(r?.report);
     const final = conclusion || r?.report?.position || r?.report?.summary;
     if (final) for (const l of wrapWidth(conclusion || M.watchOpinion(final.trim()), inner)) out.push(`  ${l}`);

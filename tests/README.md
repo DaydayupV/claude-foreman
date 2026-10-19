@@ -112,6 +112,14 @@
 | 36 审查计划和材料指纹 | review-targets.test.mjs | 计划固定审查对象、文件、范围和指纹，其他模块不能写材料参数，空 diff 不写计划；席位启动拒绝材料参数和材料变化，旧计划按 diff 兼容；三种 diff 范围各自重算；结束时材料被改、被删或 git 出错不丢结果，stale 如实记录 |
 | 37 讨论和审查的只读三级 | readonly-review.test.mjs | opencode、pi、API 为 tools；Codex 按 foreman 配置和 config.toml 判断 sandbox 或 audited，续接的讨论沿用；audited 拒绝 --no-snapshot、快照失败不启动；有工具事件或自报的写入记为失败并列出 readonly_violation，sandbox 级别不拍快照时看事件；沙箱挡下的写入（failed）不算；只有归属未知的改动不算违规但标 stale；config 和 check 每方一条 readonly_audited 提醒；watch 显示审查结论、问题和拿不准的地方（中英文） |
 | 38 冒烟小修：取消和计划状态 | cancel-and-plans.test.mjs | 取消原因照实写（cancel 命令、实时查看里按 x、旧版标记）；取消时记下已完成请求的用量并说明进行中的那次没算，一次都没完成时 usage 为 null；cancel 等不到调度进程停下时强行结束并补写结果，带上 Codex 会话记录里的用量；组视图和 status --group 写出计划完整、进行中（必选还没启动）或不完整（缺哪个必选）；项目关掉的格子，建计划和启动席位都说明是项目配置关的；强行结束前先确认调度进程已经退出，它已经写好的结果不被覆盖，只写了一半的结果换成补写的最简结果；计划状态里没审完或格式不合格的审查不算有效，Codex 原生审查和旧记录的文字算 |
+| 39 图像计划和能力 | image.test.mjs | 路线必填、取值及格子匹配，generate 不带角色，审查参数仅供 review；候选、必选、上限、用户和项目关格、席位模型和强度重验；路线 4 不触发 generate 必选；generate 依赖完整 images 接口，draw 依赖 run 和 run_access |
+| 40 图像路线确认 | image.test.mjs | 当前会话最近一次路线弹窗：缺会话、没提问、未回答、取消、自由文字、多选及路线不一致拒绝；同一次回答支持两格、多交付物和重复计划，无标记弹窗不影响；先跑 Pre/Post 钩子再建计划；按 asked 顺序判断，迟到回答不覆盖新弹窗，漏记 asked 时认 answered；非法会话 ID 即使能指向有效回答也拒绝；漏记提问的旧弹窗再次回答不改顺序，没有 tool_use_id 的记录各算一次，同一弹窗只认最后一条回答，坏记录不报错 |
+| 41 路线回答钩子 | image.test.mjs | 只记录路线问题及其回答，不记其他弹窗或回答；非法会话、其他工具和坏 JSON 静默忽略；tool_response 优先、tool_input 回退、无回答记空对象；自定义及旧名配置目录，先记录再清理超过 30 天的 jsonl，旧条目删不掉、目录读不出来都不影响记录 |
+| 42 图像执行和续接 | image.test.mjs | image 必须带计划和 scope、不接受 level 或 agent；结果与 meta 的 module/cell/step/route/level、图片、快照、计划完整状态及 status/watch 标题；续接不查 run 等级、不重新确认、排除旧图片，候选移除和关格拒绝；执行并发和同组范围准入；启动和续接只把被 .gitignore 忽略的项目内 scope 并入 track（去重，工作目录本身、没被忽略的目录和项目外路径不并入）；续接沿用 scope 时自己的上一轮不算同组其他任务；会话记录读不出来时用量统计为空、结果照常落盘 |
+| 43 图像路线告警 | image.test.mjs | 普通 run 及其续接出图告警；路线 4 draw 出位图告警；路线 3/4 的改动 SVG 嵌入位图告警，路线 2 允许混合；排除同组其他席位和范围外的 unknown，事件和报告合并去重，无快照仍检查并注明部分检查，scope 在工作目录外时也注明；超过 2 MB 的 SVG 分块检查且识别跨块标签 |
+| 44 冒烟修复：stale | image-smoke.test.mjs | status、status --group、watch 两种结束行与组汇总、计划行和席位显示 stale，计划仍完整；最新轮结果为准，stale 与未启动必选同时说明，中英文分隔符一致 |
+| 45 冒烟修复：看图步骤 | image-smoke.test.mjs | 代码和函数形式的 view_image、字面量及未知路径、成功失败未结束、since 过滤；运行中增量写事件及活动步骤，时间线和详细模式显示，续接只读本轮新增日志且不增加命令数；同一 call_id 合并调用并累计图片数，部分成功记未知，后续文字不抹掉成功；输出先到和末行无换行仍能配对；apply_patch 中的看图及出图代码不记调用；会话文件中途被删仍保留结果并正常结束；一次读不满时读到文件末尾，收尾时没写完的末行留到下次 |
+| 46 冒烟修复：费用和措辞 | image-smoke.test.mjs | opencode 费用接在 status/watch 用量行及组汇总后，只有费用也显示、零和小额格式；审查默认 uncommitted 为 true，旧 false 计划仍审未提交改动；项目关格仅在显式 agent 时提点名 |
 
 ## 说明
 

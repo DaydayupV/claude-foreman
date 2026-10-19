@@ -34,8 +34,8 @@ test('计划先校验格子、候选、必选、席位上限和参数，失败�
   c.modules.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second' }]; c.dispatch.max_seats = 2; h.config(c);
   const base = planArgs(h);
   for (const [args, message] of [
-    [planArgs(h, 'image'), M.planImageLater],
-    [base.map((v) => v === 'discuss' ? 'wrong' : v), M.planModuleChoices('discuss、run、review')],
+    [planArgs(h, 'image'), M.planRouteRequired],
+    [base.map((v) => v === 'discuss' ? 'wrong' : v), M.planModuleChoices('discuss、run、review、image')],
     [base.map((v) => v === 'complex' ? 'draw' : v), M.planCellChoices('discuss', 'simple、normal、complex')],
     [base.filter((v, i) => i !== base.indexOf('--group') && i !== base.indexOf('--group') + 1), M.missingOpt('group')],
     [planArgs(h, 'discuss', []), M.planNoSeats],

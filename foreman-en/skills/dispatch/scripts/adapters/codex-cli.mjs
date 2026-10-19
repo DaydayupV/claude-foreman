@@ -5,8 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA } from '../config.mjs';
 import { newRunDir } from '../records.mjs';
-import { execute, eventWriter, watchCancellation, spawnCli, validateSchema } from '../runner.mjs';
-import { readImageCalls, missingReferences } from '../image-calls.mjs';
+import { execute, eventWriter, imageScanner, watchCancellation, spawnCli, validateSchema } from '../runner.mjs';
+import { readImageCalls, missingReferences, readViewedImages } from '../image-calls.mjs';
 import { M, die, isObject, binCommand, pathCommand, npmEntry, killTree, isReconnect, readAttachments, readImages, focusFiles, closestMatches } from '../util.mjs';
 
 const capabilities = { modes: ['run', 'review', 'discuss'], isolation: 'os', reads_code: true, reads_images: true, native_schema: true, native_review: true, images: true, resume: true, command_start_events: true };
@@ -90,16 +90,33 @@ function generatedImages(sessionId) {
   } catch { return []; }
 }
 
+// 出图参数和参考图告警属于 Codex 会话格式，由适配器统一提供。
+const images = {
+  list: generatedImages,
+  calls({ sessionId, startedAt, prompt }) {
+    const file = sessionFile(sessionId, startedAt);
+    const calls = file ? readImageCalls(file, startedAt - 2000) : [];
+    const warnings = /referenced_image_paths["'`]?\s*(?::|=|设为|改为|传入|为|set to|to)?\s*\[\s*["'`]/i.test(prompt) && missingReferences(calls) ? [M.imageRefsMissing] : [];
+    return { calls, warnings };
+  },
+};
+
 function runCodex({ agent, args, cwd, prompt, runDir, timeoutMin, stallMin, sessionId, onSession }) {
   return new Promise((resolve) => {
     const { file, pre } = codexCommand(agent);
     const events = fs.createWriteStream(path.join(runDir, 'events.jsonl'));
     const errLog = fs.createWriteStream(path.join(runDir, 'stderr.log'));
     const event = eventWriter(runDir, events);
-    const out = { code: null, sessionId: null, usage: null, errors: [], warnings: [], notes: [], sandboxError: null, fileChanges: new Set(), images: [], imageCalls: [], quotaExhausted: false, timedOut: false, stalled: false, cancelled: false, commands: 0, messages: [], questions: [] };
+    const out = { code: null, sessionId: null, usage: null, errors: [], warnings: [], notes: [], sandboxError: null, fileChanges: new Set(), images: [], imageCalls: [], viewedImages: [], quotaExhausted: false, timedOut: false, stalled: false, cancelled: false, commands: 0, messages: [], questions: [] };
     const startedAt = Date.now();
     const runningCommands = new Set();
     let lastEventAt = Date.now();
+    const scanner = imageScanner({ images, previousSessionId: sessionId, emit: (ev) => { lastEventAt = Date.now(); event(ev); } });
+    let viewedFile = sessionId && sessionFile(sessionId, startedAt), viewedCount = 0;
+    const viewedState = { offset: 0 };
+    if (viewedFile) {
+      try { viewedState.offset = fs.statSync(viewedFile).size; } catch { /* 会话文件暂时读不到，稍后再扫 */ }
+    }
     const child = spawnCli(file, [...pre, ...args], {
       cwd, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32',
     }, {
@@ -175,17 +192,21 @@ function runCodex({ agent, args, cwd, prompt, runDir, timeoutMin, stallMin, sess
       clearInterval(cancelCheck);
       killTree(child.pid);
     });
-    // exec --json 里没有出图事件：定时查看图片目录，新图记成 image.generated 事件给 watch 显示。
-    // 续接时目录里已有的是上一轮的图，不算。
-    const seenImages = new Set(generatedImages(sessionId));
-    const scanImages = () => {
-      for (const image of generatedImages(out.sessionId || sessionId)) {
-        if (seenImages.has(image)) continue;
-        seenImages.add(image);
-        out.images.push(image);
-        lastEventAt = Date.now();
-        event({ type: 'image.generated', path: image });
-      }
+    // exec --json 没有出图和看图事件：两秒扫描一次，续接只读本轮新增的会话记录。
+    const scanImages = (final = false) => {
+      try {
+        const sid = out.sessionId || sessionId;
+        out.images = scanner.scan(sid);
+        viewedFile ||= sessionFile(sid, startedAt);
+        if (!viewedFile) return;
+        const viewed = readViewedImages(viewedFile, startedAt, viewedState, final);
+        for (const image of viewed.slice(viewedCount)) {
+          lastEventAt = Date.now();
+          event({ type: 'image.viewed', path: image.path });
+        }
+        viewedCount = viewed.length;
+        out.viewedImages = viewed.map(({ path, ok }) => ({ path, ok }));
+      } catch { /* 扫描失败只跳过本轮，不影响任务收尾 */ }
     };
     const imageCheck = setInterval(scanImages, 2000);
     const finish = (code) => {
@@ -196,14 +217,13 @@ function runCodex({ agent, args, cwd, prompt, runDir, timeoutMin, stallMin, sess
       process.removeListener('SIGINT', onSignal);
       process.removeListener('SIGTERM', onSignal);
       if (buf.trim()) record(buf);
-      scanImages();
-      // 出了图、或者任务说明提到 image_gen 或参考图时，从会话记录读出每次出图的参数（会话记录可能很大，其他任务不读）。
-      // 续接时会话记录里还有前几轮的调用，只取这一轮开始之后的（留 2 秒余量）。
-      const file = (out.images.length || /image_gen|referenced_image_paths/.test(prompt)) && sessionFile(out.sessionId || sessionId, startedAt);
-      out.imageCalls = file ? readImageCalls(file, startedAt - 2000) : [];
-      // 只有任务说明里真的给了参考图（参数名后面跟着非空的路径数组，中间可以换行）才算要求传参考图；
-      // "不传 referenced_image_paths"这类只提到参数名的写法、空数组都不算，否则全新出图也会被误报。
-      if (/referenced_image_paths["'`]?\s*(?::|=|设为|改为|传入|为|set to|to)?\s*\[\s*["'`]/i.test(prompt) && missingReferences(out.imageCalls)) out.warnings.push(M.imageRefsMissing);
+      scanImages(true);
+      // 出了图或任务说明提到出图参数时才做完整的出图调用解析，保留原有的读取条件。
+      if (out.images.length || /image_gen|referenced_image_paths/.test(prompt)) {
+        const scanned = images.calls({ sessionId: out.sessionId || sessionId, startedAt, prompt });
+        out.imageCalls = scanned.calls;
+        out.warnings.push(...scanned.warnings);
+      }
       // 沙箱坏了时 Codex 照样正常结束，只在报告里说命令起不来；提示 Claude 这不是任务本身的问题。
       if (out.sandboxError) out.notes.push(M.codexSandboxFailed(out.sandboxError));
       events.end();
@@ -239,11 +259,14 @@ function sessionFile(sessionId, startedAt) {
 function codexSessionStats(sessionId, startedAt) {
   const file = sessionFile(sessionId, startedAt);
   if (!file) return null;
-  const st = fs.statSync(file);
-  const len = Math.min(st.size, 1024 * 1024);
-  const chunk = Buffer.alloc(len);
-  const fd = fs.openSync(file, 'r');
-  try { fs.readSync(fd, chunk, 0, len, st.size - len); } finally { fs.closeSync(fd); }
+  let chunk;
+  try {
+    const st = fs.statSync(file);
+    const len = Math.min(st.size, 1024 * 1024);
+    chunk = Buffer.alloc(len);
+    const fd = fs.openSync(file, 'r');
+    try { fs.readSync(fd, chunk, 0, len, st.size - len); } finally { fs.closeSync(fd); }
+  } catch { return null; } // 会话记录被锁或刚被删掉：这次没有统计，结果照常落盘
   const lines = chunk.toString('utf8').split('\n');
   for (let i = lines.length - 1; i >= 0; i--) {
     if (!lines[i].includes('"token_count"')) continue;
@@ -387,7 +410,7 @@ async function executeCodex(ctx) {
 }
 
 export default {
-  type: 'codex cli', capabilities, readonlyLevel,
+  type: 'codex cli', capabilities, images, readonlyLevel,
   efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   defaultEffort: (level) => ({ simple: 'medium', normal: 'high', complex: 'max' })[level], channel: M.channel.codex,
   validate,

@@ -1,8 +1,8 @@
 // 三种执行路径共用的登记、事件、取消、报告修复和结果落盘；快照执行使用适配器回调。
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
-import { CLAUDE_SESSION, checkAdmission, groupScopeOwner, isCancelled, cancelSource } from './records.mjs';
+import { spawn, spawnSync } from 'node:child_process';
+import { CLAUDE_SESSION, checkAdmission, groupScopeOwner, absolute, isCancelled, cancelSource } from './records.mjs';
 import { makeTracker } from './tracker.mjs';
 import { computeReviewMaterial, computeReviewScope } from './review-scope.mjs';
 import { M, die, notice, relativePath, pathKey, whoOf, modelOf, replaceFile, killTree, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision } from './util.mjs';
@@ -82,6 +82,7 @@ function startRun(ctx, { started = Date.now(), track = [], modelShown = ctx.mode
   const meta = {
     id, mode, kind, title: ctx.title || null, cwd, model, model_shown: modelShown, model_name: modelName, level, effort,
     module: ctx.module ?? (kind === 'exec' ? 'run' : kind), cell: ctx.cell ?? level,
+    ...(ctx.module === 'image' ? { step: ctx.step, route: ctx.route } : {}),
     plan: ctx.plan ?? null, seat: ctx.seat ?? null, role: ctx.role ?? null,
     ...(ctx.outside_cell ? { outside_cell: true } : {}), ...(ctx.model_overridden ? { model_overridden: true } : {}),
     agent: agentName, agent_type: agent.type, sandbox, parent: ctx.parent || null,
@@ -116,6 +117,7 @@ function startRun(ctx, { started = Date.now(), track = [], modelShown = ctx.mode
 function finishRun(run, result, code = result.exit_code, observed = {}) {
   const { module, cell, plan, seat, role, outside_cell, model_overridden } = run.meta;
   Object.assign(result, { module, cell, plan, seat, role, ...(outside_cell ? { outside_cell: true } : {}), ...(model_overridden ? { model_overridden: true } : {}) });
+  if (module === 'image') Object.assign(result, { step: run.meta.step, route: run.meta.route });
   if (run.ctx.kind !== 'exec') {
     result.readonly = run.ctx.readonly;
     if (result.readonly_violation?.length) {
@@ -186,6 +188,22 @@ function eventWriter(dir, stream) {
   };
 }
 
+// 排除续接前已有的图片，每张新图只发一次事件并累计本轮结果。
+function imageScanner({ images, previousSessionId, emit }) {
+  const seen = new Set(images.list(previousSessionId)), generated = [];
+  return {
+    scan(sessionId) {
+      for (const file of images.list(sessionId)) {
+        if (seen.has(file)) continue;
+        seen.add(file);
+        generated.push(file);
+        emit({ type: 'image.generated', path: file });
+      }
+      return generated;
+    },
+  };
+}
+
 function runLimits(ctx, started) {
   const timeoutMin = Number(ctx.opts.timeout) || ctx.cfg.dispatch.timeout_min;
   return { timeoutMin, deadline: started + timeoutMin * 60000, stallMin: Number(ctx.opts.stall ?? ctx.cfg.dispatch.stall_min) };
@@ -219,13 +237,39 @@ function parseReport(last, schema, validateSchema) {
   } catch { return { report: null, invalid: [last.trim() ? 'Reply is not valid JSON' : 'Reply is empty'] }; }
 }
 
+// SVG 分块读取并保留边界重叠，找到位图标签就停，读不到的文件跳过。
+function svgEmbedsBitmap(file) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const chunk = Buffer.alloc(1024 * 1024);
+    let tail = '';
+    for (;;) {
+      const bytes = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (!bytes) return false;
+      const text = tail + chunk.toString('utf8', 0, bytes);
+      if (/<image/i.test(text)) return true;
+      tail = text.slice(-5);
+    }
+  } catch { return false; }
+  finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
 async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, describe, schema, validate, capabilities }) {
   const { agentName, agent, model, mode, kind, id, dir, cwd, level, effort, args, prompt, opts, expectReport } = ctx;
   const { isolation } = capabilities;
   const snapshotRequired = kind === 'exec' && isolation !== 'os';
   const audited = ctx.readonly === 'audited';
   const started = Date.now();
-  const track = [...new Map(opts.track.map((file) => {
+  // 图像输出目录常被 .gitignore 忽略，改动追踪看不到：项目内、本身被忽略的 scope 并入快照（续接共用此入口）。
+  // 工作目录本身和没被忽略的目录不并入，否则 node_modules 这类目录会被整个拍进快照。
+  const imageScopes = ctx.module === 'image' ? opts.scope.filter((file) => {
+    const rel = relativePath(cwd, file);
+    if (rel === '.' || rel === '..' || rel.startsWith('../') || path.isAbsolute(rel)) return false;
+    // 退出码 0 表示至少一个写法被忽略；带斜杠的写法让只写了 "out/" 的规则也能对上还不存在的目录。
+    return spawnSync('git', ['check-ignore', '--', rel, `${rel}/`], { cwd, windowsHide: true }).status === 0;
+  }) : [];
+  const track = [...new Map([...opts.track, ...imageScopes].map((file) => {
     const rel = relativePath(cwd, file);
     if (rel === '..' || rel.startsWith('../') || path.isAbsolute(rel)) die(M.badArg(`--track ${file}`));
     return [pathKey(rel), rel];
@@ -234,7 +278,7 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
   const run = startRun({ ...ctx, isolation }, { started, track, sandbox, modelShown, modelName, atomic: false });
   const { meta, writeMeta } = run;
   fs.writeFileSync(path.join(dir, 'brief.md'), prompt);
-  process.stderr.write(`foreman: ${M.started(mode, whoOf(meta), level, dir)}\n`);
+  process.stderr.write(`foreman: ${ctx.module === 'image' ? M.startedImage(mode === 'resume' ? 'resume' : 'image', whoOf(meta), ctx.cell, '①②③④'[ctx.route - 1], dir) : M.started(mode, whoOf(meta), level, dir)}\n`);
   if (snapshotRequired) notice(M.unsandboxedRun(agent.run_access));
 
   const warnings = [];
@@ -300,6 +344,24 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
   const trackedPaths = new Set(tracked.map((f) => pathKey(relativePath(cwd, f.path))));
   const untracked = [...new Map(reported.filter((f) => !trackedPaths.has(pathKey(f))).map((f) => [pathKey(f), f])).values()];
   if (untracked.length) notes.push(M.reportedNotTracked(untracked));
+
+  if (kind === 'exec' && ctx.module !== 'image' && r.images.length) warnings.push(M.imageOutsideModule);
+  if (ctx.module === 'image' && ctx.cell === 'draw') {
+    const mark = '①②③④'[ctx.route - 1];
+    if (ctx.route === 4 && r.images.length) warnings.push(M.vectorRouteImages(mark));
+    if ([3, 4].includes(ctx.route)) {
+      const untrackedScope = opts.scope.some((scope) => { const rel = relativePath(cwd, scope); return rel === '..' || rel.startsWith('../') || path.isAbsolute(rel); });
+      if (!changes.available || untrackedScope) notes.push(M.vectorCheckPartial(mark));
+      const own = tracked.filter((f) => ['A', 'M'].includes(f.status) && (f.by === 'agent' || f.by === 'reported'
+        || f.by === 'unknown' && !f.group_run && opts.scope.some((scope) => {
+          const file = absolute(cwd, f.path), root = absolute(cwd, scope);
+          return file === root || file.startsWith(`${root}/`);
+        }))).map((f) => f.path);
+      const files = new Map([...own, ...r.fileChanges, ...reported].filter((file) => /\.svg$/i.test(file)).map((file) => [absolute(cwd, file), file]));
+      const embeds = [...files.values()].filter((file) => svgEmbedsBitmap(path.resolve(cwd, file))).map((file) => relativePath(cwd, file));
+      if (embeds.length) warnings.push(M.vectorEmbedsBitmap(mark, M.list(embeds)));
+    }
+  }
 
   // 重连之类的 error 事件不一定致命，成败以退出码为准，errors 照常汇报。
   const ok = r.status ? r.status === 'done' : r.code === 0 && !r.timedOut && !r.stalled && !r.needsInput;
@@ -373,12 +435,13 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
       : changes,
     generated_images: r.images.length ? r.images : undefined, // 只列这一轮生成的
     image_calls: r.imageCalls?.length ? r.imageCalls : undefined, // 每次出图实际传的参数，读自 Codex 会话记录
+    viewed_images: r.viewedImages?.length ? r.viewedImages : undefined,
     run_dir: dir,
   };
   return finishRun(run, result, ok ? 0 : 1, { messages: r.messages, questions: r.questions, last });
 }
 
-export { startRun, finishRun, finishDiscussion, eventWriter, runLimits, watchCancellation, parseReport, reportWithRepair, execute, collectQuestions, spawnCli };
+export { startRun, finishRun, finishDiscussion, eventWriter, imageScanner, runLimits, watchCancellation, parseReport, reportWithRepair, execute, collectQuestions, spawnCli };
 
 export function validateSchema(schema, value) {
   const errors = [];

@@ -62,20 +62,21 @@ flowchart TD
 ```mermaid
 flowchart TD
     r0{"Who does what"} -- "Decisions, design, text" --> rself["Claude Code does it"]
-    r0 -- "Drawing (incl. illustrations used whole in SVG animations)" --> rimg["An image-capable agent"]
+    r0 -- "Drawing (incl. illustrations used whole in SVG animations)" --> rroute["You choose the route<br/>in a pop-up"]
+    rroute --> rimg["Image module:<br/>generate and draw cells"]
     r0 -- "Other hands-on work" --> rlevel{"Level the work"}
     rlevel -- "Level 0" --> rself
     rlevel -- "Levels 1–3" --> rrun["Handed off per the config"]
     rrun --> rcheck["Check: read the diff<br/>run it"]
     rimg --> rasset["assets removes backgrounds,<br/>splits and names parts, checks"]
     rasset --> rimgcheck["Claude Code looks at<br/>the contact sheet"]
-    rimgcheck -- "Not good enough" --> rimgredo["One rework<br/>then it's your call"]
+    rimgcheck -- "Not good enough" --> rimgredo["Change something and regenerate<br/>your call after three tries<br/>with no improvement"]
     rcheck -- "Not good enough" --> rrework["One rework<br/>then Claude Code takes over"]
     rrework --> rcheck
 
     classDef claude fill:#EEEDFE,stroke:#534AB7,color:#3C3489
     classDef agent fill:#E1F5EE,stroke:#0F6E56,color:#085041
-    class r0,rself,rlevel,rcheck,rasset,rimgcheck claude
+    class r0,rself,rroute,rlevel,rcheck,rasset,rimgcheck claude
     class rimg,rrun,rrework,rimgredo agent
 ```
 
@@ -136,6 +137,8 @@ So that Claude Code doesn't forget (easy when a project has its own skills), the
 
 Bitmaps are drawn by Codex's built-in image tool, then Claude Code turns them into assets ready for downstream use with the `assets` subcommand on your machine: transparent PNG parts, a manifest listing them by name, a contact sheet, and SVG for flat assets with few colors (one layer per part, which opens in Figma or Illustrator).
 
+- **You choose the route before work starts**: before each new graphic deliverable, Claude Code asks you in a pop-up: ① bitmap, ② bitmap + vector mix (a final image plus hand-drawn pieces that bend), ③ pure vector (a reference image first to set the style), or ④ pure vector / code (no image generation). The pop-up says which model generates and which hand-draws, whether reference images get uploaded, and the rework rule. It asks even with `dispatch.auto` on; rework and partial regeneration of the same deliverable don't ask again, while switching routes, adding a deliverable, widening the scope or changing the model vendor does. The plugin's hook records the route you chose, and the script checks it before an image task goes out: if you cancelled, didn't choose, or chose something else, nothing goes out. This was tested in the desktop app; the CLI hasn't been tested yet.
+- **Generating and drawing are the two cells of the image module**: `generate` makes the final image, background plates, local variants and standalone assets; `draw` hand-draws the pieces that bend from the final image, or draws the whole thing on the pure vector routes. There are no levels; a plan made with `plan --module image` goes out with the `image` command. If images get generated outside the image module by a plain hands-on task, the result points it out, and so does an SVG on a pure vector route that embeds a bitmap.
 - **In SVG, HTML and animations, every piece comes from one image**: Codex draws only the whole final image (nothing goes further until you've seen and approved it), then edits it into a background plate with the subject removed; every piece of the work comes from that final image. Pieces that move as a whole (a head, a torso, props, a counter) are cut out where they are by Claude Code with `assets layers`; pieces that bend themselves or must touch things drawn in code exactly (bending limbs, tails) go to Codex, which hand-draws them as SVG traced from the final image and writes their deformation, while Claude Code writes the brief and checks the result with its own screenshots (in a comparison the two tied on the metrics, and in a blind review Codex's version looked more natural); shapes simulated by physics every frame, things tied to mechanics, text and UI controls are drawn in code. In testing, the image model couldn't place joint pivots and contact points accurately, and pieces it took out on their own came back enlarged (up to twice the size) with redrawn proportions; pieces cut from the same image meet exactly, with the same line weight. Claude Code tells you before starting which pieces move as a whole and which go to Codex to be traced and bent.
 - **Expressions are only patches**: a blink or an open mouth is a local edit of the final image, and only the changed region is laid over, instead of swapping the whole image, which would flicker.
 - **Detailed images such as characters aren't turned into SVG by default**: they come out large and banded, so they stay PNG, embedded in the page.
@@ -151,9 +154,9 @@ Prompt templates, command options and the checks are in [references/image-assets
 
 ### The live view
 
-- The default view is a timeline: times down the left, with what the model says, folded commands and file changes in order, a bottom line that keeps showing elapsed time, command count and progress, and the result at the end.
+- The default view is a timeline: times down the left, with what the model says, folded commands, file changes and images generated or opened in order, a bottom line that keeps showing elapsed time, command count and progress, and the result at the end; opencode and pi tasks show their cost after the token use.
 - While the run is going, the view re-flows when the window is resized. Scroll back with ↑↓, PgUp/PgDn or the mouse wheel, press End to jump to the latest, and q to stop watching; the run keeps going.
-- A discussion or task group is shown in one window with a block per model: its status, elapsed time and latest few lines. When the blocks have different titles (a role-mode discussion, split hands-on work), each block's first line is the model and its status and the second is that block's title, with the round for a resumed discussion. When an API model is queued because its service is busy, press x to stop it.
+- A discussion or task group is shown in one window with a block per model: its status, elapsed time and latest few lines. When the blocks have different titles (a role-mode discussion, split hands-on work), each block's first line is the model and its status and the second is that block's title, with the round for a resumed discussion. When an API model is queued because its service is busy, press x to stop it. When the material under review changed while a review ran, that block and the plan's line say "material changed during the review (stale)".
 - Add `--verbose` for every detail: reasoning, each command and its output, token use.
 - The first time it opens for a newly dispatched conversation, a few seconds of intro play first: the model's pixel avatar, "Starting …" and a few jokes (5 seconds for one model, 10 for a discussion). Any key skips it, and setting `dispatch.intro` to `false` turns it off. The avatar is picked by the model name, with a ??? avatar for anything it doesn't recognize.
 - In the Claude desktop app, the live view opens in the terminal panel by itself after each handoff; in the CLI, Claude Code sends you the command to run in another terminal.
@@ -233,7 +236,7 @@ A minimal example: Codex does complex hands-on work and every review, complex di
 - Each cell lists candidates. When a cell has several, Claude Code picks by its rules each time: for discussions and reviews, by default 1 seat at level 1, 2 at level 2 and 3 at level 3, using different models where possible; for hands-on work, one agent per piece of work. An entry marked `"required": true` is required and always takes part when the cell is used.
 - `"claude code"` means Claude Code does it itself; for reviews and discussions, that cell uses no outside model. `null` turns an image cell off.
 - `effort` is the reasoning effort; leave it out for the default. For Codex it's `low` to `ultra`; for opencode, the model's variant; for pi, its thinking level; for API models it's sent as `reasoning_effort` as is.
-- In this version the two image cells can only be configured; image generation and drawing are still handed off the old way for now. A separate image command and a route check before generating come in a later version.
+- Image tasks start with a pop-up where you choose the route, and the route decides which cells are used: a pure vector route that only draws never touches the generate cell, so that cell's required agents don't take part.
 
 The old `levels` form still works: the first time the plugin reads it, it rewrites it as `modules`, keeping every cell's agents, efforts and order, and backs up the original as `config.json.bak`. One thing changes: the models at a discussion level used to all take part, and after the rewrite they're candidates Claude Code picks from. To keep everyone taking part, mark them all `"required": true`; `/foreman-en:setup` can mark them, and it adds the two image cells too.
 

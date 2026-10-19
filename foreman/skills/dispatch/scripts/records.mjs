@@ -151,6 +151,7 @@ function describeActivity(dir) {
       : last.type === 'api.error' ? last.message
       : last.type === 'api.usage' ? M.watchTokens(last.usage) : M.watchEnded('done');
   } else if (last?.type === 'pi.progress') step = last.phase === 'thinking' ? M.stepApiThinking(last.total_chars) : M.stepApiAnswering(last.total_chars);
+  else if (last?.type === 'image.viewed') step = M.stepImageViewed(path.basename(last.path));
   else if (running.size) step = M.stepCommand(clip(oneLine(plainCommand([...running.values()].pop())), 160));
   else if (last?.item?.type === 'agent_message') step = M.stepSaid(clip(oneLine(last.item.text), 160));
   else if (last?.item?.type === 'file_change') step = M.stepFileChanged;
@@ -180,8 +181,13 @@ const writesFiles = (meta) => meta?.kind === 'exec';
 // 同组（同一个 Claude 会话）其他执行任务里，写入范围包含这个文件的那一个。归属未知的改动落在别人的范围里时，多半是那个任务改的。
 function groupScopeOwner(meta) {
   if (meta.group == null) return () => null;
-  const others = listRuns().filter((id) => id !== meta.id).map((id) => ({ id, meta: readMeta(path.join(RUNS_ROOT, id)) }))
-    .filter((r) => r.meta?.group === meta.group && writesFiles(r.meta) && r.meta.claude_session === meta.claude_session);
+  const all = listRuns().map((id) => ({ id, meta: readMeta(path.join(RUNS_ROOT, id)) }));
+  // 自己的续接链（上一轮、上上一轮……）和同一计划席位的其他轮次都是自己，不算同组的其他任务。
+  const own = new Set([meta.id]);
+  for (let parent = meta.parent; parent && !own.has(parent); parent = all.find((r) => r.id === parent)?.meta?.parent) own.add(parent);
+  const sameSeat = (m) => meta.plan != null && m.plan === meta.plan && m.seat === meta.seat;
+  const others = all.filter((r) => !own.has(r.id) && r.meta && !sameSeat(r.meta)
+    && r.meta.group === meta.group && writesFiles(r.meta) && r.meta.claude_session === meta.claude_session);
   return (file) => {
     const a = absolute(meta.cwd, file);
     return others.find((r) => (r.meta.scope || []).some((s) => { const b = absolute(r.meta.cwd, s); return a === b || a.startsWith(`${b}/`); }))?.id ?? null;
@@ -259,4 +265,4 @@ function groupSummary(runs) {
 const readMeta = (dir) => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')); } catch { return null; } };
 const isRunning = (m) => m?.status === 'running' && pidAlive(m.pid);
 
-export { RUNS_ROOT, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, findRun, describeActivity, groupRuns, checkAdmission, runEnd, runOutcome, groupTally, groupSummary, groupScopeOwner, readMeta, isRunning, writesFiles };
+export { RUNS_ROOT, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, findRun, describeActivity, groupRuns, checkAdmission, runEnd, runOutcome, groupTally, groupSummary, groupScopeOwner, absolute, readMeta, isRunning, writesFiles };

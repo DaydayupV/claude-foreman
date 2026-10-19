@@ -1,5 +1,5 @@
 {
-  "description": "Reminds Claude at session start to load the dispatch skill and adds the user and project preference files; blocks commands that call codex exec / codex review, opencode run or pi tasks directly, so agents are always called through the foreman-en script",
+  "description": "Reminds Claude at session start to load the dispatch skill and adds the user and project preference files; blocks commands that call codex exec / codex review, opencode run or pi tasks directly, so agents are always called through the foreman-en script; records the questions and answers of image route pop-ups, so an image plan can be checked against the route the user chose",
   "hooks": {
     "SessionStart": [
       {
@@ -24,6 +24,34 @@
             "command": "node",
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/hooks/guard-direct-calls.mjs"
+            ],
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/record-answers.mjs"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/record-answers.mjs"
             ],
             "timeout": 10
           }

@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { setup, replay, write, finish } from './common.mjs';
 import { report, review } from '../fixtures/reports.mjs';
@@ -31,7 +32,9 @@ if (operation === 'version') {
     const d = new Date();
     const dir = path.join(process.env.CODEX_HOME, 'sessions', String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0'));
     const records = [...(s.rollout || []).map((r) => ({ timestamp: d.toISOString(), ...r })), ...(s.stats ? [{ type: 'event_msg', payload: { type: 'token_count', ...s.stats } }] : [])];
-    write(path.join(dir, `rollout-${session}.jsonl`), records.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    const file = path.join(dir, `rollout-${session}.jsonl`), text = records.map((r) => JSON.stringify(r)).join('\n') + (s.rollout_no_newline ? '' : '\n');
+    if (s.append_rollout && fs.existsSync(file)) fs.appendFileSync(file, text);
+    else write(file, text);
   }
   for (const name of s.images || []) {
     write(path.join(process.env.CODEX_HOME, 'generated_images', session, name), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6iQAAAABJRU5ErkJggg==', 'base64'));

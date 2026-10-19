@@ -62,6 +62,9 @@ const LEVELS = ['simple', 'normal', 'complex'];
 const MODES = ['run', 'review', 'discuss'];
 const CLAUDE_CODE = 'claude code';
 const MODULE_CELLS = { discuss: LEVELS, run: LEVELS, review: LEVELS, image: ['generate', 'draw'] };
+const ROUTE_CELLS = { 1: ['generate'], 2: ['generate', 'draw'], 3: ['generate', 'draw'], 4: ['draw'] };
+// 出图声明和两项检测接口齐全，才可以接 generate 格子。
+const canGenerate = (adapter) => adapter.capabilities.images === true && typeof adapter.images?.list === 'function' && typeof adapter.images?.calls === 'function';
 const cellList = (value) => Array.isArray(value) ? value : isObject(value) ? [value] : [];
 function eachCell(modules) {
   return Object.entries(MODULE_CELLS).flatMap(([module, cells]) => cells.filter((cell) => Object.hasOwn(modules?.[module] || {}, cell))
@@ -320,7 +323,7 @@ function validateConfig(cfg, adapters, fail = die) {
       const agent = cfg.agents[item.agent], adapter = adapters[agent.type];
       check(!seen.has(item.agent), at, why.duplicate);
       seen.add(item.agent);
-      if (module === 'image' && cell === 'generate') check(adapter.capabilities.images, `${at}.agent`, M.imagesNotSupported(item.agent, agent.type));
+      if (module === 'image' && cell === 'generate') check(canGenerate(adapter), `${at}.agent`, M.imagesNotSupported(item.agent, agent.type));
       else {
         const mode = module === 'image' ? 'run' : module;
         check(adapter.capabilities.modes.includes(mode), `${at}.agent`, M.modeNotSupported(item.agent, agent.type, mode, M.list(adapter.capabilities.modes)));
@@ -531,7 +534,7 @@ function defaultRunsRoot() {
 }
 
 function resolveCell(cfg, module, cell) {
-  if (!Object.hasOwn(MODULE_CELLS, module)) die(M.planModuleChoices(M.list(MODES)));
+  if (!Object.hasOwn(MODULE_CELLS, module)) die(M.planModuleChoices(M.list(Object.keys(MODULE_CELLS))));
   if (!MODULE_CELLS[module].includes(cell) || !Object.hasOwn(cfg.modules[module], cell)) die(M.planCellChoices(module, M.list(MODULE_CELLS[module])));
   const key = `modules.${module}.${cell}`, value = cfg.modules[module][cell];
   const candidates = cellList(value).map((item) => ({ ...item, agent: resolveAgentAlias(item.agent, cfg), required: !!item.required }));
@@ -541,21 +544,29 @@ function resolveCell(cfg, module, cell) {
 }
 
 function validatePlan(cfg, plan, adapters) {
-  if (plan.module === 'image') die(M.planImageLater);
+  if (plan.module === 'image') {
+    if (plan.route == null) die(M.planRouteRequired);
+    if (!Object.hasOwn(ROUTE_CELLS, plan.route)) die(M.planRouteChoices(plan.route));
+    if (!ROUTE_CELLS[plan.route].includes(plan.cell)) die(M.planRouteCell('①②③④'[plan.route - 1], plan.cell, M.routeUses[plan.route]));
+  } else if (plan.route != null) die(M.planRouteImageOnly);
   const cell = resolveCell(cfg, plan.module, plan.cell);
   if (cell.closedByProject) die(M.planCellClosedByProject(cell.key));
   if (cell.closed) die(M.planCellClosed(cell.key));
   const names = cell.candidates.map((item) => item.agent);
   for (const seat of plan.seats) {
+    if (plan.module === 'image' && plan.cell === 'generate' && seat.role) die(M.generateNoRoles);
     const name = resolveAgentAlias(seat.agent, cfg);
     if (!names.includes(name)) die(M.agentNotInLevel(name, cell.key, M.list(names)));
     const agent = cfg.agents[name], adapter = adapters[agent.type];
     const candidate = cell.candidates.find((item) => item.agent === name);
     if (Object.hasOwn(seat, 'model') && seat.model !== (candidate.model || agent.model || null)
       || Object.hasOwn(seat, 'effort') && seat.effort !== (candidate.effort ?? null)) die(M.planSeatChanged(plan.plan_id, seat.seat, cell.key));
-    if (!adapter.capabilities.modes.includes(plan.module)) die(M.modeNotSupported(name, agent.type, plan.module, M.list(adapter.capabilities.modes)));
+    const mode = plan.module === 'image' ? 'run' : plan.module;
+    if (plan.module === 'image' && plan.cell === 'generate') {
+      if (!canGenerate(adapter)) die(M.imagesNotSupported(name, agent.type));
+    } else if (!adapter.capabilities.modes.includes(mode)) die(M.modeNotSupported(name, agent.type, mode, M.list(adapter.capabilities.modes)));
     if (plan.review?.target === 'visual' && !adapter.capabilities.reads_images) die(M.readsImagesRequired(name, agent.type));
-    if (plan.module === 'run' && adapter.capabilities.isolation === 'tools' && !agent.run_access) die(M.runAccessRequired(name, agent.type));
+    if (mode === 'run' && (plan.module !== 'image' || plan.cell === 'draw') && adapter.capabilities.isolation === 'tools' && !agent.run_access) die(M.runAccessRequired(name, agent.type));
   }
   const missing = cell.required.filter((name) => !plan.seats.some((seat) => resolveAgentAlias(seat.agent, cfg) === name));
   if (missing.length) die(M.planMissingRequired(cell.key, M.list(missing)));
@@ -584,21 +595,24 @@ function resolveProfile(cfg, seat, o, adapters, fallbackModel = null, parentAgen
   if (legacyRequested) notice(M.legacyAgentAlias(o.agent, requested));
   if (parentAgent && requested && requested !== parentAgent) die(M.resumeAgentMismatch(requested, parentAgent));
   if (requested && !Object.hasOwn(cfg.agents, requested)) die(unknownAgentError('--agent', requested, cfg));
-  const level = o.level || seat.cell;
-  if (!level) die(M.missingLevel(LEVELS.join(' / ')));
-  if (!LEVELS.includes(level)) die(M.levelChoices(LEVELS.join(' / ')));
+  const image = seat.module === 'image';
+  if (image && o.level != null) die(M.imageNoLevel);
+  const level = image ? seat.cell ?? parentCell : o.level || seat.cell;
+  if (!image && !level) die(M.missingLevel(LEVELS.join(' / ')));
+  if (!image && !LEVELS.includes(level)) die(M.levelChoices(LEVELS.join(' / ')));
   if (parentAgent && parentCell !== level && seat.plan) die(M.resumePlanCellChanged(seat.plan, parentCell, level));
   const cell = resolveCell(cfg, seat.module, level), names = M.list(cell.candidates.map((item) => item.agent));
   const selected = parentAgent || (seat.agent && resolveAgentAlias(seat.agent, cfg)) || requested;
   let entry, outside = false;
   if (cell.closed) {
-    if (cell.closedByProject) die(M.cellClosedByProject(cell.key));
+    if (cell.closedByProject) die(M.cellClosedByProject(cell.key, o.agent != null));
+    if (image) die(M.imageCellClosed(cell.key));
     if (!requested) die(seat.module === 'run' ? M.levelForClaude(level) : M.levelIsClaude(cell.key));
     const adapter = adapters[cfg.agents[requested]?.type];
     entry = { agent: requested, effort: adapter?.defaultEffort?.(level) ?? null };
     outside = true;
   } else {
-    const single = parentAgent ? parentCell !== level : !seat.seat;
+    const single = !image && (parentAgent ? parentCell !== level : !seat.seat);
     if (parentAgent && !cell.candidates.some((item) => item.agent === parentAgent)) die(M.resumeAgentNotInCell(parentAgent, cell.key, names));
     if (single && cell.required.length > 1) die(M.severalRequired(cell.key, M.list(cell.required)));
     entry = selected ? cell.candidates.find((item) => item.agent === selected)
@@ -614,18 +628,21 @@ function resolveProfile(cfg, seat, o, adapters, fallbackModel = null, parentAgen
   if (!Object.hasOwn(cfg.agents, entry.agent)) die(unknownAgentError('--agent', entry.agent, cfg));
   const agent = cfg.agents[entry.agent], adapter = adapters[agent.type];
   const effort = o.effort ?? (Object.hasOwn(seat, 'effort') ? seat.effort : entry.effort);
-  if (!adapter.capabilities.modes.includes(seat.module)) die(M.modeNotSupported(entry.agent, agent.type, seat.module, M.list(adapter.capabilities.modes)));
-  if (seat.module === 'run' && adapter.capabilities.isolation === 'tools' && !agent.run_access) die(M.runAccessRequired(entry.agent, agent.type));
-  if (seat.module === 'run' && adapter.capabilities.isolation !== 'os' && o['no-snapshot']) die(M.snapshotRequired);
+  const mode = image ? 'run' : seat.module;
+  if (image && level === 'generate') {
+    if (!canGenerate(adapter)) die(M.imagesNotSupported(entry.agent, agent.type));
+  } else if (!adapter.capabilities.modes.includes(mode)) die(M.modeNotSupported(entry.agent, agent.type, mode, M.list(adapter.capabilities.modes)));
+  if (mode === 'run' && (!image || level === 'draw') && adapter.capabilities.isolation === 'tools' && !agent.run_access) die(M.runAccessRequired(entry.agent, agent.type));
+  if (mode === 'run' && adapter.capabilities.isolation !== 'os' && o['no-snapshot']) die(M.snapshotRequired);
   if (effort !== undefined && effort !== null && adapter.efforts && !adapter.efforts.includes(effort)) die(M.effortChoices(adapter.efforts.join(' / ')));
   const base = entry.model || agent.model || fallbackModel;
   const model = o.model || base;
   if (o.model && ['opencode cli', 'pi cli'].includes(agent.type) && (!base?.includes('/') || !model.includes('/') || model.split('/')[0] !== base.split('/')[0])) die(M.modelVendorChanged(entry.agent, model, base));
-  return { level, agentName: entry.agent, agent, model, effort: effort ?? null, module: seat.module, cell: level,
+  return { level: image ? null : level, agentName: entry.agent, agent, model, effort: effort ?? null, module: seat.module, cell: level,
     plan: seat.plan ?? null, seat: seat.seat ?? null, role: seat.role ?? null,
     ...(outside ? { outside_cell: true } : {}), ...(o.model && model !== base ? { model_overridden: true } : {}) };
 }
 
 export { ENTRY, SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA, USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, DEFAULT_AGENT_PARALLEL, DEFAULT_CONFIG, CLAUDE_CODE, LEVELS,
-  MODULE_CELLS, cellList, eachCell, eachEntry, mapCells, resolveCell, validatePlan, resolveProfile, projectFile, loadConfig, defaultRunsRoot, runsMovedNow,
+  MODULE_CELLS, ROUTE_CELLS, canGenerate, cellList, eachCell, eachEntry, mapCells, resolveCell, validatePlan, resolveProfile, projectFile, loadConfig, defaultRunsRoot, runsMovedNow,
   readAgentAliases, resolveAgentAlias, migrateStructure, renameAgentsByModel, detectEnvironment, buildStarterConfig, staleAliases, unknownAgentError };

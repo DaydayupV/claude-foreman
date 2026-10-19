@@ -336,6 +336,7 @@ node cli.mjs image --plan <plan_id> --seat <n> --brief "<任务说明.md>" --tit
 - 新增钩子 `hooks/record-answers.mjs`（PostToolUse，匹配 AskUserQuestion），把问题和回答按 Claude 会话写进 `~/.claude/foreman/answers/<会话>.jsonl`。钩子由宿主运行，模型改不了它收到的内容。
 - 路线弹窗的问题里带一个固定标记（比如"图像路线"）。`plan --module image` 要求同一个会话里有对应的回答，而且选项和 `--route` 一致；用户取消或没有回答，就不建计划。
 - 先验证两件事：桌面版和命令行版会不会对 AskUserQuestion 触发 PostToolUse；钩子的输入里有没有用户选中的选项。验证不通过，就退回"`--route` 记录 + skill 规则"，并在文档里如实写明这不是强制。
+- 验证结果（2026-10-19，桌面版，Claude Code 2.1.299）：PreToolUse 和 PostToolUse 都会触发，带同一个 `tool_use_id`；PostToolUse 的 `tool_input.answers` 和 `tool_response.answers` 都是"问题原文 → 选中的 label"，选 Other 时是用户写的字；钩子输入的 `session_id` 等于 `CLAUDE_CODE_SESSION_ID`。命令行版按用户要求没有测。据此第 3 期按强制做：钩子同时登记 PreToolUse 和 PostToolUse，只记带标记的题目；plan 只认最近一次（按每个 tool_use_id 第一次出现的位置算）路线弹窗，没有回答、不是 ①–④ 的选项或路线不一致都不建计划。answers 文件 Claude 写得到，所以这份凭据防漏问、不防伪造，skill 里写明不许自己写。
 
 ### 7.5 绕过检测
 普通 run（不是 image 模块）的结果里出现了 `generated_images` 时，给出警告"出图没有走图像模块"。Codex 每次执行都会扫描图片目录，这一条几乎没有额外成本。
@@ -415,7 +416,7 @@ node cli.mjs image --plan <plan_id> --seat <n> --brief "<任务说明.md>" --tit
 - 第 1 期上线后，对本机配置做第 13 节确认的其余改动：给 gpt-6-astra 标必选，加上图像两格。本机 review 的三格现在都只有 gpt-6-astra，要做多模型审查，还得先用 `/foreman:setup` 给 review 加候选。
 
 ## 12. 待验证的事
-1. AskUserQuestion 会不会触发 PostToolUse 钩子，钩子的输入里有没有用户选中的选项（桌面版、命令行版都要试）。这决定第 7.4 节能不能做成强制。
+1. AskUserQuestion 会不会触发 PostToolUse 钩子，钩子的输入里有没有用户选中的选项（桌面版、命令行版都要试）。这决定第 7.4 节能不能做成强制。桌面版 2026-10-19 验证通过（见 7.4 节），命令行版还没测。
 2. opencode、pi 能不能看图（它们的读文件工具怎么处理图片）。能的话再打开 `reads_images`。
 3. 在 unelevated 只读沙箱里，Codex 做真实审查时会不会有别的命令起不来。目前只测了 `type`、`git status` 和一次写入。
 4. 推理强度对出图质量有没有影响。这决定 generate 的默认值要不要维持 medium。

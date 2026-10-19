@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { RUNS_ROOT, UNFINISHED_STATUSES, requestCancel, listRuns, findRun, readMeta, isRunning, runEnd, runOutcome, groupRuns, groupSummary, describeActivity } from './records.mjs';
-import { M, die, need, pidAlive, killTree, sleep, modelOf, whoOf, agentTypeOf, replaceFile } from './util.mjs';
+import { M, die, need, pidAlive, killTree, sleep, modelOf, whoOf, agentTypeOf, replaceFile, usageLine } from './util.mjs';
 import { planStatus, describePlans } from './plan.mjs';
 
 function cmdStatus(o, sessionStats) {
@@ -27,13 +27,15 @@ function cmdStatus(o, sessionStats) {
     const { result: r, blocked } = runOutcome({ dir, meta: m });
     const label = blocked ? `? ${M.statusName(m.status === 'needs_input' ? 'needs_input' : 'blocked')}` : m.status;
     const status = blocked && process.stdout.isTTY && !process.env.NO_COLOR ? `\x1b[33m${label}\x1b[0m` : label;
-    let row = `${rid}  ${m.mode.padEnd(6)}  ${status.padEnd(11)}  ${(m.level || '-').padEnd(7)}  ${whoOf(m)}  ${mins.padStart(6)}min  ${m.group != null ? M.statusGroup(m.group) : ''}${m.round ? M.statusRound(m.round) : ''}${m.title || ''}  @ ${m.cwd}`;
+    const image = m.module === 'image', mode = image && m.mode === 'run' ? 'image' : m.mode;
+    let row = `${rid}  ${mode.padEnd(6)}  ${status.padEnd(11)}  ${(image ? m.cell : m.level || '-').padEnd(7)}  ${whoOf(m)}  ${mins.padStart(6)}min  ${m.group != null ? M.statusGroup(m.group) : ''}${m.round ? M.statusRound(m.round) : ''}${image ? M.statusRoute('①②③④'[m.route - 1]) : ''}${m.title || ''}${r?.stale === true ? ` · ${M.watchStale}` : ''}  @ ${m.cwd}`;
     if (m.status === 'running') {
       const a = describeActivity(dir);
       const last = sessionStats(m)?.last_request;
       row += `\n    └ ${M.statusActivity(a.idle_min ?? '-', a.step)}${last ? M.lastRequestNow(last, M.tokenCount) : ''}`;
     } else {
-      if (r?.usage) row += `\n    └ ${M.tokenSummary(r.usage, r.last_request ?? r.context, M.tokenCount, (r.usage_scope ?? (m?.mode === 'resume' ? 'session_total' : 'this_run')) === 'session_total')}`;
+      const usage = usageLine(r, m);
+      if (usage) row += `\n    └ ${usage}`;
     }
     return row;
   });
@@ -98,6 +100,7 @@ function writeForcedResult(dir, m, sessionStats) {
     run_id: m.id, mode: m.mode, kind: m.kind, status: 'cancelled', title: m.title ?? null, cwd: m.cwd,
     agent: m.agent, agent_type: m.agent_type, model: m.model, model_shown: m.model_shown, level: m.level, effort: m.effort,
     module: m.module ?? null, cell: m.cell ?? null, plan: m.plan ?? null, seat: m.seat ?? null, role: m.role ?? null,
+    ...(m.module === 'image' ? { step: m.step, route: m.route } : {}),
     group: m.group ?? null, round: m.round ?? null, scope: m.scope ?? [], parent: m.parent ?? null, session_id: m.session_id ?? null,
     exit_code: null, duration_s: Math.round((Date.parse(m.ended_at) - Date.parse(m.started_at)) / 1000),
     usage, usage_scope: usage ? (m.mode === 'resume' ? 'session_total' : 'this_run') : null,

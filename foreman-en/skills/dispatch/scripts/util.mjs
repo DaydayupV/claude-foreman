@@ -148,6 +148,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const clip = (s, n) => (s.length > n ? `${s.slice(0, n)}…` : s);
 const oneLine = (s) => String(s ?? '').replace(/\r/g, '').split('\n').map((x) => x.trim()).filter(Boolean).join(' ⏎ ');
 
+// 费用按金额大小保留足够精度，零不带小数。
+const formatUsd = (n) => n === 0 ? '0' : n < 0.01 ? n.toPrecision(2) : n < 1 ? n.toFixed(3) : n.toFixed(2);
+
+// status 和 watch 共用同一行用量与费用，只有费用时也照常显示。
+function usageLine(result, meta) {
+  return [result?.usage ? M.tokenSummary(result.usage, result.last_request ?? result.context, M.tokenCount,
+    (result.usage_scope ?? (meta?.mode === 'resume' ? 'session_total' : 'this_run')) === 'session_total') : '',
+  result?.cost_usd != null ? M.costUsd(formatUsd(result.cost_usd)) : ''].filter(Boolean).join(' · ');
+}
+
 function looksLikeQuestion(text) {
   // 只认末尾问号或明确请人决定的说法，普通进度说明不算提问。
   return /[?？]$/.test(text.trimEnd()) || /请确定|请确认|请选择|请决定|要不要|是否需要我|你希望|您希望|please confirm|please choose|should I|do you want|would you like|which option/i.test(text);
@@ -312,4 +322,4 @@ function wrapWidth(s, width) {
   return lines;
 }
 
-export { replaceFile, HERE, LANGUAGE, M, notice, isObject, readJson, die, need, resolveDir, readBrief, MAX_MATERIAL_CHARS, readAttachments, readImages, focusFiles, binCommand, pathCommand, npmEntry, isGitRepo, pidAlive, killTree, relativePath, pathKey, RECONNECT, isReconnect, sleep, clip, oneLine, plainCommand, isAscii, modelOf, whoOf, agentTypeOf, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision, closestMatches, charWidth, textWidth, fitWidth, wrapWidth };
+export { replaceFile, HERE, LANGUAGE, M, notice, isObject, readJson, die, need, resolveDir, readBrief, MAX_MATERIAL_CHARS, readAttachments, readImages, focusFiles, binCommand, pathCommand, npmEntry, isGitRepo, pidAlive, killTree, relativePath, pathKey, RECONNECT, isReconnect, sleep, clip, oneLine, formatUsd, usageLine, plainCommand, isAscii, modelOf, whoOf, agentTypeOf, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision, closestMatches, charWidth, textWidth, fitWidth, wrapWidth };
