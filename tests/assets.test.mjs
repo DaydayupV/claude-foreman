@@ -6,6 +6,8 @@ import { sandbox, output, failed, json, taskArgs, MESSAGES, ROOT } from './helpe
 import { canvas } from './fixtures/png.mjs';
 import * as P from '../foreman/skills/dispatch/scripts/assets-pixels.mjs';
 import * as V from '../foreman/skills/dispatch/scripts/assets-vector.mjs';
+import { tracePiece } from '../foreman/skills/dispatch/scripts/assets-extra.mjs';
+import { decodePng } from '../foreman/skills/dispatch/scripts/png.mjs';
 
 const M = MESSAGES.zh;
 const MAGENTA = [255, 0, 255], DARK = [34, 34, 34], ORANGE = [245, 165, 36], TEAL = [29, 91, 121];
@@ -191,6 +193,74 @@ test('自带描图：只出现在细线上的颜色、1 像素宽的线、相邻
   assert.equal(at(hr, 400, 1, 1)[3], 255);
 });
 
+test('assets layers 从定稿图取出同画布的图层：背景板只写回主体范围并校色，部件原位裁出，下层往上层下面延长', async (t) => {
+  const h = sandbox(t), WALL = [200, 180, 140];
+  // 定稿图：墙前面一个带描边的身体（橙），头（青）压在身体上沿；背景板只有墙，整体偏亮 4（模型重画时常见的偏色）
+  const ref = h.write('ref.png', canvas(200, 160, WALL).rect(60, 80, 140, 150, DARK).rect(63, 83, 137, 147, ORANGE).rect(80, 40, 120, 90, DARK).rect(83, 43, 117, 87, TEAL).png());
+  const plate = h.write('plate.png', canvas(200, 160, WALL.map((c) => c + 4)).png());
+  const pieces = h.write('pieces.json', JSON.stringify({ pieces: [
+    // 头的套索在墙上可以画宽，压着身体的那段要贴着头的外缘：套索按清单顺序先到先得
+    { name: 'head', kind: 'raster', lasso: [[76, 36], [124, 36], [124, 80], [120.4, 80], [120.4, 90], [79.6, 90], [79.6, 80], [76, 80]] },
+    { name: 'body', kind: 'vector', lasso: [[56, 76], [144, 76], [144, 154], [56, 154]], extendUnder: [{ piece: 'head', dist: 6 }] },
+  ] }));
+  const out = path.join(h.cwd, 'layers');
+  const r = output(await h.bridge(['assets', 'layers', '--ref', ref, '--plate', plate, '--pieces', pieces, '--out', out]));
+  assert.deepEqual(Object.keys(r.layers), ['static', 'head', 'body']);
+  // 头和身体之间 3 像素的描边归离它最近的部件，最下面一行归身体
+  assert.deepEqual([r.layers.head.x, r.layers.head.y, r.layers.head.w, r.layers.head.h], [80, 40, 40, 49]);
+  assert.ok(r.layers.body.extended > 0 && r.layers.body.paths >= 2, JSON.stringify(r.layers.body));
+  // SVG 用整张画布的坐标：清单里的位置是整张画布，包围框另记
+  assert.deepEqual([r.layers.body.x, r.layers.body.y, r.layers.body.w, r.layers.body.h], [0, 0, 200, 160]);
+  const [bx, by, bw, bh] = r.layers.body.box;
+  assert.ok(bx === 60 && bw === 80 && by <= 80 && by + bh === 150, String(r.layers.body.box));
+  assert.deepEqual(Object.keys(r.plate.measured), ['scale', 'offset', 'ambiguous']);
+  assert.ok(r.reassembled_diff_px < 20, String(r.reassembled_diff_px));
+  for (const f of ['static.png', 'head.png', 'body.svg', 'check.png', 'layers.json', 'layers.js']) assert.ok(fs.existsSync(path.join(out, f)), f);
+  // 静止层：主体以外和定稿图一样；主体原来的位置是墙（背景板按外圈校回定稿图的墙色）
+  const still = decodePng(fs.readFileSync(path.join(out, 'static.png'))), px = (img, x, y) => [...img.data.subarray((y * img.width + x) * 4, (y * img.width + x) * 4 + 3)];
+  assert.deepEqual(px(still, 10, 10), WALL);
+  assert.ok(px(still, 100, 110).every((c, i) => Math.abs(c - WALL[i]) <= 1), JSON.stringify(px(still, 100, 110)));
+  // 头按原位置裁出；身体的 SVG 画回来是橙色，被头挡住的上沿也延长出来了
+  const head = decodePng(fs.readFileSync(path.join(out, 'head.png')));
+  assert.deepEqual(px(head, 20, 25), TEAL);
+  const body = V.render(fs.readFileSync(path.join(out, 'body.svg'), 'utf8'), 200, 160);
+  assert.deepEqual([...body.subarray((110 * 200 + 100) * 4, (110 * 200 + 100) * 4 + 3)], ORANGE);
+  assert.equal(body[(86 * 200 + 100) * 4 + 3], 255);
+  // 延长段只在头真正盖住的地方：身体画出来的像素，凡是定稿图里是墙的，头都要盖住
+  const refImg = decodePng(fs.readFileSync(ref));
+  let shown = 0;
+  for (let y = 0; y < 160; y++) for (let x = 0; x < 200; x++) {
+    if (body[(y * 200 + x) * 4 + 3] < 128 || px(refImg, x, y).join() !== WALL.join()) continue;
+    const hx = x - 80, hy = y - 40, covered = hx >= 0 && hy >= 0 && hx < head.width && hy < head.height && head.data[(hy * head.width + hx) * 4 + 3] >= 128;
+    if (!covered) shown++;
+  }
+  assert.equal(shown, 0);
+  // 部件清单不对、套索圈不到主体时报错
+  failed(await h.bridge(['assets', 'layers', '--ref', ref, '--plate', plate, '--pieces', h.write('bad.json', '{"pieces":[]}'), '--out', out]), M.assetsLayersBadConfig(path.join(h.cwd, 'bad.json'), 'pieces'));
+  const lasso = [[150, 10], [190, 10], [190, 40]];
+  const bad = [['static', [{ name: 'static', lasso }]], ['../x', [{ name: '../x', lasso }]], ['Head', [{ name: 'head', lasso }, { name: 'Head', lasso }]], ['body', [{ name: 'body', lasso, extendUnder: [{ piece: 'hat', dist: 4 }] }]]];
+  for (const [i, [name, list]] of bad.entries()) {
+    const f = h.write(`bad${i}.json`, JSON.stringify({ pieces: list }));
+    failed(await h.bridge(['assets', 'layers', '--ref', ref, '--plate', plate, '--pieces', f, '--out', out]), M.assetsLayersBadConfig(f, name));
+  }
+  const empty = h.write('empty.json', JSON.stringify({ pieces: [{ name: 'ghost', kind: 'raster', lasso: [[150, 10], [190, 10], [190, 40]] }] }));
+  failed(await h.bridge(['assets', 'layers', '--ref', ref, '--plate', plate, '--pieces', empty, '--out', out]), M.assetsLayersEmpty('ghost'));
+});
+
+test('assets layers 主体占大半张画面时，噪声只按背景估计，背景板的偏色一直校到主体中心', async (t) => {
+  const h = sandbox(t), WALL = [200, 180, 140];
+  // 256×256 的画面里主体占 216×216（七成多）；背景板整体偏亮 8
+  const ref = h.write('ref.png', canvas(256, 256, WALL).rect(20, 20, 236, 236, DARK).rect(23, 23, 233, 233, ORANGE).png());
+  const plate = h.write('plate.png', canvas(256, 256, WALL.map((c) => c + 8)).png());
+  const pieces = h.write('pieces.json', JSON.stringify({ pieces: [{ name: 'body', kind: 'raster', lasso: [[16, 16], [240, 16], [240, 240], [16, 240]] }] }));
+  const out = path.join(h.cwd, 'big');
+  const r = output(await h.bridge(['assets', 'layers', '--ref', ref, '--plate', plate, '--pieces', pieces, '--out', out]));
+  assert.ok(r.plate.noise < 10, JSON.stringify(r.plate));
+  assert.ok(r.layers.body.pixels > 0.95 * 216 * 216, String(r.layers.body.pixels));
+  const still = decodePng(fs.readFileSync(path.join(out, 'static.png'))), at = (x, y) => [...still.data.subarray((y * 256 + x) * 4, (y * 256 + x) * 4 + 3)];
+  for (const [x, y] of [[128, 128], [40, 128], [128, 40]]) assert.ok(at(x, y).every((c, i) => Math.abs(c - WALL[i]) <= 1), `${x},${y}: ${at(x, y)}`);
+});
+
 test('assets 参数错误给出用法或原因', async (t) => {
   const h = sandbox(t);
   failed(await h.bridge(['assets', 'nope']), M.assetsUsage);
@@ -346,6 +416,53 @@ test('assets align 不把缩小的部件塞进同色区域，细线部件也能�
   failed(await h.bridge(['assets', 'align', '--ref', ref, '--image', block, '--out', path.join(h.cwd, 'd'), '--min-scale', 2, '--max-scale', 1]), M.assetsBadScaleRange(2, 1));
 });
 
+test('align 用边缘找回调亮的细长平涂部件，重复形状和无边缘时标拿不准', () => {
+  const w = 280, h = 160, data = Buffer.alloc(w * h * 4);
+  P.fillRect(data, w, h, 0, 0, w, h, [255, 255, 255]);
+  P.fillRect(data, w, h, 47, 61, 228, 88, [170, 90, 40]);
+  const crop = Buffer.alloc(181 * 27 * 4);
+  P.fillRect(crop, 181, 27, 0, 0, 181, 27, [182, 102, 52]);
+  const k = 1.7, piece = { width: 400, height: 220, data: P.placeScaled(crop, 181, 27, 400, 220, k, 38.4, 83.6) };
+  const a = P.alignPiece({ width: w, height: h, data }, piece);
+  assert.ok(Math.abs(a.scale * k - 1) < 0.01, JSON.stringify(a));
+  assert.ok(Math.hypot(a.offset[0] + a.scale * (38.4 + k * 181 / 2) - 137.5, a.offset[1] + a.scale * (83.6 + k * 27 / 2) - 74.5) < 1.5, JSON.stringify(a));
+  const repeated = Buffer.alloc(w * h * 4), block = Buffer.alloc(42 * 26 * 4);
+  P.fillRect(repeated, w, h, 0, 0, w, h, [255, 255, 255]);
+  P.fillRect(repeated, w, h, 30, 40, 72, 66, [170, 90, 40]);
+  P.fillRect(repeated, w, h, 190, 100, 232, 126, [170, 90, 40]);
+  P.fillRect(block, 42, 26, 0, 0, 42, 26, [170, 90, 40]);
+  assert.ok(P.alignPiece({ width: w, height: h, data: repeated }, { width: 42, height: 26, data: block }).ambiguous);
+  P.fillRect(repeated, w, h, 0, 0, w, h, [170, 90, 40]);
+  assert.ok(P.alignPiece({ width: w, height: h, data: repeated }, { width: 42, height: 26, data: block }).ambiguous);
+});
+
+test('trace 的曲线能由内置渲染器画回，细洞保留且关闭化简仍输出有效路径', () => {
+  const w = 128, h = 96, data = Buffer.alloc(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    if (((x + 0.5 - 64) / 45) ** 2 + ((y + 0.5 - 48) / 32) ** 2 > 1) continue;
+    const c = ((x + 0.5 - 64) / 42) ** 2 + ((y + 0.5 - 48) / 29) ** 2 < 1 ? [240, 190, 120] : [30, 30, 30];
+    P.fillRect(data, w, h, x, y, x + 1, y + 1, c);
+  }
+  P.fillRect(data, w, h, 62, 42, 64, 64, [30, 30, 30]);
+  const params = { seeds: [[80, 50]], box: [0, 0, w, h], colors: 1 };
+  const traced = tracePiece({ width: w, height: h, data }, params), flat = V.render(traced.svg, w, h);
+  assert.match(traced.svg, /C[-\d]/);
+  assert.ok(traced.layers[1].paths >= 2);
+  let intersection = 0, union = 0;
+  for (let p = 0; p < w * h; p++) { const a = data[p * 4 + 3] > 0, b = flat[p * 4 + 3] > 0; intersection += a && b ? 1 : 0; union += a || b ? 1 : 0; }
+  assert.ok(intersection / union > 0.98);
+  assert.deepEqual([...flat.subarray((50 * w + 62) * 4, (50 * w + 62) * 4 + 4)], [30, 30, 30, 255]);
+  // 栅格端帽按评测的 1 像素容差核对，旧算法也没有逐像素保留端帽。
+  for (const y of [42, 63]) assert.ok([-1, 0, 1].some((dy) => [-1, 0, 1].some((dx) => flat[((y + dy) * w + 62 + dx) * 4] === 30)));
+  const raw = tracePiece({ width: w, height: h, data }, { ...params, simplify: 0 });
+  assert.ok(V.render(raw.svg, w, h).some((v, i) => i % 4 === 3 && v === 255));
+  for (const m of traced.svg.matchAll(/ d="([^"]+)"/g)) assert.match(m[1], /^[MLCZ\d.\s-]+$/);
+  const plain = Buffer.from(data);
+  for (let p = 0; p < w * h; p++) if (plain[p * 4 + 3]) plain.set([240, 190, 120], p * 4);
+  const noLine = V.render(tracePiece({ width: w, height: h, data: plain }, { ...params, outline: 0 }).svg, w, h);
+  for (let p = 0; p < w * h; p++) if (noLine[p * 4 + 3]) assert.ok(noLine[p * 4] > 100, `unexpected outline at ${p % w},${Math.floor(p / w)}`);
+});
+
 test('assets patch 只取改了的区域做羽化补丁，轮廓的细微位移和外轮廓不算', async (t) => {
   const h = sandbox(t);
   // 原图：透明底上一张"脸"（深色描边、浅色填充、两只深色眼睛）；改图：眼睛换成红色横条，外轮廓整圈往外多 1 像素
@@ -358,6 +475,8 @@ test('assets patch 只取改了的区域做羽化补丁，轮廓的细微位移�
   const out = path.join(h.cwd, 'patch');
   const r = output(await h.bridge(['assets', 'patch', '--base', base, '--variant', variant, '--out', out]));
   assert.ok(r.patch_pixels > 500, `${r.patch_pixels}`);
+  // 实际用的变换之外，原始的对齐结果也留着（重出门槛看它）
+  assert.deepEqual(Object.keys(r.align.measured), ['scale', 'offset', 'ambiguous']);
   const [x0, y0, x1, y1] = r.box;
   assert.ok(x0 >= 55 && x1 <= 190 && y0 >= 45 && y1 <= 100, `box ${r.box}`);
   for (const f of ['patch.png', 'preview.png', 'check.png']) assert.ok(isPng(path.join(out, f)), f);
@@ -407,6 +526,11 @@ test('审查发现的问题：时刻参数替换旧值且不落进 #片段、首
   const a = output(await h.bridge(['assets', 'capture', '--url', 'http://localhost:9/p.html', '--times', '0.5', '--size', '200x100', '--scale', 1, '--browser', browser, '--out', path.join(h.cwd, 'a')]));
   const b = output(await h.bridge(['assets', 'capture', '--url', 'http://localhost:9/p.html?t=9#scene', '--times', '0.5', '--size', '200x100', '--scale', 1, '--browser', browser, '--out', path.join(h.cwd, 'b')]));
   assert.ok(fs.readFileSync(a.frames[0].file).equals(fs.readFileSync(b.frames[0].file)));
+  // 本地文件路径后面带的 ?参数 照样传给页面，不当成文件名的一部分
+  const page = h.write('p.html', '<!doctype html>');
+  const still = output(await h.bridge(['assets', 'capture', '--url', `${page}?rest`, '--times', '0.5', '--size', '200x100', '--scale', 1, '--browser', browser, '--out', path.join(h.cwd, 'rest')]));
+  const zero = output(await h.bridge(['assets', 'capture', '--url', page, '--times', '0', '--size', '200x100', '--scale', 1, '--browser', browser, '--out', path.join(h.cwd, 'zero')]));
+  assert.ok(fs.readFileSync(still.frames[0].file).equals(fs.readFileSync(zero.frames[0].file)));
   const twin = output(await h.bridge(['assets', 'capture', '--url', 'http://localhost:9/p.html', '--times', '0,0.0004', '--size', '200x100', '--scale', 1, '--browser', browser, '--out', path.join(h.cwd, 'twin')]));
   assert.notEqual(twin.frames[0].file, twin.frames[1].file);
   // 假页面 1 秒一圈；fps 2.6 时一圈分 3 段，最后一帧要正好是 1 秒
@@ -416,7 +540,6 @@ test('审查发现的问题：时刻参数替换旧值且不落进 #片段、首
   const face = (eyeY, grow) => canvas(160, 120, [0, 0, 0, 0]).rect(20 - grow, 20 - grow, 140 + grow, 100 + grow, [40, 30, 30, 255]).rect(23, 23, 137, 97, [250, 215, 190, 255]).rect(40, eyeY, 70, eyeY + 12, [30, 30, 40, 255]).png();
   const base = h.write('pbase.png', face(30, 0)), variant = h.write('pvar.png', face(34, 1));
   const r = output(await h.bridge(['assets', 'patch', '--base', base, '--variant', variant, '--out', path.join(h.cwd, 'patch')]));
-  const { decodePng } = await import('../foreman/skills/dispatch/scripts/png.mjs');
   const patch = decodePng(fs.readFileSync(r.files.patch));
   for (let y = 0; y < 120; y++) for (let x = 0; x < 160; x++) if (x < 26 || y < 26 || x >= 134 || y >= 94) assert.equal(patch.data[(y * 160 + x) * 4 + 3], 0, `alpha at ${x},${y}`);
   // trace：种子不在框里时报错；填色里 2 像素宽的细线留成底色层里的洞

@@ -1,7 +1,8 @@
 // assets 子命令：出图之后的确定性处理，不调用任何模型。
 // template 画编号格子模板；cut 去背景、切部件、按格子命名、出 manifest 和对照拼图（--vector 再转 SVG）；
-// check 重新读出 cut 的判定；diff 比较改图前后每一格的变化；align 把取出的部件对回参考图；
-// patch 从改图里只取变了的区域做成补丁；trace 照参考图描出一个部件的形状；capture、playback 用本机浏览器截图和检查播放。
+// check 重新读出 cut 的判定；diff 比较改图前后每一格的变化；layers 从定稿图按部件清单取出同画布的全部图层；
+// patch 从改图里只取变了的区域做成补丁；trace 照定稿图描出一个部件的形状；align 找一张图在另一张图上的缩放和偏移；
+// capture、playback 用本机浏览器截图和检查播放。
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,6 +12,7 @@ import * as V from './assets-vector.mjs';
 import { print, names, safeName, num, readImage, writePng, boxes } from './assets-io.mjs';
 import { cmdPatch, cmdTrace } from './assets-extra.mjs';
 import { cmdCapture, cmdPlayback } from './assets-capture.mjs';
+import { cmdLayers } from './assets-layers.mjs';
 import { M, die, need } from './util.mjs';
 
 // image_gen 实际输出的几档尺寸（约 157 万像素）。
@@ -280,7 +282,7 @@ function cmdDiff(o) {
   print({ size: [w, h], overall: measure([0, 0, w, h]), slots: slots.map((s) => ({ slot: s.slot, name: s.name, ...measure(s.box) })) });
 }
 
-// 从参考图里取出的部件（透明底，常被放大、挪了位置）对回参考图：输出缩放和偏移、整体和各区域的色差、
+// 找一张图在参考图上的位置（layers 和 patch 内部用同一套对齐）：输出缩放和偏移、整体和各区域的色差、
 // 和参考图同一画布的 aligned.png，以及"参考图 / 叠上部件 / 差异"三联对照图 check.png。
 function cmdAlign(o) {
   const refFile = path.resolve(need(o, 'ref')), imgFile = path.resolve(need(o, 'image')), out = path.resolve(need(o, 'out'));
@@ -324,7 +326,7 @@ function cmdAlign(o) {
 }
 
 export async function cmdAssets(o) {
-  const actions = { template: cmdTemplate, cut: cmdCut, check: cmdCheck, diff: cmdDiff, align: cmdAlign, patch: cmdPatch, trace: cmdTrace, capture: cmdCapture, playback: cmdPlayback };
+  const actions = { template: cmdTemplate, cut: cmdCut, check: cmdCheck, diff: cmdDiff, align: cmdAlign, patch: cmdPatch, trace: cmdTrace, capture: cmdCapture, playback: cmdPlayback, layers: cmdLayers };
   if (!actions[o.action]) die(M.assetsUsage);
   await actions[o.action](o);
 }

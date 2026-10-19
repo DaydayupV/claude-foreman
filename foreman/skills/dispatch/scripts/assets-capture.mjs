@@ -26,7 +26,12 @@ function findBrowser(o) {
   return found;
 }
 
-const pageUrl = (u) => (/^[a-z][a-z0-9+.-]*:\/\//i.test(u) ? u : pathToFileURL(path.resolve(u)).href);
+// 本地文件路径后面可以带 ?参数 和 #片段（比如 page.html?rest），它们不算文件名
+const pageUrl = (u) => {
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(u)) return u;
+  const i = u.search(/[?#]/);
+  return i < 0 ? pathToFileURL(path.resolve(u)).href : pathToFileURL(path.resolve(u.slice(0, i))).href + u.slice(i);
+};
 // 时刻参数用 URL 对象设置：已有同名参数会被替换，#片段保持在最后
 const atTime = (u, param, t) => { const url = new URL(u); url.searchParams.set(param, String(t)); return url.href; };
 function size(o) {

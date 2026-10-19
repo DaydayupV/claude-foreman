@@ -194,7 +194,7 @@ function fitSegment(pts, t1, t2, err, out) {
 }
 
 // 一个闭合轮廓：去重、平滑台阶、找角点（前后约 3 像素方向的夹角超过 corner 度），角点之间分段拟合
-function fitLoop(poly, err, corner) {
+function fitLoop(poly, err, corner, passes = 3) {
   let pts = poly.filter((p, i) => i === 0 || len(sub(p, poly[i - 1])) > 1e-6);
   const n = pts.length;
   if (n < 8) return { line: pts };
@@ -204,7 +204,7 @@ function fitLoop(poly, err, corner) {
   for (let i = 0; i < n; i++) if (turn[i] > corner && [1, 2].every((k) => turn[i] >= turn[(i + k) % n] && turn[i] >= turn[(i - k + n) % n])) corners.push(i);
   // 台阶平滑（角点不动）：三轮 1-2-1 平均
   const isCorner = new Uint8Array(n); corners.forEach((i) => { isCorner[i] = 1; });
-  for (let pass = 0; pass < 3; pass++) pts = pts.map((p, i) => (isCorner[i] ? p : mul(add(add(at(i - 1), mul(p, 2)), at(i + 1)), 0.25)));
+  for (let pass = 0; pass < passes; pass++) pts = pts.map((p, i) => (isCorner[i] ? p : mul(add(add(at(i - 1), mul(p, 2)), at(i + 1)), 0.25)));
   // 没有角点时人为切成两段；只有一个角点时在它对面加一个切点（一段首尾重合的轮廓没法拟合）
   if (!corners.length) corners = [0, Math.floor(n / 2)];
   else if (corners.length === 1) corners = [corners[0], (corners[0] + Math.floor(n / 2)) % n].sort((a, b) => a - b);
@@ -234,6 +234,85 @@ function loopData(loop) {
   const c = loop.curves;
   const first = c[0].line ? c[0].line[0] : c[0][0];
   return `M${num(first[0])} ${num(first[1])}` + c.map((b) => (b.line ? `L${num(b.line[1][0])} ${num(b.line[1][1])}` : `C${[b[1], b[2], b[3]].map((p) => `${num(p[0])} ${num(p[1])}`).join(' ')}`)).join('') + 'Z';
+}
+
+export function curvePaths(layers, simplify, reach) {
+  if (simplify <= 0) return layers.map((p) => S.pathData(p));
+  const err = Math.min(0.3, simplify);
+  const loops = layers.map((polys) => polys.map((poly) => {
+    const raw = [];
+    let carry = 0;
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length], d = len(sub(b, a));
+      for (let t = carry; t < d; t++) raw.push(add(a, mul(sub(b, a), t / d)));
+      carry = ((carry - d) % 1 + 1) % 1;
+    }
+    const n = raw.length, at = (i) => raw[(i + n) % n];
+    // 同一弧长滤波保留平行边的间距，不依赖各层折线顶点。
+    const smooth = n < 8 ? raw : raw.map((p, i) => {
+      const q = [0, 0];
+      let total = 0;
+      for (let j = -6; j <= 6; j++) { const weight = Math.exp(-j * j / 6); total += weight; for (let k = 0; k < 2; k++) q[k] += at(i + j)[k] * weight; }
+      return mul(q, 1 / total);
+    });
+    return { raw, smooth, poly };
+  }));
+  const gridOf = (polys) => {
+    const grid = new Map();
+    for (const loop of polys) loop.raw.forEach((p, i) => {
+      const key = Math.floor(p[0] / 4) + ',' + Math.floor(p[1] / 4);
+      if (!grid.has(key)) grid.set(key, []);
+      grid.get(key).push({ loop, i });
+    });
+    return grid;
+  };
+  const tangent = (l, i) => unit(sub(l.smooth[(i + 2) % l.raw.length], l.smooth[(i - 2 + l.raw.length) % l.raw.length]));
+  const nearby = (grid, p, radius) => {
+    const result = [], r = Math.ceil(radius / 4), x = Math.floor(p[0] / 4), y = Math.floor(p[1] / 4);
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) for (const q of grid.get((x + dx) + ',' + (y + dy)) || []) result.push(q);
+    return result;
+  };
+  const outer = gridOf(loops[0]);
+  for (const loop of loops[1]) {
+    const pairs = loop.raw.map((p, i) => {
+      let best = null, dist = reach + 2;
+      const t = tangent(loop, i);
+      for (const q of nearby(outer, p, dist)) {
+        const raw = q.loop.raw[q.i], d = len(sub(p, raw)), qt = tangent(q.loop, q.i);
+        if (d >= dist || Math.abs(dot(t, qt)) < 0.9) continue;
+        const normal = [-qt[1], qt[0]], width = dot(sub(p, raw), normal);
+        if (Math.abs(width) < 0.5 || Math.abs(dot(sub(p, raw), qt)) > 1) continue;
+        best = { q, normal, width }; dist = d;
+      }
+      return best;
+    });
+    // 外沿闭环必须共用平滑几何，否则无描边的部件会露出黑缝。
+    loop.inner = pairs.every((p) => !p) && !loop.raw.some((p) => nearby(outer, p, reach + 2).some((q) => len(sub(p, q.loop.raw[q.i])) <= reach + 2));
+    loop.smooth = loop.smooth.map((p, i) => {
+      const pair = pairs[i];
+      if (!pair) return p;
+      const widths = [];
+      for (let j = -10; j <= 10; j++) { const b = pairs[(i + j + pairs.length) % pairs.length]; if (b && b.width * pair.width > 0) widths.push(b.width); }
+      widths.sort((a, b) => a - b);
+      const target = add(pair.q.loop.smooth[pair.q.i], mul(pair.normal, widths[widths.length >> 1]));
+      const delta = sub(target, p);
+      return add(p, mul(delta, Math.min(1, 0.5 / (len(delta) || 1))));
+    });
+  }
+  // 阴影碰到底色外沿时沿用同一位移，免得阴影又把描边盖薄。
+  const base = gridOf(loops[1]);
+  for (const layer of loops.slice(2)) for (const loop of layer) loop.smooth = loop.smooth.map((p, i) => {
+    let best = null, dist = 0.8;
+    for (const q of nearby(base, loop.raw[i], dist)) {
+      const d = len(sub(loop.raw[i], q.loop.raw[q.i]));
+      if (d < dist && Math.abs(dot(tangent(loop, i), tangent(q.loop, q.i))) > 0.9) { best = q; dist = d; }
+    }
+    return best ? add(loop.raw[i], sub(best.loop.smooth[best.i], best.loop.raw[best.i])) : p;
+  });
+  return loops.map((layer) => layer.map((l) => {
+    if (l.inner) return S.pathData([S.simplify(l.poly, simplify)]);
+    return loopData(fitLoop(l.smooth, err, 90, 0));
+  }).join(' '));
 }
 const signedArea = (poly) => poly.reduce((a, p, i) => { const q = poly[(i + 1) % poly.length]; return a + p[0] * q[1] - q[0] * p[1]; }, 0) / 2;
 
@@ -293,12 +372,15 @@ export function vectorize(buf, w, h, { tol = 7, maxColors = 32, minArea = 12, er
   return { svg, paths: parts.length, colors: colors.length };
 }
 
-// 把 vectorize 写出的 SVG 画回 RGBA（按像素中心采样，不做抗锯齿，nonzero 规则），用来量轮廓重合度和颜色误差
+// 把 SVG 画回 RGBA（按像素中心采样，不做抗锯齿），用来量轮廓重合度和颜色误差。
+// 认 M/L/C/Z 命令和 <path> 上任意顺序的 fill、fill-rule（默认 nonzero，也认 evenodd），vectorize 和 trace 写出的 SVG 都能画
 export function render(svg, w, h) {
   const out = Buffer.alloc(w * h * 4);
-  for (const m of svg.matchAll(/<path fill="#([0-9a-fA-F]{6})" d="([^"]*)"\/>/g)) {
-    const col = P.parseHex('#' + m[1]), edges = [];
-    for (const sp of m[2].split('Z').filter((s) => s.trim())) {
+  for (const m of svg.matchAll(/<path\b([^>]*)\/>/g)) {
+    const attr = (k) => (m[1].match(new RegExp(`\\b${k}="([^"]*)"`)) || [])[1], fill = attr('fill'), d = attr('d');
+    if (!fill || !d || !/^#[0-9a-fA-F]{6}$/.test(fill)) continue;
+    const col = P.parseHex(fill), evenodd = attr('fill-rule') === 'evenodd', edges = [];
+    for (const sp of d.split('Z').filter((s) => s.trim())) {
       const tok = sp.match(/[MLC]|-?\d*\.?\d+/g), pts = [];
       let cmd = null, cur = null;
       for (let i = 0; i < tok.length;) {
@@ -318,8 +400,8 @@ export function render(svg, w, h) {
       xs.sort((a, b) => a[0] - b[0]);
       let wind = 0;
       for (let k = 0; k + 1 < xs.length; k++) {
-        wind += xs[k][1];
-        if (!wind) continue;
+        wind += evenodd ? 1 : xs[k][1];
+        if (evenodd ? wind % 2 === 0 : !wind) continue;
         for (let x = Math.max(0, Math.ceil(xs[k][0] - 0.5)); x < Math.min(w, Math.ceil(xs[k + 1][0] - 0.5)); x++) { const q = (y * w + x) * 4; out[q] = col[0]; out[q + 1] = col[1]; out[q + 2] = col[2]; out[q + 3] = 255; }
       }
     }
