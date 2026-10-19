@@ -1,23 +1,18 @@
 // assets 子命令：出图之后的确定性处理，不调用任何模型。
 // template 画编号格子模板；cut 去背景、切部件、按格子命名、出 manifest 和对照拼图（--vector 再转 SVG）；
 // check 重新读出 cut 的判定；diff 比较改图前后每一格的变化；align 把取出的部件对回参考图；
-// patch 从改图里只取变了的区域做成补丁；trace 照参考图描出一个部件的形状；capture、playback 用本机浏览器截图和检查播放；
-// setup 把矢量化要用的原生包装到用户目录。
-import { spawnSync } from 'node:child_process';
+// patch 从改图里只取变了的区域做成补丁；trace 照参考图描出一个部件的形状；capture、playback 用本机浏览器截图和检查播放。
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { createRequire } from 'node:module';
 import path from 'node:path';
 import { decodePng, encodePng } from './png.mjs';
 import * as P from './assets-pixels.mjs';
+import * as V from './assets-vector.mjs';
 import { print, names, safeName, num, readImage, writePng, boxes } from './assets-io.mjs';
 import { cmdPatch, cmdTrace } from './assets-extra.mjs';
 import { cmdCapture, cmdPlayback } from './assets-capture.mjs';
-import { USER_CONFIG } from './config.mjs';
 import { M, die, need } from './util.mjs';
 
-export const TOOLING_DIR = process.env.FOREMAN_TOOLING_DIR || path.join(path.dirname(USER_CONFIG), 'tooling');
-const TOOLING_PACKAGES = ['@neplex/vectorizer@0.1.0', '@resvg/resvg-js@2.6.2'];
 // image_gen 实际输出的几档尺寸（约 157 万像素）。
 const ASPECTS = { '1:1': [1254, 1254], '3:2': [1536, 1024], '2:3': [1024, 1536], '3:1': [2172, 724] };
 const GRAY = [154, 160, 166];
@@ -56,27 +51,15 @@ function cmdTemplate(o) {
   print({ template: out, slots_file: slotsFile, aspect, size: [w, h], slots: slots.length, names: list });
 }
 
-// 只有 --vector 时才加载用户目录里的原生包；没装就在动手之前停下。
-function loadTooling() {
-  try {
-    const req = createRequire(path.join(TOOLING_DIR, 'index.js'));
-    return { vectorizer: req('@neplex/vectorizer'), resvg: req('@resvg/resvg-js') };
-  } catch { die(M.assetsToolingMissing(TOOLING_DIR)); }
-}
-
-async function vectorizePart(tool, png, w, h, part, palette) {
-  const { vectorize, ColorMode, Hierarchical, PathSimplifyMode } = tool.vectorizer;
-  let svg = await vectorize(png, {
-    colorMode: ColorMode.Color, hierarchical: Hierarchical.Stacked, filterSpeckle: 4, colorPrecision: palette ? 8 : 6,
-    layerDifference: 16, mode: PathSimplifyMode.Spline, cornerThreshold: 60, lengthThreshold: 4, maxIterations: 10, spliceThreshold: 45, pathPrecision: 2,
-  });
+// 矢量化用插件自带的 assets-vector.mjs（零依赖），画回来也用它自带的渲染器，量轮廓重合度和颜色误差。
+function vectorizePart(w, h, part, palette) {
+  let { svg } = V.vectorize(part, w, h);
   // 矢量化会把一簇颜色取平均；吸附色板时把每个 fill 放回色板里的准确颜色。
   if (palette) {
     const labs = palette.map((c) => P.lab(...c));
     svg = svg.replace(/fill="#([0-9A-Fa-f]{6})"/g, (_, h6) => `fill="${P.hex(palette[P.nearest(P.lab(...P.parseHex(h6)), labs).index])}"`);
   }
-  const rendered = new tool.resvg.Resvg(svg, { fitTo: { mode: 'width', value: w } }).render();
-  const rp = rendered.pixels;
+  const rp = V.render(svg, w, h);
   let inter = 0, union = 0, err = 0, cnt = 0;
   for (let p = 0; p < w * h; p++) {
     const a = part[p * 4 + 3] >= 128, b = rp[p * 4 + 3] >= 128;
@@ -86,12 +69,11 @@ async function vectorizePart(tool, png, w, h, part, palette) {
       if (part[p * 4 + 3] === 255 && rp[p * 4 + 3] === 255) { err += P.dE(P.lab(part[p * 4], part[p * 4 + 1], part[p * 4 + 2]), P.lab(rp[p * 4], rp[p * 4 + 1], rp[p * 4 + 2])); cnt++; }
     }
   }
-  return { svg, render: Buffer.from(rp), paths: (svg.match(/<path/g) || []).length, iou: +(inter / Math.max(1, union)).toFixed(4), color_error: +(err / Math.max(1, cnt)).toFixed(2) };
+  return { svg, render: rp, paths: (svg.match(/<path/g) || []).length, iou: +(inter / Math.max(1, union)).toFixed(4), color_error: +(err / Math.max(1, cnt)).toFixed(2) };
 }
 
 async function cmdCut(o) {
   const file = path.resolve(need(o, 'image')), outDir = path.resolve(need(o, 'out'));
-  const tool = o.vector ? loadTooling() : null;
   const img = readImage(file), { width: w, height: h, data: px } = img, n = w * h;
   const template = o.slots ? readSlots(o.slots, w, h) : null;
   // 名字优先用 --names（有模板时第 N 个名字对应格子文件里的第 N 个格子），否则用模板里写的名字。
@@ -208,8 +190,8 @@ async function cmdCut(o) {
     const row = { name, slot: it.slot, file: rel, crop: [bx, by, bw, bh], area: it.area, colors95, touches_edge: x0 === 0 || y0 === 0 || x1 === w - 1 || y1 === h - 1 };
     if (palette) row.on_palette = +(onPalette / Math.max(1, opaque)).toFixed(3);
     let render = null;
-    if (tool) {
-      const v = await vectorizePart(tool, png, bw, bh, buf, palette && o.snap ? palette : null);
+    if (o.vector) {
+      const v = vectorizePart(bw, bh, buf, palette && o.snap ? palette : null);
       fs.writeFileSync(path.join(outDir, `parts/${name}.svg`), v.svg);
       Object.assign(row, { svg: `parts/${name}.svg`, paths: v.paths, iou: v.iou, color_error: v.color_error });
       render = v.render;
@@ -341,23 +323,8 @@ function cmdAlign(o) {
   print(result);
 }
 
-// 用 node 自带的 npm 装到用户目录；Windows 上 npm.cmd 不能直接 spawn，优先找 node 旁边的 npm-cli.js。
-function cmdSetup() {
-  fs.mkdirSync(TOOLING_DIR, { recursive: true });
-  const pkg = path.join(TOOLING_DIR, 'package.json');
-  if (!fs.existsSync(pkg)) fs.writeFileSync(pkg, JSON.stringify({ name: 'foreman-tooling', private: true }, null, 2) + '\n');
-  const cli = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
-  const args = ['install', '--no-audit', '--no-fund', '--prefix', TOOLING_DIR, ...TOOLING_PACKAGES];
-  const r = fs.existsSync(cli)
-    ? spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8', windowsHide: true, timeout: 600000 })
-    : spawnSync('npm', args.map((a) => (process.platform === 'win32' ? `"${a}"` : a)), { encoding: 'utf8', windowsHide: true, timeout: 600000, shell: process.platform === 'win32' });
-  const ok = r.status === 0;
-  print({ ok, dir: TOOLING_DIR, packages: TOOLING_PACKAGES, message: ok ? M.assetsSetupDone(TOOLING_DIR) : M.assetsSetupFailed(r.error?.message || (r.stderr || '').trim().split(/\r?\n/).slice(-3).join(' ')) });
-  process.exitCode = ok ? 0 : 1;
-}
-
 export async function cmdAssets(o) {
-  const actions = { template: cmdTemplate, cut: cmdCut, check: cmdCheck, diff: cmdDiff, align: cmdAlign, patch: cmdPatch, trace: cmdTrace, capture: cmdCapture, playback: cmdPlayback, setup: cmdSetup };
+  const actions = { template: cmdTemplate, cut: cmdCut, check: cmdCheck, diff: cmdDiff, align: cmdAlign, patch: cmdPatch, trace: cmdTrace, capture: cmdCapture, playback: cmdPlayback };
   if (!actions[o.action]) die(M.assetsUsage);
   await actions[o.action](o);
 }

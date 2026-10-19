@@ -5,6 +5,7 @@ import path from 'node:path';
 import { sandbox, output, failed, json, taskArgs, MESSAGES, ROOT } from './helpers.mjs';
 import { canvas } from './fixtures/png.mjs';
 import * as P from '../foreman/skills/dispatch/scripts/assets-pixels.mjs';
+import * as V from '../foreman/skills/dispatch/scripts/assets-vector.mjs';
 
 const M = MESSAGES.zh;
 const MAGENTA = [255, 0, 255], DARK = [34, 34, 34], ORANGE = [245, 165, 36], TEAL = [29, 91, 121];
@@ -93,11 +94,101 @@ test('assets diff 逐格比较改图前后的变化', async (t) => {
   failed(await h.bridge(['assets', 'diff', '--before', before, '--after', h.write('small.png', canvas(100, 100, MAGENTA, 3).png())]), M.assetsSizeMismatch('300x200', '100x100'));
 });
 
-test('没装矢量化原生包时 --vector 先停下并提示征得同意后运行 assets setup', async (t) => {
-  const h = sandbox(t), tooling = path.join(h.home, 'no-tooling');
-  const image = h.write('sheet.png', canvas(120, 80, MAGENTA, 3).rect(30, 20, 90, 60, DARK).png());
-  failed(await h.bridge(['assets', 'cut', '--image', image, '--out', path.join(h.cwd, 'cut'), '--vector'], { env: { FOREMAN_TOOLING_DIR: tooling } }), M.assetsToolingMissing(tooling));
-  assert.equal(fs.existsSync(path.join(h.cwd, 'cut')), false);
+test('assets cut --vector 用自带描图转 SVG，透明的洞留空，轮廓和颜色对得上原图', async (t) => {
+  const h = sandbox(t);
+  // a：深色描边的橙色方块，中间挖一个透明的洞；b：青色方块
+  const image = h.write('sheet.png', canvas(240, 160, MAGENTA, 3).rect(20, 30, 110, 130, DARK).rect(26, 36, 104, 124, ORANGE).rect(50, 60, 80, 100, MAGENTA).rect(150, 40, 210, 120, TEAL).png());
+  const out = path.join(h.cwd, 'cut');
+  const r = output(await h.bridge(['assets', 'cut', '--image', image, '--out', out, '--names', 'a,b', '--vector']));
+  assert.deepEqual(r.parts.map((p) => p.name), ['a', 'b']);
+  for (const p of r.parts) {
+    assert.equal(p.svg, `parts/${p.name}.svg`);
+    assert.ok(p.iou >= 0.97 && p.color_error < 3 && p.paths >= 1, JSON.stringify(p));
+  }
+  assert.ok(!r.checks.some((c) => c.id === 'vector'));
+  const layers = fs.readFileSync(path.join(out, 'layers.svg'), 'utf8');
+  assert.ok(layers.includes('<g id="a"') && layers.includes('<g id="b"'));
+  // 洞的中间画回来是透明的，橙色和描边处是实心
+  const a = r.parts[0], svg = fs.readFileSync(path.join(out, a.svg), 'utf8'), [bx, by, bw, bh] = a.crop, img = V.render(svg, bw, bh);
+  const alphaAt = (x, y) => img[((y - by) * bw + x - bx) * 4 + 3];
+  assert.equal(alphaAt(65, 80), 0);
+  assert.equal(alphaAt(40, 50), 255);
+  assert.equal(alphaAt(22, 80), 255);
+});
+
+// 直接给 RGBA 画图：f(x, y) 返回 [r, g, b, a] 或 null（透明）
+function rgba(w, h, f) {
+  const buf = Buffer.alloc(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const c = f(x, y); if (c) buf.set(c.length === 4 ? c : [...c, 255], (y * w + x) * 4); }
+  return buf;
+}
+const fills = (svg) => [...svg.matchAll(/fill="(#[0-9a-f]{6})"/gi)].map((m) => m[1].toLowerCase());
+const opaqueIou = (a, b, n) => { let i = 0, u = 0; for (let p = 0; p < n; p++) { const x = a[p * 4 + 3] >= 128, y = b[p * 4 + 3] >= 128; if (x || y) u++; if (x && y) i++; } return i / u; };
+
+test('自带描图：直边是直线、圆是曲线，画回来和原图的轮廓重合', () => {
+  const square = rgba(60, 50, (x, y) => (x >= 10 && x < 50 && y >= 10 && y < 40 ? TEAL : null));
+  const s = V.vectorize(square, 60, 50);
+  assert.equal(s.paths, 1);
+  assert.ok(!/C/.test(s.svg) && /L/.test(s.svg), s.svg);
+  assert.ok(opaqueIou(square, V.render(s.svg, 60, 50), 60 * 50) > 0.98);
+  const disc = rgba(80, 80, (x, y) => ((x + 0.5 - 40) ** 2 + (y + 0.5 - 40) ** 2 < 28 ** 2 ? ORANGE : null));
+  const d = V.vectorize(disc, 80, 80);
+  assert.ok(/C/.test(d.svg), d.svg);
+  assert.ok(opaqueIou(disc, V.render(d.svg, 80, 80), 80 * 80) > 0.98);
+  // 上下对称的水滴：尖端两个点一样尖，都算角点，绕一圈的那一段首尾也挨着；不能当成短线段把整个轮廓压没
+  for (const [r, tx] of [[10, 10], [12, 8], [9, 20]]) {
+    const d = 50 - tx, ang = Math.asin(r / d);
+    const drop = rgba(80, 40, (x, y) => {
+      const px = x + 0.5, py = y + 0.5, dx = px - tx, dy = Math.abs(py - 20);
+      return (px - 50) ** 2 + (py - 20) ** 2 < r * r || (dx > 0 && dx <= d * Math.cos(ang) ** 2 && Math.atan2(dy, dx) < ang) ? DARK : null;
+    });
+    const v = V.vectorize(drop, 80, 40);
+    assert.ok(opaqueIou(drop, V.render(v.svg, 80, 40), 80 * 40) > 0.95, `r=${r} tip=${tx} ${v.svg}`);
+  }
+});
+
+test('自带描图：两色之间的过渡带并掉，比两侧都深的细线和透明里的孤立小点分开处理', () => {
+  const MID = [140, 128, 79];   // 在深色和橙色之间
+  // 左边深色、右边橙色，中间一列过渡色；橙色里一条 2 像素宽的深色细线；角上一个 2×2 的孤立小点
+  const img = rgba(90, 60, (x, y) => {
+    if (x >= 86 && y >= 2 && y < 4 && x < 88) return DARK;
+    if (x >= 80 || y >= 56) return null;
+    if (x < 30) return DARK;
+    if (x === 30) return MID;
+    if (x >= 55 && x < 57) return DARK;
+    return ORANGE;
+  });
+  const v = V.vectorize(img, 90, 60), out = V.render(v.svg, 90, 60);
+  const near = (c, ref) => Math.hypot(c[0] - ref[0], c[1] - ref[1], c[2] - ref[2]) < 20;
+  assert.ok(!fills(v.svg).some((h) => near(P.parseHex(h), MID)), v.svg);
+  const at = (x, y) => [...out.subarray((y * 90 + x) * 4, (y * 90 + x) * 4 + 4)];
+  assert.ok(near(at(55, 30), DARK) && near(at(56, 30), DARK), JSON.stringify(at(55, 30)));
+  assert.ok(near(at(45, 30), ORANGE) && near(at(65, 30), ORANGE));
+  assert.equal(at(86, 2)[3], 0);
+});
+
+test('自带描图：只出现在细线上的颜色、1 像素宽的线、相邻两个小块和大量小洞都处理对', () => {
+  const at = (img, w, x, y) => [...img.subarray((y * w + x) * 4, (y * w + x) * 4 + 4)];
+  // 橙底上一条 2 像素宽的深色线，深色别处没有：不能在选色时丢掉
+  const line = rgba(20, 100, (x, y) => (x >= 9 && x < 11 && y >= 10 && y < 90 ? DARK : ORANGE));
+  const l = V.vectorize(line, 20, 100);
+  assert.equal(l.colors, 2);
+  assert.deepEqual(at(V.render(l.svg, 20, 100), 20, 9, 50), [...DARK, 255]);
+  // 透明底上 1 像素宽、100 像素长的线：两边都接近直线，也不能压成零面积
+  const thin = rgba(30, 120, (x, y) => (x === 10 && y >= 10 && y < 110 ? TEAL : null));
+  assert.equal(at(V.render(V.vectorize(thin, 30, 120).svg, 30, 120), 30, 10, 50)[3], 255);
+  // 两个相邻的小块（都小于碎块面积）合成一块，不会互相换颜色
+  const pair = rgba(12, 9, (x, y) => (y >= 2 && y < 7 ? (x >= 2 && x < 4 ? [220, 30, 30] : x >= 4 && x < 6 ? [30, 30, 220] : null) : null));
+  const p = V.vectorize(pair, 12, 9), pr = V.render(p.svg, 12, 9);
+  assert.equal(p.paths, 1);
+  assert.deepEqual(at(pr, 12, 2, 4), at(pr, 12, 5, 4));
+  // 每 10 像素一个 4×4 的透明洞：洞留空，而且不能慢（轮廓方向不靠两两判断嵌套）
+  const holes = rgba(400, 400, (x, y) => (x % 10 >= 3 && x % 10 < 7 && y % 10 >= 3 && y % 10 < 7 ? null : TEAL));
+  const t0 = Date.now(), hv = V.vectorize(holes, 400, 400);
+  assert.ok(Date.now() - t0 < 5000);
+  const hr = V.render(hv.svg, 400, 400);
+  assert.equal(at(hr, 400, 5, 5)[3], 0);
+  assert.equal(at(hr, 400, 1, 1)[3], 255);
 });
 
 test('assets 参数错误给出用法或原因', async (t) => {

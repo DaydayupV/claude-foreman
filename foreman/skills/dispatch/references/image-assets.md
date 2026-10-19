@@ -102,7 +102,7 @@ No text, no letters, no numbers, no labels, no grid lines, no frames, no waterma
    - 每件在作品里只整块动。
 4. **局部变体（眨眼、张嘴）**：原部件作 Image 1，用第七节的局部修改写法只改那一处；再运行 `assets patch --base <原部件> --variant <改图> --out <目录>`：它先把改图对回原部件（改图常被放大、挪位；拿不准时按原位），去掉轮廓的细微位移和外轮廓一圈的变化，只留成片的改动，羽化后写出补丁 `patch.png`（和原部件同一画布，直接叠上去）、叠好的 `preview.png` 和对照图。知道要取哪一块时加 `--keep <区域>`。不要整张换图：实测整张换图时，眼睛以外整颗头的轮廓一起位移约 1 像素，实际尺寸下有 6,000 多个像素在跳；只叠眼睛补丁时，变化只剩眼睛里的几百个像素。
 5. **手画部分**：以参考图里这个部件的轮廓和阴影形状为底稿：`assets trace --image <参考图> --seed <部件填色里的一点> --box <部件周围的矩形> --out <目录>` 从种子点圈出部件，分成描边、底色和阴影（`--colors` 定几种填色），输出参考图坐标的 `trace.svg`（每层一个 `<path>`，内部细线是填色里的洞）和对照图；圈多了或少了就换种子点、收紧 `--box`、调 `--tolerance`。再在描出来的形状上做动作，配色和阴影层次照参考图。线宽按出图部件换算：量出图里轮廓线有几个像素，乘以部件在画面里的缩放。会弯的肢体先画所有描边、再画所有填色，关节处的填色盖住内侧描边，弯曲时没有接缝；和出图部件相接的一端伸到出图部件下面。
-6. **转不转 SVG**：扁平少色的素材 `assets cut --vector` 转 SVG，生成时写扁平风格、少阴影，矢量化时加 `--colors 8` 到 `12`，路径数能少一半左右；要固定配色时用 `--palette … --snap`。角色、带渐变或细节多的画保留 PNG，用 `<image>` 嵌进 SVG 或页面：动漫角色不减色时每件几十到五百条路径，网页上会卡，减色又会出色带。
+6. **转不转 SVG**：扁平少色的素材 `assets cut --vector` 转 SVG，生成时写扁平风格、少阴影，细节多、颜色杂的素材矢量化时加 `--colors 8` 到 `12`，路径数能降到原来的四分之一以下（本来就扁平的图标几乎不变）；要固定配色时用 `--palette … --snap`。角色、带渐变或细节多的画保留 PNG，用 `<image>` 嵌进 SVG 或页面：动漫角色不减色时每件几十到五百条路径，网页上会卡，减色又会出色带。
 7. **组装和检查**：`layers.svg` 是每个部件一个 `<g id>`、按源图位置排好的整体；也可以单独引用 `parts/<名字>.svg` 或 `parts/<名字>.png`。`manifest.json` 的 `crop` 只是部件在源图上的位置，放在页面上的位置在代码里定。页面要支持 `?t=<秒>` 停在某一时刻（截图和检查都靠它）。装好后用 `assets capture --url <页面> --times <秒,…> --size <显示尺寸> --zoom <名字=接缝处的矩形;…> --out <目录>` 按实际显示尺寸截几个关键时刻（动作的两端、遮挡切换、变体出现时），加 2 倍特写，看接缝、脱节，以及出图和手画部分的精细程度是否接近。动画再用 `assets playback --url <页面> --loop <一圈的秒数> --static <不该动的区域;…> --out <目录>` 截下一圈：`static` 里不该动的区域有变化就是闪，`seam` 不为 0 就是首尾接不上，`jumps` 列出突然跳一下的时刻；把 `playback.png`（APNG，浏览器里直接播放）给用户看。截图要用本机的 Chrome 或 Edge，找不到时用 `--browser` 指定。动画交付前最好再让没参与制作的模型看一遍截图。
 8. **为什么这样分**（2026 年 10 月试片）：
    - 关节部件表：模型不按格子里的比例和关节位置画（偏离格子尺寸的两到四成），关节端头总会描一圈轮廓；装起来转动时像球形关节娃娃，交换上下层也只是换一条接缝露出来。
@@ -133,7 +133,6 @@ No text, no letters, no numbers, no labels, no grid lines, no frames, no waterma
 | `trace --image <png> --seed x,y;… --out <目录> [--box x0,y0,x1,y1] [--tolerance <色差>] [--colors <N>] [--outline <像素>] [--dark <亮度>] [--simplify <像素>]` | 照参考图描出一个部件：从种子点按颜色相近（`--tolerance`，默认 30）圈出填色，深色（亮度低于 `--dark`，默认 25）、离填色 `--outline`（默认 4）像素以内的算描边，填色分成 `--colors`（默认 2）种；写出参考图坐标的 `trace.svg`（outline、base、shadow 各一层）、`trace.json` 和对照图 |
 | `capture --url <网址或文件> --times <秒,…> --out <目录> [--size 宽x高] [--scale <倍数>] [--zoom 名字=x0,y0,x1,y1;…] [--param t] [--wait <毫秒>] [--browser <路径>]` | 用本机 Chrome 或 Edge 无头模式，在页面网址后加 `?t=<秒>` 逐个时刻截图（`--scale` 默认 2），按 CSS 像素裁出特写，写出拼图 `sheet.png` 和 `capture.json`；整张同一个颜色时自动加长等待重截 |
 | `playback --url <网址或文件> --loop <秒> --out <目录> [--fps <N>] [--static 名字=x0,y0,x1,y1;…] [--size 宽x高] [--scale <倍数>] [--preview-width <像素>] [--browser <路径>]` | 按 `--fps`（默认 12）截下一圈（多截最后一帧对首帧），算相邻帧的变化、`static` 区域的变化（闪）、首尾的差 `seam`、突然变大的 `jumps`；写出逐帧 `frames/`、能播放的 `playback.png`（APNG）、翻页拼图 `flipbook.png` 和 `playback.json` |
-| `setup` | 把矢量化用的两个原生包装到 `~/.claude/foreman/tooling`（先问用户） |
 
 `cut` 的选项：
 - `--slots`、`--names`：按格子或名单命名（有模板时第 N 个名字对应格子文件里的第 N 个格子；模板里写的名字按格子号对应，合并过格子、编号不连续也不会错位）。
@@ -142,7 +141,7 @@ No text, no letters, no numbers, no labels, no grid lines, no frames, no waterma
 - `--gap <像素>`（默认 6）：相距不到两倍 gap 的碎块算同一个部件。`--min-area <比例>`（默认 0.0004）：比这还小的碎屑丢掉。
 - `--palette "#rrggbb,…"`：统计每个部件有多少像素落在色板上；加 `--snap` 把颜色吸附到色板（色板外的明暗色阶会被吸掉，要保留就写进色板）。
 - `--colors N`：整张图共用一套 N 色色板再切，减少矢量路径。
-- `--vector`：再转 SVG，写出 `parts/<名字>.svg` 和按原位置排好、每个部件一个 `<g id>` 的 `layers.svg`（能直接导入 Figma、Illustrator）。需要先 `setup`。
+- `--vector`：再转 SVG，写出 `parts/<名字>.svg` 和按原位置排好、每个部件一个 `<g id>` 的 `layers.svg`（能直接导入 Figma、Illustrator）。用插件自带的描图，不依赖别的包：先减色、按颜色分块，大块在下、小块在上层叠，轮廓拟合成直线和三次贝塞尔曲线；对照拼图里右边是 SVG 画回来的样子，`iou` 和 `color_error` 也是画回来量的。
 - `--allow-edge`：本来就要横贯全宽的素材（视差背景层），贴边不判失败。
 
 `cut` 的输出：`alpha.png`（整张去背景后的图）、`parts/<名字>.png`、`sheet.png`（对照拼图，左上角是格子编号；有 SVG 时左原图、右 SVG 渲染）、`manifest.json`（每个部件的 id、格子、文件和在源图上的位置 `crop`，组装位置不猜）、`report.json`。
@@ -167,4 +166,5 @@ No text, no letters, no numbers, no labels, no grid lines, no frames, no waterma
 - `assets align` 只找等比缩放和平移，不处理旋转；部件被模型转了角度时对不准，要重出。
 - 部件不带层级和遮挡顺序，要在代码里定，manifest 里没有。
 - 半透明素材（玻璃、烟雾）只能用 `--matte soft` 粗略处理，没有系统验证。
+- 自带描图碰到细节多的角色部件，1 像素宽的细线（发丝）会断成一串点，路径数也多：这也是角色保留 PNG 的原因之一。
 - 图层 SVG 导入 Figma、Illustrator 后的分组和可编辑性没有实际验证过。
