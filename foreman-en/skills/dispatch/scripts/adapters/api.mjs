@@ -2,8 +2,8 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { ENTRY, DISCUSS_SCHEMA } from '../config.mjs';
-import { newRunDir } from '../records.mjs';
+import { ENTRY, DISCUSS_SCHEMA, REVIEW_SCHEMA } from '../config.mjs';
+import { newRunDir, cancelSource } from '../records.mjs';
 import { startRun, finishDiscussion, eventWriter, runLimits, watchCancellation, reportWithRepair, validateSchema } from '../runner.mjs';
 import { M, die, isObject, readAttachments, MAX_MATERIAL_CHARS, whoOf, modelOf } from '../util.mjs';
 
@@ -22,14 +22,17 @@ const apiUsage = (u) => ({
 const apiKeyOf = (agent) => (agent.api_key ? { key: agent.api_key, source: 'config' }
   : process.env[agent.api_key_env] ? { key: process.env[agent.api_key_env], source: 'env' } : { key: null, source: null });
 
+const readonlyLevel = (agent, kind) => 'tools';
+
 async function executeApi(ctx) {
   const { cfg, agentName, agent, model, effort, level, cwd, brief, mode, opts } = ctx;
   const apiKey = apiKeyOf(agent).key;
   if (!apiKey) die(M.apiKeyMissing(agentName, agent.api_key_env));
   const modelShown = agent.extra_body?.model ?? model;
-  const schemaText = fs.readFileSync(DISCUSS_SCHEMA, 'utf8');
+  const review = ctx.kind === 'review', target = ctx.reviewTarget, scope = ctx.reviewScope;
+  const schemaText = fs.readFileSync(review ? REVIEW_SCHEMA : DISCUSS_SCHEMA, 'utf8');
   const schema = JSON.parse(schemaText);
-  let history = [{ role: 'system', content: M.apiDiscussSystem(schemaText) }];
+  let history = [{ role: 'system', content: review ? M.apiReviewSystem(schemaText) : M.apiDiscussSystem(schemaText) }];
   if (ctx.parent) {
     const file = path.join(ctx.parentDir, 'messages.json');
     if (!fs.existsSync(file)) die(M.apiNoMessages(ctx.parent));
@@ -37,16 +40,26 @@ async function executeApi(ctx) {
   }
   const files = readAttachments(opts.file, cwd, true);
   let prompt = brief;
+  if (review) {
+    prompt = `${target === 'diff' && !scope ? M.reviewPromptPlain(cwd) : M.apiReviewPrompt[target](scope?.description)}\n\n${brief}`;
+    if (scope?.target === 'diff') {
+      const fileList = scope.files.map((f) => `- ${f.status} ${f.old_path ? `${f.old_path} → ` : ''}${f.path}`
+        + (f.binary ? M.reviewFileBinary : '') + (f.too_large ? M.reviewFileTooLarge : '')).join('\n');
+      const longest = (scope.patch.match(/`+/g) || []).reduce((n, s) => Math.max(n, s.length), 2);
+      prompt += `\n\n${M.reviewMaterial(fileList, scope.patch, '`'.repeat(longest + 1))}`;
+    }
+  }
   if (!ctx.parent || files.length) {
     const git = spawnSync('git', ['ls-files', '-z'], { cwd, encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
     const list = git.status === 0 ? git.stdout.split('\0').filter(Boolean) : [];
-    if (list.length || files.length) prompt += `\n\n${M.apiMaterials(list.slice(0, 300).join('\n'), list.length, files)}`;
+    if (list.length || files.length) prompt +=`\n\n${M.apiMaterials(list.slice(0, 300).join('\n'), list.length, files)}`;
   }
-  if (prompt.length > MAX_MATERIAL_CHARS) die(M.materialsTooLarge(prompt.length, MAX_MATERIAL_CHARS, M.list(files.map((f) => `${f.shown}: ${f.chars}`))));
+  if (prompt.length > MAX_MATERIAL_CHARS) die(review && target === 'diff' ? M.reviewTooLarge(prompt.length, MAX_MATERIAL_CHARS)
+    : M.materialsTooLarge(prompt.length, MAX_MATERIAL_CHARS, M.list(files.map((f) => `${f.shown}: ${f.chars}`))));
   if (ctx.parent) prompt += `\n\n${M.apiResumeFooter}`;
   history = [...history, { role: 'user', content: prompt }];
   const { id, dir, release } = await newRunDir();
-  const run = startRun({ ...ctx, kind: 'discuss', id, dir, release, sessionId: null }, { modelShown });
+  const run = startRun({ ...ctx, readonly: readonlyLevel(agent, ctx.kind), id, dir, release, sessionId: null }, { modelShown });
   const { started, meta } = run;
   const { deadline, stallMin } = runLimits(ctx, started);
   const redact = (s) => redactKey(s, apiKey);
@@ -122,7 +135,7 @@ async function executeApi(ctx) {
   try {
     let messages = history;
     report = await reportWithRepair({
-      schema, validate: validateSchema,
+      schema, validate: validateSchema, allowQuestion: !review,
       request: async () => {
         const reply = await request(messages);
         last = redact(reply.content);
@@ -143,7 +156,7 @@ async function executeApi(ctx) {
     meta.status = { balance: 'quota_exhausted', stall: 'stalled', timeout: 'timeout', cancelled: 'cancelled' }[e.kind] || 'failed';
     const message = redact(e.message);
     errors.push(e.kind === 'balance' ? M.apiBalance(agentName, message) : e.kind === 'length' ? message
-      : e.kind === 'cancelled' ? M.runCancelled(modelOf(meta))
+      : e.kind === 'cancelled' ? M.runCancelled(modelOf(meta), cancelSource(dir))
       : e.kind === 'busy' ? M.apiBusy(agentName, M.duration(e.waited_s || 0), e.retried)
       : M.apiError(agentName, e.kind, e.status, message));
   }
@@ -345,7 +358,7 @@ function validate(agent, key, check, text) {
 }
 
 export default {
-  type: 'api', capabilities: { modes: ['discuss'], isolation: 'none', reads_code: false, native_schema: false, native_review: false, images: false, resume: true, command_start_events: false }, channel: M.channel.api,
+  type: 'api', capabilities: { modes: ['discuss', 'review'], isolation: 'none', reads_code: false, reads_images: false, native_schema: false, native_review: false, images: false, resume: true, command_start_events: false }, readonlyLevel, channel: M.channel.api,
   validate,
   status: (agent) => ({ api_key_env: agent.api_key_env ?? null, key_set: !!apiKeyOf(agent).key, key_source: apiKeyOf(agent).source }),
   check: checkApiAgent,

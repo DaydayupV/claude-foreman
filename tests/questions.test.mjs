@@ -9,7 +9,7 @@ const M = MESSAGES.zh;
 const question = (source, text, extra = {}) => ({ source, question: text, options: [], recommendation: null, detail: null, ...extra });
 const message = (tool, text) => tool === 'codex' ? { type: 'item.completed', item: { type: 'agent_message', text } } : { type: 'text', part: { text } };
 const configure = (h, extra = {}) => {
-  const c = baseConfig(); Object.assign(c.agents, { oc: opencodeAgent(), ...extra });
+  const c = baseConfig(); c.agents.codex.sandbox = { discuss: 'read-only', review: 'read-only' }; Object.assign(c.agents, { oc: opencodeAgent(), ...extra });
   c.modules.discuss.complex = Object.keys(c.agents).map((agent) => ({ agent, effort: 'high' }));
   h.config(c);
 };
@@ -42,6 +42,7 @@ test('decision_request 与 asked_mid_run 汇总，最终报告不算中途提问
 test('Codex 四个入口默认 never，显式 approval 覆盖默认值', async (t) => {
   for (const approval of [undefined, 'on-request']) {
     const h = sandbox(t), c = baseConfig();
+    c.agents.codex.sandbox = { discuss: 'read-only', review: 'read-only' };
     if (approval) c.agents.codex.approval = approval;
     h.config(c);
     const first = output(await h.bridge(taskArgs(h, 'run', ['--no-snapshot'])));

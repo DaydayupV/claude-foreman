@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { setup, replay, write, finish } from './common.mjs';
-import { report } from '../fixtures/reports.mjs';
+import { report, review } from '../fixtures/reports.mjs';
 
 const args = process.argv.slice(2);
 const operation = args[0] === '--version' ? 'version' : args[0] === 'login' ? 'login' : args[0] === 'debug' ? 'catalog' : args[0] === 'sandbox' ? 'sandbox' : 'exec';
@@ -37,7 +37,7 @@ if (operation === 'version') {
     write(path.join(process.env.CODEX_HOME, 'generated_images', session, name), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6iQAAAABJRU5ErkJggg==', 'base64'));
   }
   if (!s.hold) {
-    const last = s.last_message ?? report;
+    const last = s.last_message ?? (args.some((a) => a.endsWith('review.schema.json')) ? review : report);
     console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: typeof last === 'string' ? last : JSON.stringify(last) } }));
     if (args.includes('-o')) write(args[args.indexOf('-o') + 1], typeof last === 'string' ? last : JSON.stringify(last));
     if (s.usage) console.log(JSON.stringify({ type: 'turn.completed', usage: s.usage }));

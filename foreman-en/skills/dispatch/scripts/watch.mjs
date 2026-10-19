@@ -1,7 +1,8 @@
 // 详细事件、时间线、组视图和终端实时画面，只读取统一记录。
 import fs from 'node:fs';
 import path from 'node:path';
-import { RUNS_ROOT, CANCEL_FILE, listRuns, findRun, readMeta, isRunning, runEnd, runOutcome, groupTally, groupRuns } from './records.mjs';
+import { RUNS_ROOT, requestCancel, listRuns, findRun, readMeta, isRunning, runEnd, runOutcome, groupTally, groupRuns } from './records.mjs';
+import { describePlans } from './plan.mjs';
 import { M, die, sleep, clip, oneLine, plainCommand, RECONNECT, isReconnect, modelOf, whoOf, agentTypeOf, needsDecision, charWidth, textWidth, fitWidth, wrapWidth } from './util.mjs';
 import { avatarFor, introScene, playIntro } from './watch-intro.mjs';
 
@@ -28,6 +29,16 @@ const shownStatus = (status, r) => (status === 'done' ? r?.needs_decision ? 'blo
 // 成功的任务不再列出临时的重连提示；旧记录把它记成了错误
 const realErrors = (r, ok) => (r?.errors || []).filter((e) => !(ok && isReconnect(e)));
 const SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+
+function reviewConclusion(report) {
+  if (!M.watchReview[report?.verdict]) return null;
+  const findings = report.findings || [];
+  const parts = ['high', 'medium', 'low'].map((severity) => {
+    const n = findings.filter((f) => f.severity === severity).length;
+    return n ? `${M.severityNames[severity]} ${n}` : null;
+  }).filter(Boolean).join(' · ');
+  return M.watchReview[report.verdict](findings.length, parts);
+}
 
 async function pickWatchRun(ref) {
   if (ref) return findRun(ref);
@@ -76,7 +87,8 @@ function verboseRenderer(meta, rel) {
         const t = it.text.trim();
         let report = null;
         if (t.startsWith('{')) try { report = JSON.parse(t); } catch { /* 普通消息 */ }
-        if (report?.position) o('■', M.watchOpinion(clip(oneLine(report.position), 400)));
+        if (report?.verdict) o('■', reviewConclusion(report));
+        else if (report?.position) o('■', M.watchOpinion(clip(oneLine(report.position), 400)));
         else if (report?.status) o('■', M.watchReport(report.status, clip(oneLine(report.summary), 300)));
         else o('💬', clip(oneLine(t), 600));
       } else if (it.type === 'reasoning') {
@@ -290,7 +302,7 @@ function timelineRenderer(meta, rel, { screen: useScreen = false, dir = null } =
       if (k === '\x03' || k === 'q') { detach(k === '\x03' ? 130 : 0); return; }
       if ((k === 'x' || k === 'X') && api.queued && dir && !cancelSent) {
         if (confirmCancel) {
-          fs.writeFileSync(path.join(dir, CANCEL_FILE), new Date().toISOString());
+          requestCancel(dir, 'watch');
           cancelSent = true;
         }
         confirmCancel = !confirmCancel && !cancelSent;
@@ -450,6 +462,15 @@ function timelineRenderer(meta, rel, { screen: useScreen = false, dir = null } =
     write(node(m?.ended_at, color('└')) + color(C.bold(`${ok ? '✔' : blocked ? '?' : '✗'} ${M.watchFinished(M.statusName(shownStatus(r.status, r)), M.duration(r.duration_s), changedFor(r, m))}`)));
     if (r.usage) write(' '.repeat(TIME_W + 2) + C.dim(M.tokenSummary(r.usage, r.last_request ?? r.context, M.tokenCount, (r.usage_scope ?? (m?.mode === 'resume' ? 'session_total' : 'this_run')) === 'session_total')));
     const summary = r.report?.summary || r.report?.position;
+    const conclusion = reviewConclusion(r.report);
+    if (conclusion) {
+      write(); paragraph(conclusion, '  ', 12);
+      for (const f of r.report.findings || []) paragraph(M.watchFinding(f, M.severityNames[f.severity]), '  ', 4);
+      if (r.report.unverified?.length) {
+        write(); write(C.yellow(M.watchUnverified));
+        for (const x of r.report.unverified) paragraph(`· ${x}`, '  ', 4);
+      }
+    }
     if (summary) { write(); paragraph(summary, '  ', 12); }
     const issues = r.report?.open_issues || r.report?.open_questions || [];
     if (issues.length) {
@@ -606,10 +627,11 @@ function panelLines(run, feed, rows, width, withTitle) {
   const head = panelHead(run, feed.stats, width, withTitle);
   const inner = width - 2;
   let body = [];
-  const final = r?.report?.position || r?.report?.summary;
+  const conclusion = reviewConclusion(r?.report);
+  const final = conclusion || r?.report?.position || r?.report?.summary;
   const errors = realErrors(r, ok);
   if (!running && (final || errors.length)) {
-    if (final) body = wrapWidth(M.watchOpinion(final.trim()), inner).map((l) => ({ l }));
+    if (final) body = wrapWidth(conclusion || M.watchOpinion(final.trim()), inner).map((l) => ({ l }));
     for (const e of errors) body.push({ l: fitWidth(`${r.status === 'needs_input' ? '?' : '✗'} ${oneLine(e)}`, inner), style: r.status === 'needs_input' ? 'yellow' : 'red' });
     body = body.slice(0, rows);
   } else {
@@ -631,6 +653,12 @@ function groupCounts(all) {
 }
 
 // 组的标题行：左边是组名和标题，右边是各状态的个数，放不下右侧时只留左侧
+// 组里属于派发计划的任务：每份计划一行，写明完整、进行中还是不完整、缺了哪个必选。实时面板截成一行，最终汇总折行写全。
+function planLines(all, width, wrap = false) {
+  return describePlans(all).flatMap(({ state, text }) => (wrap ? wrapWidth(text, width) : [fitWidth(text, width)])
+    .map((line) => (state === 'complete' ? C.green : state === 'incomplete' ? C.red : C.dim)(line)));
+}
+
 function groupHeadLine(group, title, all, width) {
   const counts = groupCounts(all);
   const countsW = textWidth(counts.replace(/\x1b\[[0-9;]*m/g, ''));
@@ -716,8 +744,9 @@ async function watchGroup(group, o, loadCfg) {
       // 顶部标题一行、底部提示一行，每块有分隔线和标题（没有公共标题时多一行写各自的标题）；正文行数按窗口高度平均分，最多 8 行
       const title = sharedTitle();
       const headRows = title ? 2 : 3;
-      const rows = Math.max(2, Math.min(8, Math.floor((H - 2 - all.length * headRows) / all.length)));
-      const out = [groupHeadLine(group, title, all, width)];
+      const plans = planLines(all, width);
+      const rows = Math.max(2, Math.min(8, Math.floor((H - 2 - plans.length - all.length * headRows) / all.length)));
+      const out = [groupHeadLine(group, title, all, width), ...plans];
       for (const run of all) out.push(C.dim('─'.repeat(width)), ...panelLines(run, feeds.get(run.id), rows, width, !title));
       const lines = out.slice(0, H - 1);
       while (lines.length < H - 1) lines.push('');
@@ -732,7 +761,7 @@ async function watchGroup(group, o, loadCfg) {
         if (k === '\x03' || k === 'q') { screen.stop(); process.exit(k === '\x03' ? 130 : 0); }
         if ((k === 'x' || k === 'X') && queuedRuns().length) {
           if (confirmCancel) {
-            for (const run of queuedRuns()) { fs.writeFileSync(path.join(run.dir, CANCEL_FILE), new Date().toISOString()); cancelSent.add(run.id); }
+            for (const run of queuedRuns()) { requestCancel(run.dir, 'watch'); cancelSent.add(run.id); }
           }
           confirmCancel = !confirmCancel;
         } else confirmCancel = false;
@@ -767,6 +796,10 @@ async function watchGroup(group, o, loadCfg) {
         if (states.get(run.id) !== shown) process.stdout.write(`${whoOf(run.meta)}  ${shown}\n`);
         states.set(run.id, shown);
       }
+      for (const { id, text } of describePlans([...known.values()])) {
+        if (states.get(id) !== text) process.stdout.write(`${text}\n`);
+        states.set(id, text);
+      }
       if (settled()) break;
       await sleep(2000);
       runs = recentRuns();
@@ -779,13 +812,14 @@ async function watchGroup(group, o, loadCfg) {
   const title = sharedTitle();
   const width = Math.max(20, (process.stdout.columns || 100) - 1);
   const inner = width - 2;
-  const out = ['', groupHeadLine(group, title, all, width)];
+  const out = ['', groupHeadLine(group, title, all, width), ...planLines(all, width, true)];
   for (const run of all) {
     const { result: r, ok } = runOutcome(run);
     out.push(C.dim('─'.repeat(width)), ...panelHead(run, feeds.get(run.id).stats, width, !title));
     if (r?.usage) out.push(`  ${C.dim(fitWidth(M.tokenSummary(r.usage, r.last_request ?? r.context, M.tokenCount, (r.usage_scope ?? (run.meta.mode === 'resume' ? 'session_total' : 'this_run')) === 'session_total'), inner))}`);
-    const final = r?.report?.position || r?.report?.summary;
-    if (final) for (const l of wrapWidth(M.watchOpinion(final.trim()), inner)) out.push(`  ${l}`);
+    const conclusion = reviewConclusion(r?.report);
+    const final = conclusion || r?.report?.position || r?.report?.summary;
+    if (final) for (const l of wrapWidth(conclusion || M.watchOpinion(final.trim()), inner)) out.push(`  ${l}`);
     for (const e of realErrors(r, ok)) for (const l of wrapWidth(`${r.status === 'needs_input' ? '?' : '✗'} ${oneLine(e)}`, inner)) {
       out.push(`  ${(r.status === 'needs_input' ? C.yellow : C.red)(l)}`);
     }

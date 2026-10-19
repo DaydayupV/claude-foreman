@@ -61,7 +61,7 @@ if (version(SOURCE) !== version(TARGET)) {
 }
 
 // schema 的描述文字分中英文，不同步；只检查两边的结构（字段、类型、枚举、必填项）一致。
-const SCHEMAS = ['report.schema.json', 'discuss.schema.json'];
+const SCHEMAS = ['report.schema.json', 'discuss.schema.json', 'review.schema.json'];
 const shape = (node) => {
   if (Array.isArray(node)) return node.map(shape);
   if (!node || typeof node !== 'object') return node;

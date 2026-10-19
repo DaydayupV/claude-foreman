@@ -9,7 +9,7 @@ import { discussion } from './fixtures/reports.mjs';
 const M = MESSAGES.zh;
 const modes = ['run', 'review', 'discuss'], levels = ['simple', 'normal', 'complex'];
 const self = () => ({ ...Object.fromEntries(modes.map((mode) => [mode, Object.fromEntries(levels.map((lv) => [lv, 'claude code']))])), image: { generate: null, draw: null } });
-const args = (h, mode, rest = []) => [mode, '--cwd', h.cwd, '--brief', '-', '--no-snapshot', ...rest];
+const args = (h, mode, rest = []) => [mode, '--cwd', h.cwd, '--brief', '-', ...(mode === 'run' ? ['--no-snapshot'] : []), ...rest];
 
 test('多个 Codex、无 Codex 和三类能力表及省略强度的配置', async (t) => {
   const h = sandbox(t), c = baseConfig();
@@ -19,8 +19,8 @@ test('多个 Codex、无 Codex 和三类能力表及省略强度的配置', asyn
   c.modules = { run: { complex: { agent: 'second.1' } }, discuss: { normal: [{ agent: 'api' }, { agent: 'oc' }] } };
   h.config(c);
   const out = output(await h.bridge(['config']));
-  for (const [name, isolation, reads, native, supported] of [['codex', 'os', true, true, modes], ['oc', 'tools', true, false, modes], ['api', 'none', false, false, ['discuss']]]) {
-    assert.deepEqual(out.agents_status[name].capabilities, { modes: supported, isolation, reads_code: reads, native_schema: native,
+  for (const [name, isolation, reads, native, supported] of [['codex', 'os', true, true, modes], ['oc', 'tools', true, false, modes], ['api', 'none', false, false, ['discuss', 'review']]]) {
+    assert.deepEqual(out.agents_status[name].capabilities, { modes: supported, isolation, reads_code: reads, reads_images: native, native_schema: native,
       native_review: native, images: native, resume: true, command_start_events: native });
   }
   assert.equal(out.codex, undefined);
@@ -70,7 +70,7 @@ for (const mode of modes) test(`${mode} 的 Claude 等级、点名分派与 effo
   failed(await h.bridge(args(h, mode, ['--effort', 'high']), opts), M.missingLevel('simple / normal / complex'));
 });
 
-test('opencode 未授权时不能执行、API 仅能讨论，Claude 等级点名时不传强度', async (t) => {
+test('opencode 未授权时不能执行、API 不能执行，Claude 等级点名时不传强度', async (t) => {
   const h = sandbox(t), api = await apiServer(t, [{ answer: discussion }, { answer: discussion }]), c = baseConfig();
   c.agents = { oc: opencodeAgent(), api: apiAgent(api.url) };
   c.modules = self();
@@ -78,10 +78,9 @@ test('opencode 未授权时不能执行、API 仅能讨论，Claude 等级点名
     h.config(c);
     const r = output(await h.bridge(args(h, 'discuss', ['--level', 'simple', '--agent', name])));
     assert.equal(r.effort, null);
-    const supported = name === 'oc' ? 'review、discuss' : 'discuss';
-    for (const mode of name === 'oc' ? ['run'] : ['run', 'review']) {
+    for (const mode of ['run']) {
       h.config(c);
-      const error = name === 'oc' ? M.runAccessRequired(name, 'opencode cli') : M.modeNotSupported(name, c.agents[name].type, mode, supported);
+      const error = name === 'oc' ? M.runAccessRequired(name, 'opencode cli') : M.modeNotSupported(name, c.agents[name].type, mode, M.list(['discuss', 'review']));
       failed(await h.bridge(args(h, mode, ['--level', 'simple', '--agent', name])), error);
       h.config({ ...c, modules: { [mode]: { normal: { agent: name } } } });
       failed(await h.bridge(['config']), error);

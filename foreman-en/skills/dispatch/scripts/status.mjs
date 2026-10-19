@@ -1,9 +1,9 @@
 // 状态列表、终止任务和排队检查；会话统计由入口提供只读函数。
 import fs from 'node:fs';
 import path from 'node:path';
-import { RUNS_ROOT, CANCEL_FILE, UNFINISHED_STATUSES, listRuns, findRun, readMeta, isRunning, runEnd, runOutcome, groupRuns, groupSummary, describeActivity } from './records.mjs';
-import { M, die, need, pidAlive, killTree, sleep, modelOf, whoOf, agentTypeOf } from './util.mjs';
-import { planStatus } from './plan.mjs';
+import { RUNS_ROOT, UNFINISHED_STATUSES, requestCancel, listRuns, findRun, readMeta, isRunning, runEnd, runOutcome, groupRuns, groupSummary, describeActivity } from './records.mjs';
+import { M, die, need, pidAlive, killTree, sleep, modelOf, whoOf, agentTypeOf, replaceFile } from './util.mjs';
+import { planStatus, describePlans } from './plan.mjs';
 
 function cmdStatus(o, sessionStats) {
   if (o.plan) { process.stdout.write(JSON.stringify(planStatus(o.plan), null, 2) + '\n'); return; }
@@ -45,12 +45,13 @@ function cmdStatus(o, sessionStats) {
     if (quota) break;
   }
   process.stdout.write(rows.length ? rows.join('\n') + '\n' + (quota ? `\n${M.rateLimit(quota)}\n` : '') : `${M.noRuns}\n`);
-  if (grouped) process.stdout.write(`${groupSummary(grouped)}\n`);
+  if (grouped) process.stdout.write(`${[...describePlans(grouped).map((plan) => plan.text), groupSummary(grouped)].join('\n')}\n`);
 }
 
-// 终止一个正在运行的任务：先留终止标记，让它自己停下、写好结果；10 秒内没停（比如旧版本的脚本）就直接结束进程。
+// 终止一个正在运行的任务：先留终止标记，让它自己停下、写好结果（收尾要拍快照、读用量，大仓库会慢一些）；
+// 30 秒内没停（比如旧版本的脚本或者卡住了）就直接结束进程，补写一份最简结果。
 // 已经结束、没正常完成的任务，标记为已处理。
-async function cmdCancel(o) {
+async function cmdCancel(o, sessionStats) {
   const run = findRun(need(o, 'run'));
   const print = (x) => process.stdout.write(`${JSON.stringify({ run_id: run.id, ...x }, null, 2)}\n`);
   if (!isRunning(run.meta)) {
@@ -62,17 +63,48 @@ async function cmdCancel(o) {
     print({ ok: true, status, dismissed: true });
     return;
   }
-  fs.writeFileSync(path.join(run.dir, CANCEL_FILE), new Date().toISOString());
-  for (let i = 0; i < 20; i++) {
-    await sleep(500);
+  requestCancel(run.dir, 'command');
+  const waitMs = Number(process.env.FOREMAN_TEST_CANCEL_WAIT_MS) || 30000;
+  for (const until = Date.now() + waitMs; Date.now() < until;) {
+    await sleep(Math.min(500, waitMs));
     const m = readMeta(run.dir);
     if (!isRunning(m)) { print({ ok: true, status: m?.status }); return; }
   }
-  killTree(run.meta.pid);
+  // 确认它真的退出之后才动它的记录，免得和它自己的收尾交错。非 Windows 上 killTree 只发 SIGTERM，等不到退出就再发 SIGKILL。
+  const pid = run.meta.pid;
+  const exited = async () => { for (let i = 0; i < 20 && pidAlive(pid); i++) await sleep(150); return !pidAlive(pid); };
+  killTree(pid);
+  if (!(await exited()) && process.platform !== 'win32') {
+    try { process.kill(-pid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch { /* 已经退出 */ } }
+  }
+  if (!(await exited())) { print({ ok: false, status: 'running', error: M.cancelNotStopped(pid) }); return; }
   const m = readMeta(run.dir) || run.meta;
-  Object.assign(m, { status: 'cancelled', ended_at: new Date().toISOString() });
+  if (m.status !== 'running') { print({ ok: true, status: m.status }); return; } // 被结束前自己收完了尾
+  // 结果已经写好、只差元数据时，元数据跟结果走；没有结果或者结果读不出来，补一份最简结果。
+  let written = null;
+  try { written = JSON.parse(fs.readFileSync(path.join(run.dir, 'result.json'), 'utf8')); } catch { /* 没有结果，或者旧版本写了一半 */ }
+  Object.assign(m, { status: written?.status ?? 'cancelled', ended_at: new Date().toISOString() });
+  if (!written) writeForcedResult(run.dir, m, sessionStats);
   fs.writeFileSync(path.join(run.dir, 'meta.json'), JSON.stringify(m, null, 2));
-  print({ ok: true, status: 'cancelled', forced: true });
+  print({ ok: true, status: m.status, forced: true });
+}
+
+// 调度进程没来得及写好结果就被强行结束了：补一份最简的结果。用量只能从协作方自己的会话记录里读（目前只有 Codex 有），读不到就是 null。
+function writeForcedResult(dir, m, sessionStats) {
+  const file = path.join(dir, 'result.json');
+  let usage = null;
+  try { usage = sessionStats(m)?.total_token_usage ?? null; } catch { /* 读不到会话记录就不记用量 */ }
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify({
+    run_id: m.id, mode: m.mode, kind: m.kind, status: 'cancelled', title: m.title ?? null, cwd: m.cwd,
+    agent: m.agent, agent_type: m.agent_type, model: m.model, model_shown: m.model_shown, level: m.level, effort: m.effort,
+    module: m.module ?? null, cell: m.cell ?? null, plan: m.plan ?? null, seat: m.seat ?? null, role: m.role ?? null,
+    group: m.group ?? null, round: m.round ?? null, scope: m.scope ?? [], parent: m.parent ?? null, session_id: m.session_id ?? null,
+    exit_code: null, duration_s: Math.round((Date.parse(m.ended_at) - Date.parse(m.started_at)) / 1000),
+    usage, usage_scope: usage ? (m.mode === 'resume' ? 'session_total' : 'this_run') : null,
+    errors: [M.runCancelled(modelOf(m), 'command')], notes: [M.cancelForced, usage ? M.cancelledUsagePartial : M.cancelledUsageMissing],
+    warnings: [], report: null, last_message: '', changes: { available: false }, questions: [], needs_decision: false, run_dir: dir,
+  }, null, 2));
+  replaceFile(`${file}.tmp`, file);
 }
 
 // API 协作方这次请求排队了多少秒：最近一次 api.request 之后收到过 api.queued、还没收到思考或回答。不在排队返回 null。

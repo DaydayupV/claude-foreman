@@ -14,7 +14,7 @@ for (const module of ['discuss', 'run', 'review']) test(`单席 ${module} 必须
   const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex }; c.agents.third = { ...c.agents.codex };
   c.modules[module].complex = [{ agent: 'codex', effort: 'medium', required: true }, { agent: 'second' }]; h.config(c);
   const scenario = h.scenario({ last_message: discussion }), opts = module === 'discuss' ? { env: scenario.env } : {};
-  const args = taskArgs(h, module, ['--no-snapshot']);
+  const args = taskArgs(h, module, module === 'run' ? ['--no-snapshot'] : []);
   for (const extra of [[], ['--effort', 'high'], ['--agent', 'codex', '--effort', 'high']]) failed(await h.bridge([module, '--cwd', h.cwd, '--brief', '-', ...extra], opts), M.missingLevel('simple / normal / complex'));
   failed(await h.bridge([...args, '--agent', 'third'], opts), M.agentNotInLevel('third', `modules.${module}.complex`, 'codex、second'));
   failed(await h.bridge([...args, '--agent', 'second'], opts), M.otherRequired(`modules.${module}.complex`, 'second', 'codex'));
@@ -105,7 +105,7 @@ test('启动重新校验整份计划，新增必选、移除候选和项目关�
   c.modules.discuss.complex = [{ agent: 'second' }]; h.config(c);
   failed(await h.bridge(args), M.agentNotInLevel('codex', 'modules.discuss.complex', 'second'));
   h.config(baseConfig()); h.write('.claude/foreman.json', { modules: { discuss: { complex: 'claude code' } } });
-  failed(await h.bridge(args), M.planCellClosed('modules.discuss.complex'));
+  failed(await h.bridge(args), M.planCellClosedByProject('modules.discuss.complex'));
   assert.equal(h.records().length, 0);
 });
 

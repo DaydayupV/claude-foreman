@@ -66,7 +66,7 @@
 | `model` | 模型 | 不写就沿用 `~/.codex/config.toml` |
 | `bin` | codex 可执行文件或 `codex.js` 路径（也可以用环境变量 `CODEX_BIN`） | 自动查找 |
 | `max_parallel` | 这个协作方同时最多运行几个任务，所有任务组和会话加起来算（见 skill 的"并发拆分"一节） | `4` |
-| `sandbox` | `run` / `review` / `discuss` 各自的沙箱：`read-only` / `workspace-write` / `danger-full-access`。Windows 上默认的 elevated 只读沙箱可能连读文件的命令都启动不了，见下文 | 全部 `null`，沿用 Codex 配置 |
+| `sandbox` | `run` / `review` / `discuss` 各自的沙箱：`read-only` / `workspace-write` / `danger-full-access`。讨论和审查设成 `read-only` 时由系统沙箱拦下写入（结果的 `readonly` 为 `sandbox`），否则只靠规则约束和事后对比快照（`audited`）。Windows 上默认的 elevated 只读沙箱可能连读文件的命令都启动不了，见下文 | 全部 `null`，沿用 Codex 配置 |
 | `approval` | 审批策略：`never` 或 `on-request` | 不写时用 `never`：无人值守，没人能审批。命令被沙箱挡住时直接把失败交回给模型；沙箱坏了要修沙箱，见下文"Codex 的沙箱起不来时" |
 
 ### Codex 的沙箱起不来时
@@ -88,7 +88,7 @@
 | `max_parallel` | 可选，默认 `4` |
 | `run_access` | 可选，允许它做执行任务：`"edit"` 只能读写项目目录里的文件、不能运行命令；`"shell"` 还能运行命令。不写就不能放进 `run` 和 `draw` 格子，也不能被点名派执行 |
 
-登录和 key 都由 opencode 自己管（比如 OpenCode Go 要先在 opencode 里运行 `/connect` 登录），插件不碰。讨论和审查时，脚本给 opencode 注入一个只读代理，只有读文件、搜索和列目录的工具：它能自己翻项目里的代码，但不能运行命令，也不能改文件。审查时要看的改动由脚本用 git 算好附给它。
+登录和 key 都由 opencode 自己管（比如 OpenCode Go 要先在 opencode 里运行 `/connect` 登录），插件不碰。讨论和审查时，脚本给 opencode 注入一个只读代理，只有读文件、搜索和列目录的工具：它能自己翻项目里的代码，但不能运行命令，也不能改文件。审查改动（`diff`）时，要看的改动由脚本用 git 算好附给它；审已有文件时只给路径，由它自己读。
 
 执行时注入的代理按 `run_access` 开放写文件，`shell` 档再开放运行命令。opencode **没有系统沙箱**：
 - `edit` 档写不了项目目录以外的文件，也没有运行命令的工具；
@@ -119,7 +119,7 @@
 |---|---|
 | `base_url` | 接口地址，例如 `https://api.deepseek.com`，脚本请求 `<base_url>/chat/completions` |
 | `api_key` | API key 本身。明文保存在配置文件里，改完立即生效；只能写在用户配置中。留空 `""` 表示还没填 |
-| `api_key_env` | 存放 API key 的环境变量名；设置环境变量后要重启 Claude Code 才能读到。两个都填时用 `api_key`；两个都没有的协作方不能参加讨论，放进讨论格子会在运行时报错 |
+| `api_key_env` | 存放 API key 的环境变量名；设置环境变量后要重启 Claude Code 才能读到。两个都填时用 `api_key`；两个都没有的协作方不能参加讨论和审查，放进这些格子会在运行时报错 |
 | `model` | 必填，模型 |
 | `max_parallel` | 可选，默认 `4` |
 | `extra_body` | 可选，原样并进请求体的参数，比如 `{ "max_tokens": 65536 }` |
@@ -129,12 +129,14 @@
 
 | | codex cli | opencode cli | pi cli | api |
 |---|---|---|---|---|
-| 能做的任务（`modes`） | 执行、审查、讨论 | 执行（要写 `run_access`）、审查、讨论 | 执行（要写 `run_access`）、审查、讨论 | 讨论 |
+| 能做的任务（`modes`） | 执行、审查、讨论 | 执行（要写 `run_access`）、审查、讨论 | 执行（要写 `run_access`）、审查、讨论 | 讨论、审查（只审文本材料） |
 | 隔离（`isolation`） | 系统沙箱（`os`），看沙箱配置 | 只有工具权限（`tools`） | 只有工具权限加守卫扩展（`tools`） | 无（`none`），只收发文字 |
 | 自己读代码（`reads_code`） | 能 | 能 | 能 | 不能，靠附带文件 |
 | 原生格式约束（`native_schema`） | 有 | 没有，靠提示词加一次修复 | 没有，同左 | 没有，同左 |
 | 原生审查（`native_review`） | 有 | 没有 | 没有 | 没有 |
 | 出图（`images`） | 能 | 不能 | 不能 | 不能 |
+| 看图（`reads_images`），决定能不能做 `visual` 审查 | 能（view_image） | 先记为不能（还没验证） | 先记为不能（还没验证） | 不能 |
+| 讨论和审查的只读保障（结果的 `readonly`） | `sandbox`（配了 `read-only` 沙箱）或 `audited` | `tools` | `tools` | `tools` |
 
 ## modules
 

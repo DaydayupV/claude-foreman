@@ -3,13 +3,13 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { SCHEMA, DISCUSS_SCHEMA } from '../config.mjs';
+import { SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA } from '../config.mjs';
 import { newRunDir } from '../records.mjs';
 import { execute, eventWriter, watchCancellation, spawnCli, validateSchema } from '../runner.mjs';
 import { readImageCalls, missingReferences } from '../image-calls.mjs';
-import { M, die, isObject, binCommand, pathCommand, npmEntry, killTree, isReconnect, readAttachments, focusFiles, closestMatches } from '../util.mjs';
+import { M, die, isObject, binCommand, pathCommand, npmEntry, killTree, isReconnect, readAttachments, readImages, focusFiles, closestMatches } from '../util.mjs';
 
-const capabilities = { modes: ['run', 'review', 'discuss'], isolation: 'os', reads_code: true, native_schema: true, native_review: true, images: true, resume: true, command_start_events: true };
+const capabilities = { modes: ['run', 'review', 'discuss'], isolation: 'os', reads_code: true, reads_images: true, native_schema: true, native_review: true, images: true, resume: true, command_start_events: true };
 
 // 模型、推理强度、沙箱、审批这几项 exec / resume / review 都接受 -m 和 -c。
 function codexOptions(agent, { model, effort, mode }) {
@@ -39,6 +39,11 @@ function codexConfigValue(key, table = null) {
 
 // 没配置模型时从 Codex 的配置读出实际模型名，只用于显示，让用户知道用的是哪个模型。
 const codexConfigModel = () => codexConfigValue('model');
+
+function readonlyLevel(agent, kind) {
+  // 只按这次实际生效的沙箱分级，未声明时不能假定 Codex 会启用只读沙箱。
+  return (agent.sandbox?.[kind] || codexConfigValue('sandbox_mode')) === 'read-only' ? 'sandbox' : 'audited';
+}
 
 // Codex 的沙箱启动不了命令时的报错（Windows 沙箱设置坏了最常见）；只在命令失败时匹配，避免误判正常输出。
 const SANDBOX_ERROR = /windows sandbox failed|helper_unknown_error|setup refresh had errors|failed to create unified exec process|sandbox (?:setup )?(?:failed|error)/i;
@@ -115,7 +120,8 @@ function runCodex({ agent, args, cwd, prompt, runDir, timeoutMin, stallMin, sess
       let ev;
       try { ev = JSON.parse(line); } catch { return null; }
       lastEventAt = Date.now();
-      if (ev.item?.type === 'file_change') {
+      // 只认写完的改动：沙箱挡下的补丁也会有 file_change 事件，状态是 failed。
+      if (ev.type === 'item.completed' && ev.item?.type === 'file_change' && ev.item.status !== 'failed') {
         for (const change of ev.item.changes || []) out.fileChanges.add(change.path);
       }
       if (ev.item?.type === 'command_execution') {
@@ -329,7 +335,11 @@ function checkCodex(name, agent, efforts = [], catalog = () => codexCatalog(agen
 
 async function executeCodex(ctx) {
   const { agent, model, effort, cwd, mode, kind, brief, opts: o, addDirs = [], git } = ctx;
-  const files = mode === 'discuss' || mode === 'resume' ? readAttachments(o.file, cwd, false) : [];
+  const readonly = kind === 'exec' ? undefined : readonlyLevel(agent, kind);
+  if (readonly === 'audited' && o['no-snapshot']) die(M.auditedNoSnapshot(kind));
+  const files = ctx.reviewTarget === 'visual' ? readImages(o.file, cwd)
+    : mode !== 'run' ? readAttachments(o.file, cwd, false) : [];
+  const nativeReview = kind === 'review' && git && ctx.reviewTarget === 'diff' && !brief && !files.length;
   const { id, dir, release } = await newRunDir();
   const last = path.join(dir, 'last-message.txt');
   let args, prompt;
@@ -350,27 +360,23 @@ async function executeCodex(ctx) {
     prompt = `${brief}${focusFiles(files)}\n\n${discuss ? M.discussResumeFooter : M.resumeFooter}\n`;
   } else {
     const codexOpts = codexOptions(agent, { model, effort, mode: 'review' });
-    if (git && !brief) {
-      // codex exec review 的 --uncommitted/--base/--commit 不能和自定义提示同时用，没有审查重点时走原生审查。
+    if (nativeReview) {
+      // 原生审查不能附加说明或重点文件，只有无附件的 git diff 审查使用它。
       args = ['exec', 'review', '--json', ...codexOpts, '-o', last];
       if (o.base) args.push('--base', o.base);
       else if (o.commit) args.push('--commit', o.commit);
       else args.push('--uncommitted');
       if (o.title) args.push('--title', o.title);
       prompt = '';
-    } else if (git) {
-      // 有审查重点时改用普通 exec，让 Codex 自己用 git 查看审查范围。
-      args = ['exec', '--json', '--skip-git-repo-check', ...codexOpts, '-C', cwd, '-o', last, '-'];
-      prompt = `${M.reviewPromptGit(cwd, ctx.reviewScope.description)}\n\n${brief}\n\n${M.reviewFooter}\n`;
     } else {
-      // 非 git 目录没有"改动"可言，审查范围由任务说明指定。
-      args = ['exec', '--json', '--skip-git-repo-check', ...codexOpts, '-C', cwd, '-o', last, '-'];
-      prompt = `${M.reviewPromptPlain(cwd)}\n\n${brief}\n\n${M.reviewFooter}\n`;
+      args = ['exec', '--json', '--skip-git-repo-check', ...codexOpts, '-C', cwd, '--output-schema', REVIEW_SCHEMA, '-o', last, '-'];
+      const opening = { files: M.reviewPromptFiles, claims: M.reviewPromptClaims, visual: M.reviewPromptVisual }[ctx.reviewTarget];
+      prompt = `${opening ? opening(cwd) : git ? M.reviewPromptGit(cwd, ctx.reviewScope.description) : M.reviewPromptPlain(cwd)}\n\n${brief}${focusFiles(files)}\n\n${M.reviewFooter}\n`;
     }
   }
-  return execute({ ...ctx, id, dir, release, args, prompt, expectReport: mode !== 'review' }, {
+  return execute({ ...ctx, readonly, nativeReview, id, dir, release, args, prompt, expectReport: !nativeReview }, {
     capabilities, run: runCodex, stats: codexSessionStats,
-    schema: JSON.parse(fs.readFileSync(kind === 'discuss' ? DISCUSS_SCHEMA : SCHEMA, 'utf8')), validate: validateSchema,
+    schema: JSON.parse(fs.readFileSync(kind === 'discuss' ? DISCUSS_SCHEMA : kind === 'review' ? REVIEW_SCHEMA : SCHEMA, 'utf8')), validate: validateSchema,
     describe: () => {
       const sandbox = agent.sandbox?.[kind === 'exec' ? 'run' : kind] || null;
       // model 为 null 时实际模型由 Codex 配置决定，model_shown 是给人看的实际模型名。
@@ -381,7 +387,7 @@ async function executeCodex(ctx) {
 }
 
 export default {
-  type: 'codex cli', capabilities,
+  type: 'codex cli', capabilities, readonlyLevel,
   efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   defaultEffort: (level) => ({ simple: 'medium', normal: 'high', complex: 'max' })[level], channel: M.channel.codex,
   validate,

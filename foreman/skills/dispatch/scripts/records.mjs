@@ -24,6 +24,16 @@ function initializeRecords(config) {
 }
 
 const isCancelled = (dir) => fs.existsSync(path.join(dir, CANCEL_FILE));
+// 终止标记里记下是谁要求终止的：cancel 命令（command）还是实时查看里按 x（watch），结果里照实写。
+function requestCancel(dir, by) {
+  fs.writeFileSync(path.join(dir, CANCEL_FILE), JSON.stringify({ at: new Date().toISOString(), by }));
+}
+// 没有标记返回 null；旧版本的标记只写了时间，返回 unknown。
+function cancelSource(dir) {
+  let text;
+  try { text = fs.readFileSync(path.join(dir, CANCEL_FILE), 'utf8'); } catch { return null; }
+  try { const { by } = JSON.parse(text); return ['command', 'watch'].includes(by) ? by : 'unknown'; } catch { return 'unknown'; }
+}
 
 // Microsoft Store 版的 Claude 桌面应用会把对 AppData\Roaming 的写入重定向到 AppData\Local\Packages\<应用>\LocalCache\Roaming：
 // 应用里的进程按原路径能找到插件，终端面板里的进程不行。所以启动器里先写实际路径，再写原路径，用第一个存在的。
@@ -249,4 +259,4 @@ function groupSummary(runs) {
 const readMeta = (dir) => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')); } catch { return null; } };
 const isRunning = (m) => m?.status === 'running' && pidAlive(m.pid);
 
-export { RUNS_ROOT, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, writeWatchLauncher, newRunDir, listRuns, findRun, describeActivity, groupRuns, checkAdmission, runEnd, runOutcome, groupTally, groupSummary, groupScopeOwner, readMeta, isRunning, writesFiles };
+export { RUNS_ROOT, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, findRun, describeActivity, groupRuns, checkAdmission, runEnd, runOutcome, groupTally, groupSummary, groupScopeOwner, readMeta, isRunning, writesFiles };

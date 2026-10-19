@@ -98,7 +98,7 @@ flowchart TD
 | Command | What it does |
 |---|---|
 | `/foreman-en:run <task>` | Hands a task to the configured agent. When it finishes, Claude Code reviews the diff, runs it to verify, and sends it back for rework if needed |
-| `/foreman-en:review` | Has an agent review uncommitted changes, a branch or a commit. Claude Code checks each finding and filters out false positives |
+| `/foreman-en:review` | Has an agent review uncommitted changes, a branch or a commit, or existing files, research conclusions with their evidence, and screenshots or playback files. The agent returns a structured list of issues; Claude Code checks each finding and filters out false positives |
 | `/foreman-en:discuss <topic>` | Several models each propose an approach to a complex design and critique each other's; Claude Code rules on each point and writes up a decision record; topics with competing goals can use role mode, see below |
 | `/foreman-en:watch` | Shows what each model is doing, live, in a terminal; see below |
 | `/foreman-en:status` | Lists recent runs, or shows the details of one, including token use and Codex quota |
@@ -122,7 +122,7 @@ Only you type the commands in the table above; Claude Code doesn't call them its
 
 ### Role-mode discussions
 
-When a topic has several goals pulling against each other (such as security and convenience, implementation cost and user experience, compatibility and a rewrite), or it's an evidence review before research conclusions are recorded, a level 2 or 3 discussion can use role mode: each model gets a role card and checks the same topic from one angle, such as architect, math / correctness, fact checker, maintenance and compatibility, user experience or edge-case lister, plus an overall reviewer with no role.
+When a topic has several goals pulling against each other (such as security and convenience, implementation cost and user experience, compatibility and a rewrite), a level 2 or 3 discussion can use role mode: each model gets a role card and checks the same topic from one angle, such as architect, math / correctness, fact checker, maintenance and compatibility, user experience or edge-case lister, plus an overall reviewer with no role.
 
 - **Assigned by ability**: first whether the tools can do it (the fact checker has to run commands, so only Codex can take it), then the model tier (roles that need hard thinking only go to strong models), then strengths within the tier. Models are sorted into strong, mid and weak tiers from a third-party leaderboard; see [references/model-tiers.md](foreman-en/skills/dispatch/references/model-tiers.md).
 - **One model per role first**: when there aren't enough qualifying models, a strong model opens another session for another role rather than handing it to a model below the role's tier; weak models only take roles where mistakes are cheap, or sit the discussion out.
@@ -166,7 +166,7 @@ Prompt templates, command options and the checks are in [references/image-assets
 - Agents, as many as you like (with none, the plugin still installs and Claude Code does all the work itself):
   - The [Codex CLI](https://github.com/openai/codex), installed and signed in. Recommended; image generation can only go to Codex
   - [opencode](https://opencode.ai) 2.x or [pi](https://github.com/earendil-works/pi), to reach models from many providers
-  - API keys for models with an OpenAI-compatible API (such as DeepSeek, Kimi or MiMo); these can only join discussions
+  - API keys for models with an OpenAI-compatible API (such as DeepSeek, Kimi or MiMo); these can join discussions and reviews (text only, no screenshots)
 
 ## Install and setup
 
@@ -244,7 +244,7 @@ The old `levels` form still works: the first time the plugin reads it, it rewrit
 | `codex cli` | The Codex CLI on this machine | Hands-on work, reviews, discussions, images | Yes | Codex's own sandbox | Your Codex plan or OpenAI API |
 | `opencode cli` | opencode on this machine, with the models it can reach | Reviews and discussions; hands-on work once `run_access` is set | Yes | Limited tools only, no OS sandbox | Providers you signed in to in opencode, or an OpenCode Go subscription |
 | `pi cli` | pi on this machine, with the models it can reach | Same as opencode | Yes | Same as opencode, with file paths checked by a guard the plugin injects | Providers you signed in to in pi |
-| `api` | A model with an OpenAI-compatible API | Discussions | No; Claude Code attaches the relevant files | Not applicable | The provider's API balance |
+| `api` | A model with an OpenAI-compatible API | Discussions, reviews (text only) | No; Claude Code attaches the relevant files | Not applicable | The provider's API balance |
 
 You can have several agents of one type, each with a different model. Codex isn't required.
 
@@ -272,9 +272,9 @@ Level 0 is always done by Claude Code and isn't in the config; which candidates 
 2. **Fill in the key**, either way:
    - Environment variable: write `"api_key_env": "DEEPSEEK_API_KEY"`, then set that variable. On Windows, add a user variable under "System Properties → Environment Variables"; on macOS and Linux, put it in your shell's startup file. Restart Claude Code so it can see it.
    - Config file: write `"api_key": "sk-..."`. It takes effect immediately but is stored in plain text, so don't commit or share the file. If both are set, the one in the config file wins.
-3. **Add it to discussions**: list it in the cells you want under `modules.discuss`.
+3. **Add it to discussions or reviews**: list it in the cells you want under `modules.discuss` or `modules.review`.
 
-You can also leave this to `/foreman-en:setup`, for example `/foreman-en:setup add DeepSeek`; you fill in the key yourself, with no need to paste it into the chat. API models can't look through your code themselves, so Claude Code sends the relevant files along with the topic (up to about 300,000 characters each time) and checks what they say about the code against the source.
+You can also leave this to `/foreman-en:setup`, for example `/foreman-en:setup add DeepSeek`; you fill in the key yourself, with no need to paste it into the chat. API models can't look through your code themselves, so Claude Code sends the relevant files along with the topic or review brief (the patch, when reviewing changes; up to about 300,000 characters each time) and checks what they say about the code against the source.
 
 ### Adding opencode
 
@@ -428,7 +428,7 @@ Custom roles for role-mode discussions go here too; the format is under "Custom 
 
 - **Claude Code can only call agents through the plugin.** The plugin includes a hook that blocks Claude Code's commands that run `codex exec`, `codex review`, `opencode run` or a pi task directly, so every call is recorded, has its changes tracked, and uses an explicit model and effort. Running them yourself in a terminal isn't affected.
 - **Codex is isolated by its own sandbox.**
-  - The sandbox is whatever Codex is configured with. With `danger-full-access`, Codex can read and write any directory on your machine; the task brief limits what it should touch and Claude Code reviews the diff afterwards, but that is not isolation. For isolation, set `agents.<ID>.sandbox` to `workspace-write` or `read-only` (on Windows use `workspace-write`: the read-only sandbox may fail to start even file-reading commands).
+  - The sandbox is whatever Codex is configured with. With `danger-full-access`, Codex can read and write any directory on your machine; the task brief limits what it should touch and Claude Code reviews the diff afterwards, but that is not isolation. For isolation, set `agents.<ID>.sandbox` to `workspace-write` or `read-only`. `read-only` is recommended for discussions and reviews: the OS blocks writes (the result's `readonly` is `sandbox`); without it, only the rules and a snapshot comparison afterwards hold it back (`audited`), and any write marks the run failed. On Windows the read-only sandbox may fail to start even file-reading commands; then follow `check` and switch to `[windows] sandbox = "unelevated"`.
   - Codex's default elevated sandbox on Windows needs a one-time setup with administrator rights, and if that setup is broken, every command fails (with `windows sandbox failed`). After changing the sandbox, have Claude Code run `check`: it tests the sandbox without calling a model and lists fixes if it's broken, such as switching to `[windows] sandbox = "unelevated"`.
   - Leave `approval` at the default `never`: nobody can approve in a handed-off task, and a broken sandbox needs fixing at the sandbox.
 - **opencode and pi have no OS sandbox when doing hands-on work.** At `edit` they can't write outside the project or run commands; at `shell` their commands can reach the whole machine. It's off by default; only you can turn it on, in the user config, and a project config can't.

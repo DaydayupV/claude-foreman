@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { setup, replay, finish } from './common.mjs';
-import { discussion } from '../fixtures/reports.mjs';
+import { discussion, review } from '../fixtures/reports.mjs';
 
 const args = process.argv.slice(2);
 const mode = args.includes('--mode') ? args[args.indexOf('--mode') + 1] : null;
@@ -37,7 +37,7 @@ else if (operation === 'list-models') {
   } else if (s.stop_reason) {
     emit({ type: 'message_end', message: assistant(s.last_message ?? '', { stopReason: s.stop_reason, errorMessage: s.error_message }) });
   } else if (!s.hold && !s.no_reply) {
-    const last = s.last_message ?? discussion;
+    const last = s.last_message ?? (input.includes('"verdict"') ? review : discussion);
     emit({ type: 'message_end', message: assistant(typeof last === 'string' ? last : JSON.stringify(last)) });
   }
   emit({ type: 'agent_settled', aborted: false });

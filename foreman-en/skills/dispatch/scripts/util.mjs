@@ -80,6 +80,16 @@ function focusFiles(files) {
 
 const binCommand = (bin) => /\.[cm]?js$/i.test(bin) ? { file: process.execPath, pre: [bin] } : { file: bin, pre: [] };
 
+function readImages(specs, cwd) {
+  return specs.map((spec) => {
+    const file = path.resolve(cwd, spec);
+    if (/:\d+-\d+$/.test(spec) || !/\.(png|apng|jpe?g|gif|webp)$/i.test(spec)
+      || !fs.existsSync(file) || !fs.statSync(file).isFile()) die(M.reviewVisualNotImage(spec));
+    const rel = relativePath(cwd, file);
+    return { path: file, shown: rel.startsWith('../') || rel === '..' || path.isAbsolute(rel) ? file : rel, range: null };
+  });
+}
+
 function pathCommand(name, extraDirs = []) {
   // 图形界面的 PATH 可能不含常用安装目录；JS 入口用当前的 node，不依赖 PATH 里有 node。
   const home = os.homedir();
@@ -302,4 +312,4 @@ function wrapWidth(s, width) {
   return lines;
 }
 
-export { replaceFile, HERE, LANGUAGE, M, notice, isObject, readJson, die, need, resolveDir, readBrief, MAX_MATERIAL_CHARS, readAttachments, focusFiles, binCommand, pathCommand, npmEntry, isGitRepo, pidAlive, killTree, relativePath, pathKey, RECONNECT, isReconnect, sleep, clip, oneLine, plainCommand, isAscii, modelOf, whoOf, agentTypeOf, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision, closestMatches, charWidth, textWidth, fitWidth, wrapWidth };
+export { replaceFile, HERE, LANGUAGE, M, notice, isObject, readJson, die, need, resolveDir, readBrief, MAX_MATERIAL_CHARS, readAttachments, readImages, focusFiles, binCommand, pathCommand, npmEntry, isGitRepo, pidAlive, killTree, relativePath, pathKey, RECONNECT, isReconnect, sleep, clip, oneLine, plainCommand, isAscii, modelOf, whoOf, agentTypeOf, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision, closestMatches, charWidth, textWidth, fitWidth, wrapWidth };

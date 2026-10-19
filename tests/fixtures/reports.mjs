@@ -8,6 +8,7 @@ export const discussion = {
   critiques: [], risks: ['遗漏边界行为'], open_questions: ['模块边界待确认'], confidence: 'high',
 };
 export const usage = { input_tokens: 120, cached_input_tokens: 30, output_tokens: 40, reasoning_output_tokens: 10 };
+export const review = { verdict: 'no_issues', findings: [], coverage: { checked: ['source.txt'], not_checked: [] }, unverified: [] };
 export const sessionStats = {
   info: { total_token_usage: usage, last_token_usage: { total_tokens: 60 }, model_context_window: 1000 },
   rate_limits: { primary: { used_percent: 25, window_minutes: 300, resets_at: 2000000000 } },

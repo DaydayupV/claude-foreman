@@ -8,7 +8,7 @@ import { cmdPlan, readPlan } from './plan.mjs';
 import { buildSummary } from './summary.mjs';
 import { RUNS_ROOT, initializeRecords, findRun, readMeta } from './records.mjs';
 import { adapters } from './adapters/index.mjs';
-import { computeReviewScope } from './review-scope.mjs';
+import { validateReviewMaterial } from './review-scope.mjs';
 import { cmdWatch } from './watch.mjs';
 import { cmdStatus, cmdCancel, cmdAwaitBusy } from './status.mjs';
 import { cmdAssets } from './assets.mjs';
@@ -59,7 +59,7 @@ function dispatchProfile(o, module) {
   const cwd = resolveDir(need(o, 'cwd'));
   const cfg = load(cwd);
   if (plan) validatePlan(cfg, plan, adapters);
-  return { cwd, cfg, profile: resolveProfile(cfg, seat, o, adapters) };
+  return { cwd, cfg, plan, profile: resolveProfile(cfg, seat, o, adapters) };
 }
 
 async function cmdRun(o) {
@@ -110,15 +110,15 @@ async function cmdResume(o) {
 }
 
 async function cmdReview(o) {
-  const { cwd, cfg, profile } = dispatchProfile(o, 'review');
+  if (o.plan && (o.target != null || o.file.length || o.uncommitted || o.base != null || o.commit != null)) die(M.planMaterialFlags(o.plan));
+  const { cwd, cfg, profile, plan } = dispatchProfile(o, 'review');
+  if (plan) Object.assign(o, plan.review || { target: 'diff', file: [], uncommitted: true, base: null, commit: null });
+  const target = o.target || 'diff';
+  const reviewScope = validateReviewMaterial({ ...o, cwd }, plan);
+  if (target === 'visual' && !adapters[profile.agent.type].capabilities.reads_images) die(M.readsImagesRequired(profile.agentName, profile.agent.type));
   const git = isGitRepo(cwd);
-  const brief = readBrief(o, !git);
-  let reviewScope = null;
-  if (git) {
-    try { reviewScope = computeReviewScope({ ...o, cwd }); } catch (e) { die(e.message); }
-    if (!reviewScope.files.length) die(M.reviewEmpty(reviewScope.description));
-  }
-  return adapters[profile.agent.type].execute({ cfg, ...profile, mode: 'review', kind: 'review', cwd, brief, git, reviewScope, title: o.title, opts: o });
+  const brief = readBrief(o, target !== 'diff' || !git);
+  return adapters[profile.agent.type].execute({ cfg, ...profile, mode: 'review', kind: 'review', cwd, brief, git, reviewTarget: target, reviewScope, title: o.title, opts: o });
 }
 
 function cmdConfig(o) {
@@ -225,6 +225,7 @@ async function cmdModels() {
 const { cmd, opts } = parseArgs(process.argv.slice(2));
 // 新建任务组时组名只用 ASCII：实时查看要把它写进终端命令，桌面版的终端面板只接受 ASCII 命令。
 if (['run', 'discuss', 'resume', 'review', 'plan'].includes(cmd) && opts.group != null && !/^[A-Za-z0-9._-]{1,64}$/.test(opts.group)) die(M.badGroupName(opts.group));
-const commands = { run: cmdRun, discuss: cmdDiscuss, resume: cmdResume, review: cmdReview, plan: (o) => cmdPlan(o, load, adapters), status: (o) => cmdStatus(o, (meta) => adapters[agentTypeOf(meta)]?.stats?.(meta.session_id, meta.started_at)), watch: (o) => cmdWatch(o, load), config: cmdConfig, check: cmdCheck, models: cmdModels, cancel: cmdCancel, 'await-busy': (o) => cmdAwaitBusy(o, CONFIG), assets: cmdAssets };
+const statsOf = (meta) => adapters[agentTypeOf(meta)]?.stats?.(meta.session_id, meta.started_at);
+const commands = { run: cmdRun, discuss: cmdDiscuss, resume: cmdResume, review: cmdReview, plan: (o) => cmdPlan(o, load, adapters), status: (o) => cmdStatus(o, statsOf), watch: (o) => cmdWatch(o, load), config: cmdConfig, check: cmdCheck, models: cmdModels, cancel: (o) => cmdCancel(o, statsOf), 'await-busy': (o) => cmdAwaitBusy(o, CONFIG), assets: cmdAssets };
 if (!commands[cmd]) die(M.usage);
 await commands[cmd](opts);

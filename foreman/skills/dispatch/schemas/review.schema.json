@@ -1,0 +1,40 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "findings", "coverage", "unverified"],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["issues_found", "no_issues", "incomplete"],
+      "description": "审查结论：发现问题、未发现问题或没审完"
+    },
+    "findings": {
+      "type": "array",
+      "description": "有证据的问题，按严重程度从高到低排列；没有问题时留空，不要凑数",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "location", "issue", "trigger", "severity", "evidence", "suggestion"],
+        "properties": {
+          "id": { "type": "string", "description": "问题编号，F1、F2……" },
+          "location": { "type": "string", "description": "文件:行号，或材料里的具体位置" },
+          "issue": { "type": "string", "description": "问题是什么" },
+          "trigger": { "type": "string", "description": "什么输入或状态会出错" },
+          "severity": { "type": "string", "enum": ["high", "medium", "low"] },
+          "evidence": { "type": "string", "description": "能定位和核实的证据" },
+          "suggestion": { "type": "string", "description": "建议怎么修复" }
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checked", "not_checked"],
+      "properties": {
+        "checked": { "type": "array", "items": { "type": "string" }, "description": "检查了哪些材料和场景" },
+        "not_checked": { "type": "array", "items": { "type": "string" }, "description": "没覆盖或缺少材料而无法检查的内容" }
+      }
+    },
+    "unverified": { "type": "array", "items": { "type": "string" }, "description": "拿不准或没能验证的地方" }
+  }
+}

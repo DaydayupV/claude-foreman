@@ -99,7 +99,7 @@ test('cancel 终止正在执行的任务并保存取消结果', async (t) => {
   assert.deepEqual(cancelled, { run_id: meta.id, ok: true, status: 'cancelled' });
   const result = output(await running.done, 1);
   assert.equal(result.status, 'cancelled');
-  assert.deepEqual(result.errors, [M.runCancelled('fake-codex')]);
+  assert.deepEqual(result.errors, [M.runCancelled('fake-codex', 'command')]);
   assert.ok(fs.existsSync(path.join(result.run_dir, 'cancel')));
 });
 

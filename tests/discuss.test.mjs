@@ -8,7 +8,7 @@ import { apiServer } from './fake/api-server.mjs';
 const M = MESSAGES.zh;
 
 function configure(h, agents) {
-  const c = baseConfig(); Object.assign(c.agents, agents);
+  const c = baseConfig(); c.agents.codex.sandbox = { discuss: 'read-only' }; Object.assign(c.agents, agents);
   c.modules.discuss.complex = Object.keys(c.agents).map((agent) => ({ agent, effort: 'high' }));
   h.config(c);
 }
@@ -17,7 +17,7 @@ const discussArgs = (h, agent, extra = []) => taskArgs(h, 'discuss', ['--agent',
 test('Codex 讨论解析报告并传递只读规则和附件范围', async (t) => {
   const h = sandbox(t), s = h.scenario({ last_message: discussion });
   h.write('source.txt', 'first\nsecond\n');
-  const r = output(await h.bridge(discussArgs(h, 'codex', ['--file', 'source.txt:2-2', '--no-snapshot']), { env: s.env }));
+  const r = output(await h.bridge(discussArgs(h, 'codex', ['--file', 'source.txt:2-2']), { env: s.env }));
   assert.deepEqual(r.report, discussion);
   assert.equal(r.kind, 'discuss');
   assert.equal(r.round, 1);
@@ -142,7 +142,7 @@ test('API 取消正在排队的请求并保存取消结果', async (t) => {
   assert.equal(output(await h.bridge(['cancel', '--run', meta.id])).status, 'cancelled');
   const r = output(await running.done, 1);
   assert.equal(r.status, 'cancelled');
-  assert.deepEqual(r.errors, [M.runCancelled('fake-api')]);
+  assert.deepEqual(r.errors, [M.runCancelled('fake-api', 'command')]);
   assert.equal(api.requests.length, 1);
 });
 

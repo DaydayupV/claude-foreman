@@ -2,11 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { sandbox, output, failed, read, json, baseConfig, opencodeAgent, MESSAGES } from './helpers.mjs';
+import { sandbox, output, failed, read, json, baseConfig, opencodeAgent, ROOT, MESSAGES } from './helpers.mjs';
 import { MAX_REVIEW_CHARS } from '../foreman/skills/dispatch/scripts/review-scope.mjs';
 const M = MESSAGES.zh;
 const configure = (h, agent = 'oc') => {
-  const c = baseConfig(); c.agents.oc = opencodeAgent(); c.modules.review.normal = { agent }; h.config(c);
+  const c = baseConfig(); c.agents.codex.sandbox = { review: 'read-only' }; c.agents.oc = opencodeAgent(); c.modules.review.normal = { agent }; h.config(c);
 };
 const args = (h, extra = []) => ['review', '--cwd', h.cwd, '--level', 'normal', '--no-snapshot', ...extra];
 
@@ -23,7 +23,7 @@ for (const lang of ['zh', 'en']) test(`opencode 审查注入只读 foreman-revie
   assert.deepEqual(c.agents_status.oc.capabilities.modes, ['run', 'review', 'discuss']);
   const r = output(await h.bridge(args(h, ['--brief', '-']), { env: { ...s.env, FOREMAN_LANG: lang }, input: '重点检查重复扣款' }));
   const calls = s.calls().filter((c) => c.operation === 'run'), call = calls[0];
-  assert.equal(calls.length, 1); assert.equal(call.args[call.args.indexOf('--agent') + 1], 'foreman-review');
+  assert.equal(calls.length, 2); assert.equal(call.args[call.args.indexOf('--agent') + 1], 'foreman-review');
   assert.equal(call.args[call.args.indexOf('--title') + 1], 'foreman review'); // 不带标题时 opencode 会另发请求起标题
   assert.equal(call.env.PWD, h.cwd);
   const permission = JSON.parse(call.env.OPENCODE_CONFIG_CONTENT).agent['foreman-review'].permission;
@@ -34,7 +34,7 @@ for (const lang of ['zh', 'en']) test(`opencode 审查注入只读 foreman-revie
   assert.ok(call.stdin.startsWith(m.opencodeReviewPrompt(h.cwd, m.reviewScopeUncommitted)));
   assert.ok(call.stdin.includes('重点检查重复扣款'));
   assert.ok(call.stdin.includes(m.reviewMaterial(fileList, patch, '``````')));
-  assert.ok(call.stdin.endsWith(m.reviewFooter + '\n')); assert.ok(patch.includes('+review change'));
+  assert.ok(call.stdin.endsWith(m.reviewFooter + '\n\n' + m.reviewSchemaFooter(read(path.join(ROOT, 'foreman/skills/dispatch/schemas/review.schema.json'))) + '\n')); assert.ok(patch.includes('+review change'));
   assert.equal(read(path.join(r.run_dir, 'brief.md')), call.stdin);
   assert.equal(scope.patch, undefined); assert.equal(scope.files.length, 4);
   assert.deepEqual(r.review_scope, { kind: 'uncommitted', description: m.reviewScopeUncommitted, base: null,
@@ -65,7 +65,7 @@ test('opencode 非 Git 审查必须有 brief，不附材料且 review_scope 为 
   const s = h.scenario({ last_message: '未发现问题' });
   const r = output(await h.bridge(args(h, ['--brief', '-']), { env: s.env, input: '审查 source.txt' }));
   assert.equal(r.review_scope, null);
-  assert.equal(s.calls()[0].stdin, `${M.reviewPromptPlain(h.cwd)}\n\n审查 source.txt\n\n${M.reviewFooter}\n`);
+  assert.equal(s.calls()[0].stdin, `${M.reviewPromptPlain(h.cwd)}\n\n审查 source.txt\n\n${M.reviewFooter}\n\n${M.reviewSchemaFooter(read(path.join(ROOT, 'foreman/skills/dispatch/schemas/review.schema.json')))}\n`);
   assert.equal(r.last_message, '未发现问题'); assert.equal(r.report, null);
   assert.equal(fs.existsSync(path.join(r.run_dir, 'review.patch')), false);
 });
@@ -95,7 +95,7 @@ test('审查期间改动变化时 Codex 和 opencode 都保留初始材料并警
   }
 });
 
-test('opencode 审查仅收集权限拒绝和终端输入提示，不修复正文', async (t) => {
+test('opencode 审查仅收集权限拒绝和终端输入提示，正文按 schema 修复一次', async (t) => {
   const h = sandbox(t); configure(h);
   const denied = h.scenario({ last_message: 'please confirm the missing guard?', steps: [
     { event: { type: 'text', part: { text: 'Should this be retried?' } } },
@@ -103,7 +103,7 @@ test('opencode 审查仅收集权限拒绝和终端输入提示，不修复正�
   ] });
   const r = output(await h.bridge(args(h, ['--brief', '-']), { env: denied.env }));
   assert.deepEqual(r.questions.map((q) => q.source), ['permission_denied']); assert.equal(r.report, null);
-  assert.equal(denied.calls().filter((c) => c.operation === 'run').length, 1);
+  assert.equal(denied.calls().filter((c) => c.operation === 'run').length, 2);
   const input = h.scenario({ hold: true, steps: [{ stderr: 'Continue? (y/n)\n' }] }, 'input');
   const waiting = output(await h.bridge(args(h, ['--brief', '-']), { env: { ...input.env, FOREMAN_TEST_INPUT_WAIT_MIN: '0.005' } }), 1);
   assert.equal(waiting.status, 'needs_input'); assert.deepEqual(waiting.questions.map((q) => q.source), ['input_prompt']);

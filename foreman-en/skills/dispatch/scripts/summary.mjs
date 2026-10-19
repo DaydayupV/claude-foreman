@@ -28,6 +28,10 @@ export function buildSummary(cfg, adapters, checks = null) {
   for (const [name, info] of Object.entries(agents)) {
     if (!info.used_at.length) warnings.push({ kind: 'unused_agent', agent: name, message: M.warnUnusedAgent(name) });
     if (cfg.agents[name].api_key) warnings.push({ kind: 'plaintext_key', agent: name, message: M.warnPlaintextKey(name) });
+    const modes = ['review', 'discuss'].filter((mode) => info.used_at.some((at) => at.startsWith(`modules.${mode}.`))
+      && adapters[info.type].readonlyLevel(cfg.agents[name], mode) === 'audited');
+    if (modes.length) warnings.push({ kind: 'readonly_audited', agent: name, modes,
+      message: M.warnReadonlyAudited(name, M.list(modes.map((mode) => M.modeNames[mode]))) });
     if (info.run_access === 'shell' && info.used_at.some((at) => at.startsWith('modules.run.') || at.startsWith('modules.image.draw['))) warnings.push({ kind: 'shell_access', agent: name, message: M.warnShellAccess(name) });
   }
   for (const { old, target, closest } of staleAliases(cfg)) {

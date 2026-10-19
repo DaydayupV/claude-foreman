@@ -87,7 +87,7 @@
 | 12 新配置写法和迁移 | structure-migration.test.mjs | 真实结构配置迁移后按模型改名、每格模型和强度不变、有备份和别名；部分字段的旧等级先补全；模型覆盖拆成新协作方；同名合并或加后缀；Codex 没写模型时取 config.toml；项目配置的旧代号；并发迁移只备份一次、校验失败不改文件；旧记录在 status、watch、resume 和并发准入里照常可用 |
 | 13 通用化 | generalization.test.mjs | 多个 Codex、没有 Codex、能力表校验；代号规则；三种任务的 "claude code" 和点名派出；--effort 只覆盖强度且 --level 必填；check 的新结构和总体结果；项目只能保留同格候选，整格关闭并忽略模型覆盖；按环境生成 modules、max_seats 和有 Codex 时的图像默认值；没有协作方时的会话提醒 |
 | 14 审查范围 | review-scope.test.mjs | 未提交范围含暂存、未暂存和未跟踪文件，指纹稳定且不动索引；删除、改名、二进制、非 UTF-8、过大文件；没有提交的仓库；base 从分叉点到工作区、含未提交改动、不含未跟踪文件，分支不存在或没有共同祖先时报错；根提交和合并提交（只比第一个父提交） |
-| 15 通用审查 | review.test.mjs | opencode 审查注入只读的 foreman-review，材料和正文落盘（中英文各一）；材料超限拒绝且不启动，Codex 没有这个限制；非 git 目录要求 brief；空范围不启动任何审查方；审查期间改动变化时警告；opencode 审查只收集权限拒绝和终端提示 |
+| 15 通用审查 | review.test.mjs | opencode 审查注入只读的 foreman-review，材料和正文落盘（中英文各一）；材料超限拒绝且不启动，Codex 没有这个限制；非 git 目录要求 brief；空范围不启动任何审查方；审查期间改动变化时警告并标 stale；opencode 审查只收集权限拒绝和终端提示，正文按审查 schema 修复一次 |
 | 16 opencode 执行 | opencode-run.test.mjs | run_access 校验和授权（项目配置开不了）；edit 和 shell 两档注入的权限、改动归属（工具事件为 agent、自报为 reported、其余 unknown）、报告和用量、watch；报告只修复一次且修复阶段没有工具；禁止 --no-snapshot、快照失败不启动；shell 档不判卡死、edit 档按 stall_min；续接同一会话、run_access 变化提示；同组范围重叠；超时、额度和输入看门狗 |
 | 17 拦截 opencode run | hooks.test.mjs | 拦下各种写法的 opencode run（含 npx），放行版本、模型、会话、认证、调试、服务、帮助和文字提及 |
 | 18 模型清单和总表 | catalog.test.mjs | models 列出 Codex、opencode 和 API 的清单并核对配置里的模型，读不到清单时如实报告；check 按 Codex 清单核对推理强度、不发执行请求，模型不在清单里或读不到清单时只提示；opencode 清单外的档位不发请求、修正提示列出支持的档位；模型提供方前缀和 modules 里的代号写错时提示最接近的写法；config 和 check 输出总表，含 required、统一的 modules.*[i] 位置、没用到的协作方、明文 key、shell 权限和失效的旧代号，档位不支持的格子写明原因 |
@@ -107,10 +107,15 @@
 | 31 残留锁串行回收 | admission.test.mjs | 活进程持有清理锁时不回收残留登记锁，释放后任务登记；清理锁的持有者退出后清掉清理锁并完成登记；读不出持有者的旧清理锁放一会儿后清掉并完成登记 |
 | 32 图像块是否配置 | modules.test.mjs、config.test.mjs、generalization.test.mjs | levels 迁移后 image_configured 为 false；首次生成（有或没有 Codex）为 true；显式图像块为 true，项目配置不影响 |
 | 33 给旧版留的 levels 说明 | modules.test.mjs | 迁移后文件里的 levels 是说明文字并排在 modules 前面，再读不再迁移；levels 是说明文字（中文、英文或手写）又有 modules 时照常读取、不改文件；levels 是字符串却没有 modules 时报错；带说明的文件因旧类型再次改写时保留原说明；没写 levels 的旧配置（只有旧类型、只有零点十以前的键）和空字符串说明改写后都写上标准说明；项目配置里的说明和 modules 照常收紧 |
+| 34 审查对象和材料 | review-targets.test.mjs | 四种 --target 的参数错误在登记和调用前拒绝（写错、非 diff 缺 --file 或带范围参数、缺说明、visual 不是图片或带行范围）；files 和 claims 在干净仓库和非 Git 目录都能审，整文件指纹保留附件顺序和行范围；--file 在 Codex、opencode、pi 的审查里列成重点文件，API 附上内容；diff 补丁超限时 opencode 和 pi 不登记、不调用 |
+| 35 结构化审查报告和 API 审查 | review-targets.test.mjs、review.test.mjs | Codex 带说明或 --file 的审查用 --output-schema 并解析报告，只有无说明、无附件的 git diff 走原生审查；opencode、pi、API 的审查报告修复一次，仍不合格保留原文并警告；审查不收集中途和最终提问；API 审查的系统提示、材料、任务类型，非 Git 的 diff、材料超限和不能续接；visual 在单席、格外点名、建计划和席位启动都拒绝不能看图的协作方，Codex 逐图提示 |
+| 36 审查计划和材料指纹 | review-targets.test.mjs | 计划固定审查对象、文件、范围和指纹，其他模块不能写材料参数，空 diff 不写计划；席位启动拒绝材料参数和材料变化，旧计划按 diff 兼容；三种 diff 范围各自重算；结束时材料被改、被删或 git 出错不丢结果，stale 如实记录 |
+| 37 讨论和审查的只读三级 | readonly-review.test.mjs | opencode、pi、API 为 tools；Codex 按 foreman 配置和 config.toml 判断 sandbox 或 audited，续接的讨论沿用；audited 拒绝 --no-snapshot、快照失败不启动；有工具事件或自报的写入记为失败并列出 readonly_violation，sandbox 级别不拍快照时看事件；沙箱挡下的写入（failed）不算；只有归属未知的改动不算违规但标 stale；config 和 check 每方一条 readonly_audited 提醒；watch 显示审查结论、问题和拿不准的地方（中英文） |
+| 38 冒烟小修：取消和计划状态 | cancel-and-plans.test.mjs | 取消原因照实写（cancel 命令、实时查看里按 x、旧版标记）；取消时记下已完成请求的用量并说明进行中的那次没算，一次都没完成时 usage 为 null；cancel 等不到调度进程停下时强行结束并补写结果，带上 Codex 会话记录里的用量；组视图和 status --group 写出计划完整、进行中（必选还没启动）或不完整（缺哪个必选）；项目关掉的格子，建计划和启动席位都说明是项目配置关的；强行结束前先确认调度进程已经退出，它已经写好的结果不被覆盖，只写了一半的结果换成补写的最简结果；计划状态里没审完或格式不合格的审查不算有效，Codex 原生审查和旧记录的文字算 |
 
 ## 说明
 
-- 整套约 50 秒，大头是几处真实等待：Codex 卡死检测每 30 秒查一次，测试要等无活动的任务真的被判卡死；API 断流后的重试固定等 5 秒；已结束任务组的 watch 固定停留 5 秒。
+- 整套约 90 秒，大头是几处真实等待：Codex 卡死检测每 30 秒查一次，测试要等无活动的任务真的被判卡死；API 断流后的重试固定等 5 秒；已结束任务组的 watch 固定停留 5 秒。
 - Node 24 第一次运行 `config` 时可能附带 DEP0190 警告，测试只核对插件自己的提示行。
 - 不覆盖：真实的 Codex 和 opencode、外部 API、终端里的实时画面（TTY）。这些发布前按设计文档 9.2 节的清单手工冒烟。
 - 改了 watch 的排版，要人工核对新输出后再更新 `expected/` 里的文本。

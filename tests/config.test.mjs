@@ -99,7 +99,7 @@ test('config 输出解析后的等级、协作方状态、偏好及记录目录'
   const r = output(await h.bridge(['config', '--cwd', h.cwd]));
   assert.deepEqual(r.loaded_from, [h.userConfig]);
   assert.deepEqual(r.resolved_modules.discuss.complex, [{ agent: 'codex', model: 'fake-codex', effort: 'max', required: false }]);
-  assert.deepEqual(r.agents_status.api, { type: 'api', capabilities: { modes: ['discuss'], isolation: 'none', reads_code: false, native_schema: false, native_review: false, images: false, resume: true, command_start_events: false }, model: 'fake-api', max_parallel: 4, api_key_env: null, key_set: true, key_source: 'config' });
+  assert.deepEqual(r.agents_status.api, { type: 'api', capabilities: { modes: ['discuss', 'review'], isolation: 'none', reads_code: false, reads_images: false, native_schema: false, native_review: false, images: false, resume: true, command_start_events: false }, model: 'fake-api', max_parallel: 4, api_key_env: null, key_set: true, key_source: 'config' });
   assert.equal(r.agents_status.oc.bin, opencodeAgent().bin);
   assert.equal(r.effective.agents.api.api_key, M.keyHidden);
   assert.deepEqual(r.preferences, [{ file: preference, exists: true }, { file: path.join(h.cwd, '.claude/foreman.md'), exists: false }]);

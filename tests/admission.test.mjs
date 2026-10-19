@@ -13,7 +13,7 @@ test('同组 discuss 和 review 不查写入范围，exec 仍检查', async (t) 
   const h = sandbox(t);
   seedRun(h, '20000101-exec', { group: 'scope-group', scope: ['src'], status: 'running', pid: process.pid });
   const scenario = h.scenario({ last_message: discussion });
-  const args = ['--group', 'scope-group', '--scope', 'src', '--no-snapshot'];
+  const args = ['--group', 'scope-group', '--scope', 'src'];
   assert.equal(output(await h.bridge(taskArgs(h, 'discuss', args), { env: scenario.env })).kind, 'discuss');
   assert.equal(output(await h.bridge(taskArgs(h, 'review', args))).kind, 'review');
   failed(await h.bridge(taskArgs(h, 'run', args)), M.scopeOverlap('scope-group', '20000101-exec', ['src']));

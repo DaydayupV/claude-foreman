@@ -31,8 +31,8 @@ test('续接使用上一轮会话并沿用组、范围和 track，用量只算�
 
 test('讨论续接到轮数上限后拒绝再开一轮', async (t) => {
   const h = sandbox(t), s = h.scenario({ last_message: discussion });
-  const first = output(await h.bridge(taskArgs(h, 'discuss', ['--no-snapshot']), { env: s.env }));
-  const args = (id) => ['resume', '--run', id, '--brief', '-', '--level', 'complex', '--no-snapshot'];
+  const first = output(await h.bridge(taskArgs(h, 'discuss', []), { env: s.env }));
+  const args = (id) => ['resume', '--run', id, '--brief', '-', '--level', 'complex'];
   const second = output(await h.bridge(args(first.run_id), { env: s.env }));
   assert.equal(first.round, 1);
   assert.equal(second.round, 2);
@@ -47,7 +47,7 @@ for (const scope of ['uncommitted', 'base', 'commit']) {
     h.write('source.txt', 'working change\n');
     const value = scope === 'commit' ? sha : 'HEAD';
     const range = scope === 'uncommitted' ? ['--uncommitted'] : [`--${scope}`, value];
-    const r = output(await h.bridge(['review', '--cwd', h.cwd, '--level', 'normal', '--title', '合成审查', '--no-snapshot', ...range], { env: s.env }));
+    const r = output(await h.bridge(['review', '--cwd', h.cwd, '--level', 'normal', '--title', '合成审查', ...range], { env: s.env }));
     const call = s.calls()[0];
     assert.deepEqual(call.args.slice(0, 2), ['exec', 'review']);
     assert.ok(call.args.includes(`--${scope}`));
@@ -71,7 +71,7 @@ for (const scope of ['uncommitted', 'base', 'commit']) {
     const h = sandbox(t), sha = h.initGit();
     h.write('source.txt', 'working change\n');
     const range = scope === 'uncommitted' ? [] : [`--${scope}`, scope === 'commit' ? sha.slice(0, 8) : 'HEAD'];
-    const r = output(await h.bridge(taskArgs(h, 'review', ['--no-snapshot', ...range]), { input: '检查边界条件' }));
+    const r = output(await h.bridge(taskArgs(h, 'review', [...range]), { input: '检查边界条件' }));
     const call = h.calls()[0];
     assert.equal(call.args[0], 'exec');
     assert.ok(!call.args.includes('review'));
@@ -88,7 +88,7 @@ for (const scope of ['uncommitted', 'base', 'commit']) {
 test('非 Git 目录审查要求说明并使用普通 exec', async (t) => {
   const h = sandbox(t);
   failed(await h.bridge(['review', '--cwd', h.cwd, '--level', 'normal']), M.missingOpt('brief'));
-  const r = output(await h.bridge(taskArgs(h, 'review', ['--no-snapshot']), { input: '检查 source.txt' }));
+  const r = output(await h.bridge(taskArgs(h, 'review', []), { input: '检查 source.txt' }));
   assert.equal(r.review_scope, null);
   const call = h.calls()[0];
   assert.ok(!call.args.includes('review'));

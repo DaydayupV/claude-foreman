@@ -1,0 +1,40 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "findings", "coverage", "unverified"],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["issues_found", "no_issues", "incomplete"],
+      "description": "Review verdict: issues found, no issues, or incomplete"
+    },
+    "findings": {
+      "type": "array",
+      "description": "Evidence-backed problems, most severe first; leave empty if there are none, without padding",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "location", "issue", "trigger", "severity", "evidence", "suggestion"],
+        "properties": {
+          "id": { "type": "string", "description": "Finding ID: F1, F2, and so on" },
+          "location": { "type": "string", "description": "File:line, or a specific position in the material" },
+          "issue": { "type": "string", "description": "What the problem is" },
+          "trigger": { "type": "string", "description": "What input or state makes it go wrong" },
+          "severity": { "type": "string", "enum": ["high", "medium", "low"] },
+          "evidence": { "type": "string", "description": "Evidence that can be located and checked" },
+          "suggestion": { "type": "string", "description": "How to fix it" }
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checked", "not_checked"],
+      "properties": {
+        "checked": { "type": "array", "items": { "type": "string" }, "description": "Material and cases that were checked" },
+        "not_checked": { "type": "array", "items": { "type": "string" }, "description": "What was not covered or could not be checked without missing material" }
+      }
+    },
+    "unverified": { "type": "array", "items": { "type": "string" }, "description": "What remains uncertain or could not be verified" }
+  }
+}

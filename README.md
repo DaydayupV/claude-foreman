@@ -98,7 +98,7 @@ flowchart TD
 | 命令 | 作用 |
 |---|---|
 | `/foreman:run <任务>` | 把一个执行任务派给配置的协作方，完成后 Claude Code 审查改动、实际运行验证，不合格就返工 |
-| `/foreman:review` | 请协作方审查未提交的改动、某个分支或某次提交，Claude Code 逐条核实，排除误报 |
+| `/foreman:review` | 请协作方审查未提交的改动、某个分支或某次提交，也能审没改过的文件、研究结论和证据、截图和播放文件；协作方交回结构化的问题清单，Claude Code 逐条核实，排除误报 |
 | `/foreman:discuss <议题>` | 几个模型就复杂方案各出方案、互相挑错，Claude Code 逐条裁决，给出决策记录；目标互相拉扯的议题可以用多角色模式，见下文 |
 | `/foreman:watch` | 在终端里实时查看各个模型正在做什么，见下文 |
 | `/foreman:status` | 查看最近的任务或某次任务的详细结果，包括 token 消耗和 Codex 额度 |
@@ -122,7 +122,7 @@ flowchart TD
 
 ### 多角色讨论
 
-议题里有几个目标互相拉扯时（比如安全和便利、实现成本和体验、兼容和重构），或者是研究结论落地前的证据审查，2、3 级讨论可以改用多角色模式：每个模型带一张角色卡，从一个视角检查同一个议题，比如架构师、数学/正确性、实证核查员、维护与兼容、用户体验、边界清单员，再留一个不带角色的综合对照位。
+议题里有几个目标互相拉扯时（比如安全和便利、实现成本和体验、兼容和重构），2、3 级讨论可以改用多角色模式：每个模型带一张角色卡，从一个视角检查同一个议题，比如架构师、数学/正确性、实证核查员、维护与兼容、用户体验、边界清单员，再留一个不带角色的综合对照位。
 
 - **按能力分配**：先看工具能不能做到（比如实证核查员要跑命令，只能给 Codex），再看模型档位（需要复杂思考的角色只给强档模型），最后在同档里挑长处合适的。模型档位按第三方评测分强、中、弱三档，见 [references/model-tiers.md](foreman/skills/dispatch/references/model-tiers.md)。
 - **优先一个模型一个角色**：合格的模型不够时，让强档模型多开一个会话扮另一个角色，不降级给档位不够的模型；弱档模型只扮出错代价低的角色，没有合适的就这一场不参加。
@@ -166,7 +166,7 @@ flowchart TD
 - 协作方，有几个配几个（一个都没有也能装，那样所有工作由 Claude Code 自己做）：
   - [Codex CLI](https://github.com/openai/codex)，已安装并登录。推荐，生成图片只能交给它
   - [opencode](https://opencode.ai) 2.x 或 [pi](https://github.com/earendil-works/pi)，用来接入各家模型
-  - 兼容 OpenAI 接口的模型 API key（比如 DeepSeek、Kimi、MiMo），只能参加讨论
+  - 兼容 OpenAI 接口的模型 API key（比如 DeepSeek、Kimi、MiMo），能参加讨论和审查（只审文本，不看截图）
 
 ## 安装和设置
 
@@ -244,7 +244,7 @@ flowchart TD
 | `codex cli` | 本机的 Codex CLI | 执行、审查、讨论、生成图片 | 能 | Codex 自己的沙箱 | Codex 订阅或 OpenAI API |
 | `opencode cli` | 本机的 opencode，接入它支持的各家模型 | 审查、讨论；写了 `run_access` 还能执行 | 能 | 只限定工具，没有系统沙箱 | 在 opencode 里登录的厂商，或 OpenCode Go 订阅 |
 | `pi cli` | 本机的 pi，接入它支持的各家模型 | 同 opencode | 能 | 同 opencode，读写路径由插件注入的守卫检查 | 在 pi 里登录的厂商 |
-| `api` | 兼容 OpenAI 接口的模型 | 讨论 | 不能，Claude Code 把相关文件附过去 | 不涉及 | 厂商的 API 余额 |
+| `api` | 兼容 OpenAI 接口的模型 | 讨论、审查（只审文本） | 不能，Claude Code 把相关文件附过去 | 不涉及 | 厂商的 API 余额 |
 
 同一种可以配多个，各用不同模型。Codex 不是必需的。
 
@@ -272,9 +272,9 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 2. **填 key**，二选一：
    - 环境变量：写 `"api_key_env": "DEEPSEEK_API_KEY"`，再设置这个环境变量。Windows 上在"系统属性 → 环境变量"里加一个用户变量；macOS 和 Linux 写进 shell 的启动文件。设置后重启 Claude Code 才能读到。
    - 配置文件：写 `"api_key": "sk-..."`，立即生效，但是明文保存，这个文件不要提交或分享。两种都写时，以配置文件里的为准。
-3. **加进讨论**：在 `modules.discuss` 需要的格子里加上它。
+3. **加进讨论或审查**：在 `modules.discuss` 或 `modules.review` 需要的格子里加上它。
 
-也可以交给 `/foreman:setup`，比如运行 `/foreman:setup 加 DeepSeek`；key 由你自己填，不用发到对话里。API 模型自己翻不了代码，Claude Code 会把相关文件随议题附过去（每次上限约 30 万字符），并对照原文核实它对代码的说法。
+也可以交给 `/foreman:setup`，比如运行 `/foreman:setup 加 DeepSeek`；key 由你自己填，不用发到对话里。API 模型自己翻不了代码，Claude Code 会把相关文件随议题或审查说明附过去（审查改动时附的是补丁；每次上限约 30 万字符），并对照原文核实它对代码的说法。
 
 ### 接入 opencode
 
@@ -428,7 +428,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 
 - **Claude Code 只能通过插件调用协作方。** 插件带有一个钩子：Claude Code 直接运行 `codex exec`、`codex review`、`opencode run` 或用 pi 跑任务的命令会被拦下，这样每次调用都有记录、改动追踪和明确的模型和推理强度。你自己在终端里运行它们不受影响。
 - **Codex 的隔离靠它自己的沙箱。**
-  - 沙箱以 Codex 的配置为准。是 `danger-full-access` 时，Codex 能读写电脑上的任何目录；任务说明会限定改动范围、Claude Code 事后也会审查 diff，但这些都不是技术上的隔离。想要隔离，把 `agents.<代号>.sandbox` 设成 `workspace-write` 或 `read-only`（Windows 上用 `workspace-write`：只读沙箱可能连读文件的命令都启动不了）。
+  - 沙箱以 Codex 的配置为准。是 `danger-full-access` 时，Codex 能读写电脑上的任何目录；任务说明会限定改动范围、Claude Code 事后也会审查 diff，但这些都不是技术上的隔离。想要隔离，把 `agents.<代号>.sandbox` 设成 `workspace-write` 或 `read-only`。讨论和审查推荐设 `read-only`：写入被系统拦下（结果的 `readonly` 为 `sandbox`）；没设时只靠规则约束和事后对比快照（`audited`），发现写入就记为失败。Windows 上的只读沙箱可能连读文件的命令都启动不了，这时按 `check` 的提示改用 `[windows] sandbox = "unelevated"`。
   - Windows 上 Codex 默认的 elevated 沙箱要先以管理员身份完成一次设置，设置坏了每条命令都会失败（报 `windows sandbox failed`）。改了沙箱之后让 Claude Code 运行一次 `check`：它不调模型地测一遍沙箱，坏了会列出修法，比如改用 `[windows] sandbox = "unelevated"`。
   - 审批 `approval` 保持默认的 `never` 就好：派出去的任务没人能批准，沙箱坏了要修沙箱。
 - **opencode 和 pi 做执行时没有系统沙箱。** `edit` 档写不了项目以外的文件、不能运行命令；`shell` 档的命令能访问整台机器。默认不开放，要你自己在用户配置里写，项目配置开不了。

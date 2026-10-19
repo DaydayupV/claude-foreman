@@ -2,9 +2,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { CLAUDE_SESSION, checkAdmission, groupScopeOwner, isCancelled } from './records.mjs';
+import { CLAUDE_SESSION, checkAdmission, groupScopeOwner, isCancelled, cancelSource } from './records.mjs';
 import { makeTracker } from './tracker.mjs';
-import { computeReviewScope } from './review-scope.mjs';
+import { computeReviewMaterial, computeReviewScope } from './review-scope.mjs';
 import { M, die, notice, relativePath, pathKey, whoOf, modelOf, replaceFile, killTree, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision } from './util.mjs';
 
 const INPUT_WAIT_MIN = 3;
@@ -53,10 +53,10 @@ function spawnCli(file, args, options, { onInput, busy = () => false, onStderrLi
 }
 
 function collectQuestions({ mode, kind, agent_type, report, last = '', messages = [], questions = [] }) {
-  // 没有原生审查的 CLI（opencode、pi）审查时只交回文字，不按提问收集。
-  const review = kind === 'review' && ['opencode cli', 'pi cli'].includes(agent_type);
+  const review = kind === 'review';
   const permissions = new Set();
   const collected = questions.filter((q) => {
+    if (review && ['asked_mid_run', 'final_question'].includes(q.source)) return false;
     if (q.source !== 'permission_denied') return true;
     const key = q.detail || q.question;
     if (permissions.has(key)) return false;
@@ -85,6 +85,7 @@ function startRun(ctx, { started = Date.now(), track = [], modelShown = ctx.mode
     plan: ctx.plan ?? null, seat: ctx.seat ?? null, role: ctx.role ?? null,
     ...(ctx.outside_cell ? { outside_cell: true } : {}), ...(ctx.model_overridden ? { model_overridden: true } : {}),
     agent: agentName, agent_type: agent.type, sandbox, parent: ctx.parent || null,
+    ...(kind === 'review' ? { review_target: ctx.reviewTarget } : {}),
     ...(kind === 'exec' && ctx.isolation === 'tools' ? { isolation: ctx.isolation, run_access: agent.run_access } : {}),
     track, group: opts.group ?? null, scope: opts.scope, round: ctx.round ?? null,
     started_at: new Date(started).toISOString(), status: 'running', pid: process.pid, session_id: ctx.sessionId || null,
@@ -106,7 +107,7 @@ function startRun(ctx, { started = Date.now(), track = [], modelShown = ctx.mode
   if (rejection) die(rejection);
   if (ctx.reviewScope) {
     const { patch, ...scope } = ctx.reviewScope;
-    fs.writeFileSync(path.join(dir, 'review.patch'), patch);
+    if (scope.target === 'diff') fs.writeFileSync(path.join(dir, 'review.patch'), patch);
     fs.writeFileSync(path.join(dir, 'review-scope.json'), JSON.stringify(scope, null, 2));
   }
   return { ctx, started, meta, writeMeta };
@@ -115,22 +116,47 @@ function startRun(ctx, { started = Date.now(), track = [], modelShown = ctx.mode
 function finishRun(run, result, code = result.exit_code, observed = {}) {
   const { module, cell, plan, seat, role, outside_cell, model_overridden } = run.meta;
   Object.assign(result, { module, cell, plan, seat, role, ...(outside_cell ? { outside_cell: true } : {}), ...(model_overridden ? { model_overridden: true } : {}) });
+  if (run.ctx.kind !== 'exec') {
+    result.readonly = run.ctx.readonly;
+    if (result.readonly_violation?.length) {
+      result.status = run.meta.status = 'failed';
+      result.exit_code = code = 1;
+      result.errors.push(M.readonlyViolated(run.ctx.kind, result.readonly_violation.length));
+    }
+  }
   if (run.ctx.kind === 'review') {
     const scope = run.ctx.reviewScope;
+    result.review_target = run.ctx.reviewTarget;
+    result.native_review = !!run.ctx.nativeReview;
+    result.stale = null;
     result.review_scope = scope ? { kind: scope.kind, description: scope.description, base: scope.base,
       merge_base: scope.merge_base, commit: scope.commit, files_total: scope.files.length, fingerprint: scope.fingerprint } : null;
     if (scope) {
       let after;
-      try { after = computeReviewScope({ ...run.ctx.opts, cwd: run.ctx.cwd }).fingerprint; }
+      // 结束时材料可能已被删掉，不能调用会 die 的附件校验，否则结果无法落盘。
+      try {
+        const options = { ...run.ctx.opts, cwd: run.ctx.cwd };
+        after = (scope.target === 'diff' ? computeReviewScope(options) : computeReviewMaterial(options)).fingerprint;
+      }
       catch (e) { result.warnings.push(e.message); }
-      if (after !== scope.fingerprint) result.warnings.push(M.reviewScopeChanged);
+      result.stale = after !== scope.fingerprint;
+      if (result.stale) result.warnings.push(M.reviewScopeChanged);
     }
+  }
+  // 取消时只记得到已经完成的请求的用量：正在进行的那次请求，厂商不报用量。一次都没完成时记为 null，不写成 0。
+  if (result.status === 'cancelled') {
+    const spent = !!result.usage && Object.values(result.usage).some((n) => n > 0);
+    if (!spent) Object.assign(result, { usage: null, usage_scope: null });
+    result.notes.push(spent ? M.cancelledUsagePartial : M.cancelledUsageMissing);
   }
   result.questions = collectQuestions({ ...result, ...observed, last: observed.last ?? result.last_message ?? '' });
   const decisions = result.questions.filter(needsDecision).length;
   result.needs_decision = decisions > 0;
   if (decisions) result.notes.push(M.needsDecisionNote(decisions));
-  fs.writeFileSync(path.join(run.ctx.dir, 'result.json'), JSON.stringify(result, null, 2));
+  // 先写临时文件再改名：调度进程被强行结束时，不会留下写了一半的结果。
+  const resultFile = path.join(run.ctx.dir, 'result.json');
+  fs.writeFileSync(`${resultFile}.tmp`, JSON.stringify(result, null, 2));
+  replaceFile(`${resultFile}.tmp`, resultFile);
   run.writeMeta(); // 在 result.json 之后写，watch 看到状态变化时结果已经就绪
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');
   process.exitCode = code;
@@ -168,13 +194,13 @@ function runLimits(ctx, started) {
 // 保留各执行路径原有的终止策略，只共用一秒一次的标记检查。
 const watchCancellation = (dir, cancel) => setInterval(() => { if (isCancelled(dir)) cancel(); }, 1000);
 
-async function reportWithRepair({ request, schema, validate, repair, onInvalid }) {
+async function reportWithRepair({ request, schema, validate, repair, onInvalid, allowQuestion = true }) {
   for (let attempt = 0; attempt <= 1; attempt++) {
     const reply = await request();
     if (!reply) return null;
     const parsed = parseReport(reply.last, schema, validate);
     if (!parsed.invalid.length) return parsed.report;
-    if (looksLikeFinalQuestion(reply.last)) return null;
+    if (allowQuestion && looksLikeFinalQuestion(reply.last)) return null;
     if (attempt === 1 || reply.canRepair === false) { onInvalid(); return null; }
     repair(parsed.invalid);
   }
@@ -197,6 +223,7 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
   const { agentName, agent, model, mode, kind, id, dir, cwd, level, effort, args, prompt, opts, expectReport } = ctx;
   const { isolation } = capabilities;
   const snapshotRequired = kind === 'exec' && isolation !== 'os';
+  const audited = ctx.readonly === 'audited';
   const started = Date.now();
   const track = [...new Map(opts.track.map((file) => {
     const rel = relativePath(cwd, file);
@@ -219,7 +246,8 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
   if (!opts['no-snapshot']) {
     try { tracker = makeTracker(dir, cwd, track); before = tracker.snap('before'); }
     catch (e) {
-      if (snapshotRequired) snapshotError = M.snapshotFailedNoStart(e.message);
+      if (audited) snapshotError = M.auditedSnapshotFailed(e.message);
+      else if (snapshotRequired) snapshotError = M.snapshotFailedNoStart(e.message);
       else warnings.push(M.trackingUnavailable(e.message));
       tracker?.cleanup(); tracker = null;
     }
@@ -240,12 +268,13 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
   let report = r.report || null;
   if (!Object.hasOwn(r, 'report') && expectReport && last) {
     report = parseReport(last, schema, validate).report;
-    if (!report && !looksLikeFinalQuestion(last)) warnings.push(M.badReport);
+    if (!report && (kind === 'review' || !looksLikeFinalQuestion(last))) warnings.push(M.badReport);
   }
   if (!report && last.length > 8000) notes.push(M.lastMessageTruncated(lastFile));
   notes.push(...(r.notes || []));
 
-  const reported = (report?.files_changed || []).map((f) => relativePath(cwd, f.path));
+  const claimed = report?.files_changed || (kind !== 'exec' ? parseReport(last, {}, validateSchema).report?.files_changed : null);
+  const reported = (Array.isArray(claimed) ? claimed : []).filter((f) => typeof f?.path === 'string').map((f) => relativePath(cwd, f.path));
   const agentPaths = new Set([...r.fileChanges].map((f) => pathKey(relativePath(cwd, f))));
   let changes = { available: false, agent_total: 0, reported_total: 0, unknown_total: 0 };
   if (tracker) {
@@ -263,7 +292,6 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
   changes.agent_total = tracked.filter((f) => f.by === 'agent').length;
   changes.reported_total = tracked.filter((f) => f.by === 'reported').length;
   changes.unknown_total = tracked.length - changes.agent_total - changes.reported_total;
-  if (kind !== 'exec' && changes.agent_total + changes.reported_total) warnings.push(M.readonlyChanged(kind, changes.agent_total + changes.reported_total));
   const ownerOf = groupScopeOwner(meta);
   const groupOwned = tracked.filter((f) => f.by === 'unknown').map((f) => ({ f, owner: ownerOf(relativePath(cwd, f.path)) })).filter((x) => x.owner);
   for (const { f, owner } of groupOwned) f.group_run = owner;
@@ -282,7 +310,7 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
   }
   const quotaExhausted = !ok && (r.quotaExhausted || r.errors.some((e) => /usage limit|quota/i.test(e)));
   meta.status = r.status || (ok ? 'done' : r.cancelled ? 'cancelled' : r.needsInput ? 'needs_input' : quotaExhausted ? 'quota_exhausted' : r.stalled ? 'stalled' : r.timedOut ? 'timeout' : 'failed');
-  if (r.cancelled) r.errors = [M.runCancelled(modelOf(meta))];
+  if (r.cancelled) r.errors = [M.runCancelled(modelOf(meta), cancelSource(dir))];
   meta.session_id = r.sessionId || meta.session_id;
   meta.ended_at = new Date().toISOString();
   const stats = sessionStats(meta.session_id, meta.started_at);
@@ -333,6 +361,12 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
     notes,
     warnings: [...warnings, ...r.warnings.filter((w) => !/^Under-development features enabled/.test(w))],
     report,
+    // 拍了快照时以实际改动的归属为准，自报但没改动的不算；完成的写文件事件在快照外（比如被忽略的文件）也算。没有快照时只能看事件和自报。
+    ...(kind !== 'exec' ? { readonly_violation: [...new Map([
+      ...(changes.available ? tracked.filter((f) => f.by !== 'unknown').map(({ path, by }) => [pathKey(relativePath(cwd, path)), { path: relativePath(cwd, path), by }])
+        : reported.map((path) => [pathKey(path), { path, by: 'reported' }])),
+      ...[...r.fileChanges].map((path) => [pathKey(relativePath(cwd, path)), { path: relativePath(cwd, path), by: 'agent' }]),
+    ]).values()] } : {}),
     last_message: report ? undefined : last.slice(0, 8000),
     changes: changes.available
       ? { ...changes, files: changes.files.slice(0, 300), files_total: changes.files.length, note: M.trackNote }

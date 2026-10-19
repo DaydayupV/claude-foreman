@@ -2,6 +2,8 @@
 
 Follow this when a discussion uses role mode (see "Choosing the mode" under "1. Settling the approach: discussion" in SKILL.md): each participant gets a role card and checks the same topic from its own angle. The normal-mode rules (no leaning in the brief, Claude writes its own proposal first, decisions by evidence, the round limit) all still apply; this file only covers what role mode adds.
 
+When a review (an evidence review, for example) gives its seats different angles, write the role cards, assign them and confirm with the pop-up the same way, with three differences: the shared body is the review brief; in the role card, "You still give a full answer to the shared questions, not just a list of risks" becomes "You still review everything the review rules ask for and return a review report", and the rules are the review rules (read-only, report only issues with evidence, output in the review schema); reviews can't be resumed, so there's no round 2, and Claude merges the seats' findings and checks each one.
+
 ## Role cards
 Each participant's brief = **an identical shared body** + **one role card at the end**. The shared body is the normal-mode brief (background, problem, constraints, known facts, code locations, questions to answer), word for word the same for everyone; otherwise they aren't answering the same question.
 

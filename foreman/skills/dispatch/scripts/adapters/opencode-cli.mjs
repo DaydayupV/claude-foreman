@@ -3,9 +3,9 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { SCHEMA, DISCUSS_SCHEMA } from '../config.mjs';
+import { SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA } from '../config.mjs';
 import { MAX_REVIEW_CHARS } from '../review-scope.mjs';
-import { newRunDir, isCancelled } from '../records.mjs';
+import { newRunDir, isCancelled, cancelSource } from '../records.mjs';
 import { startRun, finishDiscussion, execute, eventWriter, runLimits, reportWithRepair, spawnCli, validateSchema } from '../runner.mjs';
 import { M, LANGUAGE, die, isObject, binCommand, pathCommand, npmEntry, killTree, readAttachments, focusFiles, relativePath, whoOf, closestMatches } from '../util.mjs';
 
@@ -17,7 +17,7 @@ function opencodeCommand(agent) {
 
 const OPENCODE_AGENT = 'foreman-discuss';
 const RUN_ACCESS = ['edit', 'shell'];
-const capabilities = { modes: ['run', 'review', 'discuss'], isolation: 'tools', reads_code: true, native_schema: false, native_review: false, images: false, resume: true, command_start_events: false };
+const capabilities = { modes: ['run', 'review', 'discuss'], isolation: 'tools', reads_code: true, reads_images: false, native_schema: false, native_review: false, images: false, resume: true, command_start_events: false };
 
 function opencodeEnv(agentId = OPENCODE_AGENT, access) {
   let config;
@@ -137,20 +137,24 @@ function runOpencode({ agent, args, cwd, prompt = '', timeoutMs, stallMin = 0, r
   });
 }
 
+const readonlyLevel = (agent, kind) => 'tools';
+
 async function executeOpencode(ctx) {
   const { model, agent, level, cwd, brief, mode, opts } = ctx;
   if (ctx.parent && !ctx.sessionId) die(M.noSession(ctx.parent));
   const review = ctx.kind === 'review', exec = ctx.kind === 'exec';
   const agentId = review ? 'foreman-review' : exec ? 'foreman-run' : OPENCODE_AGENT;
-  const schemaText = review ? null : fs.readFileSync(exec ? SCHEMA : DISCUSS_SCHEMA, 'utf8');
-  const schema = review ? null : JSON.parse(schemaText);
-  const files = review ? [] : readAttachments(opts.file, cwd, false);
+  const schemaText = fs.readFileSync(review ? REVIEW_SCHEMA : exec ? SCHEMA : DISCUSS_SCHEMA, 'utf8');
+  const schema = JSON.parse(schemaText);
+  const files = readAttachments(opts.file, cwd, false);
   let prompt;
   if (review) {
     const scope = ctx.reviewScope;
-    const parts = [scope ? M.opencodeReviewPrompt(cwd, scope.description) : M.reviewPromptPlain(cwd)];
+    const opening = { files: M.reviewPromptFiles, claims: M.reviewPromptClaims }[ctx.reviewTarget];
+    const parts = [opening ? opening(cwd) : scope ? M.opencodeReviewPrompt(cwd, scope.description) : M.reviewPromptPlain(cwd)];
     if (brief) parts.push(brief);
-    if (scope) {
+    if (files.length) parts.push(focusFiles(files).trim());
+    if (scope?.target === 'diff') {
       const fileList = scope.files.map((f) => `- ${f.status} ${f.old_path ? `${f.old_path} → ` : ''}${f.path}`
         + (f.binary ? M.reviewFileBinary : '') + (f.too_large ? M.reviewFileTooLarge : '')).join('\n');
       const chars = fileList.length + scope.patch.length;
@@ -158,13 +162,13 @@ async function executeOpencode(ctx) {
       const longest = (scope.patch.match(/`+/g) || []).reduce((n, s) => Math.max(n, s.length), 2);
       parts.push(M.reviewMaterial(fileList, scope.patch, '`'.repeat(longest + 1)));
     }
-    prompt = [...parts, M.reviewFooter].join('\n\n') + '\n';
+    prompt = [...parts, M.reviewFooter, M.reviewSchemaFooter(schemaText)].join('\n\n') + '\n';
   } else if (exec) prompt = ctx.parent
     ? `${brief}${focusFiles(files)}\n\n${M.resumeFooter}\n\n${M.opencodeRunResumeFooter}\n`
     : `${brief}\n\n${M.footer(cwd, ctx.addDirs || [])}\n\n${M.opencodeRunFooter(schemaText, agent.run_access)}\n`;
   else prompt = `${brief}${focusFiles(files)}\n\n${ctx.parent ? M.opencodeResumeFooter : M.opencodeDiscussFooter(cwd, schemaText)}\n`;
   const { id, dir, release } = await newRunDir();
-  const context = { ...ctx, id, dir, release, prompt };
+  const context = { ...ctx, ...(exec ? {} : { readonly: readonlyLevel(agent, ctx.kind) }), id, dir, release, prompt };
   if (exec) return execute(context, {
     capabilities, describe: () => ({ sandbox: null, modelShown: model, modelName: model }),
     run: ({ run }) => opencodeSession(run, schema, agentId),
@@ -238,13 +242,12 @@ async function opencodeSession(run, schema, agentId) {
     meta.status = out.status;
     return meta.status === 'done' ? { last, canRepair: !!meta.session_id } : null;
   };
-  if (ctx.kind === 'review') await request();
-  else report = await reportWithRepair({
-    schema, validate: validateSchema, request,
+  report = await reportWithRepair({
+    schema, validate: validateSchema, request, allowQuestion: ctx.kind !== 'review',
     onInvalid: () => warnings.push(M.reportInvalid(agentName, path.join(dir, 'last-message.txt'))),
     repair: (invalid) => { repairing = true; nextPrompt = M.reportRepairPrompt(invalid.join('\n')); },
   });
-  if (meta.status === 'cancelled') errors.push(M.runCancelled(model));
+  if (meta.status === 'cancelled') errors.push(M.runCancelled(model, cancelSource(dir) ?? 'signal'));
   if (meta.status === 'stalled') errors.push(M.stalled(stallMin));
   if (meta.status === 'failed' && errors.some((e) => /rate.?limit|concurrency|too many requests|\b429\b/i.test(e))) notes.push(M.rateLimited(model, 'opencode'));
   let usage = null, cost = null;
@@ -353,7 +356,7 @@ function validate(agent, key, check, text) {
 }
 
 export default {
-  type: 'opencode cli', capabilities, channel: M.channel.opencode,
+  type: 'opencode cli', capabilities, readonlyLevel, channel: M.channel.opencode,
   validate,
   status: (agent) => ({ bin: agent.bin || opencodeCommand(agent).file, run_access: agent.run_access ?? null }),
   check: checkOpencodeAgent,

@@ -9,6 +9,7 @@ import { HERE, M, notice, isObject, readJson, die, pidAlive, replaceFile, closes
 const ENTRY = path.join(HERE, 'cli.mjs');
 const SCHEMA = path.join(HERE, '..', 'schemas', 'report.schema.json');
 const DISCUSS_SCHEMA = path.join(HERE, '..', 'schemas', 'discuss.schema.json');
+const REVIEW_SCHEMA = path.join(HERE, '..', 'schemas', 'review.schema.json');
 
 // 改名前（codex-bridge）用的位置，只用于迁移和兼容。
 const LEGACY_CONFIG = process.env.CODEX_BRIDGE_CONFIG || path.join(os.homedir(), '.claude', 'codex-bridge.json');
@@ -542,6 +543,7 @@ function resolveCell(cfg, module, cell) {
 function validatePlan(cfg, plan, adapters) {
   if (plan.module === 'image') die(M.planImageLater);
   const cell = resolveCell(cfg, plan.module, plan.cell);
+  if (cell.closedByProject) die(M.planCellClosedByProject(cell.key));
   if (cell.closed) die(M.planCellClosed(cell.key));
   const names = cell.candidates.map((item) => item.agent);
   for (const seat of plan.seats) {
@@ -552,6 +554,7 @@ function validatePlan(cfg, plan, adapters) {
     if (Object.hasOwn(seat, 'model') && seat.model !== (candidate.model || agent.model || null)
       || Object.hasOwn(seat, 'effort') && seat.effort !== (candidate.effort ?? null)) die(M.planSeatChanged(plan.plan_id, seat.seat, cell.key));
     if (!adapter.capabilities.modes.includes(plan.module)) die(M.modeNotSupported(name, agent.type, plan.module, M.list(adapter.capabilities.modes)));
+    if (plan.review?.target === 'visual' && !adapter.capabilities.reads_images) die(M.readsImagesRequired(name, agent.type));
     if (plan.module === 'run' && adapter.capabilities.isolation === 'tools' && !agent.run_access) die(M.runAccessRequired(name, agent.type));
   }
   const missing = cell.required.filter((name) => !plan.seats.some((seat) => resolveAgentAlias(seat.agent, cfg) === name));
@@ -623,6 +626,6 @@ function resolveProfile(cfg, seat, o, adapters, fallbackModel = null, parentAgen
     ...(outside ? { outside_cell: true } : {}), ...(o.model && model !== base ? { model_overridden: true } : {}) };
 }
 
-export { ENTRY, SCHEMA, DISCUSS_SCHEMA, USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, DEFAULT_AGENT_PARALLEL, DEFAULT_CONFIG, CLAUDE_CODE, LEVELS,
+export { ENTRY, SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA, USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, DEFAULT_AGENT_PARALLEL, DEFAULT_CONFIG, CLAUDE_CODE, LEVELS,
   MODULE_CELLS, cellList, eachCell, eachEntry, mapCells, resolveCell, validatePlan, resolveProfile, projectFile, loadConfig, defaultRunsRoot, runsMovedNow,
   readAgentAliases, resolveAgentAlias, migrateStructure, renameAgentsByModel, detectEnvironment, buildStarterConfig, staleAliases, unknownAgentError };

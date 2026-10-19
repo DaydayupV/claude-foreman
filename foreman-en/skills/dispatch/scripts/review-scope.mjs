@@ -1,15 +1,47 @@
-// 审查材料由 Git 计算，不修改工作区或索引。
+// 审查范围与材料指纹只读计算，不修改工作区或索引。
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { M } from './util.mjs';
+import { M, die, isGitRepo, readAttachments, readImages, relativePath } from './util.mjs';
 
 export const MAX_REVIEW_CHARS = 200000;
+export const REVIEW_TARGETS = ['diff', 'files', 'claims', 'visual'];
 const MAX_UNTRACKED_BYTES = 1024 * 1024;
 const DIFF_OPTIONS = ['--no-ext-diff', '--no-textconv', '--no-color', '--find-renames', '--full-index',
   '--no-relative', '--src-prefix=a/', '--dst-prefix=b/', '--submodule=short', '--ignore-submodules=none'];
 const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+
+export function validateReviewMaterial(options, plan = null) {
+  const { cwd, target = 'diff', file = [], uncommitted, base, commit } = options;
+  if (!REVIEW_TARGETS.includes(target)) die(M.reviewTargetChoices(M.list(REVIEW_TARGETS)));
+  if (target !== 'diff' && !file.length) die(M.reviewTargetNeedsFile(target));
+  if (target !== 'diff' && (uncommitted || base != null || commit != null)) die(M.reviewScopeDiffOnly);
+  if (!plan?.review) {
+    if (target === 'visual') readImages(file, cwd);
+    else readAttachments(file, cwd, false);
+  }
+  let material;
+  try { material = computeReviewMaterial(options); }
+  catch (e) { die(plan?.review ? M.planMaterialChanged(plan.plan_id) : e.message); }
+  if (plan?.review && (material?.fingerprint ?? null) !== plan.review.fingerprint) die(M.planMaterialChanged(plan.plan_id));
+  if (target === 'diff' && material && !material.files.length) die(M.reviewEmpty(material.description));
+  return material;
+}
+
+export function computeReviewMaterial({ cwd, target = 'diff', file = [], uncommitted, base, commit }) {
+  if (target === 'diff') return isGitRepo(cwd) ? { ...computeReviewScope({ cwd, uncommitted, base, commit }), target } : null;
+  const entries = file.map((spec) => {
+    const match = /:(\d+)-(\d+)$/.exec(spec);
+    const range = match ? [Number(match[1]), Number(match[2])] : null;
+    const full = path.resolve(cwd, match ? spec.slice(0, match.index) : spec), rel = relativePath(cwd, full);
+    const shown = rel.startsWith('../') || rel === '..' || path.isAbsolute(rel) ? full : rel;
+    return [shown, range, createHash('sha256').update(fs.readFileSync(full)).digest('hex')];
+  });
+  const fingerprint = createHash('sha256').update(JSON.stringify(entries)).digest('hex');
+  return { target, kind: target, description: M.reviewScopeTarget[target](entries.length), base: null, merge_base: null,
+    commit: null, files: entries.map(([path, range]) => ({ path, range })), patch: '', fingerprint };
+}
 
 export function computeReviewScope({ cwd, uncommitted, base, commit }) {
   const git = (args, allowed = [0]) => {

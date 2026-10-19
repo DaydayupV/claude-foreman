@@ -159,7 +159,6 @@ for (const [module, cell, value, reason, at = ''] of [
   ['discuss', 'simple', [{}], M.invalid.agentRef, '[0].agent'],
   ['image', 'generate', [{ agent: 'oc' }], M.imagesNotSupported('oc', 'opencode cli'), '[0].agent'],
   ['image', 'draw', [{ agent: 'oc' }], M.runAccessRequired('oc', 'opencode cli'), '[0].agent'],
-  ['review', 'normal', [{ agent: 'api' }], M.modeNotSupported('api', 'api', 'review', 'discuss'), '[0].agent'],
 ]) test(`模块校验 ${module}.${cell} ${JSON.stringify(value)}`, async (t) => {
   const h = sandbox(t), c = baseConfig();
   c.agents.oc = opencodeAgent(); c.agents.api = apiAgent('http://127.0.0.1:1');

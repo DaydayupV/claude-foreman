@@ -1,17 +1,21 @@
-// 派发计划只描述席位，真正启动时再检查当前配置并登记任务。
+// 派发计划固定席位和审查材料，真正启动时再检查当前配置并登记任务。
 import fs from 'node:fs';
 import path from 'node:path';
 import { ENTRY, LEVELS, resolveAgentAlias, resolveProfile, validatePlan } from './config.mjs';
 import { RUNS_ROOT, CLAUDE_SESSION, listRuns, readMeta, runOutcome } from './records.mjs';
+import { validateReviewMaterial } from './review-scope.mjs';
 import { M, die, need, resolveDir } from './util.mjs';
 
-function readPlan(id) {
-  if (path.basename(id) !== id) die(M.planNotFound(id));
+// 读不到时返回 null，不退出进程：实时查看里计划文件被删了也要接着显示。
+function loadPlan(id) {
+  if (path.basename(id) !== id) return null;
   try { return JSON.parse(fs.readFileSync(path.join(RUNS_ROOT, 'plans', `${id}.json`), 'utf8')); }
-  catch { die(M.planNotFound(id)); }
+  catch { return null; }
 }
+const readPlan = (id) => loadPlan(id) ?? die(M.planNotFound(id));
 
 function cmdPlan(o, load, adapters) {
+  if (o.module !== 'review' && (o.target != null || o.file.length || o.uncommitted || o.base != null || o.commit != null)) die(M.planReviewOnly);
   if (o.module === 'image') die(M.planImageLater);
   if (!['discuss', 'run', 'review'].includes(o.module)) die(M.planModuleChoices(M.list(['discuss', 'run', 'review'])));
   if (!LEVELS.includes(o.cell)) die(M.planCellChoices(o.module, M.list(LEVELS)));
@@ -23,6 +27,11 @@ function cmdPlan(o, load, adapters) {
     return { seat: i + 1, agent: resolveAgentAlias(match[1], cfg, true), role: match[2]?.trim() || null };
   });
   const plan = { module: o.module, cell: o.cell, seats };
+  if (o.module === 'review') {
+    const material = validateReviewMaterial({ ...o, cwd });
+    plan.review = { target: o.target || 'diff', file: o.file, uncommitted: !!o.uncommitted,
+      base: o.base ?? null, commit: o.commit ?? null, fingerprint: material?.fingerprint ?? null };
+  }
   const cell = validatePlan(cfg, plan, adapters);
   plan.seats = seats.map((seat) => {
     const profile = resolveProfile(cfg, { ...seat, module: o.module, cell: o.cell }, {}, adapters);
@@ -46,9 +55,9 @@ function cmdPlan(o, load, adapters) {
   process.stdout.write(JSON.stringify({ ...plan, file, commands }, null, 2) + '\n');
 }
 
-function planStatus(id) {
-  const plan = readPlan(id);
-  const runs = listRuns().map((id) => { const dir = path.join(RUNS_ROOT, id); return { id, dir, meta: readMeta(dir) }; })
+// 不给 runs 时从全部记录里找这份计划的任务；实时查看传入组里的任务，免得每秒把全部记录读一遍。
+function planStatus(id, runs = null, plan = readPlan(id)) {
+  runs = (runs ?? listRuns().map((rid) => { const dir = path.join(RUNS_ROOT, rid); return { id: rid, dir, meta: readMeta(dir) }; }))
     .filter((run) => run.meta?.plan === id)
     .sort((a, b) => Date.parse(a.meta.started_at) - Date.parse(b.meta.started_at) || a.id.localeCompare(b.id));
   const seats = plan.seats.map((seat) => {
@@ -56,7 +65,10 @@ function planStatus(id) {
     const outcome = latest && runOutcome(latest);
     const module = latest?.meta.module || (latest?.meta.kind === 'discuss' || latest?.meta.mode === 'discuss' ? 'discuss'
       : latest?.meta.kind === 'review' || latest?.meta.mode === 'review' ? 'review' : 'run');
-    const valid = outcome?.ok && (outcome.result?.report || module === 'review' && outcome.result?.last_message?.trim());
+    // 审查以结构化报告为准，没审完（incomplete）不算；没有报告时，只有 Codex 原生审查和第 2 期以前的旧记录的文字算数。
+    const r = outcome?.result;
+    const valid = outcome?.ok && (module !== 'review' ? !!r?.report : r?.report ? r.report.verdict !== 'incomplete'
+      : !!r?.last_message?.trim() && (r.native_review || r.review_target === undefined));
     return { seat: seat.seat, agent: seat.agent, role: seat.role, required: seat.required,
       run_id: latest?.id ?? null, runs: rounds.map((run) => run.id), status: outcome?.status ?? 'not_started',
       ok: !latest || outcome.running ? null : !!valid };
@@ -70,4 +82,19 @@ function planStatus(id) {
     missing_required: required.filter((seat) => seat.ok !== true).map(({ seat, agent, status }) => ({ seat, agent, status })) };
 }
 
-export { cmdPlan, readPlan, planStatus };
+// 组里每份计划一行：完整、进行中还是不完整，缺了哪个必选。实时查看和 status --group 用；计划文件读不到的跳过。
+function describePlans(runs) {
+  return [...new Set(runs.map((run) => run.meta?.plan).filter(Boolean))].flatMap((id) => {
+    const plan = loadPlan(id);
+    if (!plan) return [];
+    const { state, missing_required: missing } = planStatus(id, runs, plan);
+    const seats = (list, label) => M.list(list.map((s) => M.watchPlanSeat(s.agent, s.seat, label(s))));
+    const ended = missing.filter((s) => !['not_started', 'running'].includes(s.status));
+    const waiting = missing.filter((s) => s.status === 'not_started');
+    const detail = state === 'incomplete' && ended.length ? M.watchPlanMissing(seats(ended, (s) => (s.status === 'done' ? M.watchPlanNoResult : M.statusName(s.status))))
+      : state === 'pending' && waiting.length ? M.watchPlanNotStarted(seats(waiting, () => null)) : '';
+    return [{ id, state, text: M.watchPlanState(id, state, detail) }];
+  });
+}
+
+export { cmdPlan, readPlan, planStatus, describePlans };

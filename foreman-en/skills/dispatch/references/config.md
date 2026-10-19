@@ -66,7 +66,7 @@ Example:
 | `model` | Model | If not set, uses `~/.codex/config.toml` |
 | `bin` | Path to the codex executable or `codex.js` (or the environment variable `CODEX_BIN`) | Found automatically |
 | `max_parallel` | How many runs this agent may have going at once, across all groups and sessions (see "Splitting work to run in parallel" in the skill) | `4` |
-| `sandbox` | Sandbox for each of `run` / `review` / `discuss`: `read-only` / `workspace-write` / `danger-full-access`. On Windows, Codex's default elevated read-only sandbox may fail to start even file-reading commands; see below | All `null` (use Codex config) |
+| `sandbox` | Sandbox for each of `run` / `review` / `discuss`: `read-only` / `workspace-write` / `danger-full-access`. With `read-only` for discussions and reviews, the OS sandbox blocks writes (the result's `readonly` is `sandbox`); otherwise only the rules and a snapshot comparison afterwards hold it back (`audited`). On Windows, Codex's default elevated read-only sandbox may fail to start even file-reading commands; see below | All `null` (use Codex config) |
 | `approval` | Approval policy: `never` or `on-request` | `never` when not set: runs are unattended, so nobody can approve. A command blocked by the sandbox fails straight back to the model; a broken sandbox needs fixing, see "When Codex's sandbox won't start" below |
 
 ### When Codex's sandbox won't start
@@ -88,7 +88,7 @@ Don't fix it by changing `approval`. Codex 0.162 has two approval values: `never
 | `max_parallel` | Optional; `4` by default |
 | `run_access` | Optional; lets it do hands-on work: `"edit"` reads and writes files in the project directory only, with no commands; `"shell"` can also run commands. Without it, the agent can't be in a `run` or `draw` cell or be named for hands-on work |
 
-Sign-in and keys are handled by opencode itself (for OpenCode Go, sign in first by running `/connect` in opencode); the plugin doesn't touch them. For discussions and reviews the script gives opencode a read-only agent with only the read, search and list tools: it can look through the project's code itself, but can't run commands or change files. For a review, the script works out the changes with git and attaches them.
+Sign-in and keys are handled by opencode itself (for OpenCode Go, sign in first by running `/connect` in opencode); the plugin doesn't touch them. For discussions and reviews the script gives opencode a read-only agent with only the read, search and list tools: it can look through the project's code itself, but can't run commands or change files. For a review of changes (`diff`), the script works out the changes with git and attaches them; for existing files it only gets the paths and reads them itself.
 
 For hands-on work, the injected agent can write files, and at the `shell` level run commands too. opencode has **no OS sandbox**:
 - at the `edit` level it can't write outside the project directory and has no tool for running commands;
@@ -119,7 +119,7 @@ Like opencode it has no OS sandbox, and both levels take a change snapshot befor
 |---|---|
 | `base_url` | API address, for example `https://api.deepseek.com`; the script calls `<base_url>/chat/completions` |
 | `api_key` | The API key itself. Stored in plain text in the config file and takes effect immediately; only allowed in the user config. An empty `""` means not filled in yet |
-| `api_key_env` | Name of the environment variable that holds the API key; after setting it, restart Claude Code so it can see it. If both are set, `api_key` is used; an agent with neither can't take part in discussions, and listing it in a discussion cell fails at run time |
+| `api_key_env` | Name of the environment variable that holds the API key; after setting it, restart Claude Code so it can see it. If both are set, `api_key` is used; an agent with neither can't take part in discussions or reviews, and listing it in those cells fails at run time |
 | `model` | Required, the model |
 | `max_parallel` | Optional; `4` by default |
 | `extra_body` | Optional parameters merged into the request body as is, for example `{ "max_tokens": 65536 }` |
@@ -129,12 +129,14 @@ Like opencode it has no OS sandbox, and both levels take a change snapshot befor
 
 | | codex cli | opencode cli | pi cli | api |
 |---|---|---|---|---|
-| Tasks (`modes`) | hands-on work, reviews, discussions | hands-on work (needs `run_access`), reviews, discussions | hands-on work (needs `run_access`), reviews, discussions | discussions |
+| Tasks (`modes`) | hands-on work, reviews, discussions | hands-on work (needs `run_access`), reviews, discussions | hands-on work (needs `run_access`), reviews, discussions | discussions, reviews (text material only) |
 | Isolation (`isolation`) | OS sandbox (`os`), per the sandbox setting | tool permissions only (`tools`) | tool permissions plus a guard extension (`tools`) | none (`none`); text in and out only |
 | Reads code itself (`reads_code`) | yes | yes | yes | no; relies on attached files |
 | Native report format (`native_schema`) | yes | no; prompt plus one repair | no; same | no; same |
 | Native review (`native_review`) | yes | no | no | no |
 | Images (`images`) | yes | no | no | no |
+| Reads images (`reads_images`), which decides who can do a `visual` review | yes (view_image) | no for now (not verified yet) | no for now (not verified yet) | no |
+| How discussions and reviews stay read-only (the result's `readonly`) | `sandbox` (with a `read-only` sandbox) or `audited` | `tools` | `tools` | `tools` |
 
 ## modules
 

@@ -1,9 +1,9 @@
 import { setup, replay, finish } from './common.mjs';
-import { discussion } from '../fixtures/reports.mjs';
+import { discussion, review } from '../fixtures/reports.mjs';
 
 const args = process.argv.slice(2);
 const operation = args[0] === '--version' ? 'version' : args[0] === 'session' ? 'export' : args[0] === 'api' ? 'catalog' : args[0];
-const { scenario: s } = await setup('opencode', operation, args);
+const { scenario: s, input } = await setup('opencode', operation, args);
 if (operation === 'version') console.log(s.version || 'synthetic-opencode-1.0');
 else if (operation === 'models') {
   if (s.models_delay_ms) await replay([{ delay_ms: s.models_delay_ms }]);
@@ -39,7 +39,7 @@ else if (operation === 'export') {
     await replay([{ files: { [name]: content } }]);
   }
   if (!s.hold) {
-    const last = s.last_message ?? discussion;
+    const last = s.last_message ?? (input.includes('"verdict"') ? review : discussion);
     console.log(JSON.stringify({ type: 'text', sessionID, part: { text: typeof last === 'string' ? last : JSON.stringify(last) } }));
     if (s.step_finish) console.log(JSON.stringify({ type: 'step_finish', sessionID, part: s.step_finish }));
   }
