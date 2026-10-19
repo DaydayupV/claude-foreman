@@ -2,10 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { sandbox, output, failed, read, json, write, CODEX, OPENCODE, ROOT, baseConfig, seedRun, taskArgs, MESSAGES } from './helpers.mjs';
 import { discussion } from './fixtures/reports.mjs';
 import { apiServer } from './fake/api-server.mjs';
 const M = MESSAGES.zh;
+const url = (file) => pathToFileURL(path.join(ROOT, 'foreman/skills/dispatch/scripts', file)).href;
 const aliases = (h) => path.join(path.dirname(h.userConfig), 'agent-aliases.json');
 const legacyConfig = () => JSON.parse(read(path.join(ROOT, 'tests/fixtures/legacy-config.json')));
 
@@ -120,6 +122,66 @@ test('结构迁移并发只备份和提示一次，验证失败不覆盖原文�
   assert.ok(r.stderr.includes('本次在内存里按新结构读取'));
   assert.equal(read(bad.userConfig), before);
   assert.equal(fs.existsSync(`${bad.userConfig}.bak`), false);
+});
+
+test('结构迁移锁正被删除时报 EPERM、EACCES、EBUSY 只是稍等再试，删残留锁和释放时都不会删掉别的进程拿到的锁', async (t) => {
+  for (const mode of ['short', 'always', 'replaced', 'taken']) await t.test(mode, async (t) => {
+    const h = sandbox(t), lock = `${h.userConfig}.structure.lock`;
+    h.config({ agents: { codex: { type: 'codex', bin: CODEX, model: 'parallel' } } });
+    const original = read(h.userConfig);
+    if (mode === 'short' || mode === 'replaced') write(lock, '2147483647');
+    const script = h.write('structure-lock-transient.mjs', `import fs from 'node:fs';
+import { loadConfig } from ${JSON.stringify(url('config.mjs'))};
+import { adapters } from ${JSON.stringify(url('adapters/index.mjs'))};
+const lock = ${JSON.stringify(lock)}, mode = process.argv[2], newcomer = String(process.ppid);
+const calls = { writeFileSync: 0, readFileSync: 0, rmSync: 0 }, errors = [];
+const originals = Object.fromEntries(Object.keys(calls).map((name) => [name, fs[name]]));
+let ownerReads = 0, removedNew = 0;
+for (const name of Object.keys(calls)) {
+  fs[name] = (file, ...args) => {
+    if (file === lock) {
+      const n = calls[name]++;
+      if (mode === 'replaced' && name === 'rmSync') {
+        // 删残留锁第一次失败时，新持有者已经拿到了锁，重试前要重新确认。
+        if (n === 0) {
+          originals.rmSync(lock, { force: true }); originals.writeFileSync(lock, newcomer);
+          throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+        }
+        if (originals.readFileSync(lock, 'utf8') === newcomer) removedNew++;
+      }
+      if ((mode === 'always' && name === 'writeFileSync') || (mode === 'short' && n % 2 === 0)) {
+        const code = mode === 'always' ? 'EPERM' : ['EPERM', 'EACCES', 'EBUSY'][errors.length % 3];
+        errors.push([name, code]); throw Object.assign(new Error(code), { code });
+      }
+    }
+    const value = originals[name](file, ...args);
+    if (file === lock && mode === 'replaced' && name === 'readFileSync' && value === newcomer && ++ownerReads === 3) originals.rmSync(lock, { force: true });
+    return value;
+  };
+}
+// 持有锁期间别的进程拿走了锁（写进了它的 pid）：释放时要留给它。
+if (mode === 'taken') { const copy = fs.copyFileSync; fs.copyFileSync = (...args) => { originals.writeFileSync(lock, newcomer); return copy(...args); }; }
+loadConfig(null, adapters);
+console.log(JSON.stringify({ calls, errors, removedNew }));`);
+    const result = await h.start(script, [mode], { timeout: 15000 }).done, r = output(result);
+    if (mode === 'always') {
+      assert.ok(result.stderr.includes(M.configMigrateFailed(h.userConfig, 'EPERM')), result.stderr);
+      assert.equal(read(h.userConfig), original); assert.equal(fs.existsSync(`${h.userConfig}.bak`), false);
+      assert.ok(r.calls.writeFileSync > 1, JSON.stringify(r.calls));
+      return;
+    }
+    if (mode === 'replaced') assert.equal(r.removedNew, 0);
+    assert.deepEqual(Object.keys(json(h.userConfig).agents), ['parallel']);
+    assert.ok(fs.existsSync(`${h.userConfig}.bak`));
+    assert.ok(result.stderr.includes(M.configStructureMigrated(h.userConfig, `${h.userConfig}.bak`, M.list(['codex → parallel']))), result.stderr);
+    assert.equal(result.stderr.includes('本次在内存里按新结构读取'), false);
+    if (mode === 'taken') assert.equal(read(lock), String(process.pid));
+    else assert.equal(fs.existsSync(lock), false);
+    if (mode === 'short') {
+      for (const name of Object.keys(r.calls)) assert.ok(r.errors.some(([fn]) => fn === name), name);
+      assert.deepEqual([...new Set(r.errors.map(([, code]) => code))].sort(), ['EACCES', 'EBUSY', 'EPERM']);
+    }
+  });
 });
 
 test('旧类型和旧代号在 status、watch、resume 及并发准入中继续可用', async (t) => {

@@ -36,7 +36,7 @@
 | 2 旧配置和偏好 | migration.test.mjs | 旧配置和旧偏好在第一次运行时复制到新位置，旧文件保留 |
 | 2 记录搬迁及启动器 | migration.test.mjs | 旧记录目录整体迁移并重写 watch 启动器 |
 | 2 活跃 PID | migration.test.mjs | 旧目录里有活着的任务时延后迁移 |
-| 2 并发迁移 | migration.test.mjs | 四个进程同时启动只迁移一次且记录完整 |
+| 2 并发迁移 | migration.test.mjs | 四个进程同时启动只迁移一次且记录完整；记录目录搬迁锁正被删除时报 EPERM、EACCES、EBUSY 只是稍等再试，删残留锁和释放时都不会删掉别的进程拿到的锁 |
 | 2 自定义记录目录 | migration.test.mjs | 用户通过配置指定记录目录时不搬旧目录；用户通过环境变量指定记录目录时不搬旧目录 |
 | 2 旧环境变量 | migration.test.mjs | 旧环境变量仍生效并提示改名；旧语言环境变量生效时也提示改名 |
 | 2 项目旧文件名 | migration.test.mjs | 项目里的旧配置和偏好文件名照常读取并提示改名 |
@@ -84,7 +84,7 @@
 | 9 直接调用拦截 | hooks.test.mjs | 直接调用守卫拦截 codex exec；直接调用守卫拦截 codex review；直接调用守卫拦截 node codex.js exec；直接调用守卫拦截 npx Codex |
 | 9 查询与普通文字放行 | hooks.test.mjs | 直接调用守卫放行版本查询；直接调用守卫放行登录状态；直接调用守卫放行普通文本提及；直接调用守卫放行带分隔符的文字 |
 | 11 协作方要人回答 | questions.test.mjs | 六种来源各自收集进 questions，needs_decision 只算需要决定的四种；Codex 默认 approval_policy=never、配置了就用配置的；opencode 注入的权限里 question 被拒；最终回答是问题时不修复，像 JSON 或长篇分析时照常修复；终端提示加 3 分钟静默触发看门狗、结束进程树并记 needs_input，模型消息静默和执行中的命令不触发；watch、status 和组计数里问题的显示 |
-| 12 新配置写法和迁移 | structure-migration.test.mjs | 真实结构配置迁移后按模型改名、每格模型和强度不变、有备份和别名；部分字段的旧等级先补全；模型覆盖拆成新协作方；同名合并或加后缀；Codex 没写模型时取 config.toml；项目配置的旧代号；并发迁移只备份一次、校验失败不改文件；旧记录在 status、watch、resume 和并发准入里照常可用 |
+| 12 新配置写法和迁移 | structure-migration.test.mjs | 真实结构配置迁移后按模型改名、每格模型和强度不变、有备份和别名；部分字段的旧等级先补全；模型覆盖拆成新协作方；同名合并或加后缀；Codex 没写模型时取 config.toml；项目配置的旧代号；并发迁移只备份一次、校验失败不改文件；结构迁移锁正被删除时短暂报 EPERM、EACCES、EBUSY 只是稍等再试，一直报错才按原错误提示改写失败，删残留锁和释放时都不会删掉别的进程拿到的锁；旧记录在 status、watch、resume 和并发准入里照常可用 |
 | 13 通用化 | generalization.test.mjs | 多个 Codex、没有 Codex、能力表校验；代号规则；三种任务的 "claude code" 和点名派出；--effort 只覆盖强度且 --level 必填；check 的新结构和总体结果；项目只能保留同格候选，整格关闭并忽略模型覆盖；按环境生成 modules、max_seats 和有 Codex 时的图像默认值；没有协作方时的会话提醒 |
 | 14 审查范围 | review-scope.test.mjs | 未提交范围含暂存、未暂存和未跟踪文件，指纹稳定且不动索引；删除、改名、二进制、非 UTF-8、过大文件；没有提交的仓库；base 从分叉点到工作区、含未提交改动、不含未跟踪文件，分支不存在或没有共同祖先时报错；根提交和合并提交（只比第一个父提交） |
 | 15 通用审查 | review.test.mjs | opencode 审查注入只读的 foreman-review，材料和正文落盘（中英文各一）；材料超限拒绝且不启动，Codex 没有这个限制；非 git 目录要求 brief；空范围不启动任何审查方；审查期间改动变化时警告并标 stale；opencode 审查只收集权限拒绝和终端提示，正文按审查 schema 修复一次 |

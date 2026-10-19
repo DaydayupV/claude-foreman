@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
-import { HERE, M, notice, isObject, readJson, die, pidAlive, replaceFile, closestMatches } from './util.mjs';
+import { HERE, M, notice, isObject, readJson, die, pidAlive, retryBusy, replaceFile, closestMatches } from './util.mjs';
 
 const ENTRY = path.join(HERE, 'cli.mjs');
 const SCHEMA = path.join(HERE, '..', 'schemas', 'report.schema.json');
@@ -242,23 +242,31 @@ function migrateStructure(config, file, base, project, adapters) {
   for (const agent of Object.values(result.agents || {})) if (Object.hasOwn(OLD_TYPES, agent?.type)) agent.type = OLD_TYPES[agent.type];
   let renamed = { aliases: {} };
   const lock = `${file}.structure.lock`, tmp = `${file}.${process.pid}.tmp`, aliasTmp = `${aliasesFile}.${process.pid}.tmp`;
+  // 锁文件的每次新建、读取和删除都经过 retryBusy：Windows 上别的进程正在删同一个锁文件时，这些操作会短暂报 EPERM。
+  // 删除时把"还该删"的判断（持有者已退出、或者是自己的）交给 retryBusy，每次重试前重新确认，免得删掉等待期间别的进程刚拿到的锁。
+  const ownerOf = () => {
+    try { return Number(retryBusy(() => fs.readFileSync(lock, 'utf8'))); }
+    catch (e) { if (e.code === 'ENOENT') return null; throw e; }
+  };
+  const mine = () => ownerOf() === process.pid;
+  const stale = () => { const pid = ownerOf(); return !!pid && !pidAlive(pid); };
   let locked = false;
   try {
     if (converted.old) { renamed = renameAgentsByModel(result, adapters); result = renamed.config; }
     validateConfig(normalizeModules(mergeConfig(DEFAULT_CONFIG, result)), adapters, (msg) => { throw new Error(msg); });
     for (;;) {
-      try { fs.writeFileSync(lock, String(process.pid), { flag: 'wx' }); locked = true; break; }
+      try { retryBusy(() => fs.writeFileSync(lock, String(process.pid), { flag: 'wx' })); locked = true; break; }
       catch (e) {
         if (e.code !== 'EEXIST') throw e;
-        let owner;
-        try { owner = Number(fs.readFileSync(lock, 'utf8')); } catch (e) { if (e.code === 'ENOENT') continue; throw e; }
-        if (owner && !pidAlive(owner)) fs.rmSync(lock, { force: true });
+        const owner = ownerOf();
+        if (owner === null) continue;
+        if (owner && !pidAlive(owner)) retryBusy(() => fs.rmSync(lock, { force: true }), stale);
         else Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
       }
     }
     const current = readJson(file);
     if (!isDeepStrictEqual(current, config)) {
-      fs.rmSync(lock, { force: true });
+      retryBusy(() => fs.rmSync(lock, { force: true }), mine);
       locked = false;
       return migrateStructure(current, file, base, false, adapters);
     }
@@ -283,7 +291,7 @@ function migrateStructure(config, file, base, project, adapters) {
   } finally {
     fs.rmSync(tmp, { force: true });
     fs.rmSync(aliasTmp, { force: true });
-    if (locked) fs.rmSync(lock, { force: true });
+    if (locked) retryBusy(() => fs.rmSync(lock, { force: true }), mine);
   }
   memoryAliases = { ...memoryAliases, ...renamed.aliases };
   migratedConfigs.set(file, result);
@@ -501,14 +509,22 @@ function defaultRunsRoot() {
   const target = path.join(HOME_DIR, 'runs');
   if (fs.existsSync(target) || !fs.existsSync(LEGACY_RUNS)) return target;
   const lock = path.join(HOME_DIR, '.migrate.lock');
+  // 锁文件的操作同样都经过 retryBusy（见 migrateStructure）：删残留锁时每次重试前确认持有者没换过，删自己的锁时确认还是自己的。
+  const ownerOf = () => {
+    try { return retryBusy(() => fs.readFileSync(lock, 'utf8')); }
+    catch (e) { if (e.code === 'ENOENT') return null; throw e; }
+  };
   const wait = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
   try {
     fs.mkdirSync(HOME_DIR, { recursive: true });
     for (let waited = 0; ; waited += 50) {
-      try { fs.writeFileSync(lock, String(process.pid), { flag: 'wx' }); break; }
+      try { retryBusy(() => fs.writeFileSync(lock, String(process.pid), { flag: 'wx' })); break; }
       catch (e) {
         if (e.code !== 'EEXIST') throw e;
-        if (waited > 15000) fs.rmSync(lock, { force: true }); // 持有者被强杀留下的锁
+        if (waited > 15000) { // 持有者被强杀留下的锁
+          const owner = ownerOf();
+          if (owner !== null) retryBusy(() => fs.rmSync(lock, { force: true }), () => ownerOf() === owner);
+        }
         wait(50);
         if (fs.existsSync(target)) return target; // 别的进程已经搬完
       }
@@ -530,7 +546,7 @@ function defaultRunsRoot() {
   } catch (e) {
     notice(M.runsMoveFailed(LEGACY_RUNS, e.message));
     return fs.existsSync(target) ? target : LEGACY_RUNS;
-  } finally { fs.rmSync(lock, { force: true }); }
+  } finally { retryBusy(() => fs.rmSync(lock, { force: true }), () => ownerOf() === String(process.pid)); }
 }
 
 function resolveCell(cfg, module, cell) {

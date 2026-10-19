@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { sandbox, output, read, write, baseConfig, BRIDGE, MESSAGES } from './helpers.mjs';
+import { pathToFileURL } from 'node:url';
+import { sandbox, output, read, write, baseConfig, BRIDGE, ROOT, MESSAGES } from './helpers.mjs';
 const M = MESSAGES.zh;
+const url = (file) => pathToFileURL(path.join(ROOT, 'foreman/skills/dispatch/scripts', file)).href;
 
 function legacy(h, meta = { status: 'done', pid: 0 }) {
   const root = path.join(h.home, '.claude/codex-runs');
@@ -39,6 +41,64 @@ test('旧记录目录整体迁移并重写 watch 启动器', async (t) => {
   assert.ok(read(path.join(h.runs, 'watch.mjs')).includes(JSON.stringify(BRIDGE)));
   assert.ok(r.stderr.includes(M.runsMoved(old, h.runs)));
   assert.equal(fs.existsSync(path.join(h.home, '.claude/foreman/.migrate.lock')), false);
+});
+
+test('记录目录搬迁锁正被删除时报 EPERM、EACCES、EBUSY 只是稍等再试，删残留锁和释放时都不会删掉别的进程拿到的锁', async (t) => {
+  for (const mode of ['short', 'always', 'replaced', 'taken']) await t.test(mode, async (t) => {
+    const h = sandbox(t), old = legacy(h), lock = path.join(h.home, '.claude/foreman/.migrate.lock');
+    const original = ['synthetic-old/meta.json', 'synthetic-old/result.json', 'watch.mjs'].map((file) => [file, read(path.join(old, file))]);
+    if (mode === 'short' || mode === 'replaced') write(lock, '2147483647');
+    const script = h.write('migration-lock-transient.mjs', `import fs from 'node:fs';
+import { defaultRunsRoot } from ${JSON.stringify(url('config.mjs'))};
+const lock = ${JSON.stringify(lock)}, mode = process.argv[2], newcomer = String(process.ppid);
+const calls = { writeFileSync: 0, readFileSync: 0, rmSync: 0 }, errors = [];
+const originals = Object.fromEntries(Object.keys(calls).map((name) => [name, fs[name]]));
+if (mode === 'short' || mode === 'replaced') Atomics.wait = () => 'timed-out';
+for (const name of Object.keys(calls)) {
+  fs[name] = (file, ...args) => {
+    if (file === lock) {
+      const n = calls[name]++;
+      // 删残留锁第一次失败时，新持有者已经拿到锁并搬完目录。
+      if (mode === 'replaced' && name === 'rmSync' && n === 0) {
+        originals.rmSync(lock, { force: true }); originals.writeFileSync(lock, newcomer);
+        fs.renameSync(${JSON.stringify(old)}, ${JSON.stringify(h.runs)});
+        throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+      }
+      if ((mode === 'always' && name === 'writeFileSync') || (mode === 'short' && n % 2 === 0)) {
+        const code = mode === 'always' ? 'EPERM' : ['EPERM', 'EACCES', 'EBUSY'][errors.length % 3];
+        errors.push([name, code]); throw Object.assign(new Error(code), { code });
+      }
+    }
+    return originals[name](file, ...args);
+  };
+}
+// 持有锁期间别的进程拿走了锁（写进了它的 pid）：释放时要留给它。
+if (mode === 'taken') { const rename = fs.renameSync; fs.renameSync = (...args) => { originals.writeFileSync(lock, newcomer); return rename(...args); }; }
+console.log(JSON.stringify({ root: defaultRunsRoot(), calls, errors }));`);
+    const result = await h.start(script, [mode], { timeout: 15000 }).done, r = output(result);
+    if (mode === 'always') {
+      assert.equal(r.root, old);
+      assert.ok(result.stderr.includes(M.runsMoveFailed(old, 'EPERM')), result.stderr);
+      for (const [file, text] of original) assert.equal(read(path.join(old, file)), text);
+      assert.deepEqual(fs.readdirSync(old).sort(), ['synthetic-old', 'watch.mjs']);
+      assert.deepEqual(fs.readdirSync(path.join(old, 'synthetic-old')).sort(), ['meta.json', 'result.json']);
+      assert.ok(r.calls.writeFileSync > 1, JSON.stringify(r.calls));
+      return;
+    }
+    assert.equal(r.root, h.runs);
+    if (mode === 'replaced') {
+      assert.equal(fs.existsSync(lock), true); assert.equal(read(lock), String(process.pid));
+      return;
+    }
+    assert.ok(result.stderr.includes(M.runsMoved(old, h.runs)), result.stderr);
+    assert.equal(result.stderr.includes(M.runsMoveFailed(old, '').split('（')[0]), false);
+    assert.equal(fs.existsSync(old), false);
+    for (const [file, text] of original) assert.equal(read(path.join(h.runs, file)), text);
+    if (mode === 'taken') { assert.equal(read(lock), String(process.pid)); return; }
+    assert.equal(fs.existsSync(lock), false);
+    for (const name of Object.keys(r.calls)) assert.ok(r.errors.some(([fn]) => fn === name), name);
+    assert.deepEqual([...new Set(r.errors.map(([, code]) => code))].sort(), ['EACCES', 'EBUSY', 'EPERM']);
+  });
 });
 
 test('旧目录里有活着的任务时延后迁移', async (t) => {
