@@ -3,17 +3,17 @@
 The config is JSON. These layers are applied in order, later ones overriding earlier ones:
 1. the script's built-in defaults;
 2. the user config `~/.claude/foreman/config.json` (the environment variable `FOREMAN_CONFIG` changes the path);
-3. the project config `<project dir>/.claude/foreman.json`.
+3. the project config `<project dir>/.claude/foreman.json` (it can only tighten; see the end).
 
 It has three parts:
 
 | Part | What it answers |
 |---|---|
-| `dispatch` | How the plugin hands off work: whether to do it on its own, parallel runs, time limits and so on |
+| `dispatch` | How the plugin hands off work: whether to do it on its own, the seat limit, time limits and so on |
 | `agents` | Which agents there are and how to reach them |
-| `levels` | Who each level of each task type goes to, and with what effort |
+| `modules` | Which candidates each cell of each task type has, who is required, and with what effort |
 
-How to reach an agent goes only in `agents`; who gets what goes only in `levels`.
+How to reach an agent goes only in `agents`; who gets what goes only in `modules`.
 
 Example:
 
@@ -25,10 +25,15 @@ Example:
     "glm-5.3":     { "type": "opencode cli", "model": "opencode-go/glm-5.3" },
     "deepseek-v4-pro": { "type": "api", "base_url": "https://api.deepseek.com", "api_key_env": "DEEPSEEK_API_KEY", "model": "deepseek-v4-pro" }
   },
-  "levels": {
-    "run":     { "simple": "claude code", "normal": "claude code", "complex": { "agent": "gpt-6.1-sol", "effort": "max" } },
-    "review":  { "simple": { "agent": "gpt-6.1-sol", "effort": "medium" }, "normal": { "agent": "gpt-6.1-sol", "effort": "high" }, "complex": { "agent": "gpt-6-astra", "effort": "max" } },
-    "discuss": { "simple": "claude code", "normal": [{ "agent": "gpt-6.1-sol", "effort": "high" }], "complex": [{ "agent": "gpt-6-astra", "effort": "max" }, { "agent": "glm-5.3" }, { "agent": "deepseek-v4-pro", "effort": "max" }] }
+  "modules": {
+    "discuss": {
+      "simple":  "claude code",
+      "normal":  [{ "agent": "gpt-6.1-sol", "effort": "high" }, { "agent": "glm-5.3" }],
+      "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "glm-5.3" }, { "agent": "deepseek-v4-pro", "effort": "max" }]
+    },
+    "run":    { "simple": "claude code", "normal": "claude code", "complex": [{ "agent": "gpt-6.1-sol", "effort": "max" }] },
+    "review": { "simple": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "normal": [{ "agent": "gpt-6.1-sol", "effort": "high" }], "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }] },
+    "image":  { "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "draw": [{ "agent": "gpt-6-astra", "effort": "max" }] }
   }
 }
 ```
@@ -40,17 +45,18 @@ Example:
 | `auto` | Whether Claude asks before starting handoffs, discussions and reviews on its own: `true` goes ahead and says so, `false` asks first (see "Permission" in the skill) | `true` |
 | `watch` | `auto`: open the live view whenever work goes to another model (hands-on work, resumes, discussions, reviews); `off`: don't, and use `/foreman-en:watch` when you want to look | `auto` |
 | `intro` | The first time the live view opens for a newly dispatched conversation, play a short intro first: the model's pixel avatar, "Starting …" and a few jokes, 5 seconds for one model and 10 for a discussion. Any key skips it, and it wraps up at once if the run finishes early. Resumes (the next round of a discussion, a rework) don't get one. The avatar is picked by keywords in the model name (gpt, deepseek, glm, kimi, qwen, mimo, minimax, gemini, claude and so on), with a ??? avatar for anything else. `false` turns it off | `true` |
+| `max_seats` | The most seats one dispatch plan can have; one agent with two sessions counts as two seats (see "Candidates and required agents" below) | `6` |
 | `discuss_max_rounds` | The most rounds one discussion can have (round 1 plus later resumes), counted per participant; the script refuses resumes beyond it | `2` |
 | `timeout_min` | Total time limit for one run, in minutes | `480` |
 | `stall_min` | How long without activity counts as stuck, in minutes (0 turns it off). Codex: no events and no command running; API: no data at all in the stream; opencode: no events at all; pi: no events and no tool running | `40` |
 | `busy_ask_min` | Once an API agent has been queued this many minutes because its service is busy, Claude decides whether to stop it (0 turns this off) | `2` |
-| `runs_dir` | Run directory (or the environment variable `FOREMAN_RUNS_DIR`) | `~/.claude/foreman/runs` |
+| `runs_dir` | Run directory (or the environment variable `FOREMAN_RUNS_DIR`). Dispatch plans are kept in its `plans/` folder | `~/.claude/foreman/runs` |
 
 ## agents
 
-- Each key is the agent's **ID**, used by `levels` and `--agent`. Naming it after its model works best.
+- Each key is the agent's **ID**, used by `modules` and `--agent`. Naming it after its model works best.
 - IDs may only use letters, digits, `.`, `-` and `_`, must start with a letter or digit, and can't be `claude` or `claude code`.
-- `type` decides how it's reached and which settings it takes. There are three types, and you can have several agents of one type, each with a different model.
+- `type` decides how it's reached and which settings it takes. There are four types, and you can have several agents of one type, each with a different model.
 - Codex isn't required. With no agents at all, Claude does everything itself.
 
 **`type: "codex cli"`** (the Codex CLI on this machine)
@@ -60,7 +66,7 @@ Example:
 | `model` | Model | If not set, uses `~/.codex/config.toml` |
 | `bin` | Path to the codex executable or `codex.js` (or the environment variable `CODEX_BIN`) | Found automatically |
 | `max_parallel` | How many runs this agent may have going at once, across all groups and sessions (see "Splitting work to run in parallel" in the skill) | `4` |
-| `sandbox` | Sandbox for each of `run` / `review` / `discuss`: `read-only` / `workspace-write` / `danger-full-access`. Don't use `read-only` on Windows: the read-only sandbox may fail to start even file-reading commands | All `null` (use Codex config) |
+| `sandbox` | Sandbox for each of `run` / `review` / `discuss`: `read-only` / `workspace-write` / `danger-full-access`. On Windows, Codex's default elevated read-only sandbox may fail to start even file-reading commands; see below | All `null` (use Codex config) |
 | `approval` | Approval policy: `never` or `on-request` | `never` when not set: runs are unattended, so nobody can approve. A command blocked by the sandbox fails straight back to the model; a broken sandbox needs fixing, see "When Codex's sandbox won't start" below |
 
 ### When Codex's sandbox won't start
@@ -80,7 +86,7 @@ Don't fix it by changing `approval`. Codex 0.162 has two approval values: `never
 | `model` | Required, written as `provider/model`, for example `opencode-go/glm-5.3`. Anything `opencode models` lists works |
 | `bin` | Optional path to the opencode executable. Found automatically by default |
 | `max_parallel` | Optional; `4` by default |
-| `run_access` | Optional; lets it do hands-on work: `"edit"` reads and writes files in the project directory only, with no commands; `"shell"` can also run commands. Without it, the agent can't be in `levels.run` or be named for hands-on work |
+| `run_access` | Optional; lets it do hands-on work: `"edit"` reads and writes files in the project directory only, with no commands; `"shell"` can also run commands. Without it, the agent can't be in a `run` or `draw` cell or be named for hands-on work |
 
 Sign-in and keys are handled by opencode itself (for OpenCode Go, sign in first by running `/connect` in opencode); the plugin doesn't touch them. For discussions and reviews the script gives opencode a read-only agent with only the read, search and list tools: it can look through the project's code itself, but can't run commands or change files. For a review, the script works out the changes with git and attaches them.
 
@@ -97,7 +103,7 @@ Both levels take a change snapshot before starting (`--no-snapshot` isn't allowe
 | `model` | Required, as `provider/model`, such as `deepseek/deepseek-flash`. Anything `pi --list-models` lists works |
 | `bin` | Optional; path to the pi executable or its `cli.js`. Found automatically by default |
 | `max_parallel` | Optional, default `4` |
-| `run_access` | Optional, as for opencode: `"edit"` or `"shell"`, user config only. Without it, the agent can't be put in `levels.run` or named for hands-on work |
+| `run_access` | Optional, as for opencode: `"edit"` or `"shell"`, user config only. Without it, the agent can't be in a `run` or `draw` cell or be named for hands-on work |
 
 Sign-in and keys are handled by pi itself (`/login` inside pi, or the provider's API key environment variable); the plugin doesn't touch them. pi has no permission system of its own, so every call from the script:
 - enables only the tools the task needs: read, search and list for discussions and reviews; edit and write added for hands-on work at `edit`; running commands added at `shell`;
@@ -113,13 +119,13 @@ Like opencode it has no OS sandbox, and both levels take a change snapshot befor
 |---|---|
 | `base_url` | API address, for example `https://api.deepseek.com`; the script calls `<base_url>/chat/completions` |
 | `api_key` | The API key itself. Stored in plain text in the config file and takes effect immediately; only allowed in the user config. An empty `""` means not filled in yet |
-| `api_key_env` | Name of the environment variable that holds the API key; after setting it, restart Claude Code so it can see it. If both are set, `api_key` is used; an agent with neither can't take part in discussions, and listing it in a discussion level fails at run time |
+| `api_key_env` | Name of the environment variable that holds the API key; after setting it, restart Claude Code so it can see it. If both are set, `api_key` is used; an agent with neither can't take part in discussions, and listing it in a discussion cell fails at run time |
 | `model` | Required, the model |
 | `max_parallel` | Optional; `4` by default |
 | `extra_body` | Optional parameters merged into the request body as is, for example `{ "max_tokens": 65536 }` |
 
 ### What each type can do
-`agents_status.<ID>.capabilities` in the `config` output lists what each agent can do, and config checks use it: putting an agent at a task it can't do is an error.
+`agents_status.<ID>.capabilities` in the `config` output lists what each agent can do, and config checks use it: putting an agent in a cell it can't do is an error.
 
 | | codex cli | opencode cli | pi cli | api |
 |---|---|---|---|---|
@@ -130,13 +136,34 @@ Like opencode it has no OS sandbox, and both levels take a change snapshot befor
 | Native review (`native_review`) | yes | no | no | no |
 | Images (`images`) | yes | no | no | no |
 
-## levels
+## modules
 
-Three task types, `run` / `review` / `discuss`, each with three levels, `simple` / `normal` / `complex`. There is also a level 0 (below the threshold, not worth an outside model), which Claude always does itself and which isn't in the config. Each level can be:
-- `"claude code"`: Claude does hands-on work itself; for reviews and discussions, that level uses no outside agent. All three task types accept it.
-- `run` and `review`: `{ "agent": "<ID>", "effort": "<effort>" }`.
-- `discuss`: an array of participants, one or more, for example `[{ "agent": "gpt-6-astra", "effort": "max" }, { "agent": "deepseek-v4-pro", "effort": "max" }]`. Each agent can appear only once per level.
+Four modules, split by what they deliver:
 
+| Module | Delivers | Cells |
+|---|---|---|
+| `discuss` | Options and trade-offs for something not decided yet (read-only) | `simple` / `normal` / `complex` |
+| `run` | Changes | `simple` / `normal` / `complex` |
+| `review` | A list of problems in something that already exists (read-only) | `simple` / `normal` / `complex` |
+| `image` | Bitmaps and vector pieces | `generate` (image generation) and `draw` (hand-drawn vectors), no levels |
+
+There is also a level 0 (below the threshold, not worth an outside model), which Claude always does itself and which isn't in the config. Each cell can be:
+- `"claude code"` (discuss, run and review only): Claude does hands-on work itself; for reviews and discussions, that cell uses no outside agent.
+- A list of candidates: `[{ "agent": "<ID>", "effort": "<effort>", "required": true }, …]`. A single object works the same as a one-item list. Each agent can appear only once per cell.
+- `null` (image only): the cell is closed. With generate closed, no images are generated; with draw closed, Claude draws bending pieces and pure vector work itself. Claude can't produce bitmaps, so image cells can't be `"claude code"`.
+
+What can go in a cell is checked against the capability table: discuss candidates must be able to discuss, review candidates to review; run candidates must be able to do hands-on work, and opencode and pi also need `run_access`; generate candidates must be able to generate images (`images`, only codex cli for now); draw takes the same as run.
+
+In this version the image module can only be configured: handing off image generation and drawing (the `image` subcommand and route confirmation) comes in a later version. Until then, hand them off with `run` as "Generating images" in the skill describes, choosing the agent and effort from the image cells.
+
+### Candidates and required agents
+- When a cell has several candidates, Claude picks by the skill's rules (drop those that can't do it, add every required agent, fill discussion and review seats with different base models, one executor per work package) and says in a sentence whom it picked and why. The script only checks the hard rules a machine can check.
+- `required: true` means this agent must take part whenever the cell is used; without it the entry is an ordinary candidate that Claude may or may not add. One agent may be required in reviews and only a candidate in discussions, so `required` goes on the cell's entry, not on the agent definition.
+- To hand one task to several seats, Claude first creates a dispatch plan (`plan`); the script checks that every required agent has a seat and that the seats don't exceed `dispatch.max_seats`, and then each seat is started. A single-seat handoff is refused when the cell has another required agent.
+- When a required agent is at its parallel limit, its seat waits until a slot frees up. When a required agent fails, runs out of quota or is cancelled, the task counts as incomplete; another candidate doesn't stand in for it.
+- `run`, `generate` and `draw` hand work to one executor at a time, so each of these cells can have at most one required entry.
+
+### Effort
 `effort` can be left out, which means the tool's or model's own default. What it takes depends on the type:
 - `codex cli`: `low`, `medium`, `high`, `xhigh`, `max`, `ultra`. Which ones a model supports comes from Codex's own model list (gpt-5.5, for example, goes up to `xhigh`); `check` checks against that list.
 - `api`: sent as is as `reasoning_effort` (DeepSeek takes `low` / `high` / `max`), and `null` means don't send it. Use `null` for models with no reasoning effort parameter, such as Xiaomi MiMo (only a thinking on/off switch, on by default).
@@ -147,9 +174,9 @@ When reporting to the user, describe a missing or `null` effort as "effort: defa
 
 Run `models` to see which efforts each model takes: for Codex, opencode and pi it reads their built-in model lists; for API agents it can only list model names, so efforts come from the provider's official docs.
 
-A level can also set `model` to override the agent's model; old configs that do this still work. It isn't recommended for new configs, because the ID and the model actually used drift apart. To use another model, add another agent.
+An entry can also set `model` to override the agent's model; old configs that do this still work. It isn't recommended for new configs, because the ID and the model actually used drift apart. To use another model, add another agent.
 
-Built-in defaults: no agents, and all nine levels are `"claude code"`. The real setup comes from the config generated on first run (below).
+Built-in defaults: no agents, the nine discuss, run and review cells are `"claude code"`, and both image cells are `null`. The real setup comes from the config generated on first run (below).
 
 ## The config generated on first run
 When there's no user config, the first run of the script (any subcommand) checks the machine before generating one. The `environment` field in the `config` output shows what it finds. It checks these:
@@ -158,41 +185,53 @@ When there's no user config, the first run of the script (any subcommand) checks
 - whether pi exists: it starts, and how many models `pi --list-models` lists;
 - common API key environment variables: `DEEPSEEK_API_KEY`, `KIMI_API_KEY` / `MOONSHOT_API_KEY`, `MIMO_API_KEY`.
 
-What gets generated:
+What gets generated (every cell is written as a list of candidates, none required):
 
 | Found | What's generated |
 |---|---|
-| A usable Codex | Two `codex cli` agents, `gpt-6.1-sol` and `gpt-6-astra`. Hands-on work: Claude does simple and normal, complex goes to gpt-6.1-sol at max. Reviews: gpt-6.1-sol medium / high, complex on gpt-6-astra at max. Discussions: gpt-6.1-sol medium / high, complex on gpt-6-astra at max |
-| No usable Codex | All nine levels are `"claude code"` |
-| API keys | One `api` agent per provider, with `api_key_env` pointing at the variable found and the model name as its ID, **not added to any level** |
+| A usable Codex | Two `codex cli` agents, `gpt-6.1-sol` and `gpt-6-astra`. Hands-on work: Claude does simple and normal, complex goes to gpt-6.1-sol at max. Reviews: gpt-6.1-sol medium / high, complex on gpt-6-astra at max. Discussions: gpt-6.1-sol medium / high, complex on gpt-6-astra at max. Images: generate on gpt-6.1-sol at medium, draw on gpt-6-astra at max |
+| No usable Codex | The nine discuss, run and review cells are `"claude code"`, and both image cells are `null` |
+| API keys | One `api` agent per provider, with `api_key_env` pointing at the variable found and the model name as its ID, **not added to any cell** |
 | opencode, pi | Nothing added; `/foreman-en:setup` helps the user pick a model |
 
-Choices that cost money or affect safety (which opencode or pi model to use, letting API models join discussions) are never made automatically; `/foreman-en:setup` asks the user. Running setup again later picks up newly installed tools.
+Choices that cost money or affect safety (which opencode or pi model to use, letting API models join discussions, who is required) are never made automatically; `/foreman-en:setup` asks the user. Running setup again later picks up newly installed tools.
 
 ## Upgrading an old config
 - When upgrading from codex-bridge, the old `~/.claude/codex-bridge.json` is copied to the new location first.
-- The first time the script reads the old format, it rewrites the config file and backs up the original as `config.json.bak`:
+- The first time the script reads a config written with `levels`, it rewrites it as `modules` and backs up the original as `config.json.bak` (with a timestamp added if that already exists):
+  - only the structure changes: every cell keeps its agents, efforts and order; single `run` and `review` objects become one-item lists;
+  - no entry gets `required`, and no image block is added (run `/foreman-en:setup` to add it when you need it);
+  - **behavior change**: the old discussion lists meant "everyone takes part"; after the rewrite they are "candidates Claude picks from". To keep everyone taking part, mark those entries `"required": true`; `/foreman-en:setup` can mark them.
+  - Every rewritten file (the older formats below included) keeps `levels` as a one-line note (before `modules`); don't delete it. An old version of the plugin only knows `levels`, and reading a config with only `modules` doesn't fail there: it quietly has Claude do every task itself. With the note in place, the old version stops with an error ("Invalid config levels: must be an object"), reminding you to update. The new version skips the note and doesn't treat it as "both levels and modules".
+- Older formats are converted in the same pass, with one write and one backup:
   - `type`: `codex` → `codex cli`, `opencode` → `opencode cli`, `openai-compatible` → `api`;
-  - `"claude"` in the levels → `"claude code"`;
-  - agent IDs are renamed after their models, for example `codex` → `gpt-6-astra` and `deepseek` → `deepseek-flash`, and references in `levels` are updated too;
-  - a level that overrode the model is split out into its own agent.
-- The model and effort each level actually uses stay the same.
+  - `"claude"` in cells → `"claude code"`;
+  - agent IDs are renamed after their models, for example `codex` → `gpt-6-astra` and `deepseek` → `deepseek-flash`, and references in the cells (image cells included) are updated too;
+  - an entry that overrode the model is split out into its own agent;
+  - formats from before 0.10, such as `auto_dispatch` or top-level `model` and `sandbox`.
+- The model and effort each cell actually uses stay the same.
 - The old-to-new ID mapping is kept in `~/.claude/foreman/agent-aliases.json`. Resuming an old run, an old ID passed to `--agent`, and old IDs in a project config are all mapped to the new ID automatically.
-- Older formats from before 0.10, such as `auto_dispatch` or top-level `model` and `sandbox`, are converted as well.
+- A file with both `levels` (an object) and `modules` is an error; the script doesn't guess which one counts. The note above doesn't count. `levels` in a project config isn't rewritten on disk; it's read as `modules` in memory, with a notice suggesting the new format. An old version of the plugin ignores `modules` in a project config, so a project that must also constrain people still on the old plugin can keep the `levels` form in its project config.
 
 ## Project config: can only tighten
-- A project config only accepts `dispatch.timeout_min`, `dispatch.stall_min`, `dispatch.busy_ask_min` and `levels`. Anything else, including the whole `agents` block, is ignored with a notice.
-- `levels` can contain just the cells to change. Each cell can only:
-  - become `"claude code"`;
-  - for `run` / `review`, keep the same agent as the user config's cell, optionally with a different effort;
-  - for `discuss`, keep some of the user config's participants for that cell, optionally with different efforts.
-- Any other agent, or a model override, is ignored.
-- This way a cloned repository can't use its project config to swap the agent doing the work (say, from a sandboxed Codex to a tool without a sandbox), send your code to a new provider, or spend your quota on its own. For a sensitive project, keep only Codex in discussions, or set them to `"claude code"`.
+- A project config only accepts `timeout_min`, `stall_min`, `busy_ask_min` and `max_seats` under `dispatch`, plus `modules` (the old `levels` form is accepted too). Anything else, including the whole `agents` block, is ignored with a notice.
+- Time and seat limits take the stricter value: `timeout_min` and `max_seats` take the smaller one; for `stall_min` and `busy_ask_min`, 0 means no check, which is the loosest, so a project 0 has no effect when the user set a positive number, and when both are positive the smaller one wins.
+- `modules` can contain just the cells to change. Each cell can only:
+  - be closed as a whole: `"claude code"` for discuss, run and review, `null` for image;
+  - drop some optional entries the user config already has in that cell (the user config's order is kept);
+  - lower the effort, only for tools whose efforts have a clear order: Codex is low < medium < high < xhigh < max < ultra, pi is off < minimal < low < medium < high < xhigh < max. opencode variants and api efforts have no common order, so a project can't change them; nor can it add an effort to an entry that has none in the user config.
+- It can't add entries, swap agents or models, change `required`, or open a cell the user closed; those are ignored with a notice.
+- It can't drop only the required agents while keeping others handing work out: that's an error; keep the required agents or close the whole cell. Dropping every candidate is an error too.
+- Once a project writes `"claude code"` (or `null`) for a cell, nothing at that cell can be named with `--agent` in that project, even if the cell is already `"claude code"` in the user config; cells the project doesn't mention that are `"claude code"` in the user config can still be named. If the cell has required agents, that step counts as "not done", and Claude says so plainly instead of reviewing it itself and calling the requirement met. With `--cwd`, `closed_by_project` in the `config` output lists the cells a project closed.
+- This way a cloned repository can't use its project config to swap the agent doing the work (say, from a sandboxed Codex to a tool without a sandbox), send your code to a new provider, skip a required review, or stretch time limits and raise efforts to spend more of your quota. For a sensitive project, drop the api candidates, or set discussions and reviews to `"claude code"` as a whole.
 
 ## Other rules
-- Each agent's parallel limit counts its own running runs across all groups and sessions; at the limit, the script refuses new runs and lists the runs holding the slots.
+- Each agent's parallel limit counts its own running runs across all groups and sessions; at the limit, the script refuses new runs and lists the runs holding the slots. A dispatch plan itself holds no slot.
+- Runs in the same group must not have overlapping write scopes; this only applies to runs that write files (hands-on work), not to discussions and reviews.
 - When the sandbox isn't `read-only` / `workspace-write` (for example `danger-full-access`), Codex can write to any directory: `--cwd` only sets where it starts and **doesn't limit what it can write**. The scope is then held only by the brief and by reviewing the diff afterwards.
 - After the user changes settings, run `config` to confirm:
-  - `resolved_levels` shows who each level finally goes to, with model and effort;
+  - `resolved_modules` shows each cell's final candidates, with each one's model, effort and whether it's required;
+  - `closed_by_project` lists the cells closed by the project config (with `--cwd`);
+  - `image_configured` says whether the user config has an image block: when it's `false`, the `null` image cells are just defaults, not something the user turned off;
   - `agents_status` shows each agent's type and capabilities, whether its key is set, and the executable it uses;
-  - `summary` is the overview of the whole config: who each cell goes to, the cells each agent is used in, and warnings (unused agents, plaintext keys, shell access for hands-on work, old IDs in `agent-aliases.json` that point to IDs no longer there). `check` outputs it too, with check results.
+  - `summary` is the overview of the whole config: who each cell goes to, the cells each agent is used in, and warnings (unused agents, plaintext keys, shell access for hands-on work or drawing, old IDs in `agent-aliases.json` that point to IDs no longer there). `check` outputs it too, with check results.

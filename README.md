@@ -33,7 +33,7 @@ flowchart LR
     class discuss,run,review module
 ```
 
-每次进入一个模块，都按这一类的标准单独定级：不值得找外部模型的小事是 0 级，由 Claude Code 自己做；其余分简单、常规、复杂三级（`simple` / `normal` / `complex`），交给谁、用什么推理强度由你在配置里决定，写成 `"claude code"` 的那一级同样由 Claude Code 自己做。派出去之后终端里能实时看到模型的每一步，结束后 Claude Code 向你汇报用了哪个模型、花了多少 token。
+每次进入一个模块，都按这一类的标准单独定级：不值得找外部模型的小事是 0 级，由 Claude Code 自己做；其余分简单、常规、复杂三级（`simple` / `normal` / `complex`），每一级有哪些候选模型、谁必选、用什么推理强度由你在配置里决定，Claude Code 每次从候选里挑；写成 `"claude code"` 的那一级同样由 Claude Code 自己做。派出去之后终端里能实时看到模型的每一步，结束后 Claude Code 向你汇报用了哪个模型、花了多少 token。
 
 三个模块各自的内部流程如下，紫色的步骤由 Claude Code 做，绿色的有协作方参与。
 
@@ -193,8 +193,8 @@ flowchart TD
 
 | 检测到 | 生成的安排 |
 |---|---|
-| 能用的 Codex（已安装、已登录） | 简单和常规的执行由 Claude Code 自己做，复杂的执行交给 Codex 的 `gpt-6.1-sol`；审查和讨论交给 Codex，复杂的用 `gpt-6-astra` |
-| 没有 Codex | 所有任务暂时由 Claude Code 自己做 |
+| 能用的 Codex（已安装、已登录） | 简单和常规的执行由 Claude Code 自己做，复杂的执行交给 Codex 的 `gpt-6.1-sol`；审查和讨论交给 Codex，复杂的用 `gpt-6-astra`；出图用 `gpt-6.1-sol`，手画会弯的部件用 `gpt-6-astra` |
+| 没有 Codex | 所有任务暂时由 Claude Code 自己做，图像两格关掉 |
 | API key 环境变量（DeepSeek、Kimi、MiMo） | 写进配置，先不加入讨论 |
 | opencode、pi | 不自动加，用哪个模型由你选 |
 
@@ -206,11 +206,11 @@ flowchart TD
 
 | 块 | 管什么 |
 |---|---|
-| `dispatch` | 插件怎么派活：是否主动派、实时查看、启动动画、讨论轮数、超时、记录目录 |
+| `dispatch` | 插件怎么派活：是否主动派、实时查看、启动动画、席位上限、讨论轮数、超时、记录目录 |
 | `agents` | 有哪些协作方、怎么连接 |
-| `levels` | 每类任务的每个等级交给谁，用什么推理强度 |
+| `modules` | 每类任务的每一格有哪些候选、谁必选、用什么推理强度 |
 
-一个最小的例子：Codex 做复杂的执行和所有审查，复杂的讨论再加一个 opencode 里的模型。没写的字段用默认值。
+一个最小的例子：Codex 做复杂的执行和所有审查，复杂的讨论再加一个 opencode 里的模型，出图和手画也交给 Codex。没写的字段用默认值。
 
 ```json
 {
@@ -219,18 +219,23 @@ flowchart TD
     "gpt-6-astra": { "type": "codex cli", "model": "gpt-6-astra" },
     "glm-5.3":     { "type": "opencode cli", "model": "opencode-go/glm-5.3" }
   },
-  "levels": {
-    "run":     { "simple": "claude code", "normal": "claude code", "complex": { "agent": "gpt-6.1-sol", "effort": "max" } },
-    "review":  { "simple": { "agent": "gpt-6.1-sol", "effort": "medium" }, "normal": { "agent": "gpt-6.1-sol", "effort": "high" }, "complex": { "agent": "gpt-6-astra", "effort": "max" } },
-    "discuss": { "simple": "claude code", "normal": [{ "agent": "gpt-6.1-sol", "effort": "high" }], "complex": [{ "agent": "gpt-6-astra", "effort": "max" }, { "agent": "glm-5.3" }] }
+  "modules": {
+    "discuss": { "simple": "claude code", "normal": [{ "agent": "gpt-6.1-sol", "effort": "high" }], "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "glm-5.3" }] },
+    "run":     { "simple": "claude code", "normal": "claude code", "complex": [{ "agent": "gpt-6.1-sol", "effort": "max" }] },
+    "review":  { "simple": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "normal": [{ "agent": "gpt-6.1-sol", "effort": "high" }], "complex": [{ "agent": "gpt-6-astra", "effort": "max" }] },
+    "image":   { "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "draw": [{ "agent": "gpt-6-astra", "effort": "max" }] }
   }
 }
 ```
 
-- `agents` 的键是协作方的**代号**，`levels` 和 `--agent` 用它引用。建议直接用模型名，可以用字母、数字、`.`、`-`、`_`。
-- 三种任务（`run` 执行、`review` 审查、`discuss` 讨论）各分三级，另有一个不进配置的 0 级（见下文"任务等级"）。执行和审查写一个协作方，讨论写一组参与方。
-- 写成 `"claude code"` 表示 Claude Code 自己做；对审查和讨论来说，就是这一级不找外部模型。
+- `agents` 的键是协作方的**代号**，`modules` 和 `--agent` 用它引用。建议直接用模型名，可以用字母、数字、`.`、`-`、`_`。
+- 三种任务（`discuss` 讨论、`run` 执行、`review` 审查）各分三级，另有一个不进配置的 0 级（见下文"任务等级"）；图像（`image`）不分等级，分出图（`generate`）和手画（`draw`）两格。
+- 每一格写一组候选。一格有几个候选时，Claude Code 每次按规则挑：讨论和审查默认 1 级 1 席、2 级 2 席、3 级 3 席，尽量用不同的模型；执行每份工作派一个。标了 `"required": true` 的是必选，这一格用到时一定参加。
+- 写成 `"claude code"` 表示 Claude Code 自己做；对审查和讨论来说，就是这一格不找外部模型。图像的格子写 `null` 表示关掉。
 - `effort` 是推理强度，不写就用默认值。Codex 是 `low` 到 `ultra`；opencode 是模型的 variant；pi 是 thinking 档位；API 原样作为 `reasoning_effort` 发出。
+- 图像两格这一版只能在配置里写，出图和手画暂时还按原来的方式派出；单独的图像命令和出图前的路线确认在后续版本加入。
+
+旧的 `levels` 写法照常能读：第一次读到时，插件把它改写成 `modules`，每一格的协作方、推理强度和顺序都不变，原文件备份为 `config.json.bak`。注意一处变化：以前讨论一级里写的模型全部参加，改写后它们是候选、由 Claude Code 挑；想保留全员参加，就给它们都标上 `"required": true`，`/foreman:setup` 可以帮着标，也会帮你加上图像两格。
 
 ### 四种协作方
 
@@ -254,10 +259,11 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 | 2 `normal` | 有几个方案要比较，影响有限 | 有规格，细节要自己设计 | 较大的一般功能和修复 |
 | 3 `complex` | 复杂、不确定、选错代价高 | 根因不明、出错代价高、跨模块 | 金额、数据、并发、鉴权等高风险代码 |
 
-0 级固定由 Claude Code 自己做，不在配置里；1–3 级交给谁、用什么推理强度由你在 `levels` 里决定。等级看判断和风险，不看改动多少：照清单机械地改 20 个文件是简单，改模块之间的接口是复杂。派出去的每次调用都必须带上等级，漏了脚本直接报错，不会悄悄按某个档位运行。
+0 级固定由 Claude Code 自己做，不在配置里；1–3 级有哪些候选、谁必选、用什么推理强度由你在 `modules` 里决定，Claude Code 只在这一格的候选里挑。等级看判断和风险，不看改动多少：照清单机械地改 20 个文件是简单，改模块之间的接口是复杂。派出去的每次调用都必须带上等级，漏了脚本直接报错，不会悄悄按某个档位运行。
 
-- 想临时指定时，对 Claude Code 说"用 ultra 跑"或"用某某模型跑"，Claude Code 会改用 `--effort` 或 `--model`。
-- 某一级写成 `"claude code"` 时，你仍然可以明确要求把某个任务派出去，Claude Code 会用 `--agent` 点名。
+- 想临时指定时，对 Claude Code 说"用 ultra 跑"或"用某某模型跑"，Claude Code 会加上 `--effort`（只换推理强度）或 `--model`（只能换同一个提供方的模型）。
+- 某一级写成 `"claude code"` 时，你仍然可以明确要求把某个任务派出去，Claude Code 会用 `--agent` 点名；但项目配置关掉的格子不行。
+- 一次派几个席位（比如几个模型讨论同一个议题）时，Claude Code 先建一份派发计划，脚本检查必选是否都在、席位数有没有超过 `dispatch.max_seats`（默认 6），再逐席启动。必选的模型失败或额度用完时，这件事算没做完，不会拿别的模型顶替。
 - 0 级只限一处就能改完的小改动。默认 `simple` 也由 Claude Code 自己做；把 `simple` 交给协作方的话，除了 0 级的小改动，其余的活都会派出去。
 
 ### 接入 API 模型
@@ -266,7 +272,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 2. **填 key**，二选一：
    - 环境变量：写 `"api_key_env": "DEEPSEEK_API_KEY"`，再设置这个环境变量。Windows 上在"系统属性 → 环境变量"里加一个用户变量；macOS 和 Linux 写进 shell 的启动文件。设置后重启 Claude Code 才能读到。
    - 配置文件：写 `"api_key": "sk-..."`，立即生效，但是明文保存，这个文件不要提交或分享。两种都写时，以配置文件里的为准。
-3. **加进讨论**：在 `levels.discuss` 需要的等级里加上它。
+3. **加进讨论**：在 `modules.discuss` 需要的格子里加上它。
 
 也可以交给 `/foreman:setup`，比如运行 `/foreman:setup 加 DeepSeek`；key 由你自己填，不用发到对话里。API 模型自己翻不了代码，Claude Code 会把相关文件随议题附过去（每次上限约 30 万字符），并对照原文核实它对代码的说法。
 
@@ -275,7 +281,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 装了 opencode 2.x 的话，它里面能用的模型都可以参加讨论和审查，比如 [OpenCode Go](https://opencode.ai/docs/go/) 订阅里的 GLM、Kimi、Qwen、MiniMax、DeepSeek。它们能自己读项目里的代码，代价是每读一次文件多一次请求，更费额度。
 
 1. **登录**：终端运行 `opencode`，用 `/connect` 登录（OpenCode Go 选 OpenCode Go），再运行 `opencode models` 看能用哪些模型。名字带 `-free` 的免费模型不要配：OpenCode 现在只允许在它自己的界面里用免费模型，从命令行调用会被拒绝（报错 "OpenCode's free tier can only be used from within OpenCode"）。
-2. **加进配置**：每个模型加一项 `{ "type": "opencode cli", "model": "opencode-go/glm-5.3" }`，再加进需要的等级。也可以交给 `/foreman:setup`。
+2. **加进配置**：每个模型加一项 `{ "type": "opencode cli", "model": "opencode-go/glm-5.3" }`，再加进需要的格子。也可以交给 `/foreman:setup`。
 
 讨论和审查时，插件给它注入一个只读代理，只有读文件、搜索和列目录的工具；审查要看的改动由插件用 git 算好附给它。key 和登录都留在 opencode 里。结果里带上这一轮折算的费用（`cost_usd`），OpenCode Go 的额度就按这个扣；Go 的额度按模型分开算，高档模型额度少，建议只放在复杂讨论里。
 
@@ -284,14 +290,14 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 装了 pi（`npm install -g @earendil-works/pi-coding-agent`）的话，用法和 opencode 一样。
 
 1. **登录**：终端运行 `pi`，用 `/login` 登录要用的厂商（或者设置厂商的 API key 环境变量），再运行 `pi --list-models` 看能用哪些模型。
-2. **加进配置**：每个模型加一项 `{ "type": "pi cli", "model": "deepseek/deepseek-flash" }`，再加进需要的等级。
+2. **加进配置**：每个模型加一项 `{ "type": "pi cli", "model": "deepseek/deepseek-flash" }`，再加进需要的格子。
 
 - 推理强度是 pi 的 thinking 档位（`off` 到 `max`），每个模型支持的不一样。**写了模型不支持的档位，pi 不报错，会悄悄换成最接近的一档**，所以改完运行一次 `check`，它会说明会被换成哪一档。
 - pi 本身没有权限系统。插件每次只开放这次任务需要的工具，注入守卫扩展让读写路径不出项目目录，也不加载你自己装的扩展、skill 和 MCP。项目的 AGENTS.md / CLAUDE.md 照常读，会话存在 pi 的默认位置。
 
 ### 让 opencode 或 pi 做执行任务
 
-在用户配置里给这个协作方写 `run_access`，再放进 `levels.run`（项目配置开不了）：
+在用户配置里给这个协作方写 `run_access`，再放进 `modules.run`（或者图像的 `draw`）的格子（项目配置开不了）：
 
 - `"edit"`：只能读写项目目录里的文件，不能运行命令，测试由 Claude Code 事后跑。
 - `"shell"`：还能运行命令，比如跑测试。没有系统沙箱，命令以你的账户权限运行、能访问整台机器，只适合你信任的项目和模型。
@@ -309,6 +315,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
     "auto": true,
     "watch": "auto",
     "intro": true,
+    "max_seats": 6,
     "discuss_max_rounds": 2,
     "timeout_min": 240,
     "stall_min": 20,
@@ -322,17 +329,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
     "mimo-v2.6-pro":      { "type": "pi cli", "model": "xiaomi/mimo-v2.6-pro" },
     "kimi-k2.6":          { "type": "api", "base_url": "https://api.moonshot.cn/v1", "api_key_env": "KIMI_API_KEY", "model": "kimi-k2.6" }
   },
-  "levels": {
-    "run": {
-      "simple":  "claude code",
-      "normal":  "claude code",
-      "complex": { "agent": "gpt-6.1-sol", "effort": "max" }
-    },
-    "review": {
-      "simple":  { "agent": "gpt-6-astra", "effort": "medium" },
-      "normal":  { "agent": "gpt-6-astra", "effort": "high" },
-      "complex": { "agent": "gpt-6-astra", "effort": "max" }
-    },
+  "modules": {
     "discuss": {
       "simple": [
         { "agent": "gpt-6-astra", "effort": "medium" },
@@ -344,12 +341,26 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
         { "agent": "glm-5.3" }
       ],
       "complex": [
-        { "agent": "gpt-6-astra", "effort": "max" },
+        { "agent": "gpt-6-astra", "effort": "max", "required": true },
         { "agent": "deepseek-flash", "effort": "max" },
         { "agent": "kimi-k2.6" },
         { "agent": "mimo-v2.6-pro", "effort": "high" },
         { "agent": "glm-5.3" }
       ]
+    },
+    "run": {
+      "simple":  "claude code",
+      "normal":  "claude code",
+      "complex": [{ "agent": "gpt-6.1-sol", "effort": "max" }]
+    },
+    "review": {
+      "simple":  [{ "agent": "gpt-6-astra", "effort": "medium" }],
+      "normal":  [{ "agent": "gpt-6-astra", "effort": "high" }, { "agent": "deepseek-flash", "effort": "high" }],
+      "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "deepseek-flash", "effort": "max" }, { "agent": "glm-5.3" }]
+    },
+    "image": {
+      "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }],
+      "draw":     [{ "agent": "gpt-6-astra", "effort": "max" }]
     }
   }
 }
@@ -357,14 +368,14 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 
 | 代号 | 接入方式 | 用在哪 |
 |---|---|---|
-| `gpt-6.1-sol` | Codex CLI | 复杂的执行 |
-| `gpt-6-astra` | Codex CLI | 所有审查，三级讨论都参加 |
-| `glm-5.3` | opencode（OpenCode Go 订阅） | 三级讨论都参加 |
-| `deepseek-flash` | opencode | 常规和复杂的讨论 |
-| `mimo-v2.6-pro` | pi | 复杂的讨论 |
-| `kimi-k2.6` | API，key 在环境变量 `KIMI_API_KEY` 里 | 复杂的讨论 |
+| `gpt-6.1-sol` | Codex CLI | 复杂的执行、出图 |
+| `gpt-6-astra` | Codex CLI | 所有审查和讨论的候选，复杂的讨论和审查必选；手画会弯的部件 |
+| `glm-5.3` | opencode（OpenCode Go 订阅） | 三级讨论和复杂审查的候选 |
+| `deepseek-flash` | opencode | 常规和复杂的讨论、审查的候选 |
+| `mimo-v2.6-pro` | pi | 复杂讨论的候选 |
+| `kimi-k2.6` | API，key 在环境变量 `KIMI_API_KEY` 里 | 复杂讨论的候选 |
 
-简单和常规的执行由 Claude Code 自己做；讨论的人数随等级增加，越复杂请越多模型。
+简单和常规的执行由 Claude Code 自己做。讨论和审查的候选随等级增加：每次由 Claude Code 从候选里挑几席（默认 1 级 1 席、2 级 2 席、3 级 3 席，证据审查和高风险审查用所有不同的模型），`gpt-6-astra` 在复杂的讨论和审查里必选，一定参加。
 
 这份配置没用到、但常会调整的字段：
 
@@ -386,10 +397,12 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 
 项目配置只能收紧，不能放宽：
 
-- 只认 `dispatch.timeout_min`、`dispatch.stall_min`、`dispatch.busy_ask_min` 和 `levels`；
-- 每一级只能改成 `"claude code"`，或者从用户配置这一级已有的协作方里选（可以改推理强度）。
+- 只认 `dispatch` 的 `timeout_min`、`stall_min`、`busy_ask_min`、`max_seats` 和 `modules`（旧写法 `levels` 也认）；
+- 时长和席位取两边更严的值：超时和席位取较小的；卡死检测和排队检查写 0 是"不检测"，最宽松，所以你写了正数时项目写 0 不生效；
+- 每一格只能整格关掉（分级的写 `"claude code"`，图像的写 `null`）、删掉用户配置这一格里的可选条目，或者调低推理强度（只限 Codex 和 pi 这种档位有高低顺序的）；
+- 不能加人、换模型、改必选，也不能只删掉必选、留下其他人继续外派（会报错）。项目关掉的格子，Claude Code 也不能用 `--agent` 点名派出。
 
-这样别人的仓库没法借项目配置换掉执行方、把代码发给新的厂商，或者擅自花你的额度。敏感项目可以把讨论改成只留 Codex，或者直接写成 `"claude code"`。
+这样别人的仓库没法借项目配置换掉执行方、把代码发给新的厂商、跳过必选的审查，或者延长超时、调高推理强度来多花你的额度。敏感项目可以删掉 API 候选，或者把讨论、审查整格写成 `"claude code"`。
 
 ### 偏好文件
 
@@ -398,7 +411,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 - 用户级：`~/.claude/foreman/preferences.md`
 - 项目级：`<项目目录>/.claude/foreman.md`
 
-和插件自带的规则冲突时，以偏好文件为准，项目级优先于用户级。例如：
+偏好文件只能在插件的硬规则以内调整做法：配置文件本身、必选、材料能不能发给某一家、讨论和审查只读、要弹窗确认的事和席位上限，都不受偏好文件影响。在这个范围以内，和插件自带的规则冲突时以偏好文件为准。项目级偏好来自项目仓库（可能是别人的），只能让做法更严：它要求跳过确认、少审、换掉你配置的模型之类的，Claude Code 不会照做，会告诉你。例如：
 
 ```markdown
 # foreman 偏好
@@ -461,7 +474,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 | 项目里的 `.claude/codex-bridge.json`、`.claude/codex-bridge.md` | `.claude/foreman.json`、`.claude/foreman.md`（旧名照常能读，会提示改名） |
 | 环境变量 `CODEX_BRIDGE_CONFIG`、`CODEX_RUNS_DIR`、`CODEX_BRIDGE_LANG` | `FOREMAN_CONFIG`、`FOREMAN_RUNS_DIR`、`FOREMAN_LANG`（旧名暂时还认） |
 
-配置还会改成新写法：`type` 改为 `codex cli` / `opencode cli` / `api`，`"claude"` 改为 `"claude code"`，协作方代号改成模型名（比如 `codex` 改为 `gpt-6-astra`）。每一级实际用的模型和推理强度不变，原文件备份为 `config.json.bak`。旧配置和旧偏好文件保留，确认没问题后可以自己删掉。
+配置还会改成新写法：`type` 改为 `codex cli` / `opencode cli` / `api`，`"claude"` 改为 `"claude code"`，协作方代号改成模型名（比如 `codex` 改为 `gpt-6-astra`），`levels` 改写成 `modules`（见上文"配置的结构"）。每一格实际用的模型和推理强度不变，原文件备份为 `config.json.bak`。旧配置和旧偏好文件保留，确认没问题后可以自己删掉。
 
 ## 中文版和英文版
 

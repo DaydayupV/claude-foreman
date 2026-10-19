@@ -3,7 +3,8 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, DEFAULT_AGENT_PARALLEL, CLAUDE_CODE, resolveAgentAlias, detectEnvironment, projectFile, loadConfig, pickProfile, unknownAgentError } from './config.mjs';
+import { USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, DEFAULT_AGENT_PARALLEL, CLAUDE_CODE, cellList, eachEntry, mapCells, resolveAgentAlias, detectEnvironment, projectFile, loadConfig, resolveProfile, validatePlan, unknownAgentError } from './config.mjs';
+import { cmdPlan, readPlan } from './plan.mjs';
 import { buildSummary } from './summary.mjs';
 import { RUNS_ROOT, initializeRecords, findRun, readMeta } from './records.mjs';
 import { adapters } from './adapters/index.mjs';
@@ -11,7 +12,7 @@ import { computeReviewScope } from './review-scope.mjs';
 import { cmdWatch } from './watch.mjs';
 import { cmdStatus, cmdCancel, cmdAwaitBusy } from './status.mjs';
 import { cmdAssets } from './assets.mjs';
-import { M, die, need, resolveDir, readBrief, isGitRepo, isAscii, agentTypeOf, closestMatches } from './util.mjs';
+import { M, die, need, resolveDir, readBrief, isGitRepo, isAscii, agentTypeOf, closestMatches, pathKey } from './util.mjs';
 
 // 先加载配置，再迁移记录和重写启动器；这些步骤仍在解析参数之前完成。
 const load = (cwd) => loadConfig(cwd, adapters);
@@ -20,7 +21,7 @@ initializeRecords(CONFIG);
 
 function parseArgs(argv) {
   const [cmd, ...rest] = argv;
-  const opts = { 'add-dir': [], track: [], scope: [], file: [] };
+  const opts = { 'add-dir': [], track: [], scope: [], file: [], ...(cmd === 'plan' ? { seat: [] } : {}) };
   // assets 的第一个参数是动作（template、cut 等），不是选项。
   if (cmd === 'assets' && rest[0] && !rest[0].startsWith('--')) opts.action = rest.shift();
   const flags = new Set(['uncommitted', 'no-snapshot', 'verbose', 'no-intro', 'snap', 'vector', 'allow-edge']);
@@ -31,27 +32,47 @@ function parseArgs(argv) {
     if (flags.has(key)) { opts[key] = true; continue; }
     const val = rest[++i];
     if (val === undefined) die(M.missingValue(a));
-    if (key === 'add-dir' || key === 'track' || key === 'scope' || key === 'file') opts[key].push(val);
+    if (key === 'add-dir' || key === 'track' || key === 'scope' || key === 'file' || key === 'seat' && cmd === 'plan') opts[key].push(val);
     else opts[key] = val;
   }
   return { cmd, opts };
 }
 
-async function cmdRun(o) {
-  if (o.group != null && !o.scope.length) die(M.groupNeedsScope);
+function dispatchProfile(o, module) {
+  if (o.plan && o.seat == null) die(M.planNeedsSeat);
+  if (o.seat != null && !o.plan) die(M.seatNeedsPlan);
+  let seat = { module, cell: o.level };
+  let plan;
+  if (o.plan) {
+    plan = readPlan(o.plan);
+    if (!/^\d+$/.test(o.seat) || Number(o.seat) < 1 || Number(o.seat) > plan.seats.length) die(M.planSeatChoices(o.plan, plan.seats.length));
+    if (plan.module !== module) die(M.planModuleMismatch(o.plan, plan.module, module));
+    if (o.agent != null) die(M.planAgentFlag);
+    if (o.level != null && o.level !== plan.cell) die(M.planLevelMismatch(o.plan, plan.cell, o.level));
+    if (o.cwd != null && pathKey(path.resolve(o.cwd)) !== pathKey(plan.cwd)) die(M.planCwdMismatch(o.plan, plan.cwd));
+    if (o.group != null && o.group !== plan.group) die(M.planGroupMismatch(o.plan, plan.group));
+    o.cwd = plan.cwd;
+    o.group = plan.group;
+    o.level = plan.cell;
+    seat = { ...plan.seats[Number(o.seat) - 1], module, cell: plan.cell, plan: plan.plan_id };
+  }
   const cwd = resolveDir(need(o, 'cwd'));
   const cfg = load(cwd);
+  if (plan) validatePlan(cfg, plan, adapters);
+  return { cwd, cfg, profile: resolveProfile(cfg, seat, o, adapters) };
+}
+
+async function cmdRun(o) {
+  const { cwd, cfg, profile } = dispatchProfile(o, 'run');
+  if (o.group != null && !o.scope.length) die(M.groupNeedsScope);
   const addDirs = o['add-dir'].map(resolveDir);
   const brief = readBrief(o);
-  const profile = pickProfile(cfg, o, 'run', adapters);
   return adapters[profile.agent.type].execute({ cfg, ...profile, mode: 'run', kind: 'exec', cwd, brief, addDirs, title: o.title, opts: o });
 }
 
 async function cmdDiscuss(o) {
-  const cwd = resolveDir(need(o, 'cwd'));
-  const cfg = load(cwd);
+  const { cwd, cfg, profile } = dispatchProfile(o, 'discuss');
   const brief = readBrief(o);
-  const profile = pickProfile(cfg, o, 'discuss', adapters);
   return adapters[profile.agent.type].execute({ cfg, ...profile, mode: 'discuss', kind: 'discuss', cwd, brief, title: o.title, round: 1, opts: o });
 }
 
@@ -60,7 +81,7 @@ async function cmdResume(o) {
   o.track = [...(parent.meta.track || []), ...o.track];
   o.group ??= parent.meta.group ?? null;
   if (!o.scope.length) o.scope = parent.meta.scope || [];
-  const kind = parent.meta.kind || (parent.meta.mode === 'review' ? 'review' : 'exec');
+  const kind = parent.meta.kind || (parent.meta.mode === 'review' ? 'review' : parent.meta.mode === 'discuss' ? 'discuss' : 'exec');
   if (kind === 'review') die(M.reviewNoResume);
   adapters[agentTypeOf(parent.meta)].validateResume?.(parent);
   const discuss = kind === 'discuss';
@@ -82,16 +103,14 @@ async function cmdResume(o) {
   const cfg = load(parent.meta.cwd);
   const brief = readBrief(o);
   // 什么模型都没配置时沿用上一轮记录的模型，同一会话不中途换模型。
-  const profile = pickProfile(cfg, o, discuss ? 'discuss' : 'run', adapters, parent.meta.model, parent.meta.agent || 'codex');
+  const profile = resolveProfile(cfg, { module: discuss ? 'discuss' : 'run', plan: parent.meta.plan, seat: parent.meta.seat, role: parent.meta.role }, o, adapters, parent.meta.model, parent.meta.agent || 'codex', parent.meta.cell ?? parent.meta.level);
   return adapters[profile.agent.type].execute({ cfg, ...profile, mode: 'resume', kind, cwd: parent.meta.cwd, brief,
     title: o.title || parent.meta.title, parent: parent.id, parentDir: parent.dir, sessionId: parent.meta.session_id,
     previousRunAccess: parent.meta.run_access, round, opts: o });
 }
 
 async function cmdReview(o) {
-  const cwd = resolveDir(need(o, 'cwd'));
-  const cfg = load(cwd);
-  const profile = pickProfile(cfg, o, 'review', adapters);
+  const { cwd, cfg, profile } = dispatchProfile(o, 'review');
   const git = isGitRepo(cwd);
   const brief = readBrief(o, !git);
   let reviewScope = null;
@@ -103,15 +122,13 @@ async function cmdReview(o) {
 }
 
 function cmdConfig(o) {
-  const { sources, ...effective } = load(o.cwd ? resolveDir(o.cwd) : null);
+  const { sources, closed_by_project, image_configured, ...effective } = load(o.cwd ? resolveDir(o.cwd) : null);
   const agents_status = Object.fromEntries(Object.entries(effective.agents).map(([name, agent]) => [name, {
     type: agent.type, capabilities: adapters[agent.type].capabilities, model: agent.model || null, max_parallel: agent.max_parallel ?? DEFAULT_AGENT_PARALLEL,
     ...adapters[agent.type].status(agent),
   }]));
-  const resolved = (entry) => ({ agent: entry.agent, model: entry.model || agents_status[entry.agent].model, effort: entry.effort ?? null });
-  const resolved_levels = Object.fromEntries(Object.entries(effective.levels).map(([mode, levels]) => [mode,
-    Object.fromEntries(Object.entries(levels).map(([lv, entry]) => [lv, entry === CLAUDE_CODE ? entry : Array.isArray(entry) ? entry.map(resolved) : resolved(entry)])),
-  ]));
+  const resolved = (entry) => ({ agent: entry.agent, model: entry.model || agents_status[entry.agent].model, effort: entry.effort ?? null, required: !!entry.required });
+  const resolved_modules = mapCells(effective.modules, (value) => value === CLAUDE_CODE || value === null ? value : cellList(value).map(resolved));
   // 配置里写的 key 不打印出来。
   const shown = structuredClone(effective);
   for (const agent of Object.values(shown.agents)) if (agent.api_key) agent.api_key = M.keyHidden;
@@ -120,7 +137,9 @@ function cmdConfig(o) {
     loaded_from: sources,
     effective: shown,
     agents_status,
-    resolved_levels,
+    resolved_modules,
+    closed_by_project,
+    image_configured,
     runs_dir: RUNS_ROOT,
     watch_launcher: path.join(RUNS_ROOT, 'watch.mjs'),
     watch_launcher_ascii: isAscii(path.join(RUNS_ROOT, 'watch.mjs')),
@@ -149,35 +168,24 @@ async function cmdCheck(o) {
     watch: { ok: isAscii(path.join(RUNS_ROOT, 'watch.mjs')), launcher: path.join(RUNS_ROOT, 'watch.mjs'), fix: isAscii(path.join(RUNS_ROOT, 'watch.mjs')) ? null : M.fixLauncherNotAscii },
     agents: {},
   };
-  const variants = new Map();
-  for (const [mode, levels] of Object.entries(cfg.levels)) {
-    for (const [level, entry] of Object.entries(levels)) {
-      const items = Array.isArray(entry) ? entry : [entry];
-      for (const [index, item] of items.entries()) {
-        if (item === CLAUDE_CODE || item.effort == null) continue;
-        const model = item.model || cfg.agents[item.agent].model;
-        const usedAt = `levels.${mode}.${level}${Array.isArray(entry) ? `[${index}]` : ''}`;
-        if (!variants.has(item.agent)) variants.set(item.agent, []);
-        const list = variants.get(item.agent);
-        const existing = list.find((v) => v.model === model && v.variant === item.effort);
-        if (existing) existing.used_at.push(usedAt);
-        else list.push({ model, variant: item.effort, used_at: [usedAt] });
-      }
-    }
-  }
-  // 每个协作方被哪几类任务用到（Codex 按这个探测沙箱）。
-  const usedModes = new Map();
-  for (const [mode, levels] of Object.entries(cfg.levels)) {
-    for (const entry of Object.values(levels)) {
-      for (const item of entry === CLAUDE_CODE ? [] : Array.isArray(entry) ? entry : [entry]) usedModes.set(item.agent, new Set([...(usedModes.get(item.agent) || []), mode]));
-    }
+  const variants = new Map(), usedModes = new Map();
+  for (const { module, at, item } of eachEntry(cfg.modules)) {
+    const mode = module === 'image' ? 'run' : module;
+    usedModes.set(item.agent, new Set([...(usedModes.get(item.agent) || []), mode]));
+    if (item.effort == null) continue;
+    const model = item.model || cfg.agents[item.agent].model;
+    if (!variants.has(item.agent)) variants.set(item.agent, []);
+    const list = variants.get(item.agent);
+    const existing = list.find((v) => v.model === model && v.variant === item.effort);
+    if (existing) existing.used_at.push(at);
+    else list.push({ model, variant: item.effort, used_at: [at] });
   }
   // 只在要核对推理强度时才读清单。
   const readCatalog = catalogReader();
   for (const [name, agent] of Object.entries(cfg.agents)) {
     if (!o.agent || o.agent === name) result.agents[name] = { ...await adapters[agent.type].check(name, agent, variants.get(name) || [], () => readCatalog(agent), [...(usedModes.get(name) || [])]), type: agent.type };
   }
-  const referenced = new Set(Object.values(cfg.levels).flatMap((levels) => Object.values(levels).flatMap((entry) => entry === CLAUDE_CODE ? [] : (Array.isArray(entry) ? entry : [entry]).map((item) => item.agent))));
+  const referenced = new Set(eachEntry(cfg.modules).map(({ item }) => item.agent));
   result.ok = nodeOk && Object.entries(result.agents).every(([name, agent]) => !referenced.has(name) || agent.ok);
   result.summary = buildSummary(cfg, adapters, result.agents);
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');
@@ -216,7 +224,7 @@ async function cmdModels() {
 
 const { cmd, opts } = parseArgs(process.argv.slice(2));
 // 新建任务组时组名只用 ASCII：实时查看要把它写进终端命令，桌面版的终端面板只接受 ASCII 命令。
-if (['run', 'discuss', 'resume'].includes(cmd) && opts.group != null && !/^[A-Za-z0-9._-]{1,64}$/.test(opts.group)) die(M.badGroupName(opts.group));
-const commands = { run: cmdRun, discuss: cmdDiscuss, resume: cmdResume, review: cmdReview, status: (o) => cmdStatus(o, (meta) => adapters[agentTypeOf(meta)]?.stats?.(meta.session_id, meta.started_at)), watch: (o) => cmdWatch(o, load), config: cmdConfig, check: cmdCheck, models: cmdModels, cancel: cmdCancel, 'await-busy': (o) => cmdAwaitBusy(o, CONFIG), assets: cmdAssets };
+if (['run', 'discuss', 'resume', 'review', 'plan'].includes(cmd) && opts.group != null && !/^[A-Za-z0-9._-]{1,64}$/.test(opts.group)) die(M.badGroupName(opts.group));
+const commands = { run: cmdRun, discuss: cmdDiscuss, resume: cmdResume, review: cmdReview, plan: (o) => cmdPlan(o, load, adapters), status: (o) => cmdStatus(o, (meta) => adapters[agentTypeOf(meta)]?.stats?.(meta.session_id, meta.started_at)), watch: (o) => cmdWatch(o, load), config: cmdConfig, check: cmdCheck, models: cmdModels, cancel: cmdCancel, 'await-busy': (o) => cmdAwaitBusy(o, CONFIG), assets: cmdAssets };
 if (!commands[cmd]) die(M.usage);
 await commands[cmd](opts);

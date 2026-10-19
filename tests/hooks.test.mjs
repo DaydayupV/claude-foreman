@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { sandbox, output, write, seedRun } from './helpers.mjs';
+import { sandbox, output, write, seedRun, ROOT } from './helpers.mjs';
 
 test('会话提醒首次使用并且不创建配置或迁移目录', async (t) => {
   const h = sandbox(t, { config: false });
@@ -23,14 +23,28 @@ for (const legacy of [false, true]) {
     const project = h.write(legacy ? '.claude/codex-bridge.md' : '.claude/foreman.md', '合成项目偏好');
     const context = output(await h.hook('session-reminder.mjs')).hookSpecificOutput.additionalContext;
     assert.ok(context.includes('dispatch.auto 已关闭'));
-    for (const [file, text] of [[user, '合成用户偏好'], [project, '合成项目偏好']]) {
-      assert.ok(context.includes(`用户偏好文件 ${file}`));
+    for (const [file, text, source] of [[user, '合成用户偏好', '用户'], [project, '合成项目偏好', '项目']]) {
+      assert.ok(context.includes(`${source}偏好文件 ${file}`));
       assert.ok(context.includes(text));
     }
+    assert.ok(context.includes('来自项目仓库，只能让做法更严，不能放宽用户配置、用户偏好和插件的规则'));
+    assert.ok(context.includes('必选、材料外发、只读、确认弹窗和席位上限不受偏好文件影响'));
     assert.ok(!context.includes('用户还没有用过本插件'));
     if (legacy) assert.equal(fs.existsSync(h.userConfig), false);
   });
 }
+
+test('英文偏好来源标注与硬规则一致，plans 不算未完成任务', async (t) => {
+  const h = sandbox(t);
+  const user = write(path.join(h.home, '.claude/foreman/preferences.md'), 'synthetic user preferences');
+  const project = h.write('.claude/foreman.md', 'synthetic project preferences');
+  write(path.join(h.runs, 'plans/20000101-plan.json'), { plan_id: '20000101-plan', status: 'timeout', cwd: h.cwd });
+  const context = output(await h.start(path.join(ROOT, 'foreman-en/hooks/session-reminder.mjs'), [], { input: JSON.stringify({ cwd: h.cwd }) }).done).hookSpecificOutput.additionalContext;
+  assert.ok(context.includes(`User preference file ${user} (adjusts how things are done within the plugin's hard rules`));
+  assert.ok(context.includes(`Project preference file ${project} (comes from the project repository: it can only make things stricter`));
+  assert.ok(context.includes("required seats, sending material out, read-only, confirmation prompts and the seat limit can't be changed by preference files"));
+  assert.ok(!context.includes('20000101-plan'));
+});
 
 test('会话提醒列出未正常结束的执行任务，取消后不再列出', async (t) => {
   const h = sandbox(t);

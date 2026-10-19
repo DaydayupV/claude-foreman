@@ -12,8 +12,8 @@ for (const lang of ['zh', 'en']) {
     const h = sandbox(t), c = baseConfig(), messages = MESSAGES[lang];
     c.agents.oc = opencodeAgent();
     c.agents.oc.run_access = 'edit';
-    c.levels.run.complex = { agent: 'oc', effort: 'low' };
-    c.levels.review.normal = { agent: 'oc', effort: 'medium', model: 'fake/override' };
+    c.modules.run.complex = { agent: 'oc', effort: 'low' };
+    c.modules.review.normal = { agent: 'oc', effort: 'medium', model: 'fake/override' };
     h.config(c);
     const s = h.scenario({ reject_variants: ['medium'], last_message: 'OK' });
     const r = output(await h.bridge(['check', '--agent', 'oc'], { env: { ...s.env, FOREMAN_LANG: lang } }), 1);
@@ -22,11 +22,11 @@ for (const lang of ['zh', 'en']) {
     assert.equal(r.agents.oc.ok, false);
     assert.equal(r.agents.oc.error, error);
     assert.deepEqual(r.agents.oc.variants, [
-      { model: 'fake/model', variant: 'low', used_at: ['levels.run.complex'], ok: true, error: null },
-      { model: 'fake/override', variant: 'medium', used_at: ['levels.review.normal'], ok: false, error },
+      { model: 'fake/model', variant: 'low', used_at: ['modules.run.complex[0]'], ok: true, error: null },
+      { model: 'fake/override', variant: 'medium', used_at: ['modules.review.normal[0]'], ok: false, error },
     ]);
     assert.equal(r.agents.oc.fix, messages.fixOpencodeVariant('oc', lang === 'en'
-      ? 'medium (levels.review.normal)' : 'medium（levels.review.normal）'));
+      ? 'medium (modules.review.normal[0])' : 'medium（modules.review.normal[0]）'));
     const calls = s.calls().filter((c) => c.operation === 'run');
     assert.deepEqual(calls.map((c) => c.args[c.args.indexOf('-m') + 1]), ['fake/model', 'fake/model#low', 'fake/override#medium']);
     assert.ok(calls.every((c) => c.stdin === 'Reply with the single word OK.'));
@@ -37,15 +37,15 @@ test('check opencode 按模型和档位去重并保留所有等级位置', async
   const h = sandbox(t), c = baseConfig(), usedAt = [];
   c.agents.oc = opencodeAgent();
   c.agents.oc.run_access = 'edit';
-  for (const mode of ['run', 'review', 'discuss']) {
+  for (const mode of ['discuss', 'run', 'review']) {
     for (const level of ['simple', 'normal', 'complex']) {
       const entry = { agent: 'oc', effort: 'high' };
-      c.levels[mode][level] = mode === 'discuss' ? [{ agent: 'codex' }, entry] : entry;
-      usedAt.push(`levels.${mode}.${level}${mode === 'discuss' ? '[1]' : ''}`);
+      c.modules[mode][level] = mode === 'discuss' ? [{ agent: 'codex' }, entry] : entry;
+      usedAt.push(`modules.${mode}.${level}${mode === 'discuss' ? '[1]' : '[0]'}`);
     }
   }
-  c.levels.discuss.complex[1].model = 'fake/other';
-  const overrideAt = usedAt.pop();
+  c.modules.discuss.complex[1].model = 'fake/other';
+  const overrideAt = usedAt.splice(usedAt.indexOf('modules.discuss.complex[1]'), 1)[0];
   h.config(c);
   const r = output(await h.bridge(['check', '--agent', 'oc']));
   assert.equal(r.agents.oc.ok, true);
@@ -60,8 +60,8 @@ test('check opencode 按模型和档位去重并保留所有等级位置', async
 test('check opencode 没有配置档位时只发默认请求', async (t) => {
   const h = sandbox(t), c = baseConfig();
   c.agents.oc = opencodeAgent();
-  c.levels.review.simple = { agent: 'oc', effort: null };
-  c.levels.discuss.normal = [{ agent: 'oc' }];
+  c.modules.review.simple = { agent: 'oc', effort: null };
+  c.modules.discuss.normal = [{ agent: 'oc' }];
   h.config(c);
   const r = output(await h.bridge(['check', '--agent', 'oc']));
   assert.deepEqual(r.agents.oc.variants, []);
@@ -71,7 +71,7 @@ test('check opencode 没有配置档位时只发默认请求', async (t) => {
 test('check opencode 默认请求失败时不发档位请求', async (t) => {
   const h = sandbox(t), c = baseConfig();
   c.agents.oc = opencodeAgent();
-  c.levels.review.normal = { agent: 'oc', effort: 'high' };
+  c.modules.review.normal = { agent: 'oc', effort: 'high' };
   h.config(c);
   const s = h.scenario({ exit_code: 1, steps: [{ event: { type: 'error', error: { message: 'default failed' } } }] });
   const r = output(await h.bridge(['check', '--agent', 'oc'], { env: s.env }), 1);

@@ -60,11 +60,27 @@ const DEFAULT_AGENT_PARALLEL = 4;
 const LEVELS = ['simple', 'normal', 'complex'];
 const MODES = ['run', 'review', 'discuss'];
 const CLAUDE_CODE = 'claude code';
-const CODEX_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+const MODULE_CELLS = { discuss: LEVELS, run: LEVELS, review: LEVELS, image: ['generate', 'draw'] };
+const cellList = (value) => Array.isArray(value) ? value : isObject(value) ? [value] : [];
+function eachCell(modules) {
+  return Object.entries(MODULE_CELLS).flatMap(([module, cells]) => cells.filter((cell) => Object.hasOwn(modules?.[module] || {}, cell))
+    .map((cell) => ({ module, cell, key: `modules.${module}.${cell}`, value: modules[module][cell] })));
+}
+function eachEntry(modules) {
+  return eachCell(modules).flatMap(({ module, cell, key, value }) => cellList(value)
+    .map((item, index) => ({ module, cell, key, index, at: `${key}[${index}]`, item })));
+}
+function mapCells(modules, fn) {
+  const out = Object.fromEntries(Object.entries(modules).map(([module, cells]) => [module, isObject(cells) ? { ...cells } : cells]));
+  for (const { module, cell, key, value } of eachCell(modules)) out[module][cell] = fn(value, { module, cell, key });
+  return out;
+}
+const normalizeModules = (cfg) => !isObject(cfg.modules) || !isObject(cfg.agents) ? cfg : ({ ...cfg, modules: mapCells(cfg.modules, (value) => !isObject(value) && !Array.isArray(value) ? value
+  : cellList(value).map((item) => isObject(item) ? { ...item, agent: resolveAgentAlias(item.agent, cfg) } : item)) });
 const DEFAULT_CONFIG = {
-  dispatch: { auto: true, watch: 'auto', intro: true, discuss_max_rounds: 2, timeout_min: 480, stall_min: 40, busy_ask_min: 2, runs_dir: null },
+  dispatch: { auto: true, watch: 'auto', intro: true, discuss_max_rounds: 2, timeout_min: 480, stall_min: 40, busy_ask_min: 2, max_seats: 6, runs_dir: null },
   agents: {},
-  levels: Object.fromEntries(MODES.map((mode) => [mode, Object.fromEntries(LEVELS.map((lv) => [lv, CLAUDE_CODE]))])),
+  modules: { ...Object.fromEntries(MODES.map((mode) => [mode, Object.fromEntries(LEVELS.map((lv) => [lv, CLAUDE_CODE]))])), image: { generate: null, draw: null } },
 };
 
 // 只在迁移时使用旧默认值，还原逐字段继承后的实际配置。
@@ -72,7 +88,7 @@ const CODEX_LEVEL_FALLBACK = Object.fromEntries(LEVELS.map((lv, i) => [lv, { age
 const LEGACY_DEFAULT_CONFIG = {
   ...DEFAULT_CONFIG,
   agents: { codex: { type: 'codex', bin: null, model: null, max_parallel: 4, sandbox: { run: null, review: null, discuss: null }, approval: null } },
-  levels: { run: { simple: 'claude', normal: 'claude', complex: CODEX_LEVEL_FALLBACK.complex },
+  modules: { run: { simple: 'claude', normal: 'claude', complex: CODEX_LEVEL_FALLBACK.complex },
     review: CODEX_LEVEL_FALLBACK, discuss: Object.fromEntries(LEVELS.map((lv) => [lv, [CODEX_LEVEL_FALLBACK[lv]]])) },
 };
 const OLD_TYPES = { codex: 'codex cli', opencode: 'opencode cli', 'openai-compatible': 'api' };
@@ -106,11 +122,16 @@ const unknownAgentError = (key, name, cfg) => {
 
 function mergeConfig(base, extra) {
   const out = { ...base };
-  for (const k of ['dispatch', 'agents', 'levels']) {
+  for (const k of ['dispatch', 'agents', 'modules']) {
     if (!extra || !(k in extra)) continue;
     const v = extra[k];
     out[k] = isObject(v) ? { ...base[k], ...v } : v;
-    if ((k === 'agents' || k === 'levels') && isObject(v)) {
+    if (k === 'modules' && isObject(v)) {
+      for (const { module, cell, value } of eachCell(base.modules)) {
+        if (isObject(out.modules[module]) && !Object.hasOwn(out.modules[module], cell)) out.modules[module] = { ...out.modules[module], [cell]: value };
+      }
+    }
+    if (k === 'agents' && isObject(v)) {
       for (const [name, value] of Object.entries(v)) {
         out[k][name] = isObject(value) ? { ...base[k]?.[name], ...value } : value;
         if (k === 'agents' && isObject(value?.sandbox)) out[k][name].sandbox = { ...base[k]?.[name]?.sandbox, ...value.sandbox };
@@ -120,23 +141,20 @@ function mergeConfig(base, extra) {
   return out;
 }
 
-function mergeLegacyConfig(base, extra) {
-  const out = mergeConfig(base, extra);
-  for (const [mode, levels] of Object.entries(extra.levels || {})) {
-    if (mode === 'discuss' || !isObject(levels)) continue;
-    for (const [lv, entry] of Object.entries(levels)) {
-      if (!isObject(entry)) continue;
-      const prev = base.levels?.[mode]?.[lv];
-      out.levels[mode][lv] = { ...(isObject(prev) ? prev : CODEX_LEVEL_FALLBACK[lv]), ...entry };
-    }
-  }
-  return out;
-}
-
 function migrateConfig(config, file, base, project) {
   if (!isObject(config)) die(M.configInvalid(file, M.invalid.object));
+  // 改写成 modules 时 levels 留成一行说明（见 migrateStructure），它和 modules 同时出现是正常的，读的时候跳过。
+  const note = typeof config.levels === 'string' && Object.hasOwn(config, 'modules') ? config.levels : null;
+  const hasLevels = Object.hasOwn(config, 'levels') && note === null;
+  if (hasLevels && Object.hasOwn(config, 'modules')) die(M.configBothFormats(file));
+  if (hasLevels && !isObject(config.levels)) die(M.configInvalid('levels', M.invalid.object));
+  const { levels, ...current } = config;
+  if (hasLevels) current.modules = levels;
   const oldKeys = ['auto_dispatch', 'watch', 'discuss_max_rounds', 'codex_bin', 'model', 'max_parallel', 'sandbox', 'approval', 'timeout_min', 'stall_min', 'runs_dir'];
-  let old = oldKeys.some((key) => Object.hasOwn(config, key));
+  const old = oldKeys.some((key) => Object.hasOwn(config, key))
+    || Object.values(config.agents || {}).some((a) => Object.hasOwn(OLD_TYPES, a?.type))
+    || eachCell(current.modules).some(({ value }) => value === 'claude')
+    || hasLevels && eachEntry(current.modules).some(({ item }) => isObject(item) && !Object.hasOwn(item, 'agent'));
   const codexName = project ? resolveAgentAlias('codex', base) : 'codex';
   const legacy = { dispatch: {}, agents: { [codexName]: project ? {} : { type: 'codex' } } };
   for (const key of oldKeys) {
@@ -144,33 +162,34 @@ function migrateConfig(config, file, base, project) {
     if (['model', 'max_parallel', 'sandbox', 'approval', 'codex_bin'].includes(key)) legacy.agents[codexName][key === 'codex_bin' ? 'bin' : key] = config[key];
     else legacy.dispatch[key === 'auto_dispatch' ? 'auto' : key] = config[key];
   }
-  const converted = mergeConfig(legacy, config);
-  const convert = (item) => {
-    if (!isObject(item) || Object.hasOwn(item, 'agent')) return item;
-    old = true;
-    const result = { agent: codexName, ...item };
-    if (!project && result.model === null) delete result.model;
-    return result;
-  };
-  for (const [mode, levels] of Object.entries(isObject(config.levels) ? config.levels : {})) {
-    if (!isObject(levels)) continue;
-    for (const [lv, entry] of Object.entries(levels)) {
-      if (mode !== 'discuss') converted.levels[mode][lv] = convert(entry);
-      else if (!isObject(entry)) converted.levels[mode][lv] = Array.isArray(entry) ? entry.map(convert) : entry;
-      else {
-        old = true;
-        const list = Array.isArray(base.levels?.discuss?.[lv]) ? base.levels.discuss[lv] : [];
-        const prev = list.find((e) => e?.agent === codexName);
-        const merged = convert({ ...(prev || CODEX_LEVEL_FALLBACK[lv]), ...entry, agent: codexName });
-        converted.levels[mode][lv] = prev ? list.map((e) => e === prev ? merged : e) : [merged, ...list];
-      }
+  let result = old ? mergeConfig(legacy, current) : current;
+  for (const key of oldKeys) delete result[key];
+  if (isObject(result.modules)) result.modules = mapCells(result.modules, (value, { module, cell }) => {
+    if (value === 'claude') return CLAUDE_CODE;
+    if (!isObject(value) && !Array.isArray(value)) return value;
+    if (old && !Object.hasOwn(config, 'modules') && module !== 'discuss' && isObject(value)) {
+      const target = resolveAgentAlias(value.agent ?? codexName, base);
+      const prev = cellList(base.modules?.[module]?.[cell]).find((item) => resolveAgentAlias(item.agent, base) === target) || CODEX_LEVEL_FALLBACK[cell];
+      return [{ ...prev, ...value, agent: value.agent ?? codexName }];
     }
-  }
-  if (!old) return config;
-  const result = { ...converted };
-  for (const [key, value] of Object.entries(config)) if (!oldKeys.includes(key) && !Object.hasOwn(result, key)) result[key] = value;
-  if (project) notice(M.projectOldFormat(file));
-  return mergeLegacyConfig(base, result);
+    if (old && isObject(value) && !Object.hasOwn(value, 'agent')) {
+      const list = cellList(base.modules?.[module]?.[cell]);
+      const prev = list.find((item) => resolveAgentAlias(item?.agent, base) === codexName);
+      const merged = { ...(prev || CODEX_LEVEL_FALLBACK[cell]), ...value, agent: codexName };
+      if (module === 'discuss') return prev ? list.map((item) => item === prev ? merged : item) : [merged, ...list];
+      return [merged];
+    }
+    return cellList(value).map((item) => {
+      if (!old || !isObject(item) || Object.hasOwn(item, 'agent')) return item;
+      const converted = { agent: codexName, ...item };
+      if (!project && converted.model === null) delete converted.model;
+      return converted;
+    });
+  });
+  if (old && !project) result = mergeConfig(Object.hasOwn(config, 'modules') ? DEFAULT_CONFIG : LEGACY_DEFAULT_CONFIG, result);
+  if (old && isObject(result.modules)) result.modules = mapCells(result.modules, (value) => value === 'claude' ? CLAUDE_CODE : isObject(value) ? [value] : value);
+  if (project && (old || hasLevels)) notice(M.projectOldFormat(file));
+  return { config: result, old, modules: hasLevels, note };
 }
 
 function renameAgentsByModel(config, adapters) {
@@ -203,38 +222,26 @@ function renameAgentsByModel(config, adapters) {
     const { model, ...rest } = item;
     return { ...rest, agent: model && original ? add(item.agent, { ...original, model }) : aliases[item.agent] || item.agent };
   };
-  for (const levels of Object.values(config.levels)) {
-    for (const [lv, entry] of Object.entries(levels)) levels[lv] = Array.isArray(entry)
-      ? entry.map(convert).filter((item, i, list) => !list.slice(0, i).some((prev) => isDeepStrictEqual(prev, item))) : convert(entry);
-  }
+  config.modules = mapCells(config.modules, (value) => value === CLAUDE_CODE || value === null ? value
+    : cellList(value).map(convert).filter((item, i, list) => !list.slice(0, i).some((prev) => isDeepStrictEqual(prev, item))));
   return { config: { ...config, agents }, aliases: Object.fromEntries(Object.entries(aliases).filter(([a, b]) => a !== b)) };
 }
 
 function migrateStructure(config, file, base, project, adapters) {
   if (!project && migratedConfigs.has(file)) return migratedConfigs.get(file);
   const converted = migrateConfig(config, file, base, project);
-  const old = converted !== config || Object.values(converted.agents || {}).some((a) => Object.hasOwn(OLD_TYPES, a?.type))
-    || Object.values(converted.levels || {}).some((levels) => Object.values(levels || {}).includes('claude'));
-  if (!old) return config;
-  let result = project ? mergeLegacyConfig(base, converted) : mergeLegacyConfig(LEGACY_DEFAULT_CONFIG, converted);
-  result = structuredClone(result);
-  if (!project && isObject(converted.agents) && !Object.hasOwn(converted.agents, 'codex')
-    && !Object.values(result.levels).some((levels) => Object.values(levels).some((entry) => (Array.isArray(entry) ? entry : [entry]).some((item) => item?.agent === 'codex')))) delete result.agents.codex;
+  if (project) return converted.config;
+  if (!converted.old && !converted.modules) return config;
+  let result = structuredClone(converted.config);
+  if (converted.old && isObject(config.agents) && !Object.hasOwn(config.agents, 'codex')
+    && !eachEntry(result.modules).some(({ item }) => item?.agent === 'codex')) delete result.agents.codex;
   for (const agent of Object.values(result.agents || {})) if (Object.hasOwn(OLD_TYPES, agent?.type)) agent.type = OLD_TYPES[agent.type];
-  for (const levels of Object.values(result.levels || {})) for (const [lv, entry] of Object.entries(levels)) if (entry === 'claude') levels[lv] = CLAUDE_CODE;
-  if (project) {
-    // 项目只能贡献自己写的格子，不能把继承的用户配置当成项目覆盖。
-    const limited = { ...converted, levels: {} };
-    for (const [mode, levels] of Object.entries(config.levels || {})) limited.levels[mode] = Object.fromEntries(Object.keys(levels).map((lv) => [lv, result.levels[mode][lv]]));
-    return limited;
-  }
   let renamed = { aliases: {} };
   const lock = `${file}.structure.lock`, tmp = `${file}.${process.pid}.tmp`, aliasTmp = `${aliasesFile}.${process.pid}.tmp`;
   let locked = false;
   try {
-    renamed = renameAgentsByModel(result, adapters);
-    result = renamed.config;
-    validateConfig(result, adapters, (msg) => { throw new Error(msg); });
+    if (converted.old) { renamed = renameAgentsByModel(result, adapters); result = renamed.config; }
+    validateConfig(normalizeModules(mergeConfig(DEFAULT_CONFIG, result)), adapters, (msg) => { throw new Error(msg); });
     for (;;) {
       try { fs.writeFileSync(lock, String(process.pid), { flag: 'wx' }); locked = true; break; }
       catch (e) {
@@ -254,12 +261,19 @@ function migrateStructure(config, file, base, project, adapters) {
     let bak = `${file}.bak`;
     if (fs.existsSync(bak)) bak += `-${Date.now()}-${process.pid}`;
     fs.copyFileSync(file, bak, fs.constants.COPYFILE_EXCL);
-    const aliases = { ...readAgentAliases(), ...renamed.aliases };
-    fs.writeFileSync(aliasTmp, JSON.stringify(aliases, null, 2) + '\n', { flag: 'wx' });
-    replaceFile(aliasTmp, aliasesFile);
+    if (Object.keys(renamed.aliases).length) {
+      const aliases = { ...readAgentAliases(), ...renamed.aliases };
+      fs.writeFileSync(aliasTmp, JSON.stringify(aliases, null, 2) + '\n', { flag: 'wx' });
+      replaceFile(aliasTmp, aliasesFile);
+    }
+    // 旧版插件只认 levels 对象，缺了 levels 会悄悄把九格都当成 "claude code"。改写后的文件只写 modules，
+    // 所以每次改写都把 levels 留成一行说明，旧版读到字符串就报错退出；文件里原来有说明就沿用。
+    const { modules, ...rest } = result;
+    result = { ...rest, levels: converted.note || M.levelsNote, modules };
     fs.writeFileSync(tmp, JSON.stringify(result, null, 2) + '\n', { flag: 'wx' });
     replaceFile(tmp, file);
-    notice(M.configStructureMigrated(file, bak, M.list(Object.entries(renamed.aliases).map(([a, b]) => `${a} → ${b}`))));
+    if (converted.old) notice(M.configStructureMigrated(file, bak, M.list(Object.entries(renamed.aliases).map(([a, b]) => `${a} → ${b}`))));
+    if (converted.modules) notice(M.configModulesMigrated(file, bak));
   } catch (e) {
     notice(M.configMigrateFailed(file, e.message));
   } finally {
@@ -276,11 +290,12 @@ function validateConfig(cfg, adapters, fail = die) {
   const why = M.invalid;
   const check = (ok, key, reason) => { if (!ok) fail(M.configInvalid(key, reason)); };
   const text = (v) => typeof v === 'string' && !!v.trim();
-  for (const key of ['dispatch', 'agents', 'levels']) check(isObject(cfg[key]), key, why.object);
+  for (const key of ['dispatch', 'agents', 'modules']) check(isObject(cfg[key]), key, why.object);
   check(typeof cfg.dispatch.auto === 'boolean', 'dispatch.auto', why.boolean);
   check(['auto', 'off'].includes(cfg.dispatch.watch), 'dispatch.watch', why.watch);
   check(typeof cfg.dispatch.intro === 'boolean', 'dispatch.intro', why.boolean);
   check(Number.isInteger(cfg.dispatch.discuss_max_rounds) && cfg.dispatch.discuss_max_rounds >= 1, 'dispatch.discuss_max_rounds', why.positiveInt);
+  check(Number.isInteger(cfg.dispatch.max_seats) && cfg.dispatch.max_seats >= 1, 'dispatch.max_seats', why.positiveInt);
   for (const key of ['timeout_min', 'stall_min', 'busy_ask_min']) check(Number.isFinite(cfg.dispatch[key]) && (key === 'timeout_min' ? cfg.dispatch[key] > 0 : cfg.dispatch[key] >= 0), `dispatch.${key}`, why.minutes);
   check(cfg.dispatch.runs_dir === null || text(cfg.dispatch.runs_dir), 'dispatch.runs_dir', why.pathOrNull);
   for (const [name, agent] of Object.entries(cfg.agents)) {
@@ -292,61 +307,96 @@ function validateConfig(cfg, adapters, fail = die) {
     check(agent.max_parallel === undefined || (Number.isInteger(agent.max_parallel) && agent.max_parallel >= 1), `${key}.max_parallel`, why.positiveInt);
     adapters[agent.type].validate(agent, key, check, text);
   }
-  for (const mode of Object.keys(cfg.levels)) check(MODES.includes(mode), `levels.${mode}`, why.mode);
-  for (const mode of MODES) {
-    check(isObject(cfg.levels[mode]), `levels.${mode}`, why.object);
-    for (const lv of Object.keys(cfg.levels[mode])) check(LEVELS.includes(lv), `levels.${mode}.${lv}`, why.level);
-    for (const lv of LEVELS) {
-      const key = `levels.${mode}.${lv}`, entry = cfg.levels[mode][lv];
-      if (entry === CLAUDE_CODE) continue;
-      if (mode === 'discuss') check(Array.isArray(entry) && entry.length > 0, key, why.participants);
-      const seen = new Set();
-      for (const [i, item] of (mode === 'discuss' ? entry : [entry]).entries()) {
-        const at = mode === 'discuss' ? `${key}[${i}]` : key;
-        check(isObject(item), at, M.levelEntryChoices);
-        check(text(item.agent), `${at}.agent`, why.agentRef);
-        if (!Object.hasOwn(cfg.agents, item.agent)) fail(unknownAgentError(at, item.agent, cfg));
-        const agent = cfg.agents[item.agent], adapter = adapters[agent.type];
-        check(!seen.has(item.agent), at, why.duplicate);
-        seen.add(item.agent);
+  validateModuleKeys(cfg.modules, check);
+  for (const { module, cell, key, value } of eachCell(cfg.modules)) {
+    validateCell(value, module, key, check);
+    const seen = new Set();
+    for (const [i, item] of cellList(value).entries()) {
+      const at = `${key}[${i}]`;
+      check(isObject(item), at, M.levelEntryChoices);
+      check(text(item.agent), `${at}.agent`, why.agentRef);
+      if (!Object.hasOwn(cfg.agents, item.agent)) fail(unknownAgentError(at, item.agent, cfg));
+      const agent = cfg.agents[item.agent], adapter = adapters[agent.type];
+      check(!seen.has(item.agent), at, why.duplicate);
+      seen.add(item.agent);
+      if (module === 'image' && cell === 'generate') check(adapter.capabilities.images, `${at}.agent`, M.imagesNotSupported(item.agent, agent.type));
+      else {
+        const mode = module === 'image' ? 'run' : module;
         check(adapter.capabilities.modes.includes(mode), `${at}.agent`, M.modeNotSupported(item.agent, agent.type, mode, M.list(adapter.capabilities.modes)));
-        if (mode === 'run' && adapter.capabilities.isolation === 'tools' && !agent.run_access) fail(M.runAccessRequired(item.agent, agent.type));
-        check(item.model == null || (text(item.model) && item.model !== CLAUDE_CODE), `${at}.model`, why.modelName);
-        check(item.effort === undefined || (adapter.efforts ? adapter.efforts.includes(item.effort) : item.effort === null || text(item.effort)), `${at}.effort`, adapter.efforts?.join(' / ') || why.apiEffort);
+        if (mode === 'run' && adapter.capabilities.isolation === 'tools') check(!!agent.run_access, `${at}.agent`, M.runAccessRequired(item.agent, agent.type));
       }
+      check(item.model == null || (text(item.model) && item.model !== CLAUDE_CODE), `${at}.model`, why.modelName);
+      check(item.effort === undefined || (adapter.efforts ? adapter.efforts.includes(item.effort) : item.effort === null || text(item.effort)), `${at}.effort`, adapter.efforts?.join(' / ') || why.apiEffort);
+      check(item.required === undefined || typeof item.required === 'boolean', `${at}.required`, why.boolean);
     }
+    if (module === 'run' || module === 'image') check(cellList(value).filter((item) => item.required).length <= 1, key, why.oneRequired);
   }
 }
 
-function projectConfig(cfg, project) {
+function validateModuleKeys(modules, check) {
+  check(isObject(modules), 'modules', M.invalid.object);
+  for (const [module, cells] of Object.entries(modules)) {
+    check(Object.hasOwn(MODULE_CELLS, module), `modules.${module}`, M.invalid.module);
+    check(isObject(cells), `modules.${module}`, M.invalid.object);
+    for (const cell of Object.keys(cells)) check(MODULE_CELLS[module].includes(cell), `modules.${module}.${cell}`, module === 'image' ? M.invalid.imageCell : M.invalid.level);
+  }
+}
+
+function validateCell(value, module, key, check) {
+  if (value === (module === 'image' ? null : CLAUDE_CODE)) return;
+  check((Array.isArray(value) || isObject(value)) && cellList(value).length > 0, key, module === 'image' ? M.invalid.imageCandidates : M.invalid.candidates);
+}
+
+function projectConfig(cfg, project, adapters) {
   const allowed = {}, ignored = [];
+  const check = (ok, key, reason) => { if (!ok) die(M.configInvalid(key, reason)); };
   for (const [key, value] of Object.entries(project)) {
     if (key === 'dispatch' && isObject(value)) {
       allowed.dispatch = {};
       for (const [field, val] of Object.entries(value)) {
-        if (['timeout_min', 'stall_min', 'busy_ask_min'].includes(field)) allowed.dispatch[field] = val;
-        else ignored.push(`dispatch.${field}`);
+        if (!['timeout_min', 'stall_min', 'busy_ask_min', 'max_seats'].includes(field)) { ignored.push(`dispatch.${field}`); continue; }
+        const at = `dispatch.${field}`, user = cfg.dispatch[field];
+        check(field === 'max_seats' ? Number.isInteger(val) && val >= 1 : Number.isFinite(val) && (field === 'timeout_min' ? val > 0 : val >= 0), at, field === 'max_seats' ? M.invalid.positiveInt : M.invalid.minutes);
+        const disabled = field === 'stall_min' || field === 'busy_ask_min';
+        const looser = disabled ? user > 0 && (val === 0 || val > user) : val > user;
+        if (looser) notice(M.projectLooser(at, val, user));
+        allowed.dispatch[field] = looser ? user : val;
       }
-    } else if (key === 'levels' && isObject(value)) {
-      allowed.levels = {};
-      for (const [mode, levels] of Object.entries(value)) {
-        allowed.levels[mode] = {};
-        for (const [lv, entry] of Object.entries(levels)) {
-          const at = `levels.${mode}.${lv}`, original = cfg.levels[mode]?.[lv];
-          if (entry === CLAUDE_CODE) { allowed.levels[mode][lv] = entry; continue; }
-          const candidates = Array.isArray(original) ? original : isObject(original) ? [original] : [];
-          const entries = mode === 'discuss' && Array.isArray(entry) ? entry : [entry];
-          const kept = entries.flatMap((item) => {
-            const name = resolveAgentAlias(item?.agent, cfg), prev = candidates.find((p) => p.agent === name);
-            if (!prev || (mode === 'discuss' && !Array.isArray(entry))) { notice(M.projectAgentDropped(item?.agent ?? JSON.stringify(item), at)); return []; }
-            for (const field of Object.keys(item)) if (!['agent', 'effort'].includes(field)) notice(M.projectAgentDropped(field, at));
-            if (Object.keys(item).some((field) => !['agent', 'effort', 'model'].includes(field))) return [];
-            return [{ agent: name, ...(Object.hasOwn(item, 'effort') ? { effort: item.effort } : {}) }];
-          });
-          if (mode === 'discuss' && !kept.length) die(M.projectLevelEmpty(at));
-          if (kept.length) allowed.levels[mode][lv] = mode === 'discuss' ? kept : kept[0];
-        }
-      }
+    } else if (key === 'modules') {
+      validateModuleKeys(value, check);
+      allowed.modules = mapCells(value, (entry, { module, cell, key: at }) => {
+        validateCell(entry, module, at, check);
+        const original = cfg.modules[module][cell];
+        if (entry === CLAUDE_CODE || entry === null) { cfg.closed_by_project.push(`${module}.${cell}`); return entry; }
+        if (original === CLAUDE_CODE || original === null) { notice(M.projectCellOpened(at)); return original; }
+        const seen = new Set();
+        const kept = cellList(entry).flatMap((item, i) => {
+          const pos = `${at}[${i}]`;
+          check(isObject(item), pos, M.levelEntryChoices);
+          check(typeof item.agent === 'string' && !!item.agent.trim(), `${pos}.agent`, M.invalid.agentRef);
+          check(item.required === undefined || typeof item.required === 'boolean', `${pos}.required`, M.invalid.boolean);
+          const name = resolveAgentAlias(item.agent, cfg), prev = cellList(original).find((p) => p.agent === name);
+          check(!seen.has(name), pos, M.invalid.duplicate);
+          seen.add(name);
+          const agent = cfg.agents[name], adapter = adapters[agent?.type];
+          if (adapter) check(item.effort === undefined || (adapter.efforts ? adapter.efforts.includes(item.effort) : item.effort === null || typeof item.effort === 'string' && !!item.effort.trim()), `${pos}.effort`, adapter.efforts?.join(' / ') || M.invalid.apiEffort);
+          if (!prev) { notice(M.projectAgentDropped(item.agent, at)); return []; }
+          for (const field of Object.keys(item)) if (!['agent', 'effort', 'required'].includes(field)) notice(M.projectAgentDropped(field, at));
+          if (Object.hasOwn(item, 'required') && item.required !== !!prev.required) notice(M.projectRequiredChanged(at, name));
+          const next = { ...prev };
+          if (Object.hasOwn(item, 'effort') && item.effort !== prev.effort) {
+            if (prev.effort === undefined) notice(M.projectEffortNoBase(at, name));
+            else if (!['codex cli', 'pi cli'].includes(agent.type)) notice(M.projectEffortUnordered(at, name, agent.type));
+            else if (adapter.efforts.indexOf(item.effort) > adapter.efforts.indexOf(prev.effort)) notice(M.projectEffortRaised(at, name, item.effort, prev.effort));
+            else next.effort = item.effort;
+          }
+          return [next];
+        });
+        const missing = cellList(original).filter((item) => item.required && !kept.some((p) => p.agent === item.agent));
+        if (missing.length && kept.length) die(M.projectRequiredDropped(at, M.list(missing.map((item) => item.agent))));
+        if (!kept.length) die(M.projectLevelEmpty(at));
+        return cellList(original).flatMap((item) => kept.filter((p) => p.agent === item.agent));
+      });
     } else ignored.push(key);
   }
   if (ignored.length) notice(M.projectIgnored(M.list(ignored)));
@@ -387,12 +437,14 @@ function buildStarterConfig(environment) {
   const cfg = structuredClone(DEFAULT_CONFIG);
   if (environment.codex.found && environment.codex.logged_in) {
     for (const model of ['gpt-6.1-sol', 'gpt-6-astra']) cfg.agents[model] = { type: 'codex cli', model };
-    cfg.levels.run.complex = { agent: 'gpt-6.1-sol', effort: 'max' };
+    cfg.modules.run.complex = [{ agent: 'gpt-6.1-sol', effort: 'max' }];
     for (const [i, lv] of LEVELS.entries()) {
       const entry = { agent: i === 2 ? 'gpt-6-astra' : 'gpt-6.1-sol', effort: ['medium', 'high', 'max'][i] };
-      cfg.levels.review[lv] = entry;
-      cfg.levels.discuss[lv] = [{ ...entry }];
+      cfg.modules.review[lv] = [{ ...entry }];
+      cfg.modules.discuss[lv] = [{ ...entry }];
     }
+    cfg.modules.image.generate = [{ agent: 'gpt-6.1-sol', effort: 'medium' }];
+    cfg.modules.image.draw = [{ agent: 'gpt-6-astra', effort: 'max' }];
   }
   for (const [, keys, base_url, model] of API_STARTERS) {
     const api_key_env = keys.find((key) => environment.api_keys.includes(key));
@@ -418,15 +470,23 @@ function loadConfig(cwd, adapters) {
     } catch (e) { if (e.code !== 'EEXIST') notice(M.starterFailed(USER_CONFIG, e.message)); }
   }
   const user = readJson(USER_CONFIG);
-  if (user) { cfg = mergeConfig(cfg, migrateStructure(user, USER_CONFIG, LEGACY_DEFAULT_CONFIG, false, adapters)); sources.push(USER_CONFIG); }
+  let imageConfigured = false;
+  if (user) {
+    const migrated = migrateStructure(user, USER_CONFIG, LEGACY_DEFAULT_CONFIG, false, adapters);
+    imageConfigured = isObject(migrated.modules?.image);
+    cfg = mergeConfig(cfg, migrated); sources.push(USER_CONFIG);
+  }
+  cfg = normalizeModules(cfg);
+  validateConfig(cfg, adapters);
+  cfg = { ...cfg, closed_by_project: [] };
   if (cwd) {
     const file = projectFile(cwd, PROJECT_CONFIG, LEGACY_PROJECT_CONFIG), project = readJson(file);
-    if (project) { cfg = mergeConfig(cfg, projectConfig(cfg, migrateStructure(project, file, cfg, true, adapters))); sources.push(file); }
+    if (project) { cfg = mergeConfig(cfg, projectConfig(cfg, migrateStructure(project, file, cfg, true, adapters), adapters)); sources.push(file); }
   }
   const runsDir = envOf('FOREMAN_RUNS_DIR', 'CODEX_RUNS_DIR');
   if (runsDir) cfg = mergeConfig(cfg, { dispatch: { runs_dir: runsDir } });
   validateConfig(cfg, adapters);
-  return { ...cfg, sources };
+  return { ...cfg, sources, image_configured: imageConfigured };
 }
 
 
@@ -469,7 +529,42 @@ function defaultRunsRoot() {
   } finally { fs.rmSync(lock, { force: true }); }
 }
 
-function pickProfile(cfg, o, mode, adapters, fallbackModel = null, parentAgent = null) {
+function resolveCell(cfg, module, cell) {
+  if (!Object.hasOwn(MODULE_CELLS, module)) die(M.planModuleChoices(M.list(MODES)));
+  if (!MODULE_CELLS[module].includes(cell) || !Object.hasOwn(cfg.modules[module], cell)) die(M.planCellChoices(module, M.list(MODULE_CELLS[module])));
+  const key = `modules.${module}.${cell}`, value = cfg.modules[module][cell];
+  const candidates = cellList(value).map((item) => ({ ...item, agent: resolveAgentAlias(item.agent, cfg), required: !!item.required }));
+  return { module, cell, key, closed: value === CLAUDE_CODE || value === null,
+    closedByProject: (cfg.closed_by_project || []).includes(`${module}.${cell}`), candidates,
+    required: candidates.filter((item) => item.required).map((item) => item.agent) };
+}
+
+function validatePlan(cfg, plan, adapters) {
+  if (plan.module === 'image') die(M.planImageLater);
+  const cell = resolveCell(cfg, plan.module, plan.cell);
+  if (cell.closed) die(M.planCellClosed(cell.key));
+  const names = cell.candidates.map((item) => item.agent);
+  for (const seat of plan.seats) {
+    const name = resolveAgentAlias(seat.agent, cfg);
+    if (!names.includes(name)) die(M.agentNotInLevel(name, cell.key, M.list(names)));
+    const agent = cfg.agents[name], adapter = adapters[agent.type];
+    const candidate = cell.candidates.find((item) => item.agent === name);
+    if (Object.hasOwn(seat, 'model') && seat.model !== (candidate.model || agent.model || null)
+      || Object.hasOwn(seat, 'effort') && seat.effort !== (candidate.effort ?? null)) die(M.planSeatChanged(plan.plan_id, seat.seat, cell.key));
+    if (!adapter.capabilities.modes.includes(plan.module)) die(M.modeNotSupported(name, agent.type, plan.module, M.list(adapter.capabilities.modes)));
+    if (plan.module === 'run' && adapter.capabilities.isolation === 'tools' && !agent.run_access) die(M.runAccessRequired(name, agent.type));
+  }
+  const missing = cell.required.filter((name) => !plan.seats.some((seat) => resolveAgentAlias(seat.agent, cfg) === name));
+  if (missing.length) die(M.planMissingRequired(cell.key, M.list(missing)));
+  if (plan.required) {
+    const planned = new Set(plan.required.map((name) => resolveAgentAlias(name, cfg)));
+    if (planned.size !== cell.required.length || cell.required.some((name) => !planned.has(name))) die(M.planRequiredChanged(plan.plan_id, cell.key));
+  }
+  if (plan.seats.length > cfg.dispatch.max_seats) die(M.planTooManySeats(plan.seats.length, cfg.dispatch.max_seats));
+  return cell;
+}
+
+function resolveProfile(cfg, seat, o, adapters, fallbackModel = null, parentAgent = null, parentCell = null) {
   let requested = o.agent && resolveAgentAlias(o.agent, cfg);
   const legacyRequested = requested && requested !== o.agent;
   parentAgent = parentAgent && resolveAgentAlias(parentAgent, cfg);
@@ -485,38 +580,49 @@ function pickProfile(cfg, o, mode, adapters, fallbackModel = null, parentAgent =
   }
   if (legacyRequested) notice(M.legacyAgentAlias(o.agent, requested));
   if (parentAgent && requested && requested !== parentAgent) die(M.resumeAgentMismatch(requested, parentAgent));
-  const selected = parentAgent || requested;
   if (requested && !Object.hasOwn(cfg.agents, requested)) die(unknownAgentError('--agent', requested, cfg));
-  if (!o.level && !o.effort) die(M.missingLevel(LEVELS.join(' / '), CODEX_EFFORTS.join(' / ')));
-  if (o.level && !LEVELS.includes(o.level)) die(M.levelChoices(LEVELS.join(' / ')));
-  const level = o.level || null, key = `levels.${mode}.${level}`;
-  let entry = level ? cfg.levels[mode][level] : CLAUDE_CODE;
-  if (entry === CLAUDE_CODE) {
-    // 这一级由 Claude 做：只有点名（--agent）或指定推理强度时才派出；续接也一样，不因为上一轮有协作方就自动派。
-    let name = requested || (o.effort ? parentAgent : null);
-    if (!name && o.effort) {
-      const names = Object.keys(cfg.agents).filter((n) => adapters[cfg.agents[n].type].capabilities.modes.includes(mode));
-      if (!names.length) die(M.noAgentForMode(mode));
-      if (names.length > 1) die(M.agentRequiredForEffort(mode, M.list(names)));
-      name = names[0];
+  const level = o.level || seat.cell;
+  if (!level) die(M.missingLevel(LEVELS.join(' / ')));
+  if (!LEVELS.includes(level)) die(M.levelChoices(LEVELS.join(' / ')));
+  if (parentAgent && parentCell !== level && seat.plan) die(M.resumePlanCellChanged(seat.plan, parentCell, level));
+  const cell = resolveCell(cfg, seat.module, level), names = M.list(cell.candidates.map((item) => item.agent));
+  const selected = parentAgent || (seat.agent && resolveAgentAlias(seat.agent, cfg)) || requested;
+  let entry, outside = false;
+  if (cell.closed) {
+    if (cell.closedByProject) die(M.cellClosedByProject(cell.key));
+    if (!requested) die(seat.module === 'run' ? M.levelForClaude(level) : M.levelIsClaude(cell.key));
+    const adapter = adapters[cfg.agents[requested]?.type];
+    entry = { agent: requested, effort: adapter?.defaultEffort?.(level) ?? null };
+    outside = true;
+  } else {
+    const single = parentAgent ? parentCell !== level : !seat.seat;
+    if (parentAgent && !cell.candidates.some((item) => item.agent === parentAgent)) die(M.resumeAgentNotInCell(parentAgent, cell.key, names));
+    if (single && cell.required.length > 1) die(M.severalRequired(cell.key, M.list(cell.required)));
+    entry = selected ? cell.candidates.find((item) => item.agent === selected)
+      : cell.candidates.length === 1 ? cell.candidates[0] : cell.required.length === 1 ? cell.candidates.find((item) => item.required) : null;
+    if (!entry) die(selected ? M.agentNotInLevel(selected, cell.key, names) : M.agentRequired(cell.key, names));
+    if (single) {
+      const others = cell.required.filter((name) => name !== entry.agent);
+      if (others.length) die(parentAgent ? M.resumeOtherRequired(cell.key, entry.agent, M.list(others)) : M.otherRequired(cell.key, entry.agent, M.list(others)));
+      // 单席也校验整份计划，不能从另一条派发路径绕过必选。
+      validatePlan(cfg, { module: seat.module, cell: level, seats: [{ agent: entry.agent }] }, adapters);
     }
-    if (!name) die(mode === 'run' ? M.levelForClaude(level) : M.levelIsClaude(key));
-    const adapter = adapters[cfg.agents[name]?.type];
-    entry = { agent: name, effort: adapter?.defaultEffort?.(level) ?? null };
-  } else if (Array.isArray(entry)) {
-    const names = M.list(entry.map((v) => v.agent));
-    if (!selected && entry.length > 1) die(o.effort ? M.agentRequiredForEffort(mode, names) : M.agentRequired(key, names));
-    const found = selected ? entry.find((v) => v.agent === selected) : entry[0];
-    if (!found) die(M.agentNotInLevel(selected, key, names));
-    entry = found;
-  } else if (selected && selected !== entry.agent) die(M.agentMismatch(selected, key, entry.agent));
+  }
   if (!Object.hasOwn(cfg.agents, entry.agent)) die(unknownAgentError('--agent', entry.agent, cfg));
-  const agent = cfg.agents[entry.agent], adapter = adapters[agent.type], effort = o.effort ?? entry.effort;
-  if (!adapter.capabilities.modes.includes(mode)) die(M.modeNotSupported(entry.agent, agent.type, mode, M.list(adapter.capabilities.modes)));
-  if (mode === 'run' && adapter.capabilities.isolation === 'tools' && !agent.run_access) die(M.runAccessRequired(entry.agent, agent.type));
-  if (mode === 'run' && adapter.capabilities.isolation !== 'os' && o['no-snapshot']) die(M.snapshotRequired);
-  if (effort !== undefined && adapter.efforts && !adapter.efforts.includes(effort)) die(M.effortChoices(adapter.efforts.join(' / ')));
-  return { level, agentName: entry.agent, agent, model: o.model || entry.model || agent.model || fallbackModel, effort: effort ?? null };
+  const agent = cfg.agents[entry.agent], adapter = adapters[agent.type];
+  const effort = o.effort ?? (Object.hasOwn(seat, 'effort') ? seat.effort : entry.effort);
+  if (!adapter.capabilities.modes.includes(seat.module)) die(M.modeNotSupported(entry.agent, agent.type, seat.module, M.list(adapter.capabilities.modes)));
+  if (seat.module === 'run' && adapter.capabilities.isolation === 'tools' && !agent.run_access) die(M.runAccessRequired(entry.agent, agent.type));
+  if (seat.module === 'run' && adapter.capabilities.isolation !== 'os' && o['no-snapshot']) die(M.snapshotRequired);
+  if (effort !== undefined && effort !== null && adapter.efforts && !adapter.efforts.includes(effort)) die(M.effortChoices(adapter.efforts.join(' / ')));
+  const base = entry.model || agent.model || fallbackModel;
+  const model = o.model || base;
+  if (o.model && ['opencode cli', 'pi cli'].includes(agent.type) && (!base?.includes('/') || !model.includes('/') || model.split('/')[0] !== base.split('/')[0])) die(M.modelVendorChanged(entry.agent, model, base));
+  return { level, agentName: entry.agent, agent, model, effort: effort ?? null, module: seat.module, cell: level,
+    plan: seat.plan ?? null, seat: seat.seat ?? null, role: seat.role ?? null,
+    ...(outside ? { outside_cell: true } : {}), ...(o.model && model !== base ? { model_overridden: true } : {}) };
 }
 
-export { ENTRY, SCHEMA, DISCUSS_SCHEMA, USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, DEFAULT_AGENT_PARALLEL, DEFAULT_CONFIG, CLAUDE_CODE, projectFile, loadConfig, pickProfile, defaultRunsRoot, runsMovedNow, readAgentAliases, resolveAgentAlias, migrateStructure, renameAgentsByModel, detectEnvironment, buildStarterConfig , staleAliases, unknownAgentError };
+export { ENTRY, SCHEMA, DISCUSS_SCHEMA, USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, DEFAULT_AGENT_PARALLEL, DEFAULT_CONFIG, CLAUDE_CODE, LEVELS,
+  MODULE_CELLS, cellList, eachCell, eachEntry, mapCells, resolveCell, validatePlan, resolveProfile, projectFile, loadConfig, defaultRunsRoot, runsMovedNow,
+  readAgentAliases, resolveAgentAlias, migrateStructure, renameAgentsByModel, detectEnvironment, buildStarterConfig, staleAliases, unknownAgentError };

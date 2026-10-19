@@ -1,5 +1,5 @@
 {
-  "description": "Reminds Claude at session start to load the dispatch skill, and blocks commands that call codex exec / codex review directly so Codex is always called through the foreman-en script",
+  "description": "Reminds Claude at session start to load the dispatch skill and adds the user and project preference files; blocks commands that call codex exec / codex review, opencode run or pi tasks directly, so agents are always called through the foreman-en script",
   "hooks": {
     "SessionStart": [
       {

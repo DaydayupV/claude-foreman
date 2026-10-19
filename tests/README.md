@@ -85,18 +85,28 @@
 | 9 查询与普通文字放行 | hooks.test.mjs | 直接调用守卫放行版本查询；直接调用守卫放行登录状态；直接调用守卫放行普通文本提及；直接调用守卫放行带分隔符的文字 |
 | 11 协作方要人回答 | questions.test.mjs | 六种来源各自收集进 questions，needs_decision 只算需要决定的四种；Codex 默认 approval_policy=never、配置了就用配置的；opencode 注入的权限里 question 被拒；最终回答是问题时不修复，像 JSON 或长篇分析时照常修复；终端提示加 3 分钟静默触发看门狗、结束进程树并记 needs_input，模型消息静默和执行中的命令不触发；watch、status 和组计数里问题的显示 |
 | 12 新配置写法和迁移 | structure-migration.test.mjs | 真实结构配置迁移后按模型改名、每格模型和强度不变、有备份和别名；部分字段的旧等级先补全；模型覆盖拆成新协作方；同名合并或加后缀；Codex 没写模型时取 config.toml；项目配置的旧代号；并发迁移只备份一次、校验失败不改文件；旧记录在 status、watch、resume 和并发准入里照常可用 |
-| 13 通用化 | generalization.test.mjs | 多个 Codex、没有 Codex、能力表校验；代号规则；三种任务的 "claude code" 和点名派出；--effort 选协作方；check 的新结构和总体结果；项目配置只能收紧；按环境生成初始配置和 environment 字段；没有协作方时的会话提醒 |
+| 13 通用化 | generalization.test.mjs | 多个 Codex、没有 Codex、能力表校验；代号规则；三种任务的 "claude code" 和点名派出；--effort 只覆盖强度且 --level 必填；check 的新结构和总体结果；项目只能保留同格候选，整格关闭并忽略模型覆盖；按环境生成 modules、max_seats 和有 Codex 时的图像默认值；没有协作方时的会话提醒 |
 | 14 审查范围 | review-scope.test.mjs | 未提交范围含暂存、未暂存和未跟踪文件，指纹稳定且不动索引；删除、改名、二进制、非 UTF-8、过大文件；没有提交的仓库；base 从分叉点到工作区、含未提交改动、不含未跟踪文件，分支不存在或没有共同祖先时报错；根提交和合并提交（只比第一个父提交） |
 | 15 通用审查 | review.test.mjs | opencode 审查注入只读的 foreman-review，材料和正文落盘（中英文各一）；材料超限拒绝且不启动，Codex 没有这个限制；非 git 目录要求 brief；空范围不启动任何审查方；审查期间改动变化时警告；opencode 审查只收集权限拒绝和终端提示 |
 | 16 opencode 执行 | opencode-run.test.mjs | run_access 校验和授权（项目配置开不了）；edit 和 shell 两档注入的权限、改动归属（工具事件为 agent、自报为 reported、其余 unknown）、报告和用量、watch；报告只修复一次且修复阶段没有工具；禁止 --no-snapshot、快照失败不启动；shell 档不判卡死、edit 档按 stall_min；续接同一会话、run_access 变化提示；同组范围重叠；超时、额度和输入看门狗 |
 | 17 拦截 opencode run | hooks.test.mjs | 拦下各种写法的 opencode run（含 npx），放行版本、模型、会话、认证、调试、服务、帮助和文字提及 |
-| 18 模型清单和总表 | catalog.test.mjs | models 列出 Codex、opencode 和 API 的清单并核对配置里的模型，读不到清单时如实报告；check 按 Codex 清单核对推理强度、不发执行请求，模型不在清单里或读不到清单时只提示；opencode 清单外的档位不发请求、修正提示列出支持的档位；模型提供方前缀和 levels 里的代号写错时提示最接近的写法；config 和 check 输出总表，含没用到的协作方、明文 key、shell 权限和失效的旧代号，档位不支持的格子写明原因 |
+| 18 模型清单和总表 | catalog.test.mjs | models 列出 Codex、opencode 和 API 的清单并核对配置里的模型，读不到清单时如实报告；check 按 Codex 清单核对推理强度、不发执行请求，模型不在清单里或读不到清单时只提示；opencode 清单外的档位不发请求、修正提示列出支持的档位；模型提供方前缀和 modules 里的代号写错时提示最接近的写法；config 和 check 输出总表，含 required、统一的 modules.*[i] 位置、没用到的协作方、明文 key、shell 权限和失效的旧代号，档位不支持的格子写明原因 |
 | 19 实测补漏 | generalization.test.mjs、review.test.mjs、run.test.mjs、status-watch.test.mjs | 续接到 "claude code" 的等级时不沿用上一轮的协作方；opencode 审查和 check 总是带标题、被厂商限流时提示稍后再试、出错的回复没有 tokens 时照常统计用量；来源不明的改动落在同组其他任务的范围里时标出 group_run；组汇总把已续接的任务记作已续接 |
 | 20 pi 协作方 | pi.test.mjs、generalization.test.mjs | 配置校验（模型写法、run_access、推理强度、执行授权按能力判断）；讨论的隔离参数、只读工具、守卫策略、事件翻译、用量和费用、续接同一会话；审查的补丁材料和不能续接；edit / shell 两档执行的工具、守卫策略、改动归属、被挡的操作、命令计数和 watch；报告修复同会话不开工具；出错、限流、截断、自动重试和推理强度被改；check 按清单核对推理强度并写明会换成哪一档；models 按 pi 的规则算推理强度；守卫扩展按档位放行工具、路径按 pi 的规则解析（@、~、file://、/c/…）并按真实路径判断（符号链接、junction）；拦截钩子按 pi 的参数语义判断；环境检测带隔离参数；check 按覆盖的模型核对；自动压缩的用量；会话头之后才失败时保留 stderr；流式输出期间定期写进度，status 显示思考或回答了多少字 |
 | 21 Codex 沙箱 | check.test.mjs、run.test.mjs | check 按各类任务实际用的沙箱模式用 codex sandbox 探测（不调模型），坏了判不通过并给出修法，Windows 上顺带试 unelevated，danger-full-access 不探测；运行时命令因为沙箱失败时 notes 里说明，成功的命令不误判 |
 | 22 watch 启动动画 | intro.test.mjs | 按模型名的关键字认头像（先看最后一段、取最先出现的、没有模型名时 Codex 用 ChatGPT、认不出用 ???）；头像数据的尺寸和调色板下标；按终端大小选大头像加 Claude、只画目标、中头像、轮流登场或文字徽章；每帧不超出终端、窄窗口的徽章和文字折行、名单太长时只写人数；macOS 自带终端没声明支持 24 位色时改用 256 色；中英文笑话齐全、占位符都换掉；任务提前结束马上收尾、接着用备用屏幕时不退出；dispatch.intro 默认开且只接受布尔值 |
 | 23 出图素材 | assets.test.mjs | template 写出模板和按比例的格子坐标；cut 抠品红底、按名单命名、写出部件、manifest 和对照拼图；透明图清理光晕，soft 保留柔边；按格子命名并合并同格碎片；贴边和格外部件判失败、check 退出码为 1；diff 逐格比较；--vector 用自带描图转 SVG（透明的洞留空、轮廓和颜色对得上原图），自带描图的直边是直线、圆是曲线、对称水滴不被压没，两色之间的过渡带并掉、比两侧都深的细线保留、透明里的孤立小点去掉，只出现在细线上的颜色不丢、1 像素宽的线不被压没、相邻两个小块不互换颜色、大量小洞时不慢；参数错误；结果的 image_calls 和没传参考图的提示；名单重名和只差大小写；一个部件都没有时判失败；diff 发现被删掉的部件；出图参数按代码结构解析（字符串里的参数名、显式 null、带引号的键、变量传参、没执行的调用）；任务说明只提到参数名时不误报没传参考图；格子合并后按格子号命名；align 找回部件的缩放和偏移、写出对齐图和对照图、按区域算色差、区域写错时报错，不把部件缩小塞进同色区域、细线也能对齐、缩放上下限是硬约束；patch 只取成片的改动（去掉轮廓位移和外轮廓），--keep 限定区域；trace 分出描边、底色和阴影并写出 SVG，种子不对时报错；layers 从定稿图取出同画布的图层：背景板只写回主体范围并校色，部件按原位置裁出，下层部件穿过自己那段描边往上层下面延长、延长段不露在背景上，矢量部件的位置是整张画布，部件名不合法、重名、叫 static 或 extendUnder 指向不存在的部件时报错，主体占大半张画面时噪声只按背景估计、校色一直铺到主体中心；patch 和 layers 都留下测出的原始对齐；capture 的本地路径可以带 ?参数；capture 和 playback 用假浏览器截图、检查静止区域和首尾衔接、写出 APNG |
 | 10 共用文件同步 | sync.test.mjs | 中英文插件的共用文件、schema 结构和版本号一致 |
+| 24 第一期配置和迁移 | modules.test.mjs、structure-migration.test.mjs | 模块遍历顺序一致，单对象只在内存规范为列表；levels 迁移一次备份，顺序强度不变且不补格子或 required；已有备份加时间戳，校验失败的 levels 不改原文；用户和项目不能同时写 levels 和 modules；空列表、重复、能力、required 类型、缺少 agent、对象类型、max_seats 和执行格子多个必选校验；未知模块或格子；旧单对象已写 agent 时也保留逐字段继承；图像引用参与旧类型改名、去重与 codex 保留判断；check 和 summary 覆盖仅用于图像的协作方、强度和 shell 提醒 |
+| 25 第一期项目收紧 | project-tightening.test.mjs | 项目保留用户顺序和必选，忽略模型及其他字段，解析旧代号；时长和席位取严（含 stall_min / busy_ask_min 的 0）；项目先校验 dispatch；只降低 Codex 和 pi 的有序强度，未写时不能加，opencode / api 不能改；不能只去掉必选；各模块过滤为空报错；用户关闭的格子不能打开；整格关闭记 closed_by_project，点名及续接均拒绝；用户自己的 Claude 格子可点名并标 outside_cell |
+| 26 第一期选派和计划 | plan.test.mjs | 三模块单席必须选格子并遵守候选和必选；计划先校验格子、候选、必选、能力、席位上限和参数，失败不落盘；保存同方多席、角色、理由、默认模型和启动命令，不占任务名额；启动参数配对及一致性；启动时按当前配置重验整份计划；同一席并发只启动一次；准入拒绝不消耗席位；旧代号席位；续接沿用计划席位角色且不查其他必选；四种适配器的模型覆盖规则及标记；status 的三种 state、missing_required、最新续接和有效结果判定；status / watch 不把 plans 当任务 |
+| 27 第一期并发和锁 | admission.test.mjs、run.test.mjs、structure-migration.test.mjs | 同组 discuss 和 review 不查写入范围，exec 仍检查；groupScopeOwner 只认 exec；协作方跨组跨会话及旧代号并发计数不变；活着的登记锁不按年龄被抢（旧 pid 和 pid/token）；死锁回收及一分钟等待上限；读不出持有者的旧锁放一会儿后清掉；显式释放和退出清理只删自己的 token |
+| 28 第一期偏好来源 | hooks.test.mjs | 新旧位置的用户和项目偏好分开标注来源与硬规则；英文偏好来源标注与硬规则一致，plans 不算未完成任务 |
+| 29 续接换格子的必选 | plan.test.mjs | 无计划续接换格子重验必选，同格返工保留豁免且兼容旧 level；计划续接禁止换格子（包括 Claude 格子） |
+| 30 计划席位配置重验 | plan.test.mjs | 计划保存的模型和强度必须匹配当前格子，覆盖参数不能绕过重验；覆盖模型按当前提供方检查并标记 |
+| 31 残留锁串行回收 | admission.test.mjs | 活进程持有清理锁时不回收残留登记锁，释放后任务登记；清理锁的持有者退出后清掉清理锁并完成登记；读不出持有者的旧清理锁放一会儿后清掉并完成登记 |
+| 32 图像块是否配置 | modules.test.mjs、config.test.mjs、generalization.test.mjs | levels 迁移后 image_configured 为 false；首次生成（有或没有 Codex）为 true；显式图像块为 true，项目配置不影响 |
+| 33 给旧版留的 levels 说明 | modules.test.mjs | 迁移后文件里的 levels 是说明文字并排在 modules 前面，再读不再迁移；levels 是说明文字（中文、英文或手写）又有 modules 时照常读取、不改文件；levels 是字符串却没有 modules 时报错；带说明的文件因旧类型再次改写时保留原说明；没写 levels 的旧配置（只有旧类型、只有零点十以前的键）和空字符串说明改写后都写上标准说明；项目配置里的说明和 modules 照常收紧 |
 
 ## 说明
 

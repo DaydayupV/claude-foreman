@@ -23,8 +23,8 @@ test('真实结构迁移按模型改名并逐格保留模型和强度，备份�
     assert.equal(c.effective.agents[map[name]].model, agent.model);
   }
   for (const [mode, levels] of Object.entries(old.levels)) for (const [lv, entry] of Object.entries(levels)) {
-    const expected = (item) => ({ agent: map[item.agent], model: old.agents[item.agent].model, effort: item.effort });
-    assert.deepEqual(c.resolved_levels[mode][lv], entry === 'claude' ? 'claude code' : Array.isArray(entry) ? entry.map(expected) : expected(entry));
+    const expected = (item) => ({ agent: map[item.agent], model: old.agents[item.agent].model, effort: item.effort, required: false });
+    assert.deepEqual(c.resolved_modules[mode][lv], entry === 'claude' ? 'claude code' : Array.isArray(entry) ? entry.map(expected) : [expected(entry)]);
   }
   assert.ok(r.stderr.includes(M.configStructureMigrated(h.userConfig, `${h.userConfig}.bak`, M.list(Object.entries(map).map(([a, b]) => `${a} → ${b}`)))));
   const next = await h.bridge(['config'], { env: { CODEX_BIN: CODEX } });
@@ -35,16 +35,16 @@ test('真实结构迁移按模型改名并逐格保留模型和强度，备份�
 test('旧部分等级先继承，模型覆盖拆分且清除覆盖字段', async (t) => {
   const h = sandbox(t);
   h.config({ agents: { codex: { type: 'codex', bin: CODEX, model: 'base-model' } }, levels: {
-    run: { normal: { model: 'run-model' } }, review: { complex: { model: 'review-model' } },
+    run: { normal: { model: 'run-model' }, complex: { agent: 'codex', model: 'explicit-model' } }, review: { complex: { model: 'review-model' } },
     discuss: { normal: { model: 'discussion-model' } },
   } });
   const c = output(await h.bridge(['config']));
-  for (const [mode, lv, model, effort] of [['run', 'normal', 'run-model', 'high'], ['review', 'complex', 'review-model', 'max'], ['discuss', 'normal', 'discussion-model', 'high']]) {
-    assert.deepEqual(mode === 'discuss' ? c.resolved_levels[mode][lv][0] : c.resolved_levels[mode][lv], { agent: model, model, effort });
+  for (const [mode, lv, model, effort] of [['run', 'normal', 'run-model', 'high'], ['run', 'complex', 'explicit-model', 'max'], ['review', 'complex', 'review-model', 'max'], ['discuss', 'normal', 'discussion-model', 'high']]) {
+    assert.deepEqual(c.resolved_modules[mode][lv][0], { agent: model, model, effort, required: false });
     assert.equal(c.effective.agents[model].bin, CODEX);
-    assert.equal((mode === 'discuss' ? c.effective.levels[mode][lv][0] : c.effective.levels[mode][lv]).model, undefined);
+    assert.equal(c.effective.modules[mode][lv][0].model, undefined);
   }
-  assert.deepEqual(c.resolved_levels.review.simple, { agent: 'base-model', model: 'base-model', effort: 'medium' });
+  assert.deepEqual(c.resolved_modules.review.simple, [{ agent: 'base-model', model: 'base-model', effort: 'medium', required: false }]);
   seedRun(h, '20000101-split', { agent: 'codex', agent_type: 'codex', model: 'run-model', status: 'timeout' });
   const response = await h.bridge(['resume', '--run', '20000101-split', '--level', 'normal', '--agent', 'codex', '--brief', '-', '--no-snapshot']);
   const resumed = output(response);
@@ -67,7 +67,7 @@ test('同名配置合并，冲突按类型和序号区分，保留已按模型�
   assert.equal(a.codex, 'a-b-c');
   assert.equal(a.shared, undefined);
   assert.equal(Object.keys(c.effective.agents).length, 5);
-  assert.deepEqual(c.effective.levels.discuss.normal, [{ agent: 'shared', effort: 'high' }]);
+  assert.deepEqual(c.effective.modules.discuss.normal, [{ agent: 'shared', effort: 'high' }]);
 });
 
 for (const model of ['toml-model', null]) test(`Codex 未写模型时${model ? '使用 TOML 顶层模型命名' : '保留原代号'}`, async (t) => {
@@ -76,7 +76,7 @@ for (const model of ['toml-model', null]) test(`Codex 未写模型时${model ? '
   h.config({ agents: { codex: { type: 'codex', bin: CODEX } } });
   const c = output(await h.bridge(['config']));
   assert.deepEqual(Object.keys(c.effective.agents), [model || 'codex']);
-  assert.equal(c.resolved_levels.review.simple.model, model);
+  assert.equal(c.resolved_modules.review.simple[0].model, model);
 });
 
 test('项目旧代号与部分字段只在内存转换，别名跨迁移合并', async (t) => {
@@ -89,9 +89,9 @@ test('项目旧代号与部分字段只在内存转换，别名跨迁移合并',
   h.config(next);
   const project = h.write('.claude/foreman.json', { levels: { review: { normal: { agent: 'codex', effort: 'low' }, complex: { effort: 'high' } } } });
   const before = read(project), c = output(await h.bridge(['config', '--cwd', h.cwd]));
-  assert.equal(c.resolved_levels.review.normal.agent, 'second');
-  assert.equal(c.resolved_levels.review.normal.effort, 'low');
-  assert.equal(c.resolved_levels.review.complex.effort, 'high');
+  assert.equal(c.resolved_modules.review.normal[0].agent, 'second');
+  assert.equal(c.resolved_modules.review.normal[0].effort, 'low');
+  assert.equal(c.resolved_modules.review.complex[0].effort, 'high');
   assert.equal(read(project), before);
   assert.equal(fs.existsSync(`${project}.bak`), false);
   assert.deepEqual(json(aliases(h)), { codex: 'first', first: 'second' });
@@ -110,7 +110,7 @@ test('结构迁移并发只备份和提示一次，验证失败不覆盖原文�
   const retained = read(unwritable.userConfig);
   fs.mkdirSync(`${unwritable.userConfig}.structure.lock`);
   const memory = await unwritable.bridge(['config']);
-  assert.equal(output(memory).resolved_levels.review.normal.agent, 'memory-only');
+  assert.equal(output(memory).resolved_modules.review.normal[0].agent, 'memory-only');
   assert.ok(memory.stderr.includes('本次在内存里按新结构读取'));
   assert.equal(read(unwritable.userConfig), retained);
   const bad = sandbox(t);

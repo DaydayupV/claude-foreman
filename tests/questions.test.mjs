@@ -10,7 +10,7 @@ const question = (source, text, extra = {}) => ({ source, question: text, option
 const message = (tool, text) => tool === 'codex' ? { type: 'item.completed', item: { type: 'agent_message', text } } : { type: 'text', part: { text } };
 const configure = (h, extra = {}) => {
   const c = baseConfig(); Object.assign(c.agents, { oc: opencodeAgent(), ...extra });
-  c.levels.discuss.complex = Object.keys(c.agents).map((agent) => ({ agent, effort: 'high' }));
+  c.modules.discuss.complex = Object.keys(c.agents).map((agent) => ({ agent, effort: 'high' }));
   h.config(c);
 };
 const discussArgs = (h, agent) => taskArgs(h, 'discuss', ['--agent', agent, '--no-snapshot']);

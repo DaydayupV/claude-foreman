@@ -44,14 +44,14 @@ Keep a role card under 10 lines, in this format:
 - **API agents**: see only the brief and the files attached with `--file`.
 
 ## Assigning roles
-Participants can only come from this level's configured list (`resolved_levels.discuss.<level>`; the script refuses an `--agent` that isn't on it), and each keeps the effort configured there. Go in this order:
+Participants can only come from this cell's candidates (`resolved_modules.discuss.<level>`; `plan` refuses a seat that isn't one of them), and each keeps the effort configured there. A candidate marked required (`required`) always takes a seat; `plan` refuses a plan that leaves one out. Go in this order:
 
 1. **Tool access**: if the participant's tools can't do what the role needs, it can't take the role.
 2. **Tier**: never go below a role's minimum tier. Model tiers are in `references/model-tiers.md`.
 3. **Strengths**: among participants of the same tier, pick by the strengths the role looks for.
 4. **Different models first**: one model per role.
 5. **No free qualifying participant: give a strong model another session**: when a role has no free participant that meets its tier and tool needs (whether the role needs a strong or a mid model), have a strong model open another session for it rather than handing it to a model below the role's tier. Only strong models get extra sessions. The number of tasks one agent runs at once is capped by `max_parallel` (tasks from other groups and sessions count too); if it's full, start the extra one once earlier tasks finish.
-6. **Seat count**: no more seats than the level's configured participants.
+6. **Seat count**: no more seats than the cell's candidates, and no more than `dispatch.max_seats` (6 by default).
 
 Weak models only get roles like "Edge-case lister", where mistakes are cheap and Claude checks every item. If no role fits, leave that model out of this discussion rather than handing it an expert part. Participants configured for the level but given no role this time are shown in the pop-up as "not in this discussion".
 
@@ -79,7 +79,7 @@ First list the full assignment in the message: seat number, model (tier), role, 
 - When AskUserQuestion isn't available (for example when running without interaction), list the assignment in the chat, ask there and wait for the answer. Never skip the confirmation.
 
 ## Starting it
-- One `discuss` per seat, each with its own brief (shared body + its role card), all in the same `--group`.
+- First create a plan with `plan --module discuss --cell <level> --group <name>`, one `--seat <agent>=<role>` per seat (a model playing two roles is written twice), with the reasons for the assignment in `--why`. Then one `discuss --plan <plan_id> --seat <n>` per seat, each with its own brief (shared body + its role card).
 - Always set `--title` to "Role mode [<role name>]", such as "Role mode [Edge-case lister]". Each panel in the live view shows the model on its first line and this title on its second.
 - Don't pass `--title` when resuming for round 2: the resume keeps the previous title, and the live view adds "· round 2" to the second line itself.
 - When one model takes several roles, each role is a new `discuss`; don't `resume` the first role into the second.

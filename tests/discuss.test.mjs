@@ -9,7 +9,7 @@ const M = MESSAGES.zh;
 
 function configure(h, agents) {
   const c = baseConfig(); Object.assign(c.agents, agents);
-  c.levels.discuss.complex = Object.keys(c.agents).map((agent) => ({ agent, effort: 'high' }));
+  c.modules.discuss.complex = Object.keys(c.agents).map((agent) => ({ agent, effort: 'high' }));
   h.config(c);
 }
 const discussArgs = (h, agent, extra = []) => taskArgs(h, 'discuss', ['--agent', agent, ...extra]);

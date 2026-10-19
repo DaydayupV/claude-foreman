@@ -3,8 +3,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { RUNS_ROOT, CANCEL_FILE, UNFINISHED_STATUSES, listRuns, findRun, readMeta, isRunning, runEnd, runOutcome, groupRuns, groupSummary, describeActivity } from './records.mjs';
 import { M, die, need, pidAlive, killTree, sleep, modelOf, whoOf, agentTypeOf } from './util.mjs';
+import { planStatus } from './plan.mjs';
 
 function cmdStatus(o, sessionStats) {
+  if (o.plan) { process.stdout.write(JSON.stringify(planStatus(o.plan), null, 2) + '\n'); return; }
   if (o.run && o.group == null) {
     const run = findRun(o.run);
     const file = path.join(run.dir, 'result.json');

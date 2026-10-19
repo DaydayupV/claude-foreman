@@ -6,7 +6,7 @@ import { sandbox, output, failed, read, json, baseConfig, opencodeAgent, MESSAGE
 import { MAX_REVIEW_CHARS } from '../foreman/skills/dispatch/scripts/review-scope.mjs';
 const M = MESSAGES.zh;
 const configure = (h, agent = 'oc') => {
-  const c = baseConfig(); c.agents.oc = opencodeAgent(); c.levels.review.normal = { agent }; h.config(c);
+  const c = baseConfig(); c.agents.oc = opencodeAgent(); c.modules.review.normal = { agent }; h.config(c);
 };
 const args = (h, extra = []) => ['review', '--cwd', h.cwd, '--level', 'normal', '--no-snapshot', ...extra];
 
@@ -19,7 +19,7 @@ for (const lang of ['zh', 'en']) test(`opencode 审查注入只读 foreman-revie
     export_messages: [{ type: 'assistant', tokens: { input: 10, output: 5, reasoning: 2, cache: { read: 3, write: 4 } }, cost: 0.25 },
       { type: 'assistant', created: 'old', tokens: { input: 1000 }, cost: 1 }, { type: 'assistant' }] }); // 最后一条是出错、没有 tokens 的回复
   const c = output(await h.bridge(['config']));
-  assert.equal(c.effective.levels.review.normal.agent, 'oc');
+  assert.equal(c.effective.modules.review.normal[0].agent, 'oc');
   assert.deepEqual(c.agents_status.oc.capabilities.modes, ['run', 'review', 'discuss']);
   const r = output(await h.bridge(args(h, ['--brief', '-']), { env: { ...s.env, FOREMAN_LANG: lang }, input: '重点检查重复扣款' }));
   const calls = s.calls().filter((c) => c.operation === 'run'), call = calls[0];

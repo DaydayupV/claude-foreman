@@ -8,7 +8,7 @@ const M = MESSAGES.zh;
 const configure = (h, access = 'edit') => {
   const c = baseConfig();
   c.agents.oc = { ...opencodeAgent(), ...(access === undefined ? {} : { run_access: access }) };
-  c.levels.run.complex = { agent: 'oc' };
+  c.modules.run.complex = { agent: 'oc' };
   h.config(c);
   return c;
 };
@@ -27,7 +27,7 @@ test('run_access 只校验 opencode，config 展示权限和执行能力', async
   c.agents.api = { ...apiAgent('http://127.0.0.1:1'), run_access: 'ignored' };
   for (const value of ['edit', 'shell', undefined]) {
     c.agents.oc.run_access = value;
-    c.levels.run.complex = value ? { agent: 'oc' } : 'claude code'; h.config(c);
+    c.modules.run.complex = value ? { agent: 'oc' } : 'claude code'; h.config(c);
     const r = output(await h.bridge(['config']));
     assert.equal(r.agents_status.oc.run_access, value ?? null);
     assert.deepEqual(r.agents_status.oc.capabilities.modes, ['run', 'review', 'discuss']);
@@ -39,11 +39,11 @@ test('opencode 执行和续接需要用户授权，项目配置不能开启执�
   const h = sandbox(t), c = configure(h);
   delete c.agents.oc.run_access; h.config(c);
   failed(await h.bridge(['config']), M.runAccessRequired('oc', 'opencode cli'));
-  c.levels.run.complex = 'claude code'; h.config(c);
-  h.write('.claude/foreman.json', { agents: { oc: { run_access: 'shell' } }, levels: { run: { complex: { agent: 'oc' } } } });
+  c.modules.run.complex = 'claude code'; h.config(c);
+  h.write('.claude/foreman.json', { agents: { oc: { run_access: 'shell' } }, modules: { run: { complex: { agent: 'oc' } } } });
   const r = output(await h.bridge(['config', '--cwd', h.cwd]));
   assert.equal(r.agents_status.oc.run_access, null);
-  assert.equal(r.effective.levels.run.complex, 'claude code');
+  assert.equal(r.effective.modules.run.complex, 'claude code');
   failed(await h.bridge(taskArgs(h, 'run', ['--agent', 'oc'])), M.runAccessRequired('oc', 'opencode cli'));
   seedRun(h, 'previous-exec', { agent: 'oc', agent_type: 'opencode cli', run_access: 'edit' });
   failed(await h.bridge(['resume', '--run', 'previous-exec', '--level', 'complex', '--brief', '-', '--agent', 'oc']), M.runAccessRequired('oc', 'opencode cli'));

@@ -1,5 +1,5 @@
 {
-  "description": "会话开始时提醒 Claude 加载 dispatch skill；拦下直接调用 codex exec / codex review 的命令，要求通过 foreman 的脚本调用 Codex",
+  "description": "会话开始时提醒 Claude 加载 dispatch skill，并带上用户和项目的偏好文件；拦下直接调用 codex exec / codex review、opencode run 和用 pi 跑任务的命令，要求通过 foreman 的脚本调用协作方",
   "hooks": {
     "SessionStart": [
       {

@@ -1,6 +1,7 @@
 // 记录目录、启动登记锁、准入、活动状态和 watch 启动器。
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { ENTRY, defaultRunsRoot, runsMovedNow, resolveAgentAlias, DEFAULT_AGENT_PARALLEL } from './config.mjs';
 import { M, die, pidAlive, sleep, pathKey, clip, oneLine, plainCommand } from './util.mjs';
 
@@ -45,19 +46,38 @@ async function newRunDir() {
   fs.mkdirSync(RUNS_ROOT, { recursive: true });
   // 登记和准入串行完成，避免随机后缀让后登记的任务排到前面。
   const lock = path.join(RUNS_ROOT, '.start.lock');
+  const reap = `${lock}.reap`;
+  const token = randomUUID(), started = Date.now();
+  const ownerOf = (file = lock) => {
+    try {
+      const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+      return typeof value === 'number' ? { pid: value } : value;
+    } catch (e) { if (e.code === 'ENOENT' || e instanceof SyntaxError) return null; throw e; }
+  };
+  const ageOf = (file) => { try { return Date.now() - fs.statSync(file).mtimeMs; } catch { return 0; } };
+  // 残留锁：持有者已退出；或者读不出持有者（写到一半被强杀，正常加锁时内容和文件一起写入）而且放了 10 秒以上。
+  // 活持有者不按年龄抢锁，它可能只是暂停了。
+  const stale = (file) => { const owner = ownerOf(file); return owner?.pid ? !pidAlive(owner.pid) : ageOf(file) > 10000; };
+  const mine = (file) => ownerOf(file)?.token === token;
   for (;;) {
-    try { fs.writeFileSync(lock, String(process.pid), { flag: 'wx' }); break; }
+    try { fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, token }), { flag: 'wx' }); break; }
     catch (e) {
       if (e.code !== 'EEXIST') throw e;
-      let owner;
-      let age = 0;
-      try { owner = Number(fs.readFileSync(lock, 'utf8')); age = Date.now() - fs.statSync(lock).mtimeMs; } catch (e) { if (e.code !== 'ENOENT') throw e; }
-      // 登记只需要几毫秒；持有者已退出，或者锁放了很久（持有者被强杀后 pid 又被复用），都当作残留锁清掉。
-      if ((owner && !pidAlive(owner)) || age > 30000) fs.rmSync(lock, { force: true });
+      // 回收残留锁要先拿到清理锁，删之前再确认清理锁还是自己的、登记锁还是残留的。别的回收者按旧读数删掉了
+      // 自己的清理锁时，这里会看到 token 变了而放手，不会去删别人刚拿到的登记锁。清理锁本身残留时按同样的规则清掉。
+      if (stale(lock)) {
+        try { fs.writeFileSync(reap, JSON.stringify({ pid: process.pid, token }), { flag: 'wx' }); }
+        catch (e) { if (e.code !== 'EEXIST') throw e; if (stale(reap)) fs.rmSync(reap, { force: true }); }
+        if (mine(reap)) {
+          try { if (stale(lock) && mine(reap)) fs.rmSync(lock, { force: true }); }
+          finally { if (mine(reap)) fs.rmSync(reap, { force: true }); }
+        }
+      }
+      if (Date.now() - started >= 60000) die(M.startLockBusy(lock, ownerOf()?.pid ?? '?', 60));
       await sleep(25);
     }
   }
-  const cleanup = () => fs.rmSync(lock, { force: true });
+  const cleanup = () => { if (ownerOf()?.token === token) fs.rmSync(lock, { force: true }); };
   process.once('exit', cleanup);
   const release = () => { cleanup(); process.removeListener('exit', cleanup); };
   const previous = listRuns()[0] || '';
@@ -145,12 +165,13 @@ function groupRuns(group, since = 0) {
 }
 
 const absolute = (cwd, file) => pathKey(path.resolve(cwd, file.replace(/\\/g, '/')).replace(/\\/g, '/')).replace(/\/$/, '');
+const writesFiles = (meta) => meta?.kind === 'exec';
 
 // 同组（同一个 Claude 会话）其他执行任务里，写入范围包含这个文件的那一个。归属未知的改动落在别人的范围里时，多半是那个任务改的。
 function groupScopeOwner(meta) {
   if (meta.group == null) return () => null;
   const others = listRuns().filter((id) => id !== meta.id).map((id) => ({ id, meta: readMeta(path.join(RUNS_ROOT, id)) }))
-    .filter((r) => r.meta?.group === meta.group && r.meta.kind !== 'discuss' && r.meta.claude_session === meta.claude_session);
+    .filter((r) => r.meta?.group === meta.group && writesFiles(r.meta) && r.meta.claude_session === meta.claude_session);
   return (file) => {
     const a = absolute(meta.cwd, file);
     return others.find((r) => (r.meta.scope || []).some((s) => { const b = absolute(r.meta.cwd, s); return a === b || a.startsWith(`${b}/`); }))?.id ?? null;
@@ -160,15 +181,19 @@ function groupScopeOwner(meta) {
 // 准入检查（在登记锁内）：同一协作方正在运行的任务不超过它的 max_parallel，所有组和会话都算，
 // 因为服务商的限流和额度是按账号的；同组的执行任务写入范围不能重叠。
 function checkAdmission(meta, cfg) {
-  const running = listRuns().filter((id) => id !== meta.id)
-    .map((id) => { const dir = path.join(RUNS_ROOT, id); return { id, dir, meta: readMeta(dir) }; })
-    .filter((r) => isRunning(r.meta));
+  const runs = listRuns().filter((id) => id !== meta.id)
+    .map((id) => { const dir = path.join(RUNS_ROOT, id); return { id, dir, meta: readMeta(dir) }; });
+  if (meta.plan && meta.seat != null && !meta.parent) {
+    const previous = runs.find((r) => r.meta && !r.meta.parent && r.meta.plan === meta.plan && r.meta.seat === meta.seat);
+    if (previous) return M.seatAlreadyStarted(meta.plan, meta.seat, previous.id);
+  }
+  const running = runs.filter((r) => isRunning(r.meta));
   const limit = cfg.agents[meta.agent].max_parallel ?? DEFAULT_AGENT_PARALLEL;
   const same = running.filter((r) => resolveAgentAlias(r.meta.agent || 'codex', cfg) === meta.agent); // 旧记录没有 agent 字段，都是 Codex
   if (same.length >= limit) return M.agentFull(meta.agent, same.length, limit, M.list(same.map((r) => r.id)));
-  if (meta.group == null || meta.kind === 'discuss') return null;
+  if (meta.group == null || !writesFiles(meta)) return null;
   for (const other of running) {
-    if (other.meta.group !== meta.group || other.meta.kind === 'discuss') continue;
+    if (other.meta.group !== meta.group || !writesFiles(other.meta)) continue;
     // 比较用归一化的绝对路径，报错里显示派活时写的原样路径。
     const paths = meta.scope.filter((mine) => (other.meta.scope || []).some((file) => {
       const a = absolute(meta.cwd, mine);
@@ -224,4 +249,4 @@ function groupSummary(runs) {
 const readMeta = (dir) => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')); } catch { return null; } };
 const isRunning = (m) => m?.status === 'running' && pidAlive(m.pid);
 
-export { RUNS_ROOT, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, writeWatchLauncher, newRunDir, listRuns, findRun, describeActivity, groupRuns, checkAdmission, runEnd, runOutcome, groupTally, groupSummary, groupScopeOwner, readMeta, isRunning };
+export { RUNS_ROOT, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, writeWatchLauncher, newRunDir, listRuns, findRun, describeActivity, groupRuns, checkAdmission, runEnd, runOutcome, groupTally, groupSummary, groupScopeOwner, readMeta, isRunning, writesFiles };

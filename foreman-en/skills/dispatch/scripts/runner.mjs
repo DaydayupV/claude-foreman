@@ -81,6 +81,9 @@ function startRun(ctx, { started = Date.now(), track = [], modelShown = ctx.mode
   const { id, dir, cwd, model, mode, kind, level, effort, agentName, agent, opts } = ctx;
   const meta = {
     id, mode, kind, title: ctx.title || null, cwd, model, model_shown: modelShown, model_name: modelName, level, effort,
+    module: ctx.module ?? (kind === 'exec' ? 'run' : kind), cell: ctx.cell ?? level,
+    plan: ctx.plan ?? null, seat: ctx.seat ?? null, role: ctx.role ?? null,
+    ...(ctx.outside_cell ? { outside_cell: true } : {}), ...(ctx.model_overridden ? { model_overridden: true } : {}),
     agent: agentName, agent_type: agent.type, sandbox, parent: ctx.parent || null,
     ...(kind === 'exec' && ctx.isolation === 'tools' ? { isolation: ctx.isolation, run_access: agent.run_access } : {}),
     track, group: opts.group ?? null, scope: opts.scope, round: ctx.round ?? null,
@@ -110,6 +113,8 @@ function startRun(ctx, { started = Date.now(), track = [], modelShown = ctx.mode
 }
 
 function finishRun(run, result, code = result.exit_code, observed = {}) {
+  const { module, cell, plan, seat, role, outside_cell, model_overridden } = run.meta;
+  Object.assign(result, { module, cell, plan, seat, role, ...(outside_cell ? { outside_cell: true } : {}), ...(model_overridden ? { model_overridden: true } : {}) });
   if (run.ctx.kind === 'review') {
     const scope = run.ctx.reviewScope;
     result.review_scope = scope ? { kind: scope.kind, description: scope.description, base: scope.base,
