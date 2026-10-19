@@ -42,6 +42,71 @@ for (const legacy of [false, true]) test(`活着的登记锁不按年龄被抢�
   assert.equal(h.records().length, 1); assert.equal(fs.existsSync(lock), false);
 });
 
+test('登记锁和清理锁正被删除时报 EPERM、EACCES、EBUSY 只是稍等再试，一直报错才抛出原错误', async (t) => {
+  const h = sandbox(t), lock = path.join(h.runs, '.start.lock'), reap = `${lock}.reap`;
+  const script = h.write('lock-transient.mjs', `import fs from 'node:fs';
+import assert from 'node:assert/strict';
+import { initializeRecords, newRunDir } from ${JSON.stringify(url('records.mjs'))};
+initializeRecords(${JSON.stringify(baseConfig())});
+const lock = ${JSON.stringify(lock)}, reap = lock + '.reap', mode = process.argv[2];
+const errors = { writeFileSync: [['EPERM'], ['EBUSY']], readFileSync: [['EACCES'], ['EPERM']], rmSync: [['EBUSY'], ['EPERM']] };
+const calls = Object.fromEntries(Object.keys(errors).map((name) => [name, [0, 0]]));
+const originals = Object.fromEntries(Object.keys(errors).map((name) => [name, fs[name]]));
+let newcomer = null;
+for (const name of Object.keys(errors)) {
+  fs[name] = (file, ...args) => {
+    const i = [lock, reap].indexOf(file);
+    if (i !== -1) {
+      const n = calls[name][i]++;
+      // 删残留登记锁第一次失败时，别的回收者已经删掉了它、又有新的持有者拿到了锁：重试不能删掉这把新锁。
+      if (mode === 'replaced' && name === 'rmSync' && i === 0 && n === 0) {
+        originals.rmSync(lock, { force: true });
+        originals.writeFileSync(lock, JSON.stringify({ pid: process.pid, token: 'newcomer' }));
+        newcomer = new Promise((resolve) => setTimeout(() => {
+          let owner = null;
+          try { owner = JSON.parse(originals.readFileSync(lock, 'utf8')).token; } catch { /* 已经被删掉 */ }
+          originals.rmSync(lock, { force: true });
+          resolve(owner);
+        }, 50));
+        throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+      }
+      const code = mode === 'always' && name === 'writeFileSync' && i === 0 ? 'EPERM'
+        : mode === 'reap' && name === 'rmSync' && i === 0 ? 'EACCES' : mode === 'short' ? errors[name][i][n] : null;
+      if (code) throw Object.assign(new Error(code), { code });
+    }
+    const value = originals[name](file, ...args);
+    // 删掉残留登记锁之后，紧接着删自己的清理锁再短暂失败一次。
+    if (mode === 'short' && name === 'rmSync' && i === 0) errors.rmSync[1][calls.rmSync[1]] = 'EBUSY';
+    return value;
+  };
+}
+// 回收时的错误要是被吞掉，会一直等到 60 秒报占锁；假时钟让这条路一开始就走到 60 秒检查。
+if (mode === 'reap') { let n = 0; Date.now = () => n++ ? 60000 : 0; }
+const run = await newRunDir();
+assert.equal(fs.existsSync(reap), false);
+const owner = await newcomer;
+const before = [calls.readFileSync[0], calls.rmSync[0]];
+errors.readFileSync[0][before[0]] = 'EPERM'; errors.rmSync[0][before[1]] = 'EACCES';
+run.release();
+console.log(JSON.stringify({ dir: run.dir, calls, owner, release: [calls.readFileSync[0] - before[0], calls.rmSync[0] - before[1]] }));`);
+  for (const mode of ['short', 'always', 'reap', 'replaced']) await t.test(mode, async () => {
+    fs.rmSync(lock, { force: true }); fs.rmSync(reap, { force: true });
+    if (mode !== 'always') write(lock, { pid: 2147483647, token: 'stale' });
+    if (mode === 'short') write(reap, '2147483647');
+    const result = await h.start(script, [mode], { timeout: 15000 }).done;
+    if (mode === 'short' || mode === 'replaced') {
+      const r = output(result);
+      assert.equal(fs.statSync(r.dir).isDirectory(), true); assert.equal(fs.existsSync(lock), false);
+      // release 时每次删除前都重新读一次锁确认是自己的：读 3 次（含一次失败），删 2 次（含一次失败）。
+      if (mode === 'short') { assert.deepEqual(r.release, [3, 2]); assert.ok(r.calls.rmSync[1] >= 4); }
+      else assert.equal(r.owner, 'newcomer');
+    } else {
+      assert.equal(result.code, 1, result.stderr); assert.match(result.stderr, mode === 'always' ? /EPERM/ : /EACCES/);
+      assert.equal(result.stderr.includes(M.startLockBusy(lock, mode === 'always' ? '?' : 2147483647, 60)), false);
+    }
+  });
+});
+
 test('死进程的旧登记锁能回收，等满一分钟的活锁给出明确错误', async (t) => {
   const h = sandbox(t), lock = path.join(h.runs, '.start.lock');
   write(lock, '2147483647');

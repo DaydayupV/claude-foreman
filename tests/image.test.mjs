@@ -384,7 +384,7 @@ fs.readdirSync = (dir, ...rest) => { if (String(dir).endsWith('answers')) throw 
 
 test('会话记录读不出来时 Codex 用量统计返回空，不抛出', async (t) => {
   const h = sandbox(t), d = new Date();
-  const dir = path.join(h.env.CODEX_HOME, 'sessions', String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0'));
+  const dir = path.join(h.env.CODEX_HOME, 'sessions', String(d.getUTCFullYear()), String(d.getUTCMonth() + 1).padStart(2, '0'), String(d.getUTCDate()).padStart(2, '0'));
   const file = write(path.join(dir, 'rollout-locked-session.jsonl'), JSON.stringify({ type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 1 } } } }) + '\n');
   const script = h.write('stats.mjs', `import fs from 'node:fs';
 import adapter from ${JSON.stringify(pathToFileURL(path.join(scripts, 'adapters/codex-cli.mjs')).href)};

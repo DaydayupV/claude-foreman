@@ -251,16 +251,22 @@ const agentTypeOf = (m) => ({ codex: 'codex cli', opencode: 'opencode cli', 'ope
 const CHANNEL_KEY = { api: 'api', 'opencode cli': 'opencode', 'pi cli': 'pi' };
 const whoOf = (m) => M.who(modelOf(m), M.channel[CHANNEL_KEY[agentTypeOf(m)] || 'codex'], m?.effort, !m?.model && !!m?.model_name && agentTypeOf(m) === 'codex cli');
 
-// 用改名替换文件。Windows 上目标文件正被别的进程读取时（watch、status、并发登记都会读 meta.json），
-// 改名会报 EPERM / EACCES / EBUSY，稍等再试；最多等约 2 秒。
-function replaceFile(from, to) {
-  for (let i = 0; ; i++) {
-    try { return fs.renameSync(from, to); }
+// Windows 上文件正被别的进程读着或者正在被删（删除挂起）时，改名、新建、读取和删除会短暂报 EPERM / EACCES / EBUSY：
+// 稍等 25 毫秒再试，最多重试 80 次（约 2 秒）；一直这样就不是暂时的（比如没有写权限），抛出原错误。
+// 给了 when 时，每次尝试前都先确认它还成立，不成立就不做了：等待的这段时间里，文件可能已经被别的进程删掉又重新建过。
+function retryBusy(fn, when = () => true) {
+  for (let i = 0; when(); i++) {
+    try { return fn(); }
     catch (e) {
       if (!['EPERM', 'EACCES', 'EBUSY'].includes(e.code) || i >= 80) throw e;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
     }
   }
+}
+
+// 用改名替换文件。目标文件正被别的进程读取时（watch、status、并发登记都会读 meta.json）改名会短暂失败，由 retryBusy 等它读完。
+function replaceFile(from, to) {
+  return retryBusy(() => fs.renameSync(from, to));
 }
 
 // 终端里中日韩字符和全角符号占两格，按显示宽度截断和换行，避免折行错位。
@@ -322,4 +328,4 @@ function wrapWidth(s, width) {
   return lines;
 }
 
-export { replaceFile, HERE, LANGUAGE, M, notice, isObject, readJson, die, need, resolveDir, readBrief, MAX_MATERIAL_CHARS, readAttachments, readImages, focusFiles, binCommand, pathCommand, npmEntry, isGitRepo, pidAlive, killTree, relativePath, pathKey, RECONNECT, isReconnect, sleep, clip, oneLine, formatUsd, usageLine, plainCommand, isAscii, modelOf, whoOf, agentTypeOf, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision, closestMatches, charWidth, textWidth, fitWidth, wrapWidth };
+export { retryBusy, replaceFile, HERE, LANGUAGE, M, notice, isObject, readJson, die, need, resolveDir, readBrief, MAX_MATERIAL_CHARS, readAttachments, readImages, focusFiles, binCommand, pathCommand, npmEntry, isGitRepo, pidAlive, killTree, relativePath, pathKey, RECONNECT, isReconnect, sleep, clip, oneLine, formatUsd, usageLine, plainCommand, isAscii, modelOf, whoOf, agentTypeOf, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision, closestMatches, charWidth, textWidth, fitWidth, wrapWidth };

@@ -100,7 +100,7 @@
 | 24 第一期配置和迁移 | modules.test.mjs、structure-migration.test.mjs | 模块遍历顺序一致，单对象只在内存规范为列表；levels 迁移一次备份，顺序强度不变且不补格子或 required；已有备份加时间戳，校验失败的 levels 不改原文；用户和项目不能同时写 levels 和 modules；空列表、重复、能力、required 类型、缺少 agent、对象类型、max_seats 和执行格子多个必选校验；未知模块或格子；旧单对象已写 agent 时也保留逐字段继承；图像引用参与旧类型改名、去重与 codex 保留判断；check 和 summary 覆盖仅用于图像的协作方、强度和 shell 提醒 |
 | 25 第一期项目收紧 | project-tightening.test.mjs | 项目保留用户顺序和必选，忽略模型及其他字段，解析旧代号；时长和席位取严（含 stall_min / busy_ask_min 的 0）；项目先校验 dispatch；只降低 Codex 和 pi 的有序强度，未写时不能加，opencode / api 不能改；不能只去掉必选；各模块过滤为空报错；用户关闭的格子不能打开；整格关闭记 closed_by_project，点名及续接均拒绝；用户自己的 Claude 格子可点名并标 outside_cell |
 | 26 第一期选派和计划 | plan.test.mjs | 三模块单席必须选格子并遵守候选和必选；计划先校验格子、候选、必选、能力、席位上限和参数，失败不落盘；保存同方多席、角色、理由、默认模型和启动命令，不占任务名额；启动参数配对及一致性；启动时按当前配置重验整份计划；同一席并发只启动一次；准入拒绝不消耗席位；旧代号席位；续接沿用计划席位角色且不查其他必选；四种适配器的模型覆盖规则及标记；status 的三种 state、missing_required、最新续接和有效结果判定；status / watch 不把 plans 当任务 |
-| 27 第一期并发和锁 | admission.test.mjs、run.test.mjs、structure-migration.test.mjs | 同组 discuss 和 review 不查写入范围，exec 仍检查；groupScopeOwner 只认 exec；协作方跨组跨会话及旧代号并发计数不变；活着的登记锁不按年龄被抢（旧 pid 和 pid/token）；死锁回收及一分钟等待上限；读不出持有者的旧锁放一会儿后清掉；显式释放和退出清理只删自己的 token |
+| 27 第一期并发和锁 | admission.test.mjs、run.test.mjs、structure-migration.test.mjs | 同组 discuss 和 review 不查写入范围，exec 仍检查；groupScopeOwner 只认 exec；协作方跨组跨会话及旧代号并发计数不变；活着的登记锁不按年龄被抢（旧 pid 和 pid/token）；死锁回收及一分钟等待上限；读不出持有者的旧锁放一会儿后清掉；登记锁和清理锁正被删除时短暂报 EPERM、EACCES、EBUSY 只是稍等再试，一直报错才抛出原错误，删除前每次重试都重新确认锁还是残留的或自己的；显式释放和退出清理只删自己的 token |
 | 28 第一期偏好来源 | hooks.test.mjs | 新旧位置的用户和项目偏好分开标注来源与硬规则；英文偏好来源标注与硬规则一致，plans 不算未完成任务 |
 | 29 续接换格子的必选 | plan.test.mjs | 无计划续接换格子重验必选，同格返工保留豁免且兼容旧 level；计划续接禁止换格子（包括 Claude 格子） |
 | 30 计划席位配置重验 | plan.test.mjs | 计划保存的模型和强度必须匹配当前格子，覆盖参数不能绕过重验；覆盖模型按当前提供方检查并标记 |

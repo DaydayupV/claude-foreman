@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ENTRY, defaultRunsRoot, runsMovedNow, resolveAgentAlias, DEFAULT_AGENT_PARALLEL } from './config.mjs';
-import { M, die, pidAlive, sleep, pathKey, clip, oneLine, plainCommand } from './util.mjs';
+import { M, die, pidAlive, sleep, pathKey, clip, oneLine, plainCommand, retryBusy } from './util.mjs';
 
 // 终止标记：cancel 命令和实时查看里按 x 时写进任务的记录目录，运行中的任务看到就停下。
 const CANCEL_FILE = 'cancel';
@@ -58,9 +58,11 @@ async function newRunDir() {
   const lock = path.join(RUNS_ROOT, '.start.lock');
   const reap = `${lock}.reap`;
   const token = randomUUID(), started = Date.now();
+  // 登记锁和清理锁的每次文件操作都经过 retryBusy：Windows 上别的进程正在删同一个锁文件时，新建和读取它会短暂报 EPERM。
+  // 删除时把"还该删"的判断交给 retryBusy，每次重试前重新确认，免得删掉等待期间别的进程刚拿到的锁。
   const ownerOf = (file = lock) => {
     try {
-      const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const value = JSON.parse(retryBusy(() => fs.readFileSync(file, 'utf8')));
       return typeof value === 'number' ? { pid: value } : value;
     } catch (e) { if (e.code === 'ENOENT' || e instanceof SyntaxError) return null; throw e; }
   };
@@ -70,24 +72,24 @@ async function newRunDir() {
   const stale = (file) => { const owner = ownerOf(file); return owner?.pid ? !pidAlive(owner.pid) : ageOf(file) > 10000; };
   const mine = (file) => ownerOf(file)?.token === token;
   for (;;) {
-    try { fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, token }), { flag: 'wx' }); break; }
+    try { retryBusy(() => fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, token }), { flag: 'wx' })); break; }
     catch (e) {
       if (e.code !== 'EEXIST') throw e;
       // 回收残留锁要先拿到清理锁，删之前再确认清理锁还是自己的、登记锁还是残留的。别的回收者按旧读数删掉了
       // 自己的清理锁时，这里会看到 token 变了而放手，不会去删别人刚拿到的登记锁。清理锁本身残留时按同样的规则清掉。
       if (stale(lock)) {
-        try { fs.writeFileSync(reap, JSON.stringify({ pid: process.pid, token }), { flag: 'wx' }); }
-        catch (e) { if (e.code !== 'EEXIST') throw e; if (stale(reap)) fs.rmSync(reap, { force: true }); }
+        try { retryBusy(() => fs.writeFileSync(reap, JSON.stringify({ pid: process.pid, token }), { flag: 'wx' })); }
+        catch (e) { if (e.code !== 'EEXIST') throw e; retryBusy(() => fs.rmSync(reap, { force: true }), () => stale(reap)); }
         if (mine(reap)) {
-          try { if (stale(lock) && mine(reap)) fs.rmSync(lock, { force: true }); }
-          finally { if (mine(reap)) fs.rmSync(reap, { force: true }); }
+          try { retryBusy(() => fs.rmSync(lock, { force: true }), () => stale(lock) && mine(reap)); }
+          finally { retryBusy(() => fs.rmSync(reap, { force: true }), () => mine(reap)); }
         }
       }
       if (Date.now() - started >= 60000) die(M.startLockBusy(lock, ownerOf()?.pid ?? '?', 60));
       await sleep(25);
     }
   }
-  const cleanup = () => { if (ownerOf()?.token === token) fs.rmSync(lock, { force: true }); };
+  const cleanup = () => { retryBusy(() => fs.rmSync(lock, { force: true }), () => ownerOf()?.token === token); };
   process.once('exit', cleanup);
   const release = () => { cleanup(); process.removeListener('exit', cleanup); };
   const previous = listRuns()[0] || '';

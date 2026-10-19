@@ -12,9 +12,10 @@ const viewed = (file, call_id = 'view-code') => raw({ type: 'custom_tool_call', 
   input: `const r = await tools.view_image({path:${JSON.stringify(file)}}); image(r.image_url);` });
 const viewOutput = (call_id = 'view-code', image = true) => raw({ type: 'custom_tool_call_output', call_id,
   output: JSON.stringify([{ type: image ? 'input_image' : 'input_text', ...(image ? { image_url: 'data:image/png;base64,synthetic' } : { text: 'not found' }) }]) });
+// 假 Codex 和调度进程都按测试环境的 TZ=UTC 算日期目录，这里也用 UTC，免得本地时间跨过零点时对不上。
 const sessionFile = (h) => {
   const d = new Date();
-  return path.join(h.env.CODEX_HOME, 'sessions', String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0'), 'rollout-synthetic-session.jsonl');
+  return path.join(h.env.CODEX_HOME, 'sessions', String(d.getUTCFullYear()), String(d.getUTCMonth() + 1).padStart(2, '0'), String(d.getUTCDate()).padStart(2, '0'), 'rollout-synthetic-session.jsonl');
 };
 
 test('stale 在席位、计划行、status 和 watch 结束行显示，完整性判断不变', async (t) => {
