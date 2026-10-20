@@ -7,12 +7,12 @@ Role discussions (see `references/roles.md`) use this table when assigning roles
 - **Upkeep**: leaderboards change within months. Update this table against the latest results before each release, and change the date above.
 
 ## How to use it
-- **Tiers go by the overall score**: strong ≥ 84, mid 75–84, weak < 75. Roles that need hard thinking only go to strong models (each role's minimum tier is in `references/roles.md`).
-- **Compare strengths only within a tier**: if two strong models both suit "Data analyst", pick the one stronger at data analysis. Don't give a hard role to a weak model just because one of its category scores is high.
+- **Tiers go by the overall score**: strong ≥ 84, mid 75–84, weak < 75. Tiers are a guide, not a condition for taking part: roles that need hard thinking go to strong models first (each role's suggested tier is in `references/roles.md`); a model below the suggested tier can still take the role, but only as a breadth seat in round 1.
+- **Compare strengths only within a tier**: if two strong models both suit "Data analyst", pick the one stronger at data analysis. Don't give a core role's only seat to a weak model just because one of its category scores is high.
 - **Agentic scores depend on how the model is reached**: the same model can do differently through Codex, opencode or pi. In discussions only Codex can run commands, so for roles like "Fact checker" look at tool access first and this score second.
 - **Matching model names**: drop the provider prefix from the model name in the `config` output (such as `opencode-go/` or `xiaomi/`), ignore case, treat hyphens and spaces alike, then look it up below. A name with an extra suffix (such as `-contributor`) counts as its base model.
 - **Models not in the table**: if a newer model of the same family is weak here, treat it as weak; otherwise treat it as mid. Mark it "unrated" in the pop-up so the user can correct it.
-- **The user's view wins**: if the preference files say something about a model (such as "treat kimi-k2.6 as strong"), go by them.
+- **The user's view wins**: if the preference files say something about a model (such as "treat kimi-k2.6 as strong"), go by them. The preference files can point to local results (`cli.mjs stats`: points confirmed and false positives, points only that model found, rework rate) to change a tier; the script only sums things up and never ranks models or changes tiers itself.
 
 ## Strong (overall ≥ 84)
 | Model | Strengths | Weaknesses |

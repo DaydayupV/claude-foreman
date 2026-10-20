@@ -315,7 +315,7 @@ function runEnd(dir, meta) {
   let last = 0;
   let files = ['events.jsonl', 'meta.json'];
   if (meta.dismissed_at) {
-    try { files = fs.readdirSync(dir).filter((file) => file !== 'meta.json' && !file.startsWith('meta.json.') && file !== CANCEL_FILE); }
+    try { files = fs.readdirSync(dir).filter((file) => file !== 'meta.json' && !file.startsWith('meta.json.') && file !== CANCEL_FILE && file !== 'verdict.json' && !file.startsWith('verdict.json.')); } // 去留可能在结束后很久才补记，不延长用时。
     catch { files = []; } // 目录刚被删掉
   }
   for (const file of files) {

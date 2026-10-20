@@ -125,8 +125,9 @@ Only you type the commands in the table above; Claude Code doesn't call them its
 
 When a topic has several goals pulling against each other (such as security and convenience, implementation cost and user experience, compatibility and a rewrite), a level 2 or 3 discussion can use role mode: each model gets a role card and checks the same topic from one angle, such as architect, math / correctness, fact checker, maintenance and compatibility, user experience or edge-case lister, plus an overall reviewer with no role.
 
-- **Assigned by ability**: first whether the tools can do it (the fact checker has to run commands, so only Codex can take it), then the model tier (roles that need hard thinking only go to strong models), then strengths within the tier. Models are sorted into strong, mid and weak tiers from a third-party leaderboard; see [references/model-tiers.md](foreman-en/skills/dispatch/references/model-tiers.md).
-- **One model per role first**: when there aren't enough qualifying models, a strong model opens another session for another role rather than handing it to a model below the role's tier; weak models only take roles where mistakes are cheap, or sit the discussion out.
+- **Assigned by ability**: first whether the tools can do it (the fact checker has to run commands, so only Codex can take it), then strengths and the model tier: roles that need hard thinking go to strong models first, but the tier is only a guide, not a condition for taking part. Models are sorted into strong, mid and weak tiers from a third-party leaderboard; see [references/model-tiers.md](foreman-en/skills/dispatch/references/model-tiers.md).
+- **One model per role first**: when there aren't enough qualifying models, a strong model opens another session for another role; each extra session takes a parallel slot, and its agreeing conclusions still count as one piece of evidence. Mid and weak models can take "breadth seats" that only join round 1, with Claude checking each of their points.
+- **Core roles are never merged**: the angles a topic needs most get a seat each, and at level 3 one core role can be played by two different models. The seats never exceed `dispatch.max_seats`, and required models always get one.
 - **You always confirm first**: before it starts, a pop-up lists the "model → role" assignment, even with `dispatch.auto` on; you can start as suggested, adjust it, or use a normal discussion instead.
 - A role only sets what each model checks most closely, not its conclusion; decisions still go by evidence, and several roles agreeing doesn't count as more evidence.
 - Custom roles, using role mode by default for some kinds of topics, and a different view of a model's tier can all go in the preference files. The role table and assignment rules are in [references/roles.md](foreman-en/skills/dispatch/references/roles.md).
@@ -425,6 +426,7 @@ Preference files only adjust how things are done within the plugin's hard rules:
 - Don't hand off database migration scripts; Claude Code writes them.
 - Ask Codex for a review when a change is over 200 lines.
 - Use role mode for discussions where performance and maintainability pull against each other; treat kimi-k2.6 as a strong model.
+- Local results from stats show deepseek-v4.1-flash finding many issues no one else does in reviews; treat it as strong for reviews.
 ```
 
 Custom roles for role-mode discussions go here too; the format is under "Custom roles" in [references/roles.md](foreman-en/skills/dispatch/references/roles.md).
@@ -450,6 +452,7 @@ Each call is recorded in `~/.claude/foreman/runs/<run_id>/`: the brief, the even
 - Paths ignored by `.gitignore` aren't tracked unless you pass them with `--track` when handing off.
 - When the Codex quota runs out or an API balance is too low, the run is marked `quota_exhausted` and isn't retried automatically; for Codex it includes the expected reset time.
 - Runs whose dispatcher exited unexpectedly, got stuck or timed out are flagged to Claude Code the next time you start a session in that project.
+- After a review or discussion ends and Claude Code has checked it, it records what happened to each point in that run's `verdict.json`. `cli.mjs stats` sums these records up by model and module: seats, points confirmed and false positives, points only that model found, rework rate, time, usage and cost, with missing usage shown as missing rather than 0. You can point to these figures in the preference files to adjust model tiers; the plugin never ranks models itself.
 
 ## Platforms
 

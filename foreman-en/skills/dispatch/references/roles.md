@@ -2,7 +2,9 @@
 
 Follow this when a discussion uses role mode (see "Choosing the mode" under "1. Settling the approach: discussion" in SKILL.md): each participant gets a role card and checks the same topic from its own angle. The normal-mode rules (no leaning in the brief, Claude writes its own proposal first, decisions by evidence, the round limit) all still apply; this file only covers what role mode adds.
 
-When a review (an evidence review, for example) gives its seats different angles, write the role cards, assign them and confirm with the pop-up the same way, with three differences: the shared body is the review brief; in the role card, "You still give a full answer to the shared questions, not just a list of risks" becomes "You still review everything the review rules ask for and return a review report", and the rules are the review rules (read-only, report only issues with evidence, output in the review schema); reviews can't be resumed, so there's no round 2, and Claude merges the seats' findings and checks each one.
+When a review (an evidence review, for example) gives its seats different angles, write the role cards, assign them and confirm with the pop-up the same way, with three differences: the shared body is the review brief; in the role card, "You still give a full answer to the shared questions, not just a list of risks" becomes "You still review everything the review rules ask for and return a review report", and the rules are the review rules (read-only, report only issues with evidence, output in the review schema); reviews can't be resumed, so there's no round 2, and Claude merges the seats' findings and checks each one (level 3 also gets a gap pass; see "Gap pass" under "5. Review" in SKILL.md).
+
+What a role on a seat means differs by module (see "When a cell has several candidates" in SKILL.md): at levels 2 and 3 of discussions and reviews a role is an angle to check from, assigned by this file and confirmed with a pop-up before starting; in run and draw a role is a work package with its own write scope, sent out by the rules for splitting work to run in parallel, with no pop-up; generate has no roles.
 
 ## Role cards
 Each participant's brief = **an identical shared body** + **one role card at the end**. The shared body is the normal-mode brief (background, problem, constraints, known facts, code locations, questions to answer), word for word the same for everyone; otherwise they aren't answering the same question.
@@ -23,7 +25,7 @@ Keep a role card under 10 lines, in this format:
 - Write the full role card into the brief, not just the role name, so the record keeps the role definitions this discussion actually used.
 
 ## Preset roles
-| Role | Checks | Minimum tier | Strengths to look for | Tool needs |
+| Role | Checks | Suggested tier | Strengths to look for | Tool needs |
 |---|---|---|---|---|
 | Architect | Module boundaries, who owns what, long-term evolution | Strong | Reasoning, coding | Reads code |
 | Math / correctness | Reasoning about algorithms, money calculations, concurrency and consistency | Strong | Reasoning | — |
@@ -38,7 +40,8 @@ Keep a role card under 10 lines, in this format:
 | Edge-case lister | Lists edge cases, unusual input, empty values and concurrency cases | Weak | — | Reads code |
 
 - Pick only the roles that matter for the topic; there's no need to use them all. With 4 or more participants, keep an overall reviewer to catch what the preset roles all miss.
-- When the topic needs a role that isn't listed, Claude writes one in the same format and sets its minimum tier and tool needs. Roles the user defines in the preference files are picked from along with the presets.
+- Once the roles are picked, decide which are the **core roles**: the angles this topic needs most and would cost most to miss, such as math / correctness when reviewing money calculations, or the research mentor in an evidence review. Core roles have stricter assignment rules; see "Assigning roles" below.
+- When the topic needs a role that isn't listed, Claude writes one in the same format and sets its suggested tier and tool needs. Roles the user defines in the preference files are picked from along with the presets.
 
 ## What each kind of participant can do in a discussion
 - **Codex**: reads code and runs read-only commands.
@@ -46,34 +49,38 @@ Keep a role card under 10 lines, in this format:
 - **API agents**: see only the brief and the files attached with `--file`.
 
 ## Assigning roles
-Participants can only come from this cell's candidates (`resolved_modules.discuss.<level>`; `plan` refuses a seat that isn't one of them), and each keeps the effort configured there. A candidate marked required (`required`) always takes a seat; `plan` refuses a plan that leaves one out. Go in this order:
+Participants can only come from this cell's candidates (`resolved_modules.<discuss|review>.<level>`; `plan` refuses a seat that isn't one of them), and each keeps the effort configured there. Go in this order:
 
-1. **Tool access**: if the participant's tools can't do what the role needs, it can't take the role.
-2. **Tier**: never go below a role's minimum tier. Model tiers are in `references/model-tiers.md`.
-3. **Strengths**: among participants of the same tier, pick by the strengths the role looks for.
+1. **Tool access is a hard gate**: if the participant's tools can't do what the role needs, it can't take the role.
+2. **Required candidates first**: a candidate marked required (`required`) always takes a seat; `plan` refuses a plan that leaves one out.
+3. **Tiers are a guide**: the suggested tier in the table isn't a condition for taking part. Core roles go first to participants that meet the suggested tier; among participants of the same tier, pick by the strengths the role looks for. Model tiers are in `references/model-tiers.md`; the preference files can change a model's tier based on local results (`stats`), and then they win.
 4. **Different models first**: one model per role.
-5. **No free qualifying participant: give a strong model another session**: when a role has no free participant that meets its tier and tool needs (whether the role needs a strong or a mid model), have a strong model open another session for it rather than handing it to a model below the role's tier. Only strong models get extra sessions. The number of tasks one agent runs at once is capped by `max_parallel` (tasks from other groups and sessions count too); if it's full, start the extra one once earlier tasks finish.
-6. **Seat count**: no more seats than the cell's candidates, and no more than `dispatch.max_seats` (6 by default).
+5. **Below the tier means a breadth seat**: a participant below a role's suggested tier can still take the role, but the seat is a **breadth seat**: it hands in its round 1 proposal or review report on its own, Claude checks every point, and it doesn't join round 2. While there are free seats, mid and weak participants can all take part this way; a low tier alone is no reason to leave a model out.
+6. **Two seats for a core role at level 3**: on a level 3 topic, one core role can be played by two different base models, each in its own seat with the same role card. One model reached through api, pi and opencode counts as one base model (compared after dropping the `provider/` prefix).
+7. **Never merge core roles**: each core role has a seat of its own and never shares a role card with another role. When seats run short, drop minor roles first, or fold their checks into the overall reviewer; never drop a core role. In the user's multi-role trial, after one role was merged into another seat, 4 of the 5 issues that were missed belonged to it.
+8. **No free qualifying participant: give a strong model another session**: when a core role has no free participant that meets its suggested tier, have a strong model open another session for it first, as before. Each extra session takes one of that agent's concurrency slots (`max_parallel`; tasks from other groups and sessions count too; if it's full, start the extra one once earlier tasks finish), and it isn't independent evidence: several seats of one model agreeing count as one.
+9. **Seat count**: no more than `dispatch.max_seats` (6 by default) seats, however many candidates the cell has (with extra sessions of one model there can be more seats than candidates); required agents always take a seat, and a review's gap seat counts too.
 
-Weak models only get roles like "Edge-case lister", where mistakes are cheap and Claude checks every item. If no role fits, leave that model out of this discussion rather than handing it an expert part. Participants configured for the level but given no role this time are shown in the pop-up as "not in this discussion".
+Participants configured for the level but given no seat this time are shown in the pop-up as "not in this discussion", with the reason (such as no seats left, or the tools can't do it).
 
 ## The confirmation pop-up (always)
 Before starting role mode, always have the user confirm, even when `dispatch.auto` is `true`. When the user asked for role mode themselves, they still confirm the assignment.
 
-First list the full assignment in the message: seat number, model (tier), role, what the role checks, and why it went to that model (tool access, tier or strengths), including participants not in this discussion. Once the pop-up is open the user may not see the message, and in some interfaces `preview` only shows after an extra click, so **write the assignment into the pop-up's own text**, not only into `preview`. Ask one question with AskUserQuestion:
+First list the full assignment in the message: seat number, model (tier), role, what the role checks, why it went to that model (tool access, tier or strengths), whether it's a breadth seat and which roles are core, including participants not in this discussion. Once the pop-up is open the user may not see the message, and in some interfaces `preview` only shows after an extra click, so **write the assignment into the pop-up's own text**, not only into `preview`. Ask one question with AskUserQuestion:
 
-- Question: start with "Start the role discussion with this assignment?", then one line per seat, "① model (tier) → role", and a last line for participants not in this discussion. For example:
+- Question: start with "Start the role discussion with this assignment?", then one line per seat, "① model (tier) → role", with breadth seats marked in the brackets, and a last line for participants not in this discussion and why. For example:
 
   ```
   Start the role discussion with this assignment?
-  ① gemini-4-argon (strong) → Math / correctness
+  ① gemini-4-argon (strong) → Math / correctness (core)
   ② gpt-6-astra (strong) → Fact checker
   ③ gpt-6-astra (strong, second session) → Overall reviewer
   ④ deepseek-v4.1-flash (mid) → Maintenance and compatibility
   ⑤ mimo-v2.6-pro (weak) → Edge-case lister
-  Not in this discussion: glm-5.3-flash (weak)
+  ⑥ glm-5.3-flash (weak, breadth seat, round 1 only) → Math / correctness (core, second seat)
+  Not in this discussion: qwen3.8-flash (weak, no seats left)
   ```
-- Option one, "Start as suggested (Recommended)": sum it up in one sentence in its description (such as "Start the 5 seats as above; gpt-6-astra opens two sessions"); `preview` can also hold the full table with reasons.
+- Option one, "Start as suggested (Recommended)": sum it up in one sentence in its description (such as "Start the 6 seats as above; gpt-6-astra opens two sessions"); `preview` can also hold the full table with reasons.
 - Option two, "Adjust": then ask again, with at most two questions: which roles to swap out or add (multi-select, 2–4 preset roles relevant to the topic; the user writes custom roles under "Other"); and whether Claude reassigns or the user writes the assignment (under "Other": "seat number + change"). Show the new assignment and have the user confirm once more.
 - Option three, "Use a normal discussion instead".
 
@@ -89,6 +96,7 @@ First list the full assignment in the message: seat number, model (tier), role, 
 
 ## Round 2
 - When to hold it: the participants really disagree on the shared questions, or a role raised a risk that can be backed up and that nobody else addressed. Roles simply looking at different things isn't disagreement.
+- Resume only the seats that aren't breadth seats. Points a breadth seat raised in round 1 that Claude confirmed go to the others as part of an anonymous proposal or as Claude's own challenges.
 - Label the proposals anonymously as "Proposal A / B / …", removing both model and role names but keeping each proposal's goals, constraints and evidence.
 - The resume brief asks each participant to first find the most serious problem in the other proposals against the shared goal, then add what its own role sees; if another proposal has already dealt with its concern, it should say so plainly instead of digging in to stay in character.
 
@@ -96,7 +104,7 @@ First list the full assignment in the message: seat number, model (tier), role, 
 - Several roles agreeing doesn't add evidence, and roles played by the same model count for even less. Decide only by evidence, constraints and reversibility.
 - The decision record adds to the usual format:
   - Mode: role mode;
-  - The assignment table: seat, model, effort, role, run_id;
+  - The assignment table: seat, model, effort, role, run_id, marking core roles and breadth seats;
   - Role cards: the role cards actually used, or where the briefs are;
   - Missing viewpoints: for seats that failed or were stopped, say which role's view is missing; Claude checks the key questions itself;
   - Which roles came from the same model.
@@ -108,7 +116,7 @@ Write them in the preference files (`~/.claude/foreman/preferences.md` or `<proj
 ```markdown
 ### Trading risk officer
 - Checks: position limits, drawdown control, assumptions about fees and slippage
-- Minimum tier: strong
+- Suggested tier: strong
 - Strengths to look for: data analysis, reasoning
 - Tool needs: reads data files
 ```

@@ -36,6 +36,7 @@ const { validateReviewMaterial } = await import('./review-scope.mjs');
 const { cmdWatch } = await import('./watch.mjs');
 const { cmdStatus, cmdCancel, cmdAwaitBusy } = await import('./status.mjs');
 const { cmdAssets } = await import('./assets.mjs');
+const { cmdJudge, cmdStats } = await import('./stats.mjs');
 
 // 先加载配置，再迁移记录和重写启动器；这些步骤仍在解析参数之前完成。
 // assets 例外：它只在本机处理图片，用不到配置和记录目录，所以两步都跳过，配置缺失或写坏了也照样能用。
@@ -264,6 +265,6 @@ const { cmd, opts } = parseArgs(process.argv.slice(2));
 // 新建任务组时组名只用 ASCII：实时查看要把它写进终端命令，桌面版的终端面板只接受 ASCII 命令。
 if (['run', 'discuss', 'resume', 'review', 'image', 'plan'].includes(cmd) && opts.group != null && !/^[A-Za-z0-9._-]{1,64}$/.test(opts.group)) die(M.badGroupName(opts.group));
 const statsOf = (meta) => adapters[agentTypeOf(meta)]?.stats?.(meta.session_id, meta.started_at);
-const commands = { run: cmdRun, discuss: cmdDiscuss, resume: cmdResume, review: cmdReview, image: cmdImage, plan: (o) => cmdPlan(o, load, adapters), status: (o) => cmdStatus(o, statsOf), watch: (o) => cmdWatch(o, load), config: cmdConfig, check: cmdCheck, models: cmdModels, cancel: (o) => cmdCancel(o, statsOf), 'await-busy': (o) => cmdAwaitBusy(o, CONFIG), assets: cmdAssets };
+const commands = { run: cmdRun, discuss: cmdDiscuss, resume: cmdResume, review: cmdReview, image: cmdImage, plan: (o) => cmdPlan(o, load, adapters), judge: cmdJudge, stats: (o) => cmdStats(o, statsOf), status: (o) => cmdStatus(o, statsOf), watch: (o) => cmdWatch(o, load), config: cmdConfig, check: cmdCheck, models: cmdModels, cancel: (o) => cmdCancel(o, statsOf), 'await-busy': (o) => cmdAwaitBusy(o, CONFIG), assets: cmdAssets };
 if (!commands[cmd]) die(M.usage);
 await commands[cmd](opts);

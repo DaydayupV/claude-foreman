@@ -67,4 +67,34 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
   - 其他已经结束的任务（比如 `done`、`failed`、`cancelled`）：`ok: false`，`note` 说明没有可取消的。
   - 写不进 `meta.json` 时：标成已处理的返回 `ok: false` 和 `error`；强行结束的仍返回 `ok: true`，带 `warning`。
 - `status` 列表不列出读不了 `meta.json` 的任务（被别的程序占着、不许别人读，或者内容不完整），末尾一行写明有几个。`status --run <run_id>` 读不了 `meta.json`、但读得出 `result.json` 时，输出 `result.json`，在 `warnings` 末尾注明；两个都读不了时报错。
-- 标成已处理、又没有结束时间的任务，用时算到运行目录里除 `meta.json` 以外最晚修改的那个文件（标记已处理会改写 `meta.json`）。
+- 标成已处理、又没有结束时间的任务，用时算到运行目录里除 `meta.json` 和 `verdict.json` 以外最晚修改的那个文件（标记已处理会改写 `meta.json`，`judge` 往往很久以后才写 `verdict.json`）。
+
+## judge 和 stats
+审查或讨论结束、Claude 核实完以后，用 `judge` 记下每条意见的去留；`stats` 把这些记录和用量汇总成各模型的本地实测。
+
+```bash
+node "<脚本路径>" judge --run <run_id> [--accept "F1,F3"] [--partial "F4"] [--reject "F2"] [--same "F1=<run_id>:F3,…"]
+node "<脚本路径>" stats [--module discuss|run|review|image] [--since <天数>]
+```
+
+**judge**
+- 只记审查和讨论（执行和图像任务会被拒绝），任务要已经结束。编号以字母开头，只用字母、数字和 `. _ -`，最长 32 个字符，几个编号用逗号隔开。
+- 编号：带结构化报告的审查用报告里的 `id`（F1、F2…），不在报告里的会被拒绝；讨论用 Claude 在决策记录里给观点编的号（P1、P2…），没有结构化报告的审查用 Claude 在汇报里给的编号，这两种不校验。一个编号只能有一种去留：`accept`（成立）、`partial`（部分成立）或 `reject`（不成立，审查里就是误报）。
+- 同一个问题：几席报的是同一个问题时，在其中一席加 `--same "<本席的编号>=<另一席的 run_id>:<那一席的编号>"`。链接不分方向、可以传递，写在一边就够。只能连到同伴：同一份计划里的另一席；没有计划时，是同一个任务组、同一个 Claude 会话、同一个模块的任务。等号左边的编号要有去留（这次一起写，或者以前记过）；右边是带结构化报告的审查时，编号要在它的报告里。
+- 结果写进这个任务记录目录的 `verdict.json`（先写临时文件再改名）。同一个任务同时只有一个 `judge` 在写（锁文件 `verdict.json.lock`）：后来的最多等 5 秒，还拿不到就报错退出、不写文件。再次运行只改这次写到的编号：写到去留的，覆盖原来的去留；`--same` 写到的，链接整个换成这次给的；其余条目不动。
+- 输出 `verdict.json` 的内容（`run_id`、`module`、`plan`、`seat`、`group`、`claude_session`、`agent`、`model`、`updated_at`，以及 `items`：每条的 `verdict`、`same_as`、`at`），外加 `file`（文件路径）和 `unjudged`（报告里还没记去留的编号；没有结构化报告时为 `null`）。
+
+**stats**
+- 不改任何记录，读记录目录里的全部任务。读不了 `meta.json` 的任务，以及父任务读不了、归不了席位的续接，记在 `totals.unreadable`；还在运行的轮次记在 `totals.running_skipped`；这些都不进统计，根任务还在运行的整个席位不算。
+- 席位：一个没有父任务的任务，加上它所有的续接（讨论的后续轮次、返工、回答问题），算一个席位。`--since <天数>` 按这个根任务的开始时间过滤，`--module` 按根任务的模块过滤（旧记录没有 `module` 的按 `kind` 推断）。
+- 按（基础模型，模块）分行。基础模型是模型名去掉最后一个 `/` 以前的提供方前缀、再转小写，所以经 opencode、pi、api 接入的同一个模型合成一行。席位数和返工记在根任务的模型上；每一轮的用时、用量、费用和去留记在那一轮自己的模型上（返工升级时可能换了模型）。
+- 每行的字段：
+  - `seats`、`runs`：席位数和轮数。
+  - `findings_reported`：审查报告里一共报了多少条（只算审查）；`judged_runs`、`judged`：记过去留的轮数和条数（结构化报告是 `no_issues`、一条都没报的审查轮次不用 `judge`，自动算作记过、0 条）；`accepted`、`partial`、`rejected`：成立、部分成立、不成立的条数。
+  - `unique`：只有这个模型发现、核实成立（含部分成立）的问题数。同一席位各轮里编号相同的条目算同一条，同伴里的条目再按 `--same` 连成一个个问题，一个问题只由这一个基础模型的席位报出，就给它记一条。只在同一份计划（没有计划时是同一个任务组和 Claude 会话）里有两个以上不同的基础模型都记过去留时才统计；`unique_basis_runs` 是参与统计的轮数，一轮都没有时 `unique` 为 `null`。
+  - `rework`（只对执行和图像，其他模块为 `null`）：`seats`、`reworked`、`rate`。正常交回报告后又被 `resume` 续接的席位才算返工过；回答问题、卡死或失败后的续接不算。
+  - `duration_s`：`total`（各轮用时之和）、`median_per_seat`（没有运行中的轮次、每一轮都有用时的席位，按席位总用时取中位数）、`missing_runs`（没有用时的轮数）。
+  - `tokens`：`input`、`cached_input`、`output`，有用量的轮数 `runs`，缺失的轮数 `missing_runs`。记的是会话累计（`usage_scope` 为 `session_total`）的续接，只算这一轮新增的部分。Codex 的轮次没记用量、又是这个会话的最后一轮（后面没有任何续接，正在运行的也算）时，从 Codex 自己的会话记录补读；读不到的计入 `missing_runs`，不当成 0。
+  - `cost_usd`：`total`、`runs`、`missing_runs`。只有 opencode 和 pi 记录费用；Codex 用订阅额度，API 协作方不折算费用，这两类不计入，也不算缺失。
+- 输出 JSON：`runs_dir`、`module`、`since_days`、`generated_at`、`totals`（`runs`、`seats`、`judged_runs`、`running_skipped`、`unreadable`、`unreadable_verdicts`）、`rows`（按讨论、审查、执行、图像的顺序，同一模块里席位多的在前）和 `notes`（上面几条口径的说明）。
+- 怎么用：偏好文件可以引用这份统计改某个模型的档位（比如"本地实测里 deepseek-v4.1-flash 审查的独有发现多，审查时按强档用"），以偏好文件为准；脚本不自动排名，也不改配置和档位。记过去留的轮数少时（看 `judged_runs` 和 `unique_basis_runs`），这些数字只作参考。
