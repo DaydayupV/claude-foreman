@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { sandbox, taskArgs, output, failed, json, read, write, poll, baseConfig, seedRun, MESSAGES } from './helpers.mjs';
+import { sandbox, taskArgs, output, failed, json, read, write, poll, baseConfig, seedRun, MESSAGES, ROOT } from './helpers.mjs';
 import { report, usage, sessionStats, command } from './fixtures/reports.mjs';
 const M = MESSAGES.zh;
 const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
@@ -219,4 +219,25 @@ test('Codex 的命令因为沙箱起不来时，notes 里说明这不是任务�
   const ok = h.scenario({ steps: [{ event: { type: 'item.completed', item: { id: 'cmd-2', type: 'command_execution', command: 'grep sandbox', exit_code: 0, aggregated_output: 'sandbox failed in docs' } } }] });
   const r2 = output(await h.bridge(taskArgs(h), { env: ok.env }));
   assert.ok(!r2.notes.some((n) => n.startsWith(M.codexSandboxFailed('').slice(0, 10))));
+});
+
+test('失败命令的输出证明不了沙箱坏了时不提示：打印出的文件内容里有沙箱报错的字样、进程因为别的原因起不来；输出第一行是沙箱报错才提示', async (t) => {
+  const h = sandbox(t);
+  // 照 20261020-210624-atlp：一条脚本先打印 package.json 和这个适配器的源码，后面的命令失败（exit 1），源码里的正则文字被当成了沙箱报错
+  const source = read(path.join(ROOT, 'foreman/skills/dispatch/scripts/adapters/codex-cli.mjs'));
+  const printed = [
+    `{\n  "private": true\n}\n${source}`,
+    `foreman/skills/dispatch/scripts/adapters/codex-cli.mjs:50:${source.split('\n').find((l) => l.includes('windows sandbox failed'))}`,
+    "  if (s.sandbox_broken) process.stderr.write('windows sandbox failed: helper_unknown_error: setup refresh had errors\\n');",
+  ].map((text) => ({ exit_code: 1, text }));
+  // 照 20261010-184531-l49o：命令行太长，进程起不来，和沙箱无关
+  printed.push({ exit_code: -1, text: 'Failed to create unified exec process: 文件名或扩展名太长。 (os error 206)' });
+  const s = h.scenario({ steps: printed.map(({ exit_code, text }, i) => ({ event: { type: 'item.completed', item: { id: `cmd-${i}`, type: 'command_execution', command: 'Get-Content …', exit_code, status: 'failed', aggregated_output: text } } })) });
+  const r = output(await h.bridge(taskArgs(h), { env: s.env }));
+  assert.ok(!r.notes.some((n) => n.startsWith(M.codexSandboxFailed('').slice(0, 10))), r.notes.join('\n'));
+  // 沙箱的报错写在输出第一行时，退出码是普通的失败码也算
+  const error = 'windows sandbox failed: helper_unknown_error: setup refresh had errors';
+  const broken = h.scenario({ steps: [{ event: { type: 'item.completed', item: { id: 'cmd-9', type: 'command_execution', command: 'git status', exit_code: 1, status: 'failed', aggregated_output: `${error}\n` } } }] });
+  const r2 = output(await h.bridge(taskArgs(h), { env: broken.env }));
+  assert.ok(r2.notes.includes(M.codexSandboxFailed(error)), r2.notes.join('\n'));
 });

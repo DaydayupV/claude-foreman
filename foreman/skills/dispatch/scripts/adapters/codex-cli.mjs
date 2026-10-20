@@ -45,8 +45,10 @@ function readonlyLevel(agent, kind) {
   return (agent.sandbox?.[kind] || codexConfigValue('sandbox_mode')) === 'read-only' ? 'sandbox' : 'audited';
 }
 
-// Codex 的沙箱启动不了命令时的报错（Windows 沙箱设置坏了最常见）；只在命令失败时匹配，避免误判正常输出。
-const SANDBOX_ERROR = /windows sandbox failed|helper_unknown_error|setup refresh had errors|failed to create unified exec process|sandbox (?:setup )?(?:failed|error)/i;
+// Codex 的沙箱启动不了命令时的报错（Windows 沙箱设置坏了最常见）。沙箱坏了时命令根本没跑起来，输出只有这条报错，
+// 所以只认失败命令输出的第一行、报错写在行首：命令打印出的文件内容（这份源码、文档、测试）里出现这些字样不算。
+// 进程起不来（Failed to create unified exec process）要原因提到沙箱才算，命令行太长之类的原因换个写法重试就行。
+const SANDBOX_ERROR = /^(?:error:\s*)?(?:windows sandbox failed|helper_unknown_error|setup refresh had errors|sandbox (?:setup )?(?:failed|error)|failed to create unified exec process:.*(?:sandbox|helper_unknown_error|setup refresh))/i;
 const SANDBOX_MARK = 'foreman-sandbox-ok';
 
 // 用 codex sandbox 在沙箱里跑一条 echo，不调用模型。ok 为 null 表示这个版本的 Codex 没法这样探测。
@@ -152,8 +154,8 @@ function runCodex({ agent, args, cwd, prompt, runDir, timeoutMin, stallMin, sess
       else if (ev.type === 'item.completed' && ev.item?.type === 'error') out.warnings.push(ev.item.message);
       else if (ev.type === 'item.completed' && ev.item?.type === 'command_execution') {
         out.commands++;
-        const failed = ev.item.exit_code !== 0 && SANDBOX_ERROR.exec(String(ev.item.aggregated_output || ''));
-        if (failed && !out.sandboxError) out.sandboxError = String(ev.item.aggregated_output).trim().split(/\r?\n/).find((l) => SANDBOX_ERROR.test(l)).slice(0, 300);
+        const first = String(ev.item.aggregated_output || '').trim().split(/\r?\n/, 1)[0];
+        if (ev.item.exit_code !== 0 && SANDBOX_ERROR.test(first) && !out.sandboxError) out.sandboxError = first.slice(0, 300);
       }
       else if (ev.type === 'item.completed' && ev.item?.type === 'agent_message') out.messages.push(ev.item.text || '');
       return ev;
