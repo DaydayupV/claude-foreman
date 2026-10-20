@@ -72,7 +72,7 @@ function runOpencode({ agent, args, cwd, prompt = '', timeoutMs, stallMin = 0, r
     const { file, pre } = opencodeCommand(agent);
     const out = { code: null, status: null, stdout: '', stderrTail: '', text: '', errors: [], recovered: [], events: 0, messages: [], questions: [] };
     const denied = [], stderrLines = [], eventErrors = [];
-    let stopped = false;
+    let stopped = false, endedOnText = false;
     // opencode 按环境变量 PWD 认工作目录，不看进程真实的 cwd；PWD 是从调用方的 shell 继承来的，可能指向别的目录。
     const child = spawnCli(file, [...pre, ...args], { cwd, env: { ...opencodeEnv(agentId, agent.run_access), PWD: cwd }, windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' }, {
@@ -100,6 +100,8 @@ function runOpencode({ agent, args, cwd, prompt = '', timeoutMs, stallMin = 0, r
       if (ev.type === 'tool_use' && ev.part?.state?.status === 'error'
         && /permission|rejected|not allowed/i.test(JSON.stringify(ev.part.state.error || ev.part.state.output || ''))) denied.push(ev.part);
       if (ev.type === 'step_finish') stopped = ev.part?.reason === 'stop';
+      // 出错重试后，有时最后一步写完回复就退出、不发 step_finish（20261021-030953-7ce3），所以记下事件流是不是以一段写完的回复结尾。
+      endedOnText = ev.type === 'text' && ev.part?.time?.end != null;
       if (ev.type === 'error') {
         stopped = false;
         eventErrors.push(ev.error?.message || ev.error?.type || JSON.stringify(ev));
@@ -133,8 +135,9 @@ function runOpencode({ agent, args, cwd, prompt = '', timeoutMs, stallMin = 0, r
       out.questions.push(...permissionQuestions(denied, stderrLines, cwd));
       out.code = code;
       if (runDir && isCancelled(runDir)) out.status = 'cancelled';
-      // 最后一次 step_finish 是 stop 且后面没有 error 才算恢复，CLI 此时仍可能以 1 退出。
-      (stopped ? out.recovered : out.errors).push(...eventErrors);
+      // 最后一次 step_finish 是 stop、或者最后一个事件是写完的回复，且后面没有 error，才算恢复，CLI 此时仍可能以 1 退出。
+      // 回复只是报告残片时，照常走一次格式修复。
+      (stopped || endedOnText ? out.recovered : out.errors).push(...eventErrors);
       out.status ||= out.errors.some((e) => /usage limit|quota|insufficient balance/i.test(e)) ? 'quota_exhausted'
         : (code === 0 || out.recovered.length > 0) && !out.errors.length ? 'done' : 'failed';
       if (!out.events && out.status === 'failed') out.errors.push(M.exitCode(code, out.stderrTail.trim().split(/\r?\n/).slice(-6).join('\n'), 'opencode'));

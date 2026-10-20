@@ -4,6 +4,7 @@ import path from 'node:path';
 import { sandbox, baseConfig, opencodeAgent, taskArgs, output, read, lines, MESSAGES } from './helpers.mjs';
 import { review } from './fixtures/reports.mjs';
 import { opencodeRetry } from './fixtures/opencode-retry.mjs';
+import { opencodeRetryNoFinish } from './fixtures/opencode-retry-nofinish.mjs';
 const M = MESSAGES.zh;
 const transportError = 'Timed out waiting for response data';
 const error = (message = transportError) => ({ type: 'error', error: { type: 'provider.transport', message } });
@@ -105,4 +106,37 @@ test('审查回放 mpxt 后修复调用失败：恢复过的错误并回 errors�
   assert.deepEqual(r.errors, [transportError, '修复时上游 401']);
   assert.deepEqual(r.notes, []);
   assert.equal(r.report, null);
+});
+
+test('审查回放 7ce3：重试后写完报告就退出、没有 step_finish，也算恢复，直接收下报告', async (t) => {
+  const h = sandbox(t); configure(h);
+  const s = h.scenario(replay(opencodeRetryNoFinish));
+  const r = output(await h.bridge(reviewArgs(h), { env: s.env }));
+  assert.equal(runs(s).length, 1);
+  assert.equal(r.status, 'done');
+  assert.deepEqual(r.report, JSON.parse(opencodeRetryNoFinish.at(-1).part.text));
+  assert.deepEqual(r.errors, []);
+  assert.deepEqual(r.notes, [M.opencodeRecovered(transportError)]);
+});
+
+test('审查重试后以写完的报告残片结尾：算恢复，照常修复一次', async (t) => {
+  const h = sandbox(t); configure(h);
+  const fragment = { type: 'text', part: { text: '{"verdict":"issues_found","findings":[', time: { start: 1, end: 2 } } };
+  const s = h.scenario({ calls: [replay([...opencodeRetryNoFinish.slice(0, -1), fragment]), { last_message: review }] });
+  const r = output(await h.bridge(reviewArgs(h), { env: s.env }));
+  assert.equal(runs(s).length, 2);
+  assert.equal(r.status, 'done');
+  assert.deepEqual(r.report, review);
+  assert.deepEqual(r.notes, [M.opencodeRecovered(transportError)]);
+});
+
+test('审查重试后最后一段回复没写完（没有 time.end）：仍然失败、不修复', async (t) => {
+  const h = sandbox(t); configure(h);
+  const unfinished = { type: 'text', part: { text: opencodeRetryNoFinish.at(-1).part.text } };
+  const s = h.scenario(replay([...opencodeRetryNoFinish.slice(0, -1), unfinished]));
+  const r = output(await h.bridge(reviewArgs(h), { env: s.env }), 1);
+  assert.equal(r.status, 'failed');
+  assert.deepEqual(r.errors, [transportError]);
+  assert.deepEqual(r.notes, []);
+  assert.equal(runs(s).length, 1);
 });
