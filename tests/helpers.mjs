@@ -184,9 +184,13 @@ export function expected(name, actual, replacements = {}) {
 }
 export const taskArgs = (h, mode = 'run', extra = []) => [mode, '--cwd', h.cwd, '--level', 'complex', '--brief', '-', ...extra];
 
+// 用测试进程自己的进程号假装调度进程还在运行时，开始时间不能早于测试进程启动：脚本核对进程启动时间，晚于任务开始的进程算作复用了进程号。
+export const liveStart = (ms) => new Date(Math.max(ms, Math.ceil(performance.timeOrigin))).toISOString();
+
 export function seedRun(h, id, meta = {}, result = null, events = []) {
   const dir = path.join(h.runs, id);
-  const start = new Date(Date.now() - 60000).toISOString();
+  const ago = Date.now() - 60000;
+  const start = meta.status === 'running' && meta.pid === process.pid ? liveStart(ago) : new Date(ago).toISOString();
   write(path.join(dir, 'meta.json'), {
     id, mode: 'run', kind: 'exec', cwd: h.cwd, title: '合成任务', agent: 'codex', agent_type: 'codex cli',
     model: 'fake-codex', level: 'complex', effort: 'high', status: 'done', pid: 0,

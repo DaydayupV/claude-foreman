@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { seedRun, write, poll } from '../helpers.mjs';
+import { seedRun, write, poll, liveStart } from '../helpers.mjs';
 
 // 一场还在进行的四方讨论：Codex 先说了一段话再跑了六条命令（有一条失败），opencode 只读文件和搜索，
 // pi 说过一句话、后来又有两条思考摘要，API 正在思考。pid 用一个活着的进程（测试进程自己），任务就算在运行。
@@ -34,7 +34,7 @@ export function liveGroup(h, pid) {
   ];
   seats.forEach((s, i) => seedRun(h, s.id, {
     mode: 'discuss', kind: 'discuss', title: '合成讨论：登记锁原地重试', agent: s.agent, agent_type: s.type, model: s.model, effort: s.effort,
-    status: 'running', pid, group, plan, seat: i + 1, started_at: at(0), ended_at: undefined,
+    status: 'running', pid, group, plan, seat: i + 1, started_at: liveStart(start), ended_at: undefined,
   }, null, s.events));
   write(path.join(h.runs, 'plans', `${plan}.json`), {
     plan_id: plan, module: 'discuss', cell: 'complex', group, cwd: h.cwd, claude_session: 'test-session', created_at: at(0),

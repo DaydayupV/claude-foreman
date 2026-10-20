@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { once } from 'node:events';
+import { pathToFileURL } from 'node:url';
 import { sandbox, output, write, seedRun, ROOT } from './helpers.mjs';
 
 test('会话提醒首次使用并且不创建配置或迁移目录', async (t) => {
@@ -72,6 +74,51 @@ test('会话提醒以已退出任务的结果为准，没有结果仍提醒中�
   assert.ok(context.includes('missing-result｜run｜合成任务｜调度进程已退出，没有结果'));
 });
 
+test('会话提醒批量识别复用进程号的旧 running，保留当前 runner 且不回写记录', async (t) => {
+  const h = sandbox(t), sleeper = h.start('-e', ['setInterval(() => {}, 1000)']);
+  await once(sleeper.child, 'spawn');
+  const meta = { status: 'running', pid: sleeper.child.pid, ended_at: undefined };
+  const started_at = new Date(Date.now() - 3600000).toISOString();
+  const dirs = ['old-runner-a', 'old-runner-b'].map((id) => seedRun(h, id, { ...meta, started_at }));
+  seedRun(h, 'current-runner', { ...meta, started_at: new Date().toISOString() });
+  seedRun(h, 'finished-runner', { ...meta, started_at }, { status: 'done' });
+  seedRun(h, 'other-project-runner', { ...meta, started_at, cwd: path.join(h.home, 'other') });
+  const before = dirs.map((dir) => fs.readFileSync(path.join(dir, 'meta.json'), 'utf8'));
+  const context = output(await h.hook('session-reminder.mjs', { cwd: h.cwd }, { timeout: 10000 })).hookSpecificOutput.additionalContext;
+  for (const id of ['old-runner-a', 'old-runner-b']) assert.ok(context.includes(`${id}｜run｜合成任务｜调度进程已退出，没有结果`));
+  for (const id of ['current-runner', 'finished-runner', 'other-project-runner']) assert.equal(context.includes(id), false);
+  assert.deepEqual(dirs.map((dir) => fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')), before);
+  assert.doesNotThrow(() => process.kill(sleeper.child.pid, 0));
+});
+
+test('会话提醒以 3000 毫秒查询，查询失败仍输出其余提醒', async (t) => {
+  const h = sandbox(t), sleeper = h.start('-e', ['setInterval(() => {}, 1000)']);
+  await once(sleeper.child, 'spawn');
+  seedRun(h, 'query-timeout', { status: 'running', pid: sleeper.child.pid, started_at: new Date(Date.now() - 3600000).toISOString() });
+  seedRun(h, 'already-interrupted', { status: 'interrupted' });
+  const capture = path.join(h.home, 'query-timeouts.json');
+  const script = h.write('hook-timeout.mjs', `import fs from 'node:fs';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+const spawn = childProcess.spawnSync, timeouts = [];
+childProcess.spawnSync = (...args) => {
+  timeouts.push(args[2].timeout);
+  fs.writeFileSync(${JSON.stringify(capture)}, JSON.stringify(timeouts));
+  const result = spawn(...args);
+  // 保留真实查询输出模拟超时，不实际等满超时。
+  return { ...result, error: Object.assign(new Error('ETIMEDOUT'), { code: 'ETIMEDOUT' }) };
+};
+syncBuiltinESMExports();
+await import(${JSON.stringify(pathToFileURL(path.join(ROOT, 'foreman/hooks/session-reminder.mjs')).href)});`);
+  const r = output(await h.start(script, [], { input: JSON.stringify({ cwd: h.cwd }), timeout: 10000 }).done);
+  const context = r.hookSpecificOutput.additionalContext;
+  assert.deepEqual(JSON.parse(fs.readFileSync(capture, 'utf8')), [3000]);
+  assert.ok(context.includes('foreman:dispatch'));
+  assert.ok(context.includes('already-interrupted'));
+  assert.equal(context.includes('query-timeout｜'), false);
+  assert.doesNotThrow(() => process.kill(sleeper.child.pid, 0));
+});
+
 test('会话提醒优先采用活进程号对应记录的中断结果，不回写元数据', async (t) => {
   const h = sandbox(t), id = 'interrupted-with-live-pid';
   const dir = seedRun(h, id, { status: 'running', pid: process.pid }, { status: 'interrupted' });
@@ -117,3 +164,22 @@ for (const [label, command] of [
     assert.equal(r.stderr, '');
   });
 }
+
+test('会话提醒核对期间任务写好结果时以结果为准，不误报中断', async (t) => {
+  const h = sandbox(t), sleeper = h.start('-e', ['setInterval(() => {}, 1000)']);
+  await once(sleeper.child, 'spawn');
+  const dir = seedRun(h, 'finished-during-query', { status: 'running', pid: sleeper.child.pid, started_at: new Date(Date.now() - 3600000).toISOString() });
+  const script = h.write('hook-finish-during-query.mjs', `import fs from 'node:fs';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+const spawn = childProcess.spawnSync;
+childProcess.spawnSync = (...args) => {
+  // 查询期间 runner 写好结果退出，进程号又被别的程序占着
+  fs.writeFileSync(${JSON.stringify(path.join(dir, 'result.json'))}, JSON.stringify({ status: 'done' }));
+  return spawn(...args);
+};
+syncBuiltinESMExports();
+await import(${JSON.stringify(pathToFileURL(path.join(ROOT, 'foreman/hooks/session-reminder.mjs')).href)});`);
+  const r = output(await h.start(script, [], { input: JSON.stringify({ cwd: h.cwd }), timeout: 10000 }).done);
+  assert.equal(r.hookSpecificOutput.additionalContext.includes('finished-during-query'), false);
+});

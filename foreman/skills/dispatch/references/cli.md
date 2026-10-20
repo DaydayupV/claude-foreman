@@ -32,6 +32,7 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
 - 图像计划的席位用 `image --plan <plan_id> --seat <序号> --brief … --title … --scope <输出目录>` 启动：不写 `--level`（格子由计划决定），`--scope` 至少给一个（同组任务的写入范围检查要用；工作目录里被 `.gitignore` 忽略的输出目录会自动并入 `--track`，改动追踪才看得到，工作目录本身和没被忽略的目录不并入），其余参数（`--track`、`--effort`、`--model`、`--add-dir`、`--timeout`、`--stall`）和 `run` 一样。内部按执行任务跑：快照、执行报告、改动归属、`generated_images`、`image_calls` 都和 `run` 相同，记录里 `mode` 是 `run`、`kind` 是 `exec`，另有 `module: "image"`、`cell`、`step`（就是格子）和 `route`，`level` 为 `null`。续接用 `resume --run <run_id> --brief …`，不写 `--level`：从图像格子选派，不查执行的等级，也不再核对确认凭据。
 - 计划不占并发名额；每一席启动时照常按它的协作方计并发。
 - `status --plan <plan_id>` 输出 JSON：每一席的 `run_id`（最新一轮）、`runs`（这一席所有轮次）、`status`（没启动过是 `not_started`）、`ok`（结束后才有：正常结束并交回了有效结果；审查以结构化报告为准，`verdict` 为 `incomplete` 的不算，没有报告时只有 Codex 原生审查的文字算）；`state` 为 `complete`（必选席位都交回了有效结果；没有必选时，每一席都结束、至少一席有效）、`incomplete`（有必选席位结束了但没有有效结果，比如失败、取消、额度用完、等人回答）或 `pending`；`missing_required` 列出还没有有效结果的必选席位和它的状态；每一席的 `stale` 是它最新一轮审查结果里的 `stale`（不是审查或还没有结果时为 `null`），图像计划另有 `route`。审查期间材料变了的席位，实时查看和 `status --group` 会在这一席和计划那一行写"material changed during the review (stale)"，计划照样算完整。
+- 补漏席是角色为 `补漏`（英文插件写 `gap`）的席位。它用的协作方没标必选、计划里又有必选席时，`state` 只看必选席，补漏席还没跑完计划也会显示 `complete`。所以另有 `gap_unfinished`：还没交回有效结果的补漏席（没启动、还在运行、失败或结果无效），每项是 `seat`、`agent`、`status`，没有时为空数组；实时查看和 `status --group` 在计划那一行加一句"gap seat not finished: …"，写明是哪一席、处于什么状态（not started、running、no valid result，或者 failed 这类状态词）。
 
 ## models
 列出本机 Codex、opencode、pi 自带的模型清单（含每个模型支持的推理强度），以及每个 API 协作方的接口列出的模型名（不含推理强度），并核对配置里的模型在不在清单里、不在时给出最接近的写法。只读，不发模型请求。用户问有哪些模型可选、或者要换模型和推理强度时用。
@@ -41,7 +42,8 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
 - `report`：协作方的结构化报告：执行报告、讨论报告或审查报告。审查报告有 `verdict`（`issues_found` / `no_issues` / `incomplete`）、`findings`（每条有 `id`、`location`、`issue`、`trigger`、`severity`、`evidence`、`suggestion`，为空是合法结果）、`coverage`（`checked`、`not_checked`）和 `unverified`。Codex 原生审查（审 `diff`、不带说明也不带 `--file`）没有结构化报告：`report` 为 `null`，意见是 `last_message` 里的英文文字。报告不是合法 JSON 时（opencode、pi、API 修复一次后仍不合格），也只有 `last_message`。
 - `last_message`：没有 `report` 时，协作方最后一条回复的原文，只保留前 8000 字，全文在 `run_dir/last-message.txt`。
 - `changes`：脚本追踪到的工作目录内改动。每个文件标有 `by`：`agent` 表示有工具事件证明是执行的协作方改的（改名前的记录里写作 `codex`）；`reported` 表示只有它在报告里自称改过，常见于用命令或脚本写的文件；`unknown` 表示两样都没有。报告里写成目录的（以 `/` 结尾，或者在磁盘上是目录）按前缀算，目录下被追踪的文件都记 `reported`；只有这个前缀下一个被追踪的文件都没有时，`notes` 才提示它不在追踪范围内（工作目录本身不算）。标了 `group_run` 的落在同组另一个任务的写入范围里，而且那个任务的运行时间和这个任务有重叠（区间是开始到结束，还在跑的算到现在，旧记录没有结束时间的按最后活动时间算；这个任务开始前就结束了的不认领），个数在 `group_total`；实时查看的结束行和组面板不把它们算进"of unknown origin"，另写"N from other runs in the group"。
-- `notes`：提示信息，比如归属未知的改动、协作方报告了但没追踪到的文件、Codex 的沙箱启动不了命令。
+- `notes`：提示信息，比如归属未知的改动、协作方报告了但没追踪到的文件、Codex 的沙箱启动不了命令、opencode 中途报错后自动重试并正常结束（见下）。
+- opencode 中途报错（比如流超时 "Timed out waiting for response data"）、自己重试后最后一步正常结束（`step_finish` 的 reason 是 `stop`）时，不算失败：错误原文写进 `notes`，不进 `errors`，opencode 的退出码不是 0 也一样。这时回复可能被拆成了几段，最后一段不是合格的报告，就照常发一次修复请求，让它把完整报告重发一遍；不拼接几段消息。错误之后没有正常结束的，照旧记成 `failed`；恢复之后修复请求又失败、或者任务被取消、超时的，恢复过的错误也照实写进 `errors`，不写这条提示。
 - `warnings`：要注意的问题，比如审查期间材料又变了；普通执行任务出了图（"出图没有走图像模块"）；路线 ④ 的手画任务出了位图；路线 ③、④ 的手画任务新写或改过的 SVG 里嵌了位图（`<image>`；只查这一席自己的改动；没有快照、或者 `--scope` 在工作目录外时，追踪不到的地方只查执行事件和报告里列出的 SVG，`notes` 里会说明）；收尾时 `meta.json` 一直写不进（多半是备份或同步软件占着它，约 15 秒后放弃），这时它停在上一次写好的内容，结果照常在 `result.json` 里（这条提示只在打印出来的结果里，`result.json` 里没有）。
 - `questions` 和 `needs_decision`：协作方要人回答的事，见 SKILL.md 的"协作方要人回答时"。
 - `session_id`、`run_dir`：完整 diff 在 `run_dir/diff.patch`，审查的补丁在 `run_dir/review.patch`。
@@ -58,6 +60,7 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
 - `readonly_violation`：讨论或审查里有证据的写入，列出 `[{ path, by }]`；这时 `status` 为 `failed`，`errors` 里有说明，改动没有自动还原。
 
 ## cancel 和 status
+- 怎么算"在运行"：`meta.json` 的状态是 `running`、调度进程的进程号还活着，并且这个进程不晚于任务的 `started_at` 启动（调度进程自己写 `started_at`，复用这个进程号的程序一定启动得更晚）。没写完结果就被杀掉的旧任务，进程号以后分给了别的程序时，按中断算，不再占并发名额，也不算进 `stats` 的 `running_skipped`。`status`、`stats`、实时查看、并发名额检查和会话开始时的提醒都这样判断：先挑出状态是 `running`、进程号又还活着的几条，一次查完它们的启动时间（Windows 上用一次 PowerShell，不弹窗），没有这样的任务时不查；同一个进程里的结论会缓存，实时查看不会每秒都去查。派活时在拿登记锁之前查，锁里不再启动查询，拿锁之后才登记的任务直接算在运行；会话开始时的提醒最多查 3 秒。查不到启动时间时，照旧算在运行。
 - `result.json` 只在任务结束时写。它写好了，`status`、实时查看、`cancel` 和会话开始时的提醒就都按它的状态算，不看调度进程的进程号：收尾时写不进 `meta.json` 的任务，磁盘上的 `meta.json` 会一直停在 `running`，而这个进程号以后可能分给别的程序。`cancel` 遇到这种任务、调度进程又已经退出时，顺手把终态写回 `meta.json`；只读的命令不写。
 - `cancel --run <run_id>` 输出一段 JSON，`ok` 表示这次有没有做成：
   - 运行中的任务：先核对这个进程号还是不是当初的调度进程（比对进程的启动时间，Windows 上用 PowerShell 查，不弹窗），再留终止标记，最多等 30 秒让它自己停下、写好结果（`ok: true`，`status` 是它自己写的状态）。等不到时再核对一次，确认是同一个进程才强行结束它，补写一份最简结果（带上会话记录里读得到的用量），输出 `forced: true`。
@@ -73,16 +76,17 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
 审查或讨论结束、Claude 核实完以后，用 `judge` 记下每条意见的去留；`stats` 把这些记录和用量汇总成各模型的本地实测。
 
 ```bash
-node "<脚本路径>" judge --run <run_id> [--accept "F1,F3"] [--partial "F4"] [--reject "F2"] [--same "F1=<run_id>:F3,…"]
+node "<脚本路径>" judge --run <run_id> [--accept "F1,F3"] [--partial "F4"] [--reject "F2"] [--same "F1=<run_id>:F3,…"] [--clear "F5,…"]
 node "<脚本路径>" stats [--module discuss|run|review|image] [--since <天数>]
 ```
 
 **judge**
 - 只记审查和讨论（执行和图像任务会被拒绝），任务要已经结束。编号以字母开头，只用字母、数字和 `. _ -`，最长 32 个字符，几个编号用逗号隔开。
 - 编号：带结构化报告的审查用报告里的 `id`（F1、F2…），不在报告里的会被拒绝；讨论用 Claude 在决策记录里给观点编的号（P1、P2…），没有结构化报告的审查用 Claude 在汇报里给的编号，这两种不校验。一个编号只能有一种去留：`accept`（成立）、`partial`（部分成立）或 `reject`（不成立，审查里就是误报）。
-- 同一个问题：几席报的是同一个问题时，在其中一席加 `--same "<本席的编号>=<另一席的 run_id>:<那一席的编号>"`。链接不分方向、可以传递，写在一边就够。只能连到同伴：同一份计划里的另一席；没有计划时，是同一个任务组、同一个 Claude 会话、同一个模块的任务。等号左边的编号要有去留（这次一起写，或者以前记过）；右边是带结构化报告的审查时，编号要在它的报告里。
+- 同一个问题：几席报的是同一个问题时，在其中一席加 `--same "<本席的编号>=<另一席的 run_id>:<那一席的编号>"`。链接不分方向、可以传递，写在一边就够。只能连到同伴：同一份计划里的另一席；没有计划时，是同一个任务组、同一个 Claude 会话、同一个模块的任务。等号左边的编号要有去留（这次一起写，或者以前记过）；右边是带结构化报告的审查时，编号要在它的报告里。右边的任务还在运行时拒绝（它的编号还定不下来），等它结束、核实完再连。
+- 删掉记错的条目：`--clear "<编号,…>"` 删掉这些条目，连同它们的 `--same` 链接；编号要已经记过，同一个编号不能同时写在 `--clear` 和去留或 `--same` 里。别的任务里指向它们的链接不动，`stats` 会忽略找不到的链接。全部删完时 `verdict.json` 也删掉，这个任务回到没记过去留的状态（结构化报告是 `no_issues` 的审查轮次重新按 0 条自动计入）。
 - 结果写进这个任务记录目录的 `verdict.json`（先写临时文件再改名）。同一个任务同时只有一个 `judge` 在写（锁文件 `verdict.json.lock`）：后来的最多等 5 秒，还拿不到就报错退出、不写文件。再次运行只改这次写到的编号：写到去留的，覆盖原来的去留；`--same` 写到的，链接整个换成这次给的；其余条目不动。
-- 输出 `verdict.json` 的内容（`run_id`、`module`、`plan`、`seat`、`group`、`claude_session`、`agent`、`model`、`updated_at`，以及 `items`：每条的 `verdict`、`same_as`、`at`），外加 `file`（文件路径）和 `unjudged`（报告里还没记去留的编号；没有结构化报告时为 `null`）。
+- 输出 `verdict.json` 的内容（`run_id`、`module`、`plan`、`seat`、`group`、`claude_session`、`agent`、`model`、`updated_at`，以及 `items`：每条的 `verdict`、`same_as`、`at`），外加 `file`（文件路径；`--clear` 删完、文件被删掉时为 `null`）、`unjudged`（报告里还没记去留的编号；没有结构化报告时为 `null`），给了 `--clear` 时还有 `cleared`（这次删掉的编号）。
 
 **stats**
 - 不改任何记录，读记录目录里的全部任务。读不了 `meta.json` 的任务，以及父任务读不了、归不了席位的续接，记在 `totals.unreadable`；还在运行的轮次记在 `totals.running_skipped`；这些都不进统计，根任务还在运行的整个席位不算。

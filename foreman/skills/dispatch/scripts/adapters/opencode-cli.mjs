@@ -70,8 +70,9 @@ function permissionQuestions(actions, lines, cwd) {
 function runOpencode({ agent, args, cwd, prompt = '', timeoutMs, stallMin = 0, runDir, onEvent, agentId }) {
   return new Promise((resolve) => {
     const { file, pre } = opencodeCommand(agent);
-    const out = { code: null, status: null, stdout: '', stderrTail: '', text: '', errors: [], events: 0, messages: [], questions: [] };
-    const denied = [], stderrLines = [];
+    const out = { code: null, status: null, stdout: '', stderrTail: '', text: '', errors: [], recovered: [], events: 0, messages: [], questions: [] };
+    const denied = [], stderrLines = [], eventErrors = [];
+    let stopped = false;
     // opencode 按环境变量 PWD 认工作目录，不看进程真实的 cwd；PWD 是从调用方的 shell 继承来的，可能指向别的目录。
     const child = spawnCli(file, [...pre, ...args], { cwd, env: { ...opencodeEnv(agentId, agent.run_access), PWD: cwd }, windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' }, {
@@ -98,7 +99,11 @@ function runOpencode({ agent, args, cwd, prompt = '', timeoutMs, stallMin = 0, r
       if (ev.type === 'text') { out.text = ev.part?.text || ''; out.messages.push(out.text); }
       if (ev.type === 'tool_use' && ev.part?.state?.status === 'error'
         && /permission|rejected|not allowed/i.test(JSON.stringify(ev.part.state.error || ev.part.state.output || ''))) denied.push(ev.part);
-      if (ev.type === 'error') out.errors.push(ev.error?.message || ev.error?.type || JSON.stringify(ev));
+      if (ev.type === 'step_finish') stopped = ev.part?.reason === 'stop';
+      if (ev.type === 'error') {
+        stopped = false;
+        eventErrors.push(ev.error?.message || ev.error?.type || JSON.stringify(ev));
+      }
       onEvent?.(ev);
     };
     child.stdout.setEncoding('utf8');
@@ -128,8 +133,10 @@ function runOpencode({ agent, args, cwd, prompt = '', timeoutMs, stallMin = 0, r
       out.questions.push(...permissionQuestions(denied, stderrLines, cwd));
       out.code = code;
       if (runDir && isCancelled(runDir)) out.status = 'cancelled';
+      // 最后一次 step_finish 是 stop 且后面没有 error 才算恢复，CLI 此时仍可能以 1 退出。
+      (stopped ? out.recovered : out.errors).push(...eventErrors);
       out.status ||= out.errors.some((e) => /usage limit|quota|insufficient balance/i.test(e)) ? 'quota_exhausted'
-        : code === 0 && !out.errors.length ? 'done' : 'failed';
+        : (code === 0 || out.recovered.length > 0) && !out.errors.length ? 'done' : 'failed';
       if (!out.events && out.status === 'failed') out.errors.push(M.exitCode(code, out.stderrTail.trim().split(/\r?\n/).slice(-6).join('\n'), 'opencode'));
       resolve(out);
     });
@@ -189,6 +196,7 @@ async function opencodeSession(run, schema, agentId) {
   const event = eventWriter(dir);
   for (const file of ['events.jsonl', 'opencode.jsonl', 'stderr.log']) fs.writeFileSync(path.join(dir, file), '');
   const errors = [], warnings = [], notes = [];
+  const recovered = new Set();
   const observed = { messages: [], questions: [] };
   let repairing = false;
   const fileChanges = new Set();
@@ -237,6 +245,7 @@ async function opencodeSession(run, schema, agentId) {
     const out = await runOpencode({ agent, args, cwd, agentId: currentAgent, prompt: nextPrompt, runDir: dir, onEvent: translate,
       timeoutMs: deadline - Date.now(), stallMin });
     errors.push(...out.errors);
+    for (const error of out.recovered) recovered.add(error);
     observed.questions.push(...out.questions);
     if (!repairing) observed.messages = out.messages;
     meta.status = out.status;
@@ -247,6 +256,9 @@ async function opencodeSession(run, schema, agentId) {
     onInvalid: () => warnings.push(M.reportInvalid(agentName, path.join(dir, 'last-message.txt'))),
     repair: (invalid) => { repairing = true; nextPrompt = M.reportRepairPrompt(invalid.join('\n')); },
   });
+  // 恢复过的错误只在最后正常结束时算作提示；取消、超时或之后又失败的，照实放进 errors。
+  if (recovered.size && meta.status === 'done') notes.push(M.opencodeRecovered([...recovered].join('; ')));
+  else errors.unshift(...recovered);
   if (meta.status === 'cancelled') errors.push(M.runCancelled(model, cancelSource(dir) ?? 'signal'));
   if (meta.status === 'stalled') errors.push(M.stalled(stallMin));
   if (meta.status === 'failed' && errors.some((e) => /rate.?limit|concurrency|too many requests|\b429\b/i.test(e))) notes.push(M.rateLimited(model, 'opencode'));

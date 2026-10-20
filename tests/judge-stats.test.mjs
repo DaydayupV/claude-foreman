@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { once } from 'node:events';
 import { pathToFileURL } from 'node:url';
 import { sandbox, seedRun, write, json, output, failed, poll, MESSAGES, BRIDGE, CODEX } from './helpers.mjs';
 
@@ -14,6 +15,7 @@ const verdict = (dir, items) => write(path.join(dir, 'verdict.json'), { items })
 test('judge 写入规定字段、保留未修改条目，第二次调用覆盖去留并补齐 unjudged', async (t) => {
   const h = sandbox(t), dir = seedRun(h, 'review-a', { ...review, group: 'audit' }, report('F1', 'F2', 'F3'));
   const first = output(await h.bridge(['judge', '--run', 'review-a', '--accept', ' F1, ,F1, ', '--partial', 'F2']));
+  assert.equal(Object.hasOwn(first, 'cleared'), false);
   assert.deepEqual(Object.keys(json(first.file)), ['run_id', 'module', 'plan', 'seat', 'group', 'claude_session', 'agent', 'model', 'updated_at', 'items']);
   assert.equal(first.file, path.join(dir, 'verdict.json'));
   assert.deepEqual([first.module, first.plan, first.seat, first.group, first.claude_session, first.agent, first.model], ['review', null, null, 'audit', 'test-session', 'codex', 'fake-codex']);
@@ -79,6 +81,108 @@ test('judge --same 合并同编号多条链接、去重、整体替换并保留�
   const third = output(await h.bridge(['judge', '--run', 'a', '--partial', 'F1']));
   assert.equal(third.items.F1.verdict, 'partial');
   assert.deepEqual(third.items.F1.same_as, ['b:F4']);
+});
+
+test('judge --same 拒绝运行中同伴且不写文件，运行中任务也不能 clear', async (t) => {
+  const h = sandbox(t), peer = h.start('-e', ['setInterval(()=>{},1000)']);
+  await once(peer.child, 'spawn');
+  const dir = seedRun(h, 'review-a', { ...review, plan: 'plan-a' }, report('F1'));
+  const other = seedRun(h, 'review-b', { ...review, plan: 'plan-a', status: 'running', pid: peer.child.pid,
+    started_at: new Date().toISOString(), ended_at: undefined });
+  const before = [fs.readdirSync(dir), fs.readdirSync(other)], same = 'F1=review-b:F99';
+  failed(await h.bridge(['judge', '--run', 'review-a', '--accept', 'F1', '--same', same]), M.judgeSameRunning(same, 'review-b'));
+  failed(await h.bridge(['judge', '--run', 'review-b', '--clear', 'F99']), M.judgeRunning('review-b'));
+  assert.deepEqual([fs.readdirSync(dir), fs.readdirSync(other)], before);
+});
+
+test('judge 只给 --clear 可删除报告外的误记和自身链接，保留其他条目及同伴链接', async (t) => {
+  const h = sandbox(t), dir = seedRun(h, 'a', { ...review, plan: 'p' }, report('F1'));
+  const other = seedRun(h, 'b', { ...review, plan: 'p' }, report('F2'));
+  const keep = { verdict: 'partial', same_as: ['b:F2'], at: '2000-01-01T00:00:00Z' };
+  verdict(dir, { F99: { verdict: 'accept', same_as: ['b:F2'] }, F1: keep });
+  const peerFile = verdict(other, { F2: { verdict: 'accept', same_as: ['a:F99'] } });
+  const peerBefore = fs.readFileSync(peerFile, 'utf8');
+  const r = output(await h.bridge(['judge', '--run', 'a', '--clear', ' F99, ,F99, ']));
+  assert.deepEqual(r.cleared, ['F99']);
+  assert.deepEqual(r.items, { F1: keep });
+  assert.deepEqual(json(r.file).items, r.items);
+  assert.equal(Object.hasOwn(json(r.file), 'cleared'), false);
+  assert.equal(fs.readFileSync(peerFile, 'utf8'), peerBefore);
+});
+
+test('judge --clear 删完移除 verdict，file 为 null 且 stats 不再计为记过去留', async (t) => {
+  const h = sandbox(t), dir = seedRun(h, 'review-a', review, report('F1', 'F2'));
+  const file = verdict(dir, { F1: { verdict: 'accept' }, F2: { verdict: 'reject' } });
+  assert.equal(output(await h.bridge(['stats'])).totals.judged_runs, 1);
+  const r = output(await h.bridge(['judge', '--run', 'review-a', '--clear', 'F1, F2']));
+  assert.equal(r.file, null);
+  assert.deepEqual(r.cleared, ['F1', 'F2']);
+  assert.deepEqual(r.items, {});
+  assert.deepEqual(r.unjudged, ['F1', 'F2']);
+  assert.equal(fs.existsSync(file), false);
+  assert.deepEqual(fs.readdirSync(dir).filter((name) => name.startsWith('verdict.json')), []);
+  const stats = output(await h.bridge(['stats']));
+  assert.deepEqual([stats.totals.judged_runs, stats.rows[0].judged_runs, stats.rows[0].judged], [0, 0, 0]);
+});
+
+test('judge --clear 删完 no_issues 审查席的误记后恢复自动零条统计', async (t) => {
+  const h = sandbox(t), dir = seedRun(h, 'review-a', review, { report: { verdict: 'no_issues', findings: [] } });
+  verdict(dir, { F99: { verdict: 'accept' } });
+  const r = output(await h.bridge(['judge', '--run', 'review-a', '--clear', 'F99']));
+  assert.equal(r.file, null);
+  assert.equal(fs.existsSync(path.join(dir, 'verdict.json')), false);
+  const stats = output(await h.bridge(['stats']));
+  assert.deepEqual([stats.totals.judged_runs, stats.rows[0].judged_runs, stats.rows[0].judged], [1, 1, 0]);
+});
+
+test('judge --clear 拒绝未记过或格式错误的编号，报出已记列表且不改文件', async (t) => {
+  const h = sandbox(t), dir = seedRun(h, 'review-a', review, report('F1', 'F2'));
+  const file = verdict(dir, { F1: { verdict: 'accept' }, F2: { verdict: 'reject' } }), before = fs.readFileSync(file, 'utf8');
+  for (const [ids, message] of [
+    ['F1,F9', M.judgeClearUnknown('F9', 'review-a', M.list(['F1', 'F2']))],
+    ['1F', M.judgeBadId('1F')],
+    ['F'.repeat(33), M.judgeBadId('F'.repeat(33))],
+  ]) failed(await h.bridge(['judge', '--run', 'review-a', '--clear', ids]), message);
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+  assert.deepEqual(fs.readdirSync(dir).filter((name) => name.startsWith('verdict.json.')), []);
+  const empty = seedRun(h, 'review-empty', review, report());
+  failed(await h.bridge(['judge', '--run', 'review-empty', '--clear', 'F1']), M.judgeClearUnknown('F1', 'review-empty', M.judgeNoIds));
+  assert.deepEqual(fs.readdirSync(empty).filter((name) => name.startsWith('verdict.json')), []);
+});
+
+test('judge --clear 与 accept partial reject 或 same 左侧冲突时锁外拒绝', async (t) => {
+  const h = sandbox(t), dir = seedRun(h, 'review-a', review, report('F1'));
+  const file = verdict(dir, { F1: { verdict: 'accept' } }), before = fs.readFileSync(file, 'utf8');
+  const lock = `${file}.lock`, owner = { pid: process.pid, at: new Date().toISOString() };
+  write(lock, owner);
+  for (const args of [['--accept', 'F1'], ['--partial', 'F1'], ['--reject', 'F1'], ['--same', 'F1=review-b:F2']]) {
+    failed(await h.bridge(['judge', '--run', 'review-a', '--clear', 'F1', ...args]), M.judgeClearConflict('F1'));
+  }
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+  assert.deepEqual(json(lock), owner);
+});
+
+test('judge --clear 等到锁后按最新 items 校验并删除', async (t) => {
+  const h = sandbox(t), dir = seedRun(h, 'review-a', review, report('F1'));
+  const keep = { verdict: 'partial' }, file = verdict(dir, { F1: keep }), lock = `${file}.lock`;
+  const attempted = path.join(h.cwd, 'attempted');
+  write(lock, { pid: process.pid, at: new Date().toISOString() });
+  const preload = h.write('judge-clear-gate.mjs', `
+import fs from 'node:fs';
+const write = fs.writeFileSync;
+fs.writeFileSync = function (name, ...args) {
+  if (String(name) === ${JSON.stringify(lock)}) write(${JSON.stringify(attempted)}, '');
+  return write.call(this, name, ...args);
+};
+`);
+  const pending = h.startBridge(['judge', '--run', 'review-a', '--clear', 'F99'], { env: { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` } });
+  await poll(() => fs.existsSync(attempted) || pending.child.exitCode !== null, 'clear 尝试拿锁或退出');
+  verdict(dir, { F1: keep, F99: { verdict: 'reject' } });
+  fs.rmSync(lock);
+  const r = output(await pending.done);
+  assert.deepEqual(r.cleared, ['F99']);
+  assert.deepEqual(json(file).items, { F1: keep });
+  assert.deepEqual(fs.readdirSync(dir).filter((name) => name.startsWith('verdict.json.')), []);
 });
 
 test('judge 支持讨论自由编号、旧续接的根模块和原生审查，旧 verdict 损坏时重新记', async (t) => {
@@ -315,7 +419,7 @@ test('stats no_issues 空报告自动计入去留和 unique 基数，incomplete 
 
 test('judge 拒绝解析后为空的去留和 same，不写 verdict 或锁', async (t) => {
   const h = sandbox(t), dir = seedRun(h, 'review-a', review, report('F1'));
-  for (const args of [['--accept', ''], ['--reject', ','], ['--same', ' , '], ['--partial', ' ', '--same', ',']]) {
+  for (const args of [['--accept', ''], ['--reject', ','], ['--same', ' , '], ['--clear', ' , '], ['--partial', ' ', '--same', ',']]) {
     failed(await h.bridge(['judge', '--run', 'review-a', ...args]), M.judgeNothing);
     assert.deepEqual(fs.readdirSync(dir).filter((name) => name.startsWith('verdict.json')), []);
   }

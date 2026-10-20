@@ -177,6 +177,9 @@ import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 const spawn = childProcess.spawnSync;
 let queries = 0;
+// 启动时间查询一次可以查几个进程号，每个一行"进程号 时间"
+const startTimes = (file, args, time) => (String(file).toLowerCase().endsWith('powershell.exe')
+  ? /-Id ([0-9,]+)/.exec(args[args.indexOf('-Command') + 1])[1] : args[args.indexOf('-p') + 1]).split(',').map((pid) => pid + ' ' + time).join(String.fromCharCode(10));
 childProcess.spawnSync = (file, args, options) => {
   const powershell = String(file).toLowerCase().endsWith('powershell.exe');
   if (powershell || file === 'ps') {
@@ -187,9 +190,11 @@ childProcess.spawnSync = (file, args, options) => {
         const meta = JSON.parse(fs.readFileSync(${JSON.stringify(file)}, 'utf8'));
         fs.writeFileSync(${JSON.stringify(file)}, JSON.stringify({ ...meta, session_id: 'fresh-session' }));
       }
-      return { status: ${reused ? 0 : 1}, stdout: powershell ? 'other' : ${JSON.stringify(new Date(Date.parse(started_at) + 60000).toISOString())} };
+      // 查不到时没有输出：ps 非零退出时查到的行照样算数，所以"始终查不到"不能带时间
+      if (!${reused}) return { status: 1, stdout: '' };
+      return { status: 0, stdout: powershell ? 'other' : startTimes(file, args, ${JSON.stringify(new Date(Date.parse(started_at) + 60000).toISOString())}) };
     }
-    return { status: ${reused ? 0 : 1}, stdout: ${JSON.stringify(started_at)} };
+    return ${reused} ? { status: 0, stdout: startTimes(file, args, ${JSON.stringify(started_at)}) } : { status: 1, stdout: '' };
   }
   if (file === 'taskkill') throw new Error('不能结束未经核实的进程');
   return spawn(file, args, options);
@@ -221,15 +226,18 @@ import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 const spawn = childProcess.spawnSync;
 let queries = 0;
+// 启动时间查询一次可以查几个进程号，每个一行"进程号 时间"
+const startTimes = (file, args, time) => (String(file).toLowerCase().endsWith('powershell.exe')
+  ? /-Id ([0-9,]+)/.exec(args[args.indexOf('-Command') + 1])[1] : args[args.indexOf('-p') + 1]).split(',').map((pid) => pid + ' ' + time).join(String.fromCharCode(10));
 childProcess.spawnSync = (file, args, options) => {
   if (String(file).toLowerCase().endsWith('powershell.exe') || file === 'ps') {
     const killing = args.includes('-Command') && args[args.indexOf('-Command') + 1].includes('taskkill.exe');
     if (++queries === ${atEntry ? 1 : 2}) {
       fs.writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify(${JSON.stringify(result)}));
       fs.writeFileSync(${JSON.stringify(file)}, JSON.stringify(${JSON.stringify(meta)}));
-      return { status: 0, stdout: killing ? 'other' : ${JSON.stringify(new Date(Date.parse(started_at) + 500).toISOString())} };
+      return { status: 0, stdout: killing ? 'other' : startTimes(file, args, ${JSON.stringify(new Date(Date.parse(started_at) + 500).toISOString())}) };
     }
-    return { status: 0, stdout: ${JSON.stringify(started_at)} };
+    return { status: 0, stdout: startTimes(file, args, ${JSON.stringify(started_at)}) };
   }
   if (file === 'taskkill') throw new Error('不能结束已经完成的任务');
   return spawn(file, args, options);
@@ -257,6 +265,9 @@ import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 const spawn = childProcess.spawnSync, read = fs.readFileSync;
 let locked = false;
+// 启动时间查询一次可以查几个进程号，每个一行"进程号 时间"
+const startTimes = (file, args, time) => (String(file).toLowerCase().endsWith('powershell.exe')
+  ? /-Id ([0-9,]+)/.exec(args[args.indexOf('-Command') + 1])[1] : args[args.indexOf('-p') + 1]).split(',').map((pid) => pid + ' ' + time).join(String.fromCharCode(10));
 fs.readFileSync = (target, ...args) => {
   if (locked && String(target) === ${JSON.stringify(file)}) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
   return read(target, ...args);
@@ -266,7 +277,7 @@ childProcess.spawnSync = (target, args, options) => {
     fs.writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify(${JSON.stringify(result)}));
     fs.writeFileSync(${JSON.stringify(file)}, JSON.stringify(${JSON.stringify(meta)}));
     locked = true;
-    return { status: 0, stdout: ${JSON.stringify(new Date(Date.parse(started_at) + 500).toISOString())} };
+    return { status: 0, stdout: startTimes(target, args, ${JSON.stringify(new Date(Date.parse(started_at) + 500).toISOString())}) };
   }
   return spawn(target, args, options);
 };

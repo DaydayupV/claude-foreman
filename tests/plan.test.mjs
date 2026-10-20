@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { once } from 'node:events';
 import { pathToFileURL } from 'node:url';
-import { sandbox, output, failed, baseConfig, seedRun, taskArgs, write, json, opencodeAgent, piAgent, apiAgent, ROOT, BRIDGE, MESSAGES } from './helpers.mjs';
+import { sandbox, output, failed, baseConfig, seedRun, liveStart, taskArgs, write, json, opencodeAgent, piAgent, apiAgent, ROOT, BRIDGE, MESSAGES } from './helpers.mjs';
 import { discussion } from './fixtures/reports.mjs';
 import { apiServer } from './fake/api-server.mjs';
 const M = MESSAGES.zh;
@@ -207,7 +208,7 @@ test('必选计划的 pending complete incomplete 与最新续接的结果有效
     out = await status(); assert.equal(out.state, 'incomplete'); assert.equal(out.seats[0].ok, false);
     assert.deepEqual(out.missing_required, [{ seat: 1, agent: 'codex', status: statusName }]);
   }
-  seedRun(h, '20000101-latest', { ...meta, status: 'running', pid: process.pid, started_at: '2000-01-02T00:00:00Z' });
+  seedRun(h, '20000101-latest', { ...meta, status: 'running', pid: process.pid, started_at: liveStart(Date.now()) }); // 用测试进程充当活着的 runner，开始时间不能早于它启动
   out = await status(); assert.equal(out.state, 'pending'); assert.equal(out.seats[0].ok, null);
   seedRun(h, '20000101-latest', { ...meta, status: 'running', pid: 2147483647, started_at: '2000-01-02T00:00:00Z' });
   out = await status(); assert.equal(out.state, 'incomplete'); assert.equal(out.seats[0].status, 'interrupted');
@@ -222,4 +223,51 @@ test('无必选计划要每席结束且至少一席有效，review 允许非空�
   assert.equal((await status()).state, 'complete');
   write(path.join(h.runs, '20000101-one', 'result.json'), { last_message: '  ' });
   const out = await status(); assert.equal(out.state, 'incomplete'); assert.deepEqual(out.missing_required, []);
+});
+
+test('status --plan 列出未启动的补漏和 gap 席，跑完后清空且不改变 state 算法', async (t) => {
+  const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex };
+  c.modules.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second' }]; h.config(c);
+  const p = output(await h.bridge(planArgs(h, 'discuss', ['codex', 'second=补漏', 'second=gap', 'second=复核'])));
+  const saved = json(p.file); saved.seats[1].role = ' 补漏 '; saved.seats[2].role = ' GaP '; write(p.file, saved);
+  const meta = { plan: p.plan_id, kind: 'discuss', mode: 'discuss' };
+  seedRun(h, '20000101-main', { ...meta, seat: 1 }, { report: discussion });
+  const status = async () => output(await h.bridge(['status', '--plan', p.plan_id]));
+  const before = await status();
+  assert.equal(before.state, 'complete');
+  assert.deepEqual(before.missing_required, []);
+  assert.deepEqual(before.gap_unfinished, [2, 3].map((seat) => ({ seat, agent: 'second', status: 'not_started' })));
+  // 跑过但失败、或者结束了却没有有效结果的补漏席，也算没跑完
+  seedRun(h, '20000101-gap-2', { ...meta, seat: 2, status: 'failed' }, {});
+  seedRun(h, '20000101-gap-3', { ...meta, seat: 3 }, {});
+  const ended = await status();
+  assert.equal(ended.state, 'complete');
+  assert.deepEqual(ended.gap_unfinished, [{ seat: 2, agent: 'second', status: 'failed' }, { seat: 3, agent: 'second', status: 'done' }]);
+  for (const seat of [2, 3]) seedRun(h, `20000101-gap-${seat}`, { ...meta, seat }, { report: discussion });
+  const after = await status();
+  assert.equal(after.state, 'complete');
+  assert.deepEqual(after.gap_unfinished, []);
+});
+
+test('status --group 计划行显示未启动及运行中的 gap seat not finished', async (t) => {
+  const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex };
+  c.modules.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second' }]; h.config(c);
+  const p = output(await h.bridge(planArgs(h, 'discuss', ['codex', 'second=补漏', 'second=gap'])));
+  const meta = { plan: p.plan_id, group: 'plan-group', kind: 'discuss', mode: 'discuss' };
+  seedRun(h, '20000101-main', { ...meta, seat: 1 }, { report: discussion });
+  const peer = h.start('-e', ['setInterval(()=>{},1000)']);
+  await once(peer.child, 'spawn');
+  seedRun(h, '20000101-gap', { ...meta, seat: 3, status: 'running', pid: peer.child.pid,
+    started_at: new Date().toISOString(), ended_at: undefined });
+  const status = output(await h.bridge(['status', '--plan', p.plan_id]));
+  assert.equal(status.state, 'complete');
+  assert.deepEqual(status.gap_unfinished, [
+    { seat: 2, agent: 'second', status: 'not_started' }, { seat: 3, agent: 'second', status: 'running' },
+  ]);
+  const line = `Plan ${p.plan_id}: complete; gap seat not finished: second (seat 2, not started), second (seat 3, running)`;
+  for (const lang of ['zh', 'en']) {
+    const r = await h.bridge(['status', '--group', 'plan-group'], { env: { FOREMAN_LANG: lang } });
+    assert.equal(r.code, 0, r.stderr);
+    assert.ok(r.stdout.split(/\r?\n/).includes(line), r.stdout);
+  }
 });

@@ -1,7 +1,7 @@
 // 状态列表、终止任务和排队检查；会话统计由入口提供只读函数。
 import fs from 'node:fs';
 import path from 'node:path';
-import { RUNS_ROOT, UNFINISHED_STATUSES, requestCancel, listRuns, findRun, readMeta, isRunning, runEnd, runOutcome, groupRuns, groupSummary, describeActivity, saveMeta, metaWriteWarning } from './records.mjs';
+import { RUNS_ROOT, UNFINISHED_STATUSES, requestCancel, listRuns, findRun, readMeta, checkRunners, isRunning, runEnd, runOutcome, groupRuns, groupSummary, describeActivity, saveMeta, metaWriteWarning } from './records.mjs';
 import { M, die, need, pidAlive, processStartedAt, killTreeIfSame, sleep, modelOf, agentTypeOf, replaceFile } from './util.mjs';
 import { D, C, padWidth, visibleWidth, modelLabel, clock, took, outcomeStyle, usageLine, paintPlanWord } from './format.mjs';
 import { planStatus, describePlans } from './plan.mjs';
@@ -23,7 +23,7 @@ function cmdStatus(o, sessionStats) {
     }
     if (fs.existsSync(file)) process.stdout.write(fs.readFileSync(file, 'utf8') + '\n');
     else {
-      if (run.meta.status === 'running' && !pidAlive(run.meta.pid)) run.meta.status = 'interrupted';
+      if (run.meta.status === 'running' && !isRunning(run.meta)) run.meta.status = 'interrupted';
       process.stdout.write(JSON.stringify({ ...run.meta, activity: describeActivity(run.dir) }, null, 2) + '\n');
     }
     return;
@@ -33,11 +33,15 @@ function cmdStatus(o, sessionStats) {
   // 每个任务一行：编号、模式和等级（原词）、状态记号和状态词、模型标签、用时（运行中写 12:03），各列按显示宽度对齐；
   // 下面一行是运行中的活动情况，或者结束后的用量。颜色只给状态记号和状态词，模型和标题加粗，次要信息用暗色。
   let unreadable = 0;
-  const records = runs.flatMap((rid) => {
-    const dir = path.join(RUNS_ROOT, rid);
+  const loaded = runs.map((id) => {
+    const dir = path.join(RUNS_ROOT, id);
+    return { id, dir, meta: readMeta(dir) };
+  });
+  checkRunners(loaded.map((run) => run.meta));
+  const records = loaded.flatMap((run) => {
+    const { id: rid, dir } = run;
     // meta.json 读不出来时计入末尾提示。进程已退出、记录还是运行中的，交给 runOutcome 判断：
     // 它会先重读一次（多半是刚写完结果就退出了），还是运行中才算中断。
-    const run = { dir, meta: readMeta(dir) };
     if (!run.meta) { unreadable++; return []; }
     const outcome = runOutcome(run);
     const m = run.meta;
@@ -111,7 +115,7 @@ async function cmdCancel(o, sessionStats) {
     }
     print({ ok: false, status: 'running', error: M.metaUnreadable(path.join(run.dir, 'meta.json')) });
   };
-  if (!isRunning(run.meta)) {
+  if (run.meta.status !== 'running' || !pidAlive(run.meta.pid)) {
     await handleEnded(readMeta(run.dir) || run.meta);
     return;
   }
@@ -214,7 +218,9 @@ async function cmdAwaitBusy(o, config) {
     await sleep(1000);
   }
   for (;;) {
-    const running = pick().filter((run) => isRunning(run.meta) && !['opencode cli', 'pi cli'].includes(agentTypeOf(run.meta)));
+    const runs = pick();
+    checkRunners(runs.map((run) => run.meta));
+    const running = runs.filter((run) => isRunning(run.meta) && !['opencode cli', 'pi cli'].includes(agentTypeOf(run.meta)));
     const busy = running.map((run) => ({ run, s: queuedSeconds(run.dir) })).filter((x) => x.s != null && x.s >= after * 60);
     if (busy.length || !running.length) {
       print({

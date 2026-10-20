@@ -1,7 +1,7 @@
 // 核实意见的去留，以及按基础模型和模块汇总本地实测记录。
 import fs from 'node:fs';
 import path from 'node:path';
-import { RUNS_ROOT, listRuns, findRun, readMeta, isRunning, runOutcome } from './records.mjs';
+import { RUNS_ROOT, listRuns, findRun, readMeta, checkRunners, isRunning, runOutcome } from './records.mjs';
 import { M, die, need, isObject, modelOf, agentTypeOf, replaceFile, sleep } from './util.mjs';
 
 const MODULES = ['discuss', 'review', 'run', 'image'];
@@ -62,15 +62,17 @@ async function lockVerdict(file) {
 }
 
 async function cmdJudge(o) {
-  const options = Object.fromEntries([...VERDICTS, 'same'].map((key) => [key, split(o[key])]));
+  const options = Object.fromEntries([...VERDICTS, 'same', 'clear'].map((key) => [key, split(o[key])]));
   if (!Object.values(options).some((ids) => ids.length)) die(M.judgeNothing);
   const run = findRun(need(o, 'run')), { meta } = run;
   if (isRunning(meta)) die(M.judgeRunning(run.id));
   const module = moduleOf(meta);
   if (!['review', 'discuss'].includes(module)) die(M.judgeModule(run.id, module));
   const ids = findingsOf(readRecord(run.dir, 'result.json'), module);
-  const changes = new Map(), links = new Map();
+  const changes = new Map(), links = new Map(), cleared = new Set(options.clear);
+  for (const id of cleared) checkId(id);
   for (const verdict of VERDICTS) for (const id of options[verdict]) {
+    if (cleared.has(id)) die(M.judgeClearConflict(id));
     checkId(id, run.id, ids);
     if (changes.has(id) && changes.get(id) !== verdict) die(M.judgeConflict(id));
     changes.set(id, verdict);
@@ -79,10 +81,12 @@ async function cmdJudge(o) {
     const match = /^([^=:\s]+)=([^=:\s]+):([^=:\s]+)$/.exec(value);
     if (!match) die(M.judgeBadSame(value));
     const [, id, ref, otherId] = match;
+    if (cleared.has(id)) die(M.judgeClearConflict(id));
     checkId(id, run.id, ids);
     const other = findRun(ref), otherModule = moduleOf(other.meta);
     if (other.id === run.id) die(M.judgeSameSelf(value));
     if (!peerKey(meta, module) || peerKey(meta, module) !== peerKey(other.meta, otherModule)) die(M.judgeSameNotPeer(value, other.id));
+    if (isRunning(other.meta)) die(M.judgeSameRunning(value, other.id));
     checkId(otherId, other.id, findingsOf(readRecord(other.dir, 'result.json'), otherModule));
     if (!links.has(id)) links.set(id, new Set());
     links.get(id).add(`${other.id}:${otherId}`);
@@ -90,15 +94,22 @@ async function cmdJudge(o) {
   const file = path.join(run.dir, 'verdict.json'), tmp = `${file}.${process.pid}.tmp`, release = await lockVerdict(file);
   try {
     const items = { ...readVerdict(run.dir)?.items }, at = new Date().toISOString();
+    const recorded = Object.keys(items);
+    for (const id of cleared) if (!recorded.includes(id)) die(M.judgeClearUnknown(id, run.id, recorded.length ? M.list(recorded) : M.judgeNoIds));
+    for (const id of cleared) delete items[id];
     for (const id of links.keys()) if (!changes.has(id) && !VERDICTS.includes(items[id]?.verdict)) die(M.judgeSameUnjudged(id));
     for (const [id, verdict] of changes) items[id] = { ...items[id], verdict, at };
     for (const [id, same] of links) items[id] = { verdict: items[id].verdict, same_as: [...same], at };
     const value = { run_id: run.id, module, plan: meta.plan ?? null, seat: meta.seat ?? null,
       group: meta.group ?? null, claude_session: meta.claude_session ?? null,
       agent: meta.agent ?? null, model: modelOf(meta), updated_at: at, items };
-    fs.writeFileSync(tmp, JSON.stringify(value, null, 2));
-    replaceFile(tmp, file);
-    print({ file, ...value, unjudged: ids ? ids.filter((id) => !VERDICTS.includes(items[id]?.verdict)) : null });
+    const hasItems = Object.keys(items).length > 0;
+    if (hasItems) {
+      fs.writeFileSync(tmp, JSON.stringify(value, null, 2));
+      replaceFile(tmp, file);
+    } else fs.rmSync(file, { force: true });
+    print({ file: hasItems ? file : null, ...value, ...(o.clear == null ? {} : { cleared: [...cleared] }),
+      unjudged: ids ? ids.filter((id) => !VERDICTS.includes(items[id]?.verdict)) : null });
   } finally {
     try { fs.rmSync(tmp, { force: true }); } finally { release(); }
   }
@@ -184,8 +195,9 @@ function cmdStats(o, statsOf) {
   if (since != null && (!Number.isFinite(since) || since <= 0)) die(M.statsBadSince(o.since));
   const cutoff = since == null ? null : Date.now() - since * 86400000;
   const totals = { runs: 0, seats: 0, judged_runs: 0, running_skipped: 0, unreadable: 0, unreadable_verdicts: 0 };
-  const runs = listRuns().map((id) => {
-    const dir = path.join(RUNS_ROOT, id), meta = readMeta(dir);
+  const loaded = listRuns().map((id) => { const dir = path.join(RUNS_ROOT, id); return { id, dir, meta: readMeta(dir) }; });
+  checkRunners(loaded.map((run) => run.meta)); // 停在 running 的几条一次核对完，不逐条启动查询
+  const runs = loaded.map(({ id, dir, meta }) => {
     const running = isRunning(meta);
     if (!meta) totals.unreadable++;
     if (running) totals.running_skipped++;

@@ -44,6 +44,38 @@ test('status 对正在运行的任务给出当前命令和活动时间', async (
   assert.equal(output(await running.done, 1).status, 'cancelled');
 });
 
+test('status 将复用进程号的旧 running 显示为 interrupted，当前 runner 仍为 running', async (t) => {
+  const h = sandbox(t), sleeper = h.start('-e', ['setInterval(() => {}, 1000)']);
+  await new Promise((resolve) => sleeper.child.once('spawn', resolve));
+  const meta = { status: 'running', pid: sleeper.child.pid, ended_at: undefined };
+  const dir = seedRun(h, 'reused-status', { ...meta, started_at: new Date(Date.now() - 3600000).toISOString() });
+  seedRun(h, 'current-status', { ...meta, started_at: new Date().toISOString() });
+  const file = path.join(dir, 'meta.json'), before = read(file);
+  const list = await h.bridge(['status']);
+  assert.equal(list.code, 0, list.stderr);
+  assert.match(list.stdout, /reused-status\s+run\s+✗ interrupted/);
+  assert.match(list.stdout, /current-status\s+run\s+\S+ running/);
+  assert.equal(output(await h.bridge(['status', '--run', 'reused-status'])).status, 'interrupted');
+  assert.equal(read(file), before);
+  assert.doesNotThrow(() => process.kill(sleeper.child.pid, 0));
+});
+
+test('watch 单任务和组视图将复用进程号的旧 running 视为中断并退出', async (t) => {
+  const h = sandbox(t), sleeper = h.start('-e', ['setInterval(() => {}, 1000)']);
+  await new Promise((resolve) => sleeper.child.once('spawn', resolve));
+  seedRun(h, 'reused-watch', { status: 'running', pid: sleeper.child.pid, group: 'reused-watch-group',
+    started_at: new Date(Date.now() - 3600000).toISOString(), ended_at: undefined });
+  for (const extra of [[], ['--verbose']]) {
+    const r = await h.bridge(['watch', '--run', 'reused-watch', ...extra]);
+    assert.equal(r.code, 0, r.stderr);
+    assert.ok(r.stdout.includes(D.watchInterrupted), r.stdout);
+  }
+  const group = await h.bridge(['watch', '--group', 'reused-watch-group']);
+  assert.equal(group.code, 0, group.stderr);
+  assert.ok(group.stdout.includes('interrupted'), group.stdout);
+  assert.doesNotThrow(() => process.kill(sleeper.child.pid, 0));
+});
+
 for (const [id, label] of [['a', 'Codex 执行'], ['b', 'API 讨论'], ['c', 'opencode 讨论'], ['d', '失败任务']]) {
   test(`watch --run 非 TTY 的${label}输出与期望一致`, async (t) => {
     const h = sandbox(t);

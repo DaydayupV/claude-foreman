@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ENTRY, defaultRunsRoot, runsMovedNow, resolveAgentAlias, DEFAULT_AGENT_PARALLEL } from './config.mjs';
-import { M, die, pidAlive, sleep, pathKey, clip, oneLine, plainCommand, retryBusy, replaceFile } from './util.mjs';
+import { M, die, pidAlive, processStartTimes, sleep, pathKey, clip, oneLine, plainCommand, retryBusy, replaceFile } from './util.mjs';
 import { D } from './format.mjs';
 
 // 终止标记：cancel 命令和实时查看里按 x 时写进任务的记录目录，运行中的任务看到就停下。
@@ -55,6 +55,10 @@ await import(pathToFileURL(candidates.find((p) => fs.existsSync(p)) ?? candidate
 // 并发上限按协作方算，任何任务（分不分组、哪个会话）都要在锁内登记并做准入检查，调用方用完 release。
 async function newRunDir() {
   fs.mkdirSync(RUNS_ROOT, { recursive: true });
+  // 进程身份在锁外预查，避免其他派活等 PowerShell；记下当时有哪些任务，准入时据此分辨新登记的。
+  const ids = listRuns();
+  listedBeforeLock = new Set(ids);
+  checkRunners(ids.map((id) => readMeta(path.join(RUNS_ROOT, id))));
   // 登记和准入串行完成，避免随机后缀让后登记的任务排到前面。
   const lock = path.join(RUNS_ROOT, '.start.lock');
   const reap = `${lock}.reap`;
@@ -290,7 +294,9 @@ function checkAdmission(meta, cfg) {
     const previous = runs.find((r) => r.meta && !r.meta.parent && r.meta.plan === meta.plan && r.meta.seat === meta.seat);
     if (previous) return M.seatAlreadyStarted(meta.plan, meta.seat, previous.id);
   }
-  const running = runs.filter((r) => isRunning(r.meta));
+  // 拿锁前还没有的任务是之后才登记的，都是刚启动的 runner，直接算在运行；拿锁前就有、当时没核对上的
+  // （元数据一时读不出、进程号刚被复用）很少见，才在锁内补查。
+  const running = runs.filter((r) => isRunning(r.meta, { query: !listedBeforeLock || listedBeforeLock.has(r.id) }));
   const limit = cfg.agents[meta.agent].max_parallel ?? DEFAULT_AGENT_PARALLEL;
   const same = running.filter((r) => resolveAgentAlias(r.meta.agent || 'codex', cfg) === meta.agent); // 旧记录没有 agent 字段，都是 Codex
   if (same.length >= limit) return M.agentFull(meta.agent, same.length, limit, M.list(same.map((r) => r.id)));
@@ -325,8 +331,8 @@ function runEnd(dir, meta) {
 }
 
 function runOutcome(run) {
-  // 手上的记录还是"运行中"、进程却已退出时，多半是刚写完结果就退出了，先重读一次再判断是不是中断
-  if (run.meta.status === 'running' && !pidAlive(run.meta.pid)) run.meta = readMeta(run.dir) || settleMeta(run.dir, run.meta);
+  // 手上的记录还是"运行中"、runner 却已不在时，先重读一次，免得漏掉刚写好的结果。
+  if (run.meta.status === 'running' && !isRunning(run.meta)) run.meta = readMeta(run.dir) || settleMeta(run.dir, run.meta);
   const m = run.meta;
   const running = isRunning(m);
   const file = path.join(run.dir, 'result.json');
@@ -360,6 +366,36 @@ function groupSummary(runs) {
 const readMeta = (dir, { settle = true } = {}) => {
   try { const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')); return settle ? settleMeta(dir, meta) : meta; } catch { return null; }
 };
-const isRunning = (m) => m?.status === 'running' && pidAlive(m.pid);
+const runnerChecks = new Map();
+let listedBeforeLock = null;
+const runnerKey = (m) => `${m.pid}|${m.started_at}`;
+function runnerCheck(m) {
+  const checked = runnerChecks.get(runnerKey(m));
+  // 确认被复用后，原 runner 肯定已经不在了；其他结论每分钟重新核对。
+  return checked && (checked.state === 'other' || Date.now() - checked.at < 60000) ? checked.state : null;
+}
 
-export { RUNS_ROOT, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, saveMeta, metaWriteWarning, settleMeta, findRun, describeActivity, groupRuns, checkAdmission, runEnd, runOutcome, groupTally, groupSummary, groupScopeOwner, absolute, readMeta, isRunning, writesFiles };
+function checkRunners(metas) {
+  const pending = metas.filter((m) => isRunning(m, { query: false }) && !runnerCheck(m));
+  if (!pending.length) return;
+  const times = processStartTimes(pending.map((m) => m.pid));
+  const at = Date.now();
+  for (const m of pending) {
+    const started = times.get(m.pid), recorded = Date.parse(m.started_at);
+    const state = started == null || !Number.isFinite(recorded) ? 'unknown' : started > recorded ? 'other' : 'same';
+    runnerChecks.set(runnerKey(m), { state, at });
+  }
+}
+
+function isRunning(m, { query = true } = {}) {
+  if (m?.status !== 'running') return false;
+  if (!pidAlive(m.pid)) {
+    // 已确认被复用的结论保留：原 runner 不会再回来，之后再查不到启动时间也不能把它算回运行中。
+    if (runnerChecks.get(runnerKey(m))?.state !== 'other') runnerChecks.delete(runnerKey(m));
+    return false;
+  }
+  if (query && !runnerCheck(m)) checkRunners([m]);
+  return runnerCheck(m) !== 'other';
+}
+
+export { RUNS_ROOT, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, saveMeta, metaWriteWarning, settleMeta, findRun, describeActivity, groupRuns, checkAdmission, runEnd, runOutcome, groupTally, groupSummary, groupScopeOwner, absolute, readMeta, checkRunners, isRunning, writesFiles };

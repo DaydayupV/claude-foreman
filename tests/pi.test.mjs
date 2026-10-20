@@ -169,6 +169,33 @@ test('出错、限流、截断、自动重试和推理强度被 pi 改掉', asyn
   assert.ok(unsigned.errors.some((e) => e.includes('synthetic: no API key for deepseek')));
 });
 
+test('pi 自动重试覆盖带残片的错误回复，最后回复不合格时同会话修复一次', async (t) => {
+  const h = sandbox(t);
+  configure(h, {}, (c) => { c.modules.discuss.complex = [{ agent: 'pi' }]; });
+  const fragment = '{"position":"出错前的残片';
+  for (const [name, last, count] of [['valid', discussion, 1], ['invalid', '],"coverage":', 2]]) {
+    const s = h.scenario({ calls: [{ last_message: last, steps: [
+      { event: { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: fragment }], stopReason: 'error', errorMessage: 'synthetic overloaded' } } },
+      { event: { type: 'auto_retry_start', attempt: 1, maxAttempts: 3, errorMessage: 'synthetic overloaded' } },
+      { event: { type: 'auto_retry_end', success: true, attempt: 2 } },
+    ] }, { last_message: discussion }] }, name);
+    const r = output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'pi']), { env: s.env }));
+    const calls = runs(s);
+    assert.equal(r.status, 'done');
+    assert.deepEqual(r.errors, []);
+    assert.deepEqual(r.report, discussion);
+    assert.equal(calls.length, count);
+    assert.equal(read(path.join(r.run_dir, 'last-message.txt')), JSON.stringify(discussion));
+    assert.deepEqual(h.events(r.run_id).filter((e) => e.item?.type === 'agent_message').map((e) => e.item.text),
+      count === 1 ? [fragment, JSON.stringify(discussion)] : [fragment, last, JSON.stringify(discussion)]);
+    if (count === 2) {
+      assert.equal(calls[1].args[calls[1].args.indexOf('--session') + 1], r.session_id);
+      assert.equal(calls[1].stdin, M.reportRepairPrompt('Reply is not valid JSON'));
+      assert.ok(calls[1].args.includes('--no-tools'));
+    }
+  }
+});
+
 test('check：版本、清单、最小请求；推理强度只按清单核对，写明会被改成哪一档', async (t) => {
   const h = sandbox(t), c = configure(h, {}, (cfg) => {
     cfg.modules.discuss.simple = [{ agent: 'pi', effort: 'medium' }];

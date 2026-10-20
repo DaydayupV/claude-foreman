@@ -38,7 +38,7 @@ else if (operation === 'export') {
   for (const [name, content] of Object.entries(s.files || {})) {
     await replay([{ files: { [name]: content } }]);
   }
-  if (!s.hold) {
+  if (!s.hold && !s.no_final) {
     const last = s.last_message ?? (input.includes('"verdict"') ? review : discussion);
     console.log(JSON.stringify({ type: 'text', sessionID, part: { text: typeof last === 'string' ? last : JSON.stringify(last) } }));
     if (s.step_finish) console.log(JSON.stringify({ type: 'step_finish', sessionID, part: s.step_finish }));

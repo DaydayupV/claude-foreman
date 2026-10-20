@@ -128,16 +128,30 @@ function pidAlive(pid) {
 
 // 启动时间用于识别进程号复用；查不到时交给调用方决定，不能据此强行结束进程。
 // Windows 上按系统目录里的完整路径调用 PowerShell，PATH 被精简过也查得到。
-function processStartedAt(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return null;
+function processStartTimes(pids, { timeoutMs = 15000 } = {}) {
+  const times = new Map(pids.filter((pid) => Number.isInteger(pid) && pid > 0).map((pid) => [pid, null]));
+  if (!times.size) return times;
+  const ids = [...times.keys()].join(',');
   const powershell = path.join(process.env.SystemRoot || 'C:/Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   try {
+    // 缺失进程会使 PowerShell 以 1 退出，显式成功以保留同批其余进程的结果。
     const r = process.platform === 'win32'
-      ? spawnSync(fs.existsSync(powershell) ? powershell : 'powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')`], { encoding: 'utf8', windowsHide: true, timeout: 15000 })
-      : spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, timeout: 15000 });
-    const started = r.status === 0 ? Date.parse(r.stdout.trim()) : NaN;
-    return Number.isFinite(started) ? started : null;
-  } catch { return null; }
+      ? spawnSync(fs.existsSync(powershell) ? powershell : 'powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Get-Process -Id ${ids} -ErrorAction SilentlyContinue | ForEach-Object { try { [Console]::WriteLine(('{0} {1}' -f $_.Id, $_.StartTime.ToUniversalTime().ToString('o'))) } catch {} }; exit 0`], { encoding: 'utf8', windowsHide: true, timeout: timeoutMs })
+      : spawnSync('ps', ['-o', 'pid=,lstart=', '-p', ids], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, timeout: timeoutMs });
+    if (r.error || r.signal) return times;
+    // ps 在有的进程号已不存在时以非零退出，查到的那几行照样能用。
+    for (const line of (r.stdout || '').trim().split(/\r?\n/)) {
+      const match = /^\s*(\d+)\s+(.+)$/.exec(line);
+      if (!match) continue;
+      const pid = Number(match[1]), started = Date.parse(match[2]);
+      if (times.has(pid) && Number.isFinite(started)) times.set(pid, started);
+    }
+  } catch { /* 整批查询失败时保留 null */ }
+  return times;
+}
+
+function processStartedAt(pid) {
+  return processStartTimes([pid]).get(pid) ?? null;
 }
 
 // 确认是同一个进程才结束整棵进程树：返回 killed（已发出结束，退没退出由调用方再看）、other（进程号已属于别的程序）或 null（核对不了，没动它）。
@@ -363,4 +377,4 @@ function wrapWidth(s, width) {
   return lines;
 }
 
-export { retryBusy, replaceFile, HERE, LANGUAGE, M, notice, isObject, readJson, die, need, resolveDir, readBrief, MAX_MATERIAL_CHARS, readAttachments, readImages, focusFiles, binCommand, pathCommand, npmEntry, isGitRepo, pidAlive, processStartedAt, killTreeIfSame, killTree, relativePath, pathKey, RECONNECT, isReconnect, sleep, clip, oneLine, plainCommand, isAscii, modelOf, agentTypeOf, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision, closestMatches, charWidth, textWidth, fitWidth, wrapWidth };
+export { retryBusy, replaceFile, HERE, LANGUAGE, M, notice, isObject, readJson, die, need, resolveDir, readBrief, MAX_MATERIAL_CHARS, readAttachments, readImages, focusFiles, binCommand, pathCommand, npmEntry, isGitRepo, pidAlive, processStartTimes, processStartedAt, killTreeIfSame, killTree, relativePath, pathKey, RECONNECT, isReconnect, sleep, clip, oneLine, plainCommand, isAscii, modelOf, agentTypeOf, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision, closestMatches, charWidth, textWidth, fitWidth, wrapWidth };

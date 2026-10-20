@@ -1,7 +1,7 @@
 // 详细事件、时间线、组视图和终端实时画面，只读取统一记录。
 import fs from 'node:fs';
 import path from 'node:path';
-import { RUNS_ROOT, requestCancel, listRuns, findRun, readMeta, isRunning, runEnd, runOutcome, groupTally, groupRuns } from './records.mjs';
+import { RUNS_ROOT, requestCancel, listRuns, findRun, readMeta, checkRunners, isRunning, runEnd, runOutcome, groupTally, groupRuns } from './records.mjs';
 import { describePlans } from './plan.mjs';
 import { M, die, sleep, clip, oneLine, plainCommand, RECONNECT, isReconnect, modelOf, agentTypeOf, needsDecision, charWidth, textWidth, fitWidth, wrapWidth } from './util.mjs';
 import { D, TEST_SCREEN, termCols, termRows, C, plain, visibleWidth, shortModel, fullModel, modelLabel, clock, took, outcomeStyle, changedFor,
@@ -62,7 +62,9 @@ async function pickWatchRun(ref) {
   // 刚派活时任务可能还没登记，等一会儿；仍没有就显示最近一次。
   for (let waited = 0; ; waited += 500) {
     const ids = listRuns();
-    const running = ids.find((id) => isRunning(readMeta(path.join(RUNS_ROOT, id))));
+    const runs = ids.map((id) => ({ id, meta: readMeta(path.join(RUNS_ROOT, id)) }));
+    checkRunners(runs.map((run) => run.meta));
+    const running = runs.find((run) => isRunning(run.meta))?.id;
     if (running) return findRun(running);
     if (waited >= 15000) {
       if (!ids[0]) die(M.noRuns);
@@ -809,7 +811,11 @@ async function watchGroup(group, o, loadCfg) {
     const replaced = new Set(runs.map((run) => run.meta.parent).filter(Boolean));
     return runs.filter((run) => !replaced.has(run.id));
   };
-  const recentRuns = () => current(groupRuns(group, Date.now() - 86400000)).reverse();
+  const recentRuns = () => {
+    const runs = current(groupRuns(group, Date.now() - 86400000)).reverse();
+    checkRunners(runs.map((run) => run.meta));
+    return runs;
+  };
   let runs;
   for (let waited = 0; ; waited += 500) {
     runs = recentRuns();
@@ -832,7 +838,9 @@ async function watchGroup(group, o, loadCfg) {
       keepScreen: true,
       isOver: () => {
         for (const run of recentRuns()) seen.set(run.id, run);
-        return [...seen.values()].every((run) => { const m = readMeta(run.dir); return !!m && !isRunning(m); });
+        const metas = [...seen.values()].map((run) => readMeta(run.dir));
+        checkRunners(metas);
+        return metas.every((m) => !!m && !isRunning(m));
       },
       refresh: () => { const list = recentRuns(); return list.length ? fresh(list) : null; },
     });
@@ -853,7 +861,11 @@ async function watchGroup(group, o, loadCfg) {
     }
   };
   refresh();
-  const anyRunning = () => [...known.values()].some((run) => isRunning(run.meta));
+  const anyRunning = () => {
+    const metas = [...known.values()].map((run) => run.meta);
+    checkRunners(metas);
+    return metas.some((m) => isRunning(m));
+  };
   const settled = () => !anyRunning() && Date.now() - lastAdded >= 5000; // 等几秒，同组后派出的任务也能收进来
   // 同组任务标题相同时（比如一场讨论）标题只在顶上写一次；不同时（拆开的执行任务）写在每块面板上。
   // 讨论的第 2 轮起，标题后面写上第几轮
@@ -872,9 +884,14 @@ async function watchGroup(group, o, loadCfg) {
     // 有模型在排队时按 x 终止：第一次按要求确认，第二次给所有排队中的任务写终止标记
     let confirmCancel = false;
     const cancelSent = new Set();
-    const queuedRuns = () => [...known.values()].filter((run) => isRunning(run.meta) && feeds.get(run.id).stats.queued && !cancelSent.has(run.id));
+    const queuedRuns = () => {
+      const all = [...known.values()];
+      checkRunners(all.map((run) => run.meta));
+      return all.filter((run) => isRunning(run.meta) && feeds.get(run.id).stats.queued && !cancelSent.has(run.id));
+    };
     const render = (W, H) => {
       const all = [...known.values()];
+      checkRunners(all.map((run) => run.meta));
       const width = Math.max(20, W - 1);
       for (const run of all) feeds.get(run.id).read();
       // 顶部标题一行、底部提示一行，每块有分隔线和标题（没有公共标题时多一行写各自的标题）；正文行数按窗口高度平均分，最多 8 行。
@@ -921,6 +938,7 @@ async function watchGroup(group, o, loadCfg) {
       if (settled()) break;
       await sleep(1000);
       for (const run of known.values()) run.meta = readMeta(run.dir) || run.meta;
+      checkRunners([...known.values()].map((run) => run.meta));
       if (tick % 2 === 1) { runs = recentRuns(); refresh(); }
     }
     if (process.stdin.isTTY) { process.stdin.off('data', onKeys); process.stdin.setRawMode(false); process.stdin.pause(); }
@@ -933,6 +951,7 @@ async function watchGroup(group, o, loadCfg) {
     process.stdout.write(`${D.groupHeader(group, sharedTitle(), known.size)}\n`);
     const states = new Map();
     for (;;) {
+      checkRunners([...known.values()].map((run) => run.meta));
       for (const run of known.values()) {
         const shown = outcomeStyle(runOutcome(run)).word;
         if (states.get(run.id) !== shown) process.stdout.write(`${D.dots([modelLabel(run.meta), shown])}\n`);

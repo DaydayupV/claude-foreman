@@ -10,14 +10,14 @@
 
 ## 假工具与夹具
 
-- `helpers.mjs`：临时用户目录、配置、子进程、轮询、Git、记录读取、路径占位替换。
+- `helpers.mjs`：临时用户目录、配置、子进程、轮询、Git、记录读取、路径占位替换。`seedRun` 用测试进程自己的 pid 假装调度进程还在运行时，开始时间不早于测试进程启动（`liveStart`）：脚本会核对进程启动时间，晚于任务开始的进程算作复用了进程号。
 - `fake/codex.mjs`、`fake/opencode.mjs`：通过 `agents.<名字>.bin` 指定，`FAKE_SCENARIO` 指向合成 JSON 剧本。
 - 剧本的 `capture` 指定 JSONL 调用日志；记录工具、操作、argv、stdin、cwd、pid 及指定的环境变量。`calls` 按同一工具/操作的调用序号覆盖基础剧本，用于续接和报告修复。
 - `steps` 中每步支持 `event`、`delay_ms`、`wait_for`（临时放行文件）、`files`、`stderr`。根级支持 `files`、`last_message`、`exit_code`、`stderr` 和 `hold`。
 - Codex 另支持 `logged_in`、`version`、`session_id`、`stats`、`usage`、`images`、`rollout`；`stats` 生成带 `token_count` 的合成会话 JSONL，`rollout` 往同一份会话记录里追加原始记录（没写时间的按当时补上），图片为合成的单像素 PNG。
 - `fake/browser.mjs`：假的无头浏览器，照 Chrome 的截图参数画一张随 t 移动方块的 PNG，给 capture 和 playback 测试用。
 - `fixtures/png.mjs`：在内存里画纯色矩形并写成 PNG（RGB 或 RGBA），给 assets 测试用。
-- opencode 另支持 `models`、`session_id`、`export_messages`、`export_error` 和可选 `step_finish`。导出的消息可以用 `created: "old"` 模拟本轮开始前的历史。
+- opencode 另支持 `models`、`session_id`、`export_messages`、`export_error` 和可选 `step_finish`；`no_final` 让它只回放 `steps` 里的事件，不再补最后一条回复（`fixtures/opencode-retry.mjs` 是按真实现场整理的流超时、重试、报告被拆成三段的事件序列）。导出的消息可以用 `created: "old"` 模拟本轮开始前的历史。
 - `fake/api-server.mjs`：按请求序号提供 SSE 剧本，支持正常流、保活排队、401/402、拒绝 `response_format`、报告修复、残缺流和取消；请求保存在测试内存中。
 - `fixtures/`：完全合成的报告、用量和四类 watch 记录；`fixtures/watch-live.mjs` 是一场还在进行的四方讨论（Codex、opencode、pi、API），pid 用测试进程自己，任务就算在运行。`expected/`：已人工核对的文本（插件自己写的字段中英两个插件都是英文，所以只有一份）：五份非 TTY 的 watch 输出、两份组视图实时面板的画面（100x30、64x18）、一份 status 列表；仅替换临时路径为 `<HOME>`/`<CWD>`，事件时刻为 `<TIME>`，运行中的计时为 `<CLOCK>`，状态、用量、文案和排版均保留。
 - 实时画面：环境变量 `FOREMAN_TEST_SCREEN=<宽>x<高>` 让 watch 把输出当成这么大的终端，照常画备用屏幕；测试从输出里取第一帧，按每行的光标定位拆回各行再比对。设了它又把 `NO_COLOR` 设成空时照常上色，用来核对颜色。
@@ -134,6 +134,10 @@
 | 56 judge 记录去留 | judge-stats.test.mjs | judge 写入规定字段、保留未修改条目，第二次调用覆盖去留并补齐 unjudged；judge 拒绝空调用、不合格或未知编号、冲突、运行中任务和执行任务；judge --same 校验语法、自指、同伴、两端编号、目标存在以及左侧去留；judge --same 合并同编号多条链接、去重、整体替换并保留其他编号的链接；judge 支持讨论自由编号、旧续接的根模块和原生审查，旧 verdict 损坏时重新记；judge 拒绝解析后为空的去留和 same，不写 verdict 或锁 |
 | 57 stats 汇总口径 | judge-stats.test.mjs | stats 合并两种接入的基础模型，保留用量缺失并只对 opencode/pi 计费用缺失；stats 按链扣除累计用量、处理倒退并将升级轮次记在各自模型上；stats 返工只算正常交回报告后的续接，图像沿根模块统计；stats 同一计划的去留和 --same 无向传递链接按问题计 unique；stats 无计划按组、会话和模块分同伴，单模型和无组记录不参与 unique；stats --module/--since 按根过滤整链，支持小数并拒绝非法值；stats 空记录、坏元数据/结果/verdict 和运行中跳过计数，过滤后只统计保留项；stats 完整席位链阻止向运行中续接补读，排除中位用时并跳过运行中的根；stats 祖先不可读时跳过后代并计 unreadable，父目录不存在时才另算根；stats no_issues 空报告自动计入去留和 unique 基数，incomplete 或坏 verdict 不替代；stats 同席多轮的同编号只计一条，same 指向续接时连接到同一根 |
 | 58 judge、stats 的帮助、并发和 runEnd | judge-stats.test.mjs | judge 和 stats 的 --help/-h 在坏配置下仍输出中英文用法且不创建记录目录；judge 两个进程并发合并同一任务的不同编号，均成功且不丢条目；judge 回收超过 30 秒的死进程锁，写完清理锁和临时文件；judge 新锁等待 5 秒报 judgeBusy，保留别人的锁且不写去留；runEnd 已处理分支排除 verdict、锁和各进程的临时文件 |
+| 59 冒烟修复：opencode 中途出错后恢复 | opencode-retry.test.mjs、pi.test.mjs | 审查回放 mpxt：退出码 1 的已恢复错误允许同会话修复，修复调用也可恢复且提示去重；审查回放 mpxt：修复后仍不合格维持 done、空报告和警告，不再发第三次请求；审查错误后没有正常结束：最后事件是 error 时失败且不修复；审查最后一次 stop 后又出 error：全部错误仍未恢复且不修复；审查最后一次结束为 tool-calls：此前有 stop 也不能恢复错误；审查最后一次结束为 length：此前有 stop 也不能恢复错误；审查没有 error 但退出码非零：即使以 stop 结束也仍失败；审查回放 mpxt 后修复调用失败：恢复过的错误并回 errors，不写恢复提示；pi 自动重试覆盖带残片的错误回复，最后回复不合格时同会话修复一次 |
+| 60 冒烟修复：进程号复用的旧 running 记录 | running-check.test.mjs、status-watch.test.mjs、hooks.test.mjs、cancel-and-plans.test.mjs | processStartTimes 一次查询多个真实进程，缺失进程为 null，单进程接口保持一致；isRunning 首次自行查询，重复判断复用缓存，无候选时不查询；same 和 unknown 缓存 60 秒后重新查询，other 永久有效；checkAdmission 批量核对，复用进程号的旧记录不占名额，当前 runner 仍占名额；runOutcome 将复用进程号且无结果的旧记录记为 interrupted，并重读刚收尾的元数据；status 将复用进程号的旧 running 显示为 interrupted，当前 runner 仍为 running；watch 单任务和组视图将复用进程号的旧 running 视为中断并退出；会话提醒批量识别复用进程号的旧 running，保留当前 runner 且不回写记录；观察到退出后清除缓存，isRunning 和 checkRunners 都会重新查询复用的进程号；newRunDir 在锁外预查，准入不查询，旧记录不占名额，预查后登记的 runner 仍占名额；确认复用后进程号消失再出现，查不到启动时间也不算回运行中；拿锁前就有、当时元数据读不出的旧记录，准入时在锁内补查；会话提醒以 3000 毫秒查询，查询失败仍输出其余提醒；会话提醒核对期间任务写好结果时以结果为准，不误报中断 |
+| 61 冒烟修复：judge 的运行中同伴和 --clear | judge-stats.test.mjs | judge --same 拒绝运行中同伴且不写文件，运行中任务也不能 clear；judge 只给 --clear 可删除报告外的误记和自身链接，保留其他条目及同伴链接；judge --clear 删完移除 verdict，file 为 null 且 stats 不再计为记过去留；judge --clear 删完 no_issues 审查席的误记后恢复自动零条统计；judge --clear 拒绝未记过或格式错误的编号，报出已记列表且不改文件；judge --clear 与 accept partial reject 或 same 左侧冲突时锁外拒绝；judge --clear 等到锁后按最新 items 校验并删除 |
+| 62 冒烟修复：补漏席标记 | plan.test.mjs | status --plan 列出未启动的补漏和 gap 席，跑完后清空且不改变 state 算法；status --group 计划行显示未启动及运行中的 gap seat not finished |
 
 ## 说明
 

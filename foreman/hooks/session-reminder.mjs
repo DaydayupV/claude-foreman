@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { processStartTimes } from '../skills/dispatch/scripts/util.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPTS = path.join(HERE, '..', 'skills', 'dispatch', 'scripts');
@@ -68,7 +69,7 @@ function unfinishedRuns(root, cwd) {
   const runs = fs.readdirSync(root).map((id) => readJson(path.join(root, id, 'meta.json'))).filter(Boolean);
   const resumed = new Set(runs.map((m) => m.parent).filter(Boolean));
   const now = Date.now();
-  return runs.filter((m) => {
+  const candidates = runs.filter((m) => {
     if (!m.cwd || directoryKey(m.cwd) !== directoryKey(cwd) || resumed.has(m.id) || m.dismissed_at) return false;
     const age = now - new Date(m.started_at).getTime();
     if (!(age >= 0 && age <= 7 * 86400000)) return false;
@@ -77,6 +78,19 @@ function unfinishedRuns(root, cwd) {
       if (status) m.status = status;
       else try { process.kill(m.pid, 0); } catch { m.status = 'interrupted'; }
     }
+    return true;
+  });
+  // 只有执行任务会因为中断被提醒，讨论和审查不用查。
+  const running = candidates.filter((m) => m.status === 'running' && (m.kind || (m.mode === 'review' ? 'review' : 'exec')) === 'exec');
+  if (running.length) {
+    const times = processStartTimes(running.map((m) => m.pid), { timeoutMs: 3000 });
+    for (const m of running) {
+      const started = times.get(m.pid);
+      // 查询期间 runner 可能刚写好结果退出、进程号又被复用，先以结果为准。
+      if (started != null && started > Date.parse(m.started_at)) m.status = readJson(path.join(root, m.id, 'result.json'))?.status || 'interrupted';
+    }
+  }
+  return candidates.filter((m) => {
     // 等输入的任务也要交回问题；其他异常仍只提醒执行任务。
     if (m.status !== 'needs_input' && (m.kind || (m.mode === 'review' ? 'review' : 'exec')) !== 'exec') return false;
     return ['interrupted', 'quota_exhausted', 'stalled', 'timeout', 'needs_input'].includes(m.status);
