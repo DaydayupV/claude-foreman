@@ -10,7 +10,8 @@ export function liveGroup(h, pid) {
   const done = (id, command, extra = {}) => ({ type: 'item.completed', ts: at(5), item: { id, type: 'command_execution', command, exit_code: 0, aggregated_output: '', ...extra } });
   const say = (text, seconds = 2) => ({ type: 'item.completed', ts: at(seconds), item: { type: 'agent_message', text } });
   const think = (text, seconds) => ({ type: 'item.completed', ts: at(seconds), item: { type: 'reasoning', text } });
-  const tool = (id, name, category, command) => done(id, command, { tool: name, category });
+  // 和适配器翻译出来的一样：command 是工具名加原始参数，label 是时间线上写的（搜索先写模式，再写路径）
+  const tool = (id, name, category, command, label) => done(id, command, { tool: name, category, label });
   const plan = '20000101-000000-plan';
   const seats = [
     { id: '20000101-000001-aaaa', agent: 'gpt-6-astra-codex-cli', type: 'codex cli', model: 'gpt-6-astra', effort: 'max', events: [
@@ -20,12 +21,12 @@ export function liveGroup(h, pid) {
       done('c4', 'node --test tests/admission.test.mjs', { exit_code: 1, aggregated_output: 'not ok 3 - 登记锁正被删除\n' }),
       done('c5', 'git diff --stat'), done('c6', 'rg -n retryBusy foreman/skills/dispatch/scripts')] },
     { id: '20000101-000002-bbbb', agent: 'deepseek-v4.1-flash', type: 'opencode cli', model: 'opencode-go/deepseek-v4.1-flash', effort: 'max', events: [
-      tool('o1', 'read', 'read', 'read foreman/skills/dispatch/scripts/records.mjs'), tool('o2', 'grep', 'search', 'grep retryBusy foreman'),
-      tool('o3', 'read', 'read', 'read foreman/skills/dispatch/scripts/util.mjs'), tool('o4', 'glob', 'search', 'glob **/*.lock'),
-      tool('o5', 'read', 'read', 'read tests/admission.test.mjs')] },
+      tool('o1', 'read', 'read', 'read foreman/skills/dispatch/scripts/records.mjs', 'foreman/skills/dispatch/scripts/records.mjs'), tool('o2', 'grep', 'search', 'grep foreman retryBusy', 'retryBusy foreman'),
+      tool('o3', 'read', 'read', 'read foreman/skills/dispatch/scripts/util.mjs', 'foreman/skills/dispatch/scripts/util.mjs'), tool('o4', 'glob', 'search', 'glob **/*.lock', '**/*.lock'),
+      tool('o5', 'read', 'read', 'read tests/admission.test.mjs', 'tests/admission.test.mjs')] },
     { id: '20000101-000003-cccc', agent: 'mimo-v2.6-pro-pi-cli', type: 'pi cli', model: 'xiaomi/mimo-v2.6-pro', effort: 'high', events: [
       say('我先读登记锁的代码，再看测试。'), think('**Checking the lock**\n\nThe lock file is created with flag wx.', 3),
-      tool('p1', 'read', 'read', 'read foreman/skills/dispatch/scripts/records.mjs'), tool('p2', 'ls', 'search', 'ls tests'),
+      tool('p1', 'read', 'read', 'read foreman/skills/dispatch/scripts/records.mjs', 'foreman/skills/dispatch/scripts/records.mjs'), tool('p2', 'ls', 'search', 'ls tests', 'ls tests'),
       think('删除挂起时 openSync 会报 EPERM，要确认重试的上限是多少。\n第二段不显示。', 6)] },
     { id: '20000101-000004-dddd', agent: 'kimi-k2.6-api', type: 'api', model: 'kimi-k2.6', effort: null, events: [
       { type: 'api.request', ts: at(1), attempt: 1, model: 'kimi-k2.6', effort: null },

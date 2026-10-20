@@ -23,6 +23,9 @@ test('status 列表按记录排序并汇总当前会话的组', async (t) => {
   assert.ok(group.stdout.includes('20000101-b'));
   assert.ok(!group.stdout.includes('20000101-c'));
   assert.ok(group.stdout.endsWith(`${D.groupSummary(2, 0, 1, 1)}\n`));
+  // 组汇总行和其他行一样用" · "分隔
+  assert.ok(group.stdout.endsWith('2 runs: 0 running · 1 done · 1 failed\n'), group.stdout);
+  assert.equal(D.groupSummary(5, 1, 1, 1, 1, 1), '5 runs: 1 running · 1 done · 1 resumed · 1 with questions · 1 failed');
   assert.deepEqual(output(await h.bridge(['status', '--run', '20000101-b'])), { status: 'failed' });
 });
 

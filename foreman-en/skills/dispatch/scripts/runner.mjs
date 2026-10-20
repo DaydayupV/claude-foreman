@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { CLAUDE_SESSION, checkAdmission, groupScopeOwner, absolute, isCancelled, cancelSource, saveMeta } from './records.mjs';
+import { CLAUDE_SESSION, checkAdmission, groupScopeOwner, absolute, isCancelled, cancelSource, saveMeta, metaWriteWarning } from './records.mjs';
 import { makeTracker } from './tracker.mjs';
 import { computeReviewMaterial, computeReviewScope } from './review-scope.mjs';
 import { M, die, notice, relativePath, pathKey, modelOf, replaceFile, killTree, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision } from './util.mjs';
@@ -95,10 +95,10 @@ function startRun(ctx, { started = Date.now(), track = [], modelShown = ctx.mode
   };
   const writeMeta = () => saveMeta(dir, meta);
   let rejection;
+  // 登记时还拿着全局登记锁，不做收尾那种长时间重试：写不进就不启动，免得没登记的任务躲过并发上限和范围检查
   try {
-    writeMeta();
-    rejection = checkAdmission(meta, ctx.cfg);
-    if (rejection) fs.rmSync(dir, { recursive: true });
+    rejection = saveMeta(dir, meta) ? checkAdmission(meta, ctx.cfg) : metaWriteWarning(dir);
+    if (rejection) try { fs.rmSync(dir, { recursive: true }); } catch { /* 删不掉就留着，照样给出不启动的原因 */ }
   } finally { ctx.release(); }
   if (rejection) die(rejection);
   if (ctx.reviewScope) {
@@ -154,7 +154,7 @@ function finishRun(run, result, code = result.exit_code, observed = {}) {
   const resultFile = path.join(run.ctx.dir, 'result.json');
   fs.writeFileSync(`${resultFile}.tmp`, JSON.stringify(result, null, 2));
   replaceFile(`${resultFile}.tmp`, resultFile);
-  run.writeMeta(); // 在 result.json 之后写，watch 看到状态变化时结果已经就绪
+  saveMeta(run.ctx.dir, run.meta, { final: true }); // 在 result.json 之后写，watch 看到状态变化时结果已经就绪
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');
   process.exitCode = code;
   return result;
@@ -280,172 +280,179 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
   const notes = [];
   if (snapshotRequired && ctx.parent && ctx.previousRunAccess !== agent.run_access) notes.push(M.runAccessChanged(ctx.previousRunAccess, agent.run_access));
   let tracker = null;
-  let before = null;
-  let snapshotError = null;
-  if (!opts['no-snapshot']) {
-    try { tracker = makeTracker(dir, cwd, track); before = tracker.snap('before'); }
-    catch (e) {
-      if (audited) snapshotError = M.auditedSnapshotFailed(e.message);
-      else if (snapshotRequired) snapshotError = M.snapshotFailedNoStart(e.message);
-      else warnings.push(M.trackingUnavailable(e.message));
-      tracker?.cleanup(); tracker = null;
+  const cleanup = () => tracker?.cleanup();
+  try {
+    let before = null;
+    let snapshotError = null;
+    if (!opts['no-snapshot']) {
+      try {
+        tracker = makeTracker(dir, cwd, track);
+        process.once('exit', cleanup);
+        before = tracker.snap('before');
+      }
+      catch (e) {
+        if (audited) snapshotError = M.auditedSnapshotFailed(e.message);
+        else if (snapshotRequired) snapshotError = M.snapshotFailedNoStart(e.message);
+        else warnings.push(M.trackingUnavailable(e.message));
+        tracker?.cleanup(); tracker = null;
+      }
     }
-  }
 
-  const baseline = mode === 'resume' ? sessionStats(ctx.sessionId, meta.started_at)?.total_token_usage : {};
-  const r = snapshotError ? { status: 'failed', code: 1, errors: [snapshotError], warnings: [], fileChanges: new Set(), images: [], commands: 0, usage: null, cost: null }
-    : await runAgent({
-      agent, args, cwd, prompt, runDir: dir,
-      ...runLimits(ctx, started),
-      run,
-      sessionId: ctx.sessionId,
-      onSession: (sid) => { meta.session_id = sid; writeMeta(); },
+    const baseline = mode === 'resume' ? sessionStats(ctx.sessionId, meta.started_at)?.total_token_usage : {};
+    const r = snapshotError ? { status: 'failed', code: 1, errors: [snapshotError], warnings: [], fileChanges: new Set(), images: [], commands: 0, usage: null, cost: null }
+      : await runAgent({
+        agent, args, cwd, prompt, runDir: dir,
+        ...runLimits(ctx, started),
+        run,
+        sessionId: ctx.sessionId,
+        onSession: (sid) => { meta.session_id = sid; writeMeta(); },
+      });
+
+    const lastFile = path.join(dir, 'last-message.txt');
+    const last = fs.existsSync(lastFile) ? fs.readFileSync(lastFile, 'utf8').trim() : '';
+    let report = r.report || null;
+    if (!Object.hasOwn(r, 'report') && expectReport && last) {
+      report = parseReport(last, schema, validate).report;
+      if (!report && (kind === 'review' || !looksLikeFinalQuestion(last))) warnings.push(M.badReport);
+    }
+    if (!report && last.length > 8000) notes.push(M.lastMessageTruncated(lastFile));
+    notes.push(...(r.notes || []));
+
+    const claimed = report?.files_changed || (kind !== 'exec' ? parseReport(last, {}, validateSchema).report?.files_changed : null);
+    // 报告里写成目录的（以 / 结尾，或者在磁盘上是目录）按前缀算：目录下被追踪的文件都算它自称改过的。工作目录本身和工作目录外的不算。
+    const claims = (Array.isArray(claimed) ? claimed : []).filter((f) => typeof f?.path === 'string').map((f) => {
+      const rel = relativePath(cwd, f.path);
+      const inside = rel !== '.' && rel !== '..' && !rel.startsWith('../') && !path.isAbsolute(rel);
+      let dir = /[\\/]$/.test(f.path);
+      if (!dir && inside) try { dir = fs.statSync(path.resolve(cwd, rel)).isDirectory(); } catch { /* 不存在的按文件算 */ }
+      return { rel, key: pathKey(rel), dir: dir && inside, root: rel === '.' };
     });
-
-  const lastFile = path.join(dir, 'last-message.txt');
-  const last = fs.existsSync(lastFile) ? fs.readFileSync(lastFile, 'utf8').trim() : '';
-  let report = r.report || null;
-  if (!Object.hasOwn(r, 'report') && expectReport && last) {
-    report = parseReport(last, schema, validate).report;
-    if (!report && (kind === 'review' || !looksLikeFinalQuestion(last))) warnings.push(M.badReport);
-  }
-  if (!report && last.length > 8000) notes.push(M.lastMessageTruncated(lastFile));
-  notes.push(...(r.notes || []));
-
-  const claimed = report?.files_changed || (kind !== 'exec' ? parseReport(last, {}, validateSchema).report?.files_changed : null);
-  // 报告里写成目录的（以 / 结尾，或者在磁盘上是目录）按前缀算：目录下被追踪的文件都算它自称改过的。工作目录本身和工作目录外的不算。
-  const claims = (Array.isArray(claimed) ? claimed : []).filter((f) => typeof f?.path === 'string').map((f) => {
-    const rel = relativePath(cwd, f.path);
-    const inside = rel !== '.' && rel !== '..' && !rel.startsWith('../') && !path.isAbsolute(rel);
-    let dir = /[\\/]$/.test(f.path);
-    if (!dir && inside) try { dir = fs.statSync(path.resolve(cwd, rel)).isDirectory(); } catch { /* 不存在的按文件算 */ }
-    return { rel, key: pathKey(rel), dir: dir && inside, root: rel === '.' };
-  });
-  const reported = claims.map((c) => c.rel);
-  const underClaimedDir = (key) => claims.some((c) => c.dir && key.startsWith(`${c.key}/`));
-  const agentPaths = new Set([...r.fileChanges].map((f) => pathKey(relativePath(cwd, f))));
-  let changes = { available: false, agent_total: 0, reported_total: 0, unknown_total: 0 };
-  if (tracker) {
-    try { changes = { available: true, ...tracker.diff(before, tracker.snap('after'), path.join(dir, 'diff.patch')) }; }
-    catch (e) { warnings.push(M.trackingFailed(e.message)); }
-    finally { tracker.cleanup(); }
-  }
-  const tracked = [...(changes.files || []), ...(changes.large_files_changed || [])];
-  // 归属分三种：agent 有工具事件作证据；reported 只有协作方在报告里自称改过（比如用脚本写的文件）；unknown 都没有，可能是别人改的。
-  const reportedPaths = new Set(claims.map((c) => c.key));
-  for (const file of tracked) {
-    const key = pathKey(relativePath(cwd, file.path));
-    file.by = agentPaths.has(key) ? 'agent' : reportedPaths.has(key) || underClaimedDir(key) ? 'reported' : 'unknown';
-  }
-  changes.agent_total = tracked.filter((f) => f.by === 'agent').length;
-  changes.reported_total = tracked.filter((f) => f.by === 'reported').length;
-  changes.unknown_total = tracked.length - changes.agent_total - changes.reported_total;
-  const ownerOf = groupScopeOwner(meta);
-  const groupOwned = tracked.filter((f) => f.by === 'unknown').map((f) => ({ f, owner: ownerOf(relativePath(cwd, f.path)) })).filter((x) => x.owner);
-  for (const { f, owner } of groupOwned) f.group_run = owner;
-  changes.group_total = groupOwned.length;
-  if (groupOwned.length) notes.push(M.groupScopeChanges(groupOwned.length, M.list([...new Set(groupOwned.map((x) => x.owner))])));
-  if (changes.unknown_total > groupOwned.length) notes.push(M.unattributedChanges(changes.unknown_total - groupOwned.length));
-  // 自称改过、却没追踪到的：文件看它本身，目录看前缀下有没有被追踪的文件；工作目录本身不算一条自称的改动
-  const trackedKeys = tracked.map((f) => pathKey(relativePath(cwd, f.path)));
-  const untracked = [...new Map(claims.filter((c) => !c.root && !trackedKeys.includes(c.key) && !(c.dir && trackedKeys.some((k) => k.startsWith(`${c.key}/`))))
-    .map((c) => [c.key, c.rel])).values()];
-  if (untracked.length) notes.push(M.reportedNotTracked(untracked));
-
-  if (kind === 'exec' && ctx.module !== 'image' && r.images.length) warnings.push(M.imageOutsideModule);
-  if (ctx.module === 'image' && ctx.cell === 'draw') {
-    const mark = '①②③④'[ctx.route - 1];
-    if (ctx.route === 4 && r.images.length) warnings.push(M.vectorRouteImages(mark));
-    if ([3, 4].includes(ctx.route)) {
-      const untrackedScope = opts.scope.some((scope) => { const rel = relativePath(cwd, scope); return rel === '..' || rel.startsWith('../') || path.isAbsolute(rel); });
-      if (!changes.available || untrackedScope) notes.push(M.vectorCheckPartial(mark));
-      const own = tracked.filter((f) => ['A', 'M'].includes(f.status) && (f.by === 'agent' || f.by === 'reported'
-        || f.by === 'unknown' && !f.group_run && opts.scope.some((scope) => {
-          const file = absolute(cwd, f.path), root = absolute(cwd, scope);
-          return file === root || file.startsWith(`${root}/`);
-        }))).map((f) => f.path);
-      const files = new Map([...own, ...r.fileChanges, ...reported].filter((file) => /\.svg$/i.test(file)).map((file) => [absolute(cwd, file), file]));
-      const embeds = [...files.values()].filter((file) => svgEmbedsBitmap(path.resolve(cwd, file))).map((file) => relativePath(cwd, file));
-      if (embeds.length) warnings.push(M.vectorEmbedsBitmap(mark, M.list(embeds)));
+    const reported = claims.map((c) => c.rel);
+    const underClaimedDir = (key) => claims.some((c) => c.dir && key.startsWith(`${c.key}/`));
+    const agentPaths = new Set([...r.fileChanges].map((f) => pathKey(relativePath(cwd, f))));
+    let changes = { available: false, agent_total: 0, reported_total: 0, unknown_total: 0 };
+    if (tracker) {
+      try { changes = { available: true, ...tracker.diff(before, tracker.snap('after'), path.join(dir, 'diff.patch')) }; }
+      catch (e) { warnings.push(M.trackingFailed(e.message)); }
+      finally { tracker.cleanup(); }
     }
-  }
+    const tracked = [...(changes.files || []), ...(changes.large_files_changed || [])];
+    // 归属分三种：agent 有工具事件作证据；reported 只有协作方在报告里自称改过（比如用脚本写的文件）；unknown 都没有，可能是别人改的。
+    const reportedPaths = new Set(claims.map((c) => c.key));
+    for (const file of tracked) {
+      const key = pathKey(relativePath(cwd, file.path));
+      file.by = agentPaths.has(key) ? 'agent' : reportedPaths.has(key) || underClaimedDir(key) ? 'reported' : 'unknown';
+    }
+    changes.agent_total = tracked.filter((f) => f.by === 'agent').length;
+    changes.reported_total = tracked.filter((f) => f.by === 'reported').length;
+    changes.unknown_total = tracked.length - changes.agent_total - changes.reported_total;
+    const ownerOf = groupScopeOwner(meta);
+    const groupOwned = tracked.filter((f) => f.by === 'unknown').map((f) => ({ f, owner: ownerOf(relativePath(cwd, f.path)) })).filter((x) => x.owner);
+    for (const { f, owner } of groupOwned) f.group_run = owner;
+    changes.group_total = groupOwned.length;
+    if (groupOwned.length) notes.push(M.groupScopeChanges(groupOwned.length, M.list([...new Set(groupOwned.map((x) => x.owner))])));
+    if (changes.unknown_total > groupOwned.length) notes.push(M.unattributedChanges(changes.unknown_total - groupOwned.length));
+    // 自称改过、却没追踪到的：文件看它本身，目录看前缀下有没有被追踪的文件；工作目录本身不算一条自称的改动
+    const trackedKeys = tracked.map((f) => pathKey(relativePath(cwd, f.path)));
+    const untracked = [...new Map(claims.filter((c) => !c.root && !trackedKeys.includes(c.key) && !(c.dir && trackedKeys.some((k) => k.startsWith(`${c.key}/`))))
+      .map((c) => [c.key, c.rel])).values()];
+    if (untracked.length) notes.push(M.reportedNotTracked(untracked));
 
-  // 重连之类的 error 事件不一定致命，成败以退出码为准，errors 照常汇报。
-  const ok = r.status ? r.status === 'done' : r.code === 0 && !r.timedOut && !r.stalled && !r.needsInput;
-  if (!ok && !r.errors.length) {
-    // 参数错误等情况 codex 不产生事件，只在 stderr 留信息，把末尾几行带出来。
-    const tail = String(r.stderrTail || '').trim().split('\n').slice(-5).join('\n');
-    if (tail) r.errors.push(M.exitCode(r.code, tail));
-  }
-  const quotaExhausted = !ok && (r.quotaExhausted || r.errors.some((e) => /usage limit|quota/i.test(e)));
-  meta.status = r.status || (ok ? 'done' : r.cancelled ? 'cancelled' : r.needsInput ? 'needs_input' : quotaExhausted ? 'quota_exhausted' : r.stalled ? 'stalled' : r.timedOut ? 'timeout' : 'failed');
-  if (r.cancelled) r.errors = [M.runCancelled(modelOf(meta), cancelSource(dir))];
-  meta.session_id = r.sessionId || meta.session_id;
-  meta.ended_at = new Date().toISOString();
-  const stats = sessionStats(meta.session_id, meta.started_at);
-  const total = stats?.total_token_usage || r.usage;
-  const usage = total && (baseline ? Object.fromEntries(
-    ['input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens']
-      .map((key) => [key, (total[key] || 0) - (baseline[key] || 0)]),
-  ) : total);
-  const resetsAt = stats?.rate_limit?.resets_at;
-  const quotaResetsAt = resetsAt == null ? null : new Date(resetsAt * 1000).toISOString();
-  if (quotaExhausted && !r.status) {
-    const date = quotaResetsAt && new Date(quotaResetsAt);
-    const pad = (n) => String(n).padStart(2, '0');
-    const local = date && `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-    r.errors.push(M.quotaExhausted(local));
-  }
+    if (kind === 'exec' && ctx.module !== 'image' && r.images.length) warnings.push(M.imageOutsideModule);
+    if (ctx.module === 'image' && ctx.cell === 'draw') {
+      const mark = '①②③④'[ctx.route - 1];
+      if (ctx.route === 4 && r.images.length) warnings.push(M.vectorRouteImages(mark));
+      if ([3, 4].includes(ctx.route)) {
+        const untrackedScope = opts.scope.some((scope) => { const rel = relativePath(cwd, scope); return rel === '..' || rel.startsWith('../') || path.isAbsolute(rel); });
+        if (!changes.available || untrackedScope) notes.push(M.vectorCheckPartial(mark));
+        const own = tracked.filter((f) => ['A', 'M'].includes(f.status) && (f.by === 'agent' || f.by === 'reported'
+          || f.by === 'unknown' && !f.group_run && opts.scope.some((scope) => {
+            const file = absolute(cwd, f.path), root = absolute(cwd, scope);
+            return file === root || file.startsWith(`${root}/`);
+          }))).map((f) => f.path);
+        const files = new Map([...own, ...r.fileChanges, ...reported].filter((file) => /\.svg$/i.test(file)).map((file) => [absolute(cwd, file), file]));
+        const embeds = [...files.values()].filter((file) => svgEmbedsBitmap(path.resolve(cwd, file))).map((file) => relativePath(cwd, file));
+        if (embeds.length) warnings.push(M.vectorEmbedsBitmap(mark, M.list(embeds)));
+      }
+    }
 
-  const result = {
-    agent: agentName, agent_type: agent.type,
-    ...(snapshotRequired ? { isolation, run_access: agent.run_access } : {}),
-    ...(r.cost !== undefined ? { cost_usd: r.cost } : {}),
-    run_id: id,
-    mode,
-    kind,
-    status: meta.status,
-    title: meta.title,
-    cwd,
-    track,
-    group: meta.group,
-    round: meta.round,
-    scope: meta.scope,
-    model,
-    model_shown: modelShown,
-    level,
-    effort,
-    sandbox,
-    parent: meta.parent,
-    session_id: meta.session_id,
-    exit_code: r.code,
-    duration_s: Math.round((Date.now() - started) / 1000),
-    usage,
-    usage_scope: r.usage_scope ?? (total ? (baseline ? 'this_run' : 'session_total') : null),
-    last_request: stats?.last_request || null,
-    rate_limit: stats?.rate_limit || null,
-    quota_resets_at: quotaResetsAt,
-    commands_executed: r.commands,
-    errors: r.errors,
-    notes,
-    warnings: [...warnings, ...r.warnings.filter((w) => !/^Under-development features enabled/.test(w))],
-    report,
-    // 拍了快照时以实际改动的归属为准，自报但没改动的不算；完成的写文件事件在快照外（比如被忽略的文件）也算。没有快照时只能看事件和自报。
-    ...(kind !== 'exec' ? { readonly_violation: [...new Map([
-      ...(changes.available ? tracked.filter((f) => f.by !== 'unknown').map(({ path, by }) => [pathKey(relativePath(cwd, path)), { path: relativePath(cwd, path), by }])
-        : claims.filter((c) => !c.root).map((c) => [c.key, { path: c.rel, by: 'reported' }])),
-      ...[...r.fileChanges].map((path) => [pathKey(relativePath(cwd, path)), { path: relativePath(cwd, path), by: 'agent' }]),
-    ]).values()] } : {}),
-    last_message: report ? undefined : last.slice(0, 8000),
-    changes: changes.available
-      ? { ...changes, files: changes.files.slice(0, 300), files_total: changes.files.length, note: M.trackNote }
-      : changes,
-    generated_images: r.images.length ? r.images : undefined, // 只列这一轮生成的
-    image_calls: r.imageCalls?.length ? r.imageCalls : undefined, // 每次出图实际传的参数，读自 Codex 会话记录
-    viewed_images: r.viewedImages?.length ? r.viewedImages : undefined,
-    run_dir: dir,
-  };
-  return finishRun(run, result, ok ? 0 : 1, { messages: r.messages, questions: r.questions, last });
+    // 重连之类的 error 事件不一定致命，成败以退出码为准，errors 照常汇报。
+    const ok = r.status ? r.status === 'done' : r.code === 0 && !r.timedOut && !r.stalled && !r.needsInput;
+    if (!ok && !r.errors.length) {
+      // 参数错误等情况 codex 不产生事件，只在 stderr 留信息，把末尾几行带出来。
+      const tail = String(r.stderrTail || '').trim().split('\n').slice(-5).join('\n');
+      if (tail) r.errors.push(M.exitCode(r.code, tail));
+    }
+    const quotaExhausted = !ok && (r.quotaExhausted || r.errors.some((e) => /usage limit|quota/i.test(e)));
+    meta.status = r.status || (ok ? 'done' : r.cancelled ? 'cancelled' : r.needsInput ? 'needs_input' : quotaExhausted ? 'quota_exhausted' : r.stalled ? 'stalled' : r.timedOut ? 'timeout' : 'failed');
+    if (r.cancelled) r.errors = [M.runCancelled(modelOf(meta), cancelSource(dir))];
+    meta.session_id = r.sessionId || meta.session_id;
+    meta.ended_at = new Date().toISOString();
+    const stats = sessionStats(meta.session_id, meta.started_at);
+    const total = stats?.total_token_usage || r.usage;
+    const usage = total && (baseline ? Object.fromEntries(
+      ['input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens']
+        .map((key) => [key, (total[key] || 0) - (baseline[key] || 0)]),
+    ) : total);
+    const resetsAt = stats?.rate_limit?.resets_at;
+    const quotaResetsAt = resetsAt == null ? null : new Date(resetsAt * 1000).toISOString();
+    if (quotaExhausted && !r.status) {
+      const date = quotaResetsAt && new Date(quotaResetsAt);
+      const pad = (n) => String(n).padStart(2, '0');
+      const local = date && `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+      r.errors.push(M.quotaExhausted(local));
+    }
+
+    const result = {
+      agent: agentName, agent_type: agent.type,
+      ...(snapshotRequired ? { isolation, run_access: agent.run_access } : {}),
+      ...(r.cost !== undefined ? { cost_usd: r.cost } : {}),
+      run_id: id,
+      mode,
+      kind,
+      status: meta.status,
+      title: meta.title,
+      cwd,
+      track,
+      group: meta.group,
+      round: meta.round,
+      scope: meta.scope,
+      model,
+      model_shown: modelShown,
+      level,
+      effort,
+      sandbox,
+      parent: meta.parent,
+      session_id: meta.session_id,
+      exit_code: r.code,
+      duration_s: Math.round((Date.now() - started) / 1000),
+      usage,
+      usage_scope: r.usage_scope ?? (total ? (baseline ? 'this_run' : 'session_total') : null),
+      last_request: stats?.last_request || null,
+      rate_limit: stats?.rate_limit || null,
+      quota_resets_at: quotaResetsAt,
+      commands_executed: r.commands,
+      errors: r.errors,
+      notes,
+      warnings: [...warnings, ...r.warnings.filter((w) => !/^Under-development features enabled/.test(w))],
+      report,
+      // 拍了快照时以实际改动的归属为准，自报但没改动的不算；完成的写文件事件在快照外（比如被忽略的文件）也算。没有快照时只能看事件和自报。
+      ...(kind !== 'exec' ? { readonly_violation: [...new Map([
+        ...(changes.available ? tracked.filter((f) => f.by !== 'unknown').map(({ path, by }) => [pathKey(relativePath(cwd, path)), { path: relativePath(cwd, path), by }])
+          : claims.filter((c) => !c.root).map((c) => [c.key, { path: c.rel, by: 'reported' }])),
+        ...[...r.fileChanges].map((path) => [pathKey(relativePath(cwd, path)), { path: relativePath(cwd, path), by: 'agent' }]),
+      ]).values()] } : {}),
+      last_message: report ? undefined : last.slice(0, 8000),
+      changes: changes.available
+        ? { ...changes, files: changes.files.slice(0, 300), files_total: changes.files.length, note: M.trackNote }
+        : changes,
+      generated_images: r.images.length ? r.images : undefined, // 只列这一轮生成的
+      image_calls: r.imageCalls?.length ? r.imageCalls : undefined, // 每次出图实际传的参数，读自 Codex 会话记录
+      viewed_images: r.viewedImages?.length ? r.viewedImages : undefined,
+      run_dir: dir,
+    };
+    return finishRun(run, result, ok ? 0 : 1, { messages: r.messages, questions: r.questions, last });
+  } finally { cleanup(); process.removeListener('exit', cleanup); }
 }
 
 export { startRun, finishRun, finishDiscussion, eventWriter, imageScanner, runLimits, watchCancellation, parseReport, reportWithRepair, execute, collectQuestions, spawnCli };

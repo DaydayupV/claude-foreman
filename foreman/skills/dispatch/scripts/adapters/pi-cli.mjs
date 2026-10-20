@@ -8,7 +8,7 @@ import { MAX_REVIEW_CHARS } from '../review-scope.mjs';
 import { newRunDir, isCancelled, cancelSource } from '../records.mjs';
 import { startRun, finishDiscussion, execute, eventWriter, runLimits, reportWithRepair, spawnCli, validateSchema } from '../runner.mjs';
 import { M, die, isObject, binCommand, pathCommand, npmEntry, killTree, readAttachments, focusFiles, relativePath, closestMatches } from '../util.mjs';
-import { D, modelLabel } from '../format.mjs';
+import { D, modelLabel, toolLabel } from '../format.mjs';
 
 function piCommand(agent) {
   if (agent.bin) return binCommand(agent.bin);
@@ -259,8 +259,9 @@ async function piSession(run, schema, access) {
       const shown = (value) => (path.isAbsolute(String(value)) ? relativePath(cwd, String(value)) : String(value));
       const command = ev.toolName === 'bash' ? String(args.command || '')
         : [ev.toolName, ...['pattern', 'path', 'glob'].filter((k) => args[k] != null).map((k) => (k === 'path' ? shown(args[k]) : String(args[k])))].join(' ');
-      event({ type: 'item.completed', item: { ...item, type: 'command_execution', category: ev.toolName === 'bash' ? 'shell' : ['grep', 'find', 'ls'].includes(ev.toolName) ? 'search' : 'read',
-        command, exit_code: ev.isError ? 1 : 0, aggregated_output: output } });
+      const category = ev.toolName === 'bash' ? 'shell' : ['grep', 'find', 'ls'].includes(ev.toolName) ? 'search' : 'read';
+      const label = category === 'shell' ? {} : { label: toolLabel(category, ev.toolName, { pattern: args.pattern, glob: args.glob, path: target == null ? null : shown(target) }) };
+      event({ type: 'item.completed', item: { ...item, type: 'command_execution', category, command, ...label, exit_code: ev.isError ? 1 : 0, aggregated_output: output } });
     } else if (ev.type === 'auto_retry_start') event({ type: 'error', message: M.piRetrying(ev.attempt, ev.maxAttempts, ev.errorMessage || '') });
   };
   let nextPrompt = prompt;

@@ -115,18 +115,67 @@ function listRuns() {
     .reverse();
 }
 
-// status、watch、cancel、resume、await-busy 会随时读 meta.json，直接覆盖会让它们读到空文件或半份 JSON。
-// 先写临时文件再改名；临时文件名带进程号，避免多个进程写同一记录时互相覆盖。
-// 别的程序长时间占着 meta.json、只许写不许改名时（replaceFile 重试约 2 秒仍失败），退回直接覆盖：
-// 读的一方最多短暂读到半份，好过调度进程在事件回调里崩掉、留下没人管的协作方。
-function saveMeta(dir, meta) {
-  const file = path.join(dir, 'meta.json'), tmp = `${file}.${process.pid}.tmp`, text = JSON.stringify(meta, null, 2);
-  try { fs.writeFileSync(tmp, text); replaceFile(tmp, file); }
-  catch (e) {
-    if (!['EPERM', 'EACCES', 'EBUSY'].includes(e.code)) throw e;
-    fs.writeFileSync(file, text);
-    try { fs.rmSync(tmp, { force: true }); } catch { /* 留下的临时文件不影响读取 */ }
+const pendingMetaWrites = new Map();
+
+// 先写带进程号的临时文件再改名，避免并发读取拿到半份 JSON；改名被占用时退回直接覆盖。
+// 覆盖也被占用就返回 false，下次调用用完整的 meta 补上；成功返回 true，并清掉未写入的标记。
+// 结束写入最多等约 15 秒，每轮失败后等 250 毫秒；仍写不进就记到 stderr.log，所有失败都清理临时文件。
+function saveMeta(dir, meta, { final = false } = {}) {
+  const file = path.join(dir, 'meta.json'), tmp = `${file}.${process.pid}.tmp`;
+  const started = Date.now(), waitMs = final ? Number(process.env.FOREMAN_TEST_META_WAIT_MS) || 15000 : 0;
+  let retrying = false;
+  try {
+    const text = JSON.stringify(meta, null, 2);
+    for (;;) {
+      try {
+        fs.writeFileSync(tmp, text);
+        try {
+          if (retrying) fs.renameSync(tmp, file);
+          else replaceFile(tmp, file);
+        }
+        catch (e) {
+          if (!['EPERM', 'EACCES', 'EBUSY'].includes(e.code)) throw e;
+          fs.writeFileSync(file, text);
+        }
+        pendingMetaWrites.delete(dir);
+        return true;
+      } catch (e) {
+        if (!['EPERM', 'EACCES', 'EBUSY'].includes(e.code)) throw e;
+        pendingMetaWrites.set(dir, { sec: Number(((Date.now() - started) / 1000).toFixed(1)), error: e.code || e.message });
+        if (!final) return false;
+        const remaining = waitMs - (Date.now() - started);
+        if (remaining <= 0) {
+          try { fs.appendFileSync(path.join(dir, 'stderr.log'), metaWriteWarning(dir) + '\n'); } catch { /* 日志写不进也不影响收尾 */ }
+          return false;
+        }
+        // 后续改名单次尝试，避免每轮再叠加 replaceFile 的约两秒等待。
+        retrying = true;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(250, remaining));
+      }
+    }
+  } finally {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* 临时文件删不掉也不影响任务 */ }
   }
+}
+
+function metaWriteWarning(dir) {
+  const { sec, error } = pendingMetaWrites.get(dir);
+  return M.metaWriteGaveUp(path.join(dir, 'meta.json'), sec, error);
+}
+
+// 收尾写不进元数据时，从结果补齐内存里的终态，不回写磁盘。
+function settleMeta(dir, meta) {
+  if (meta?.status !== 'running' || pidAlive(meta.pid)) return meta;
+  let result;
+  try { result = JSON.parse(fs.readFileSync(path.join(dir, 'result.json'), 'utf8')); } catch { return meta; }
+  if (!result?.status) return meta;
+  const settled = { ...meta, status: result.status };
+  if (!settled.session_id && result.session_id) settled.session_id = result.session_id;
+  if (!settled.ended_at && Number.isFinite(result.duration_s)) {
+    const ended = new Date(Date.parse(meta.started_at) + result.duration_s * 1000);
+    if (Number.isFinite(ended.getTime())) settled.ended_at = ended.toISOString();
+  }
+  return settled;
 }
 
 function findRun(ref) {
@@ -138,9 +187,10 @@ function findRun(ref) {
   // 旧版插件共用记录目录，仍可能直接覆盖写（saveMeta 的退路也是）：解析失败时每 25 毫秒再读一次，约 1 秒后仍读不出就抛原错误。
   // 读文件本身被占用时 retryBusy 另等最多约 2 秒，所以最坏约 3 秒。
   for (const deadline = Date.now() + 1000; ;) {
-    try { return { id, dir, meta: JSON.parse(retryBusy(() => fs.readFileSync(file, 'utf8'))) }; }
+    try { return { id, dir, meta: settleMeta(dir, JSON.parse(retryBusy(() => fs.readFileSync(file, 'utf8')))) }; }
     catch (e) {
       if (e.code === 'ENOENT') die(M.runNotFound(ref));
+      if (['EPERM', 'EACCES', 'EBUSY'].includes(e.code)) die(M.metaUnreadable(file));
       if (!(e instanceof SyntaxError) || Date.now() >= deadline) throw e;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
     }
@@ -268,12 +318,14 @@ function runEnd(dir, meta) {
 
 function runOutcome(run) {
   // 手上的记录还是"运行中"、进程却已退出时，多半是刚写完结果就退出了，先重读一次再判断是不是中断
-  if (run.meta.status === 'running' && !pidAlive(run.meta.pid)) run.meta = readMeta(run.dir) || run.meta;
+  if (run.meta.status === 'running' && !pidAlive(run.meta.pid)) run.meta = readMeta(run.dir) || settleMeta(run.dir, run.meta);
   const m = run.meta;
   const running = isRunning(m);
-  const status = m.status === 'running' && !running ? 'interrupted' : m.status;
   const file = path.join(run.dir, 'result.json');
-  const result = !running && fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
+  let result = null;
+  if (!running) try { result = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* 没有结果、被占用或只写了一半 */ }
+  // 结果可能在元数据兜底后才恢复可读，以这一次读到的状态为准。
+  const status = m.status === 'running' && !running ? result?.status ?? 'interrupted' : m.status;
   // 交回问题的任务已经正常结束，只是有事要 Claude 决定，不算失败
   const blocked = status === 'needs_input' || status === 'done' && (result?.needs_decision || result?.report?.status === 'blocked');
   const ok = !blocked && status === 'done' && (!result?.report?.status || result.report.status === 'completed');
@@ -296,7 +348,10 @@ function groupSummary(runs) {
   return D.groupSummary(runs.length, t.running, t.ok, t.failed, t.blocked, t.resumed);
 }
 
-const readMeta = (dir) => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')); } catch { return null; } };
+// settle 为 false 时原样返回磁盘上的内容，不用 result.json 兜底（cancel 要分清是元数据真写成了结束，还是只有结果写好了）
+const readMeta = (dir, { settle = true } = {}) => {
+  try { const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')); return settle ? settleMeta(dir, meta) : meta; } catch { return null; }
+};
 const isRunning = (m) => m?.status === 'running' && pidAlive(m.pid);
 
-export { RUNS_ROOT, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, saveMeta, findRun, describeActivity, groupRuns, checkAdmission, runEnd, runOutcome, groupTally, groupSummary, groupScopeOwner, absolute, readMeta, isRunning, writesFiles };
+export { RUNS_ROOT, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, saveMeta, metaWriteWarning, settleMeta, findRun, describeActivity, groupRuns, checkAdmission, runEnd, runOutcome, groupTally, groupSummary, groupScopeOwner, absolute, readMeta, isRunning, writesFiles };

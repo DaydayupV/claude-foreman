@@ -19,11 +19,11 @@ export function watchRecords(h) {
       events: [event({ type: 'api.request', attempt: 1, model: 'fake-api', effort: 'high' }, 0),
         event({ type: 'api.queued', waited_s: 0 }, 0), event({ type: 'api.reasoning', text: '合成推理', total_chars: 4 }),
         event({ type: 'api.content', text: JSON.stringify(discussion), total_chars: 100 }, 2)] },
-    // opencode 的读文件、搜索工具事件和适配器翻译出来的一样，带 tool 和 category
+    // opencode 的读文件、搜索工具事件和适配器翻译出来的一样，带 tool 和 category；读文件那条是没有 label 的旧记录，从命令里取
     { id: 'c', name: 'oc', type: 'opencode cli', kind: 'discuss', model: 'fake/model', report: discussion,
       events: [event({ type: 'thread.started', thread_id: 'synthetic-opencode' }),
         event({ type: 'item.completed', item: { id: 'opencode-1', tool: 'read', category: 'read', type: 'command_execution', command: 'read source.txt', exit_code: 0 } }),
-        event({ type: 'item.completed', item: { id: 'opencode-2', tool: 'grep', category: 'search', type: 'command_execution', command: 'grep TODO src', exit_code: 0 } })] },
+        event({ type: 'item.completed', item: { id: 'opencode-2', tool: 'grep', category: 'search', type: 'command_execution', command: 'grep src TODO', label: 'TODO src', exit_code: 0 } })] },
     { id: 'd', name: 'codex', type: 'codex cli', kind: 'exec', model: 'fake-codex', report: null,
       events: [event({ type: 'error', message: '合成失败原因' })], status: 'failed' },
   ];

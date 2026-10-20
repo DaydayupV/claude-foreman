@@ -70,13 +70,13 @@ function unfinishedRuns(root, cwd) {
   const now = Date.now();
   return runs.filter((m) => {
     if (!m.cwd || directoryKey(m.cwd) !== directoryKey(cwd) || resumed.has(m.id) || m.dismissed_at) return false;
-    // 等输入的任务也要交回问题；其他异常仍只提醒执行任务。
-    if (m.status !== 'needs_input' && (m.kind || (m.mode === 'review' ? 'review' : 'exec')) !== 'exec') return false;
     const age = now - new Date(m.started_at).getTime();
     if (!(age >= 0 && age <= 7 * 86400000)) return false;
     if (m.status === 'running') {
-      try { process.kill(m.pid, 0); } catch { m.status = 'interrupted'; }
+      try { process.kill(m.pid, 0); } catch { m.status = readJson(path.join(root, m.id, 'result.json'))?.status || 'interrupted'; }
     }
+    // 等输入的任务也要交回问题；其他异常仍只提醒执行任务。
+    if (m.status !== 'needs_input' && (m.kind || (m.mode === 'review' ? 'review' : 'exec')) !== 'exec') return false;
     return ['interrupted', 'quota_exhausted', 'stalled', 'timeout', 'needs_input'].includes(m.status);
   }).sort((a, b) => new Date(b.started_at) - new Date(a.started_at)).slice(0, 5);
 }

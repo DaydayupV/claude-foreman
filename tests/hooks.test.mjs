@@ -64,6 +64,14 @@ test('会话提醒列出未正常结束的执行任务，取消后不再列出',
   assert.ok(after.includes('exec-stalled'));
 });
 
+test('会话提醒以已退出任务的结果为准，没有结果仍提醒中断', async (t) => {
+  const h = sandbox(t), meta = { status: 'running', pid: 2147483647 };
+  seedRun(h, 'completed-result', meta, { status: 'done' }); seedRun(h, 'missing-result', meta);
+  const context = output(await h.hook('session-reminder.mjs')).hookSpecificOutput.additionalContext;
+  assert.equal(context.includes('completed-result'), false);
+  assert.ok(context.includes('missing-result｜run｜合成任务｜调度进程已退出，没有结果'));
+});
+
 for (const [label, command] of [
   ['codex exec', 'codex exec "synthetic"'], ['codex review', 'codex review --uncommitted'],
   ['node codex.js exec', 'node "C:/synthetic/bin/codex.js" exec -'], ['npx Codex', 'npx @openai/codex exec -'],

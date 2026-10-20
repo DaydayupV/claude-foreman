@@ -48,6 +48,15 @@ function reviewConclusion(report) {
   return D.watchReview[report.verdict](findings.length, parts);
 }
 
+// 组视图里一席结束后的结论：审查写结论，讨论写立场（Position），执行、续接和图像任务照详细模式写成报告行
+function finalText(report) {
+  const conclusion = reviewConclusion(report);
+  if (conclusion) return conclusion;
+  if (report?.position) return D.watchOpinion(report.position.trim());
+  if (!report?.summary) return null;
+  return report.status ? D.watchReport(D.statusName(report.status), report.summary.trim()) : report.summary.trim();
+}
+
 async function pickWatchRun(ref) {
   if (ref) return findRun(ref);
   // 刚派活时任务可能还没登记，等一会儿；仍没有就显示最近一次。
@@ -659,8 +668,34 @@ function createFeed(run) {
   return feed;
 }
 
-// 组视图一块的标题：第一行左边是状态记号和模型标签，右边是状态词和用时（结束后加上改动、运行中加上计数）。
-// 模型标签尽量写全：右侧放不下时先截短右侧；最终汇总（wrap）里改成把右侧写到下一行。窗口太窄时只留左侧。
+// 必留部分本身放不下时才截短；可选信息从末尾整项省掉，空间够时用省略号标出。
+function fitPanelRight(required, right, width) {
+  if (textWidth(required) > width) return fitWidth(required, width);
+  let text = required;
+  for (const part of right.slice(required.length).split(' · ').filter(Boolean)) {
+    const next = part.startsWith(' ') ? text + part : D.dots([text, part]);
+    if (textWidth(next) > width) {
+      if (textWidth(text) + 4 <= width) text = D.dots([text, '…']);
+      break;
+    }
+    text = next;
+  }
+  return text;
+}
+
+// 最终汇总优先在分隔符处折行，单段太长时再按显示宽度折行，保留全部内容。
+function wrapPanelRight(right, width) {
+  const lines = [];
+  for (const part of right.split(' · ')) {
+    const last = lines.length - 1;
+    const next = D.dots([lines[last], part]);
+    if (last >= 0 && textWidth(next) <= width) lines[last] = next;
+    else lines.push(...wrapWidth(part, width));
+  }
+  return lines;
+}
+
+// 组视图一块的标题：先保留状态和时钟，再放可选信息；右侧预留 40 列容纳常见计数或 API 进度，标签通常至少留 8 列以便辨认。
 // 同组标题各不相同时（比如角色讨论、拆开的执行任务），再写一行这一块的标题，续接的讨论后面写上第几轮
 function panelHead(run, stats, width, withTitle, { wrap = false } = {}) {
   const o = runOutcome(run);
@@ -669,21 +704,25 @@ function panelHead(run, stats, width, withTitle, { wrap = false } = {}) {
   const elapsed = runEnd(run.dir, m) - Date.parse(m.started_at);
   const { mark, color, word: status } = outcomeStyle(o);
   const s = stats;
+  const time = running && clock(s.req ? Date.now() - Date.parse(s.req) : elapsed);
   // 右侧先拼成纯文字，截短之后再上色：开头的状态词上色，其余暗色
   const [word, right] = !running ? [status, D.dots([status, took(r?.duration_s ?? elapsed / 1000), changedFor(r, m), r?.stale === true && D.watchStale])]
-    : s.queued ? [D.apiPhases.queued, D.watchApiQueuedLive(clock(Date.now() - Date.parse(s.req)))]
-    : s.req ? [D.apiPhases[s.answering ? 'answering' : 'thinking'], D.watchApiLive(s.answering, clock(Date.now() - Date.parse(s.req)), (s.answering ? s.answerChars : s.chars).toLocaleString('en-US'))]
-    : [status, D.dots([`${status} ${clock(elapsed)}`, ...D.liveCounts({ commands: s.commands, reads: s.reads, searches: s.searches })])];
+    : s.queued ? [D.apiPhases.queued, D.watchApiQueuedLive(time)]
+    : s.req ? [D.apiPhases[s.answering ? 'answering' : 'thinking'], D.watchApiLive(s.answering, time, (s.answering ? s.answerChars : s.chars).toLocaleString('en-US'))]
+    : [status, D.dots([`${status} ${time}`, ...D.liveCounts({ commands: s.commands, reads: s.reads, searches: s.searches })])];
   const paintRight = (text) => paintLead(text, word, running ? C.cyan : color);
+  const required = running ? `${word} ${time}` : D.dots([status, took(r?.duration_s ?? elapsed / 1000)]);
   const label = modelLabel(m);
   const room = width - 2 - textWidth(label) - 2; // 模型标签写全时右侧还剩的宽度
-  const line = (l, text) => `${color(mark)} ${C.bold(l)}${' '.repeat(Math.max(1, width - 2 - textWidth(l) - textWidth(text)))}${paintRight(text)}`;
+  const line = (l, text) => `${color(mark)} ${C.bold(l)}${' '.repeat(Math.max(l ? 1 : 0, width - 2 - textWidth(l) - textWidth(text)))}${paintRight(text)}`;
   const lines = [];
-  if (textWidth(right) <= room) lines.push(line(label, right));
-  else if (wrap) lines.push(`${color(mark)} ${C.bold(fitWidth(label, width - 2))}`, `  ${paintRight(fitWidth(right, width - 2))}`);
-  else if (room >= textWidth(word) + 8) lines.push(line(label, fitWidth(right, room)));
-  else if (textWidth(right) + 16 <= width) lines.push(line(fitWidth(label, width - textWidth(right) - 4), right));
-  else lines.push(`${color(mark)} ${C.bold(fitWidth(label, width - 2))}`);
+  if (wrap && textWidth(right) <= room) lines.push(line(label, right));
+  else if (wrap) lines.push(`${color(mark)} ${C.bold(fitWidth(label, width - 2))}`, ...wrapPanelRight(right, width - 2).map((text) => `  ${paintRight(text)}`));
+  else {
+    const labelWidth = Math.min(Math.max(8, width - 4 - 40), width - 4 - textWidth(required));
+    const left = labelWidth > 0 ? fitWidth(label, labelWidth) : '';
+    lines.push(line(left, fitPanelRight(required, right, width - (left ? 4 + textWidth(left) : 2))));
+  }
   if (!withTitle || !m.title) return lines;
   const title = oneLine(m.title);
   const round = m.round > 1 && !title.includes(D.watchRound(m.round)) ? D.watchRound(m.round) : '';
@@ -728,11 +767,10 @@ function panelLines(run, feed, rows, width, withTitle) {
   const head = panelHead(run, feed.stats, width, withTitle);
   const inner = width - 2;
   let body = [];
-  const conclusion = reviewConclusion(r?.report);
-  const final = conclusion || r?.report?.position || r?.report?.summary;
+  const final = finalText(r?.report);
   const errors = realErrors(r, ok);
   if (!running && (final || errors.length)) {
-    if (final) body = wrapWidth(conclusion || D.watchOpinion(final.trim()), inner);
+    if (final) body = wrapWidth(final, inner);
     for (const e of errors) body.push(`${r.status === 'needs_input' ? C.yellow('?') : C.red('✗')} ${fitWidth(oneLine(e), inner - 2)}`);
     body = body.slice(0, rows);
   } else {
@@ -923,9 +961,8 @@ async function watchGroup(group, o, loadCfg) {
     out.push(C.dim('─'.repeat(width)), ...panelHead(run, feeds.get(run.id).stats, width, !title, { wrap: true }));
     const usage = usageLine(r, run.meta);
     if (usage) out.push(`  ${C.dim(fitWidth(usage, inner))}`);
-    const conclusion = reviewConclusion(r?.report);
-    const final = conclusion || r?.report?.position || r?.report?.summary;
-    if (final) for (const l of wrapWidth(conclusion || D.watchOpinion(final.trim()), inner)) out.push(`  ${l}`);
+    const final = finalText(r?.report);
+    if (final) for (const l of wrapWidth(final, inner)) out.push(`  ${l}`);
     const [mark, color] = r?.status === 'needs_input' ? ['?', C.yellow] : ['✗', C.red];
     for (const e of realErrors(r, ok)) out.push(...wrapWidth(`${mark} ${oneLine(e)}`, inner).map((l, i) => `  ${i ? l : color(mark) + l.slice(mark.length)}`));
     out.push(`  ${C.dim(replayCommand(RUNS_ROOT, run.id))}`);

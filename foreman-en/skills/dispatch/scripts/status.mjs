@@ -1,7 +1,7 @@
 // 状态列表、终止任务和排队检查；会话统计由入口提供只读函数。
 import fs from 'node:fs';
 import path from 'node:path';
-import { RUNS_ROOT, UNFINISHED_STATUSES, requestCancel, listRuns, findRun, readMeta, isRunning, runEnd, runOutcome, groupRuns, groupSummary, describeActivity, saveMeta } from './records.mjs';
+import { RUNS_ROOT, UNFINISHED_STATUSES, requestCancel, listRuns, findRun, readMeta, isRunning, runEnd, runOutcome, groupRuns, groupSummary, describeActivity, saveMeta, metaWriteWarning } from './records.mjs';
 import { M, die, need, pidAlive, killTree, sleep, modelOf, agentTypeOf, replaceFile } from './util.mjs';
 import { D, C, padWidth, visibleWidth, modelLabel, clock, took, outcomeStyle, usageLine, paintPlanWord } from './format.mjs';
 import { planStatus, describePlans } from './plan.mjs';
@@ -65,12 +65,13 @@ async function cmdCancel(o, sessionStats) {
   const run = findRun(need(o, 'run'));
   const print = (x) => process.stdout.write(`${JSON.stringify({ run_id: run.id, ...x }, null, 2)}\n`);
   if (!isRunning(run.meta)) {
-    const status = run.meta.status === 'running' ? 'interrupted' : run.meta.status;
-    if (!UNFINISHED_STATUSES.includes(status)) { print({ ok: false, status }); return; }
+    // 以再读一次的为准：上一次读的时候 result.json 可能正被占着，已经完成的任务还显示成运行中
     const m = readMeta(run.dir) || run.meta;
+    const status = m.status === 'running' ? 'interrupted' : m.status;
+    if (!UNFINISHED_STATUSES.includes(status)) { print({ ok: false, status }); return; }
     m.dismissed_at = new Date().toISOString();
-    saveMeta(run.dir, m);
-    print({ ok: true, status, dismissed: true });
+    const saved = saveMeta(run.dir, m, { final: true });
+    print(saved ? { ok: true, status, dismissed: true } : { ok: false, status, error: metaWriteWarning(run.dir) });
     return;
   }
   requestCancel(run.dir, 'command');
@@ -78,9 +79,9 @@ async function cmdCancel(o, sessionStats) {
   for (const until = Date.now() + waitMs; Date.now() < until;) {
     await sleep(Math.min(500, waitMs));
     const m = readMeta(run.dir);
-    if (m && !isRunning(m)) { print({ ok: true, status: m.status }); return; }
+    if (m && m.status !== 'running') { print({ ok: true, status: m.status }); return; }
     // 这一次读不出不等于已经停下：调度进程还活着就接着等，已经退出就不再等，按下面强行结束的收尾补写记录
-    if (!m && !pidAlive(run.meta.pid)) break;
+    if (!pidAlive(run.meta.pid)) break;
   }
   // 确认它真的退出之后才动它的记录，免得和它自己的收尾交错。非 Windows 上 killTree 只发 SIGTERM，等不到退出就再发 SIGKILL。
   const pid = run.meta.pid;
@@ -90,15 +91,17 @@ async function cmdCancel(o, sessionStats) {
     try { process.kill(-pid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch { /* 已经退出 */ } }
   }
   if (!(await exited())) { print({ ok: false, status: 'running', error: M.cancelNotStopped(pid) }); return; }
-  const m = readMeta(run.dir) || run.meta;
-  if (m.status !== 'running') { print({ ok: true, status: m.status }); return; } // 被结束前自己收完了尾
+  // 看磁盘上的元数据，不用结果兜底：被结束前自己收完了尾的，元数据已经写成结束状态，原样返回，
+  // 这时结果正好读不出也不能再补写，免得把完成的任务改成已取消
+  const m = readMeta(run.dir, { settle: false }) || run.meta;
+  if (m.status !== 'running') { print({ ok: true, status: m.status }); return; }
   // 结果已经写好、只差元数据时，元数据跟结果走；没有结果或者结果读不出来，补一份最简结果。
   let written = null;
   try { written = JSON.parse(fs.readFileSync(path.join(run.dir, 'result.json'), 'utf8')); } catch { /* 没有结果，或者旧版本写了一半 */ }
   Object.assign(m, { status: written?.status ?? 'cancelled', ended_at: new Date().toISOString() });
   if (!written) writeForcedResult(run.dir, m, sessionStats);
-  saveMeta(run.dir, m);
-  print({ ok: true, status: m.status, forced: true });
+  const saved = saveMeta(run.dir, m, { final: true });
+  print({ ok: true, status: m.status, forced: true, ...(!saved ? { warning: metaWriteWarning(run.dir) } : {}) });
 }
 
 // 调度进程没来得及写好结果就被强行结束了：补一份最简的结果。用量只能从协作方自己的会话记录里读（目前只有 Codex 有），读不到就是 null。

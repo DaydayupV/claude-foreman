@@ -8,14 +8,15 @@ import { M, die, need, resolveDir, readBrief, isGitRepo, isAscii, agentTypeOf, c
 // 不带值的选项；其余选项都把下一个参数当作它的值。
 const FLAGS = new Set(['uncommitted', 'no-snapshot', 'verbose', 'no-intro', 'snap', 'vector', 'allow-edge']);
 
-// --help 只打印这一条子命令的用法（assets 可以带动作），退出码 0。和 parseArgs 一样走一遍参数，
-// 写在某个选项的值里的（比如 --title --help）不算。
+// --help（或 -h）只打印这一条子命令的用法（assets 可以带动作），退出码 0。和 parseArgs 一样走一遍参数，
+// 写在某个选项的值里的（比如 --title --help、--title -h）不算。
+const isHelp = (arg) => arg === '--help' || arg === '-h';
 function helpText([cmd, ...rest]) {
-  if (cmd === '--help') return M.usage;
-  const action = cmd === 'assets' && rest[0] && !rest[0].startsWith('--') ? rest.shift() : null;
+  if (isHelp(cmd)) return M.usage;
+  const action = cmd === 'assets' && rest[0] && !rest[0].startsWith('-') ? rest.shift() : null;
   let asked = false;
   for (let i = 0; i < rest.length && !asked; i++) {
-    asked = rest[i] === '--help';
+    asked = isHelp(rest[i]);
     if (rest[i].startsWith('--') && !FLAGS.has(rest[i].slice(2))) i++;
   }
   if (!asked) return null;

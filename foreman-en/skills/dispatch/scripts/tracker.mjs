@@ -27,9 +27,12 @@ function makeTracker(runDir, cwd, track) {
     return r.stdout;
   };
 
-  git(['init', '--quiet']);
-  fs.mkdirSync(path.join(gitDir, 'info'), { recursive: true });
-  fs.writeFileSync(path.join(gitDir, 'info', 'exclude'), SNAPSHOT_EXCLUDES.join('\n') + '\n');
+  const cleanup = () => { try { fs.rmSync(gitDir, { recursive: true, force: true }); } catch { /* 留着也无害 */ } };
+  try {
+    git(['init', '--quiet']);
+    fs.mkdirSync(path.join(gitDir, 'info'), { recursive: true });
+    fs.writeFileSync(path.join(gitDir, 'info', 'exclude'), SNAPSHOT_EXCLUDES.join('\n') + '\n');
+  } catch (e) { cleanup(); throw e; }
 
   function snap(label) {
     const index = path.join(gitDir, `index-${label}`);
@@ -66,7 +69,6 @@ function makeTracker(runDir, cwd, track) {
     return { files, large_files_changed: largeChanged, shortstat: stat, patch_bytes: Buffer.byteLength(patch) };
   }
 
-  const cleanup = () => { try { fs.rmSync(gitDir, { recursive: true, force: true }); } catch { /* 留着也无害 */ } };
   return { snap, diff, cleanup };
 }
 

@@ -5,7 +5,7 @@ Group watch-group · 4 runs                                                     
   done · took 3s · 1 file changed, plus 1 of unknown origin, 1 from other runs in the group
   合成a
   tokens: in 120 (cached 25%) · out 40
-  Position: 合成任务已完成
+  Report: done · 合成任务已完成
   replay: node <HOME>/r/watch.mjs --run a
 ───────────────────────────────────────────────────────────────────────────────────────────────────
 ✔ fake-api · API · effort high                                                       done · took 3s

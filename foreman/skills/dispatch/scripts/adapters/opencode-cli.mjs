@@ -8,7 +8,7 @@ import { MAX_REVIEW_CHARS } from '../review-scope.mjs';
 import { newRunDir, isCancelled, cancelSource } from '../records.mjs';
 import { startRun, finishDiscussion, execute, eventWriter, runLimits, reportWithRepair, spawnCli, validateSchema } from '../runner.mjs';
 import { M, LANGUAGE, die, isObject, binCommand, pathCommand, npmEntry, killTree, readAttachments, focusFiles, relativePath, closestMatches } from '../util.mjs';
-import { D, modelLabel } from '../format.mjs';
+import { D, modelLabel, toolLabel } from '../format.mjs';
 
 function opencodeCommand(agent) {
   if (agent.bin) return binCommand(agent.bin);
@@ -217,12 +217,11 @@ async function opencodeSession(run, schema, agentId) {
         event({ type: 'item.completed', item: { ...item, type: 'file_change', changes } });
         return;
       }
-      const params = ['filePath', 'path', 'pattern', 'include'].filter((k) => input[k] != null).map((k) => {
-        const value = String(input[k]);
-        return (k === 'filePath' || k === 'path') && path.isAbsolute(value) ? relativePath(cwd, value) : value;
-      });
+      const shown = (value) => (path.isAbsolute(String(value)) ? relativePath(cwd, String(value)) : String(value));
+      const params = ['filePath', 'path', 'pattern', 'include'].filter((k) => input[k] != null).map((k) => (k === 'filePath' || k === 'path' ? shown(input[k]) : String(input[k])));
       if (category === 'shell') commands++;
-      event({ type: 'item.completed', item: { ...item, type: 'command_execution', command: category === 'shell' ? String(input.command || '') : [tool, ...params].join(' '),
+      const label = category === 'shell' ? {} : { label: toolLabel(category, tool, { pattern: input.pattern, glob: input.include, path: target == null ? null : shown(target) }) };
+      event({ type: 'item.completed', item: { ...item, type: 'command_execution', command: category === 'shell' ? String(input.command || '') : [tool, ...params].join(' '), ...label,
         exit_code: state.status === 'completed' ? 0 : 1, aggregated_output: String(state.output || state.error || '').slice(0, 2000) } });
     } else if (ev.type === 'error') event({ type: 'error', message: ev.error?.message || ev.error?.type || JSON.stringify(ev) });
   };

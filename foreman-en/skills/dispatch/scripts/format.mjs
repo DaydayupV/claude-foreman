@@ -66,11 +66,20 @@ function usageLine(result, meta) {
   result?.cost_usd != null ? D.costUsd(formatUsd(result.cost_usd)) : ''].filter(Boolean).join(' · ');
 }
 
+// opencode 和 pi 的读文件、搜索工具在时间线上写什么，适配器存进事件的 label，各适配器写法一致：
+// 读文件写路径；搜索先写模式，再写 glob 过滤和路径。没有模式时写 glob，都没有就写工具名，免得只剩一个路径、看不出搜了什么。
+function toolLabel(category, tool, { pattern, glob, path: where } = {}) {
+  const has = (x) => x != null && x !== '';
+  if (category === 'read') return has(where) ? String(where) : tool;
+  return [has(pattern) ? pattern : has(glob) ? glob : tool, has(pattern) ? glob : null, where].filter(has).map(String).join(' ');
+}
+
 // 工具调用怎么显示：opencode 和 pi 的读文件、搜索（category 为 read 或 search）写成"读 …""搜索 …"，不算命令、不加 $。
 function commandAction(it) {
   if (it.category === 'read' || it.category === 'search') {
-    const text = oneLine(it.command);
-    const rest = it.tool && text === it.tool ? '.' : it.tool && text.startsWith(`${it.tool} `) ? text.slice(it.tool.length + 1) : text;
+    // 旧记录没有 label，从命令里去掉工具名
+    const text = oneLine(it.label ?? it.command);
+    const rest = it.label != null ? text : it.tool && text === it.tool ? '.' : it.tool && text.startsWith(`${it.tool} `) ? text.slice(it.tool.length + 1) : text;
     return { kind: it.category, text: it.category === 'read' ? D.actionRead(rest) : D.actionSearch(rest) };
   }
   return { kind: 'command', text: `$ ${oneLine(plainCommand(it.command))}` };
@@ -90,4 +99,4 @@ const shellPath = (p) => (/[\s"'`$&|;<>()]/.test(p) ? `"${p}"` : p);
 const replayCommand = (runsRoot, id) => D.watchReplay(`node ${shellPath(path.join(runsRoot, 'watch.mjs'))} --run ${id}`);
 
 export { D, TEST_SCREEN, termCols, termRows, useColor, C, plain, visibleWidth, padWidth, shortModel, fullModel, modelLabel, clock, took,
-  shownStatus, outcomeStyle, agentTotal, changedText, changedFor, formatUsd, usageLine, commandAction, foldText, thoughtLine, paintPlanWord, replayCommand };
+  shownStatus, outcomeStyle, agentTotal, changedText, changedFor, formatUsd, usageLine, toolLabel, commandAction, foldText, thoughtLine, paintPlanWord, replayCommand };

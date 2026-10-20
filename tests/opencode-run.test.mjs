@@ -60,6 +60,7 @@ for (const access of ['edit', 'shell']) test(`opencode ${access} 执行：权限
     ...edits.map(([name, file], i) => tool(name, { [i % 2 ? 'path' : 'filePath']: path.join(h.cwd, file) }, { [file]: 'after\n' })),
     tool('edit', { path: 'denied.txt' }, { 'denied.txt': 'outside actor' }, 'error'),
     ...(access === 'shell' ? [tool('shell', { command: 'node --version' }), tool('bash', { command: 'npm test' })] : []),
+    tool('grep', { path: h.cwd, pattern: 'export', include: '*.js' }), tool('list', { path: h.cwd }),
   ], export_messages: [{ type: 'assistant', tokens: { input: 10, output: 5 }, cost: 0.125 }] });
   const execution = await h.bridge(taskArgs(h), { env: s.env, input: '合成执行任务' });
   const r = output(execution), call = runs(s)[0], config = JSON.parse(call.env.OPENCODE_CONFIG_CONTENT);
@@ -92,6 +93,8 @@ for (const access of ['edit', 'shell']) test(`opencode ${access} 执行：权限
     // 读文件和搜索不算命令：写成"读 …""搜索 …"，不加 $
     assert.ok(watch.stdout.includes(D.actionRead('source.txt')));
     assert.ok(watch.stdout.includes(D.actionSearch('before')));
+    // 搜索先写模式，再写 glob 过滤和路径；没有模式时写工具名（和 pi 一致）。简洁显示会折叠一部分，看详细模式
+    if (extra.length) assert.ok(watch.stdout.includes(D.actionSearch('export *.js .')) && watch.stdout.includes(D.actionSearch('list .')), watch.stdout);
     assert.ok(!watch.stdout.includes('$ read') && !watch.stdout.includes('$ grep'));
     if (access === 'shell') assert.ok(watch.stdout.includes('node --version'));
   }

@@ -107,6 +107,7 @@ for (const access of ['edit', 'shell']) test(`执行（${access}）：工具、�
     ...tool('write', { path: 'new.txt' }, { files: { 'new.txt': 'new\n' } }),
     ...tool('write', { path: '../outside.txt' }, { isError: true, result: 'foreman guard: ../outside.txt is outside the project directory' }),
     ...(access === 'shell' ? tool('bash', { command: 'npm test' }, { result: 'ok' }) : []),
+    ...tool('grep', { pattern: 'export', path: h.cwd, glob: '*.js' }), ...tool('find', { pattern: '*.md' }), ...tool('ls', { path: '.' }),
   ] });
   const execution = await h.bridge(taskArgs(h), { env: s.env, input: '合成执行任务' });
   const r = output(execution), call = runs(s)[0];
@@ -124,6 +125,9 @@ for (const access of ['edit', 'shell']) test(`执行（${access}）：工具、�
   const watch = await h.bridge(['watch', '--run', r.run_id]);
   assert.equal(watch.code, 0);
   assert.ok(watch.stdout.includes(D.actionRead('source.txt')) && !watch.stdout.includes('$ read'));
+  // 搜索先写模式，再写 glob 过滤和路径；没有模式时写工具名（和 opencode 一致）。简洁显示会折叠一部分，看详细模式
+  const verbose = await h.bridge(['watch', '--run', r.run_id, '--verbose']);
+  for (const text of ['export *.js .', '*.md', 'ls .']) assert.ok(verbose.stdout.includes(D.actionSearch(text)), verbose.stdout);
   if (access === 'shell') assert.ok(watch.stdout.includes('$ npm test'));
 });
 

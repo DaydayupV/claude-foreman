@@ -70,7 +70,7 @@ const zh = {
   startLockBusy: (lock, pid, seconds) => `登记锁 ${lock} 被进程 ${pid} 占着，等了 ${seconds} 秒还没释放。确认这个进程不是 foreman（比如它的进程号被别的程序复用了）之后，删掉这个锁文件再试`,
   starterCodex: (model, complexModel) => `检测到 Codex，simple 和 normal 的执行任务由 Claude 自己做，复杂的执行任务用 ${model}，复杂的审查和讨论用 ${complexModel}；出图用 ${model}，手画矢量部件用 ${complexModel}。`,
   warnUnusedAgent: (name) => `${name} 没有用在任何格子里`,
-  usage: '用法：cli.mjs <run|discuss|resume|review|image|plan|status|watch|config|check|models|await-busy|cancel|assets> [选项]，run / discuss / review 用 --level 选格子，可以加 [--agent <协作方>]，或者用 [--plan <计划> --seat <序号>] 启动计划里的一席；image 只能用 --plan <计划> --seat <序号> 启动，要带 --scope <输出目录>；check 支持 [--agent <协作方>]；discuss / resume 支持 [--file <路径[:起始行-结束行]>]...；run / resume / discuss / review 支持 [--track <路径>]...；run / resume / discuss 支持 [--group <组名>] [--scope <路径>]...；status 支持 [--group <组名>] 或 [--plan <计划>]，watch 支持 [--group <组名>]；plan 和 assets 的参数见 references/cli.md',
+  usage: '用法：cli.mjs <run|discuss|resume|review|image|plan|status|watch|config|check|models|await-busy|cancel|assets> [选项]，run / discuss / review 用 --level 选格子，可以加 [--agent <协作方>]，或者用 [--plan <计划> --seat <序号>] 启动计划里的一席；image 只能用 --plan <计划> --seat <序号> 启动，要带 --scope <输出目录>；check 支持 [--agent <协作方>]；discuss / resume 支持 [--file <路径[:起始行-结束行]>]...；run / resume / discuss / review 支持 [--track <路径>]...；run / resume / discuss 支持 [--group <组名>] [--scope <路径>]...；status 支持 [--group <组名>] 或 [--plan <计划>]，watch 支持 [--group <组名>]；每个子命令的完整参数用 cli.mjs <命令> --help（或 -h）查看',
   starterCreated: (file, parts) => `首次使用，已生成配置文件 ${file}：${parts}`,
   starterNoCodex: '没有检测到可用的 Codex，执行、审查和讨论暂时都由 Claude 自己做。',
   starterOpencode: (n) => `检测到 opencode（${n} 个可用模型），还没有加入。`,
@@ -354,6 +354,9 @@ ${schema}`,
   lastMessageTruncated: (file) => `last_message 只保留了前 8000 字，全文见 ${file}`,
   badReport: '最终报告不是合法 JSON，见 last_message',
   trackNote: '只追踪工作目录内的改动',
+  // meta.json 被别的程序以不许写共享的方式占着（备份、同步软件，或者 .NET 的 File.OpenRead）
+  metaWriteGaveUp: (file, sec, err) => `${sec} 秒内一直写不进 ${file}（${err}），多半是别的程序占着它、不许别人写。放弃这次写入：meta.json 停在上一次写好的内容，结果照常在 result.json 里`,
+  metaUnreadable: (file) => `读不了 ${file}：别的程序占着它、不许别人读。关掉占用它的程序（比如备份或同步软件）再试`,
 
   // ---------- 发给 Codex 的约束 ----------
   footer: (cwd, addDirs) => `---
@@ -555,7 +558,7 @@ const en = {
   startLockBusy: (lock, pid, seconds) => `The start lock ${lock} is held by process ${pid} and hasn't been released after ${seconds} seconds. Once you've confirmed that process isn't foreman (for example, its process ID was reused by another program), delete the lock file and try again`,
   starterCodex: (model, complexModel) => `found Codex. Claude does simple and normal hands-on tasks itself, complex ones use ${model}, complex reviews and discussions use ${complexModel}, image generation uses ${model}, and hand-drawn vector pieces use ${complexModel}. `,
   warnUnusedAgent: (name) => `${name} isn't used in any cell`,
-  usage: 'Usage: cli.mjs <run|discuss|resume|review|image|plan|status|watch|config|check|models|await-busy|cancel|assets> [options]; run / discuss / review pick a cell with --level and can add [--agent <agent>], or start one seat of a plan with [--plan <plan> --seat <n>]; image only starts from --plan <plan> --seat <n> and needs --scope <output dir>; check supports [--agent <agent>]; discuss / resume support [--file <path[:start-end]>]...; run / resume / discuss / review support [--track <path>]...; run / resume / discuss support [--group <name>] [--scope <path>]...; status supports [--group <name>] or [--plan <plan>], watch supports [--group <name>]; for plan and assets options see references/cli.md',
+  usage: 'Usage: cli.mjs <run|discuss|resume|review|image|plan|status|watch|config|check|models|await-busy|cancel|assets> [options]; run / discuss / review pick a cell with --level and can add [--agent <agent>], or start one seat of a plan with [--plan <plan> --seat <n>]; image only starts from --plan <plan> --seat <n> and needs --scope <output dir>; check supports [--agent <agent>]; discuss / resume support [--file <path[:start-end]>]...; run / resume / discuss / review support [--track <path>]...; run / resume / discuss support [--group <name>] [--scope <path>]...; status supports [--group <name>] or [--plan <plan>], watch supports [--group <name>]; for the full options of a subcommand, run cli.mjs <command> --help (or -h)',
   starterCreated: (file, parts) => `First run: created config file ${file}: ${parts}`,
   starterNoCodex: 'no usable Codex found, so Claude does hands-on work, reviews and discussions itself for now. ',
   starterOpencode: (n) => `found opencode (${n} models available), not added yet. `,
@@ -828,7 +831,7 @@ ${schema}`,
   dashHidden: (n) => (n === 1 ? "… 1 more run doesn't fit; make the window taller to see it" : `… ${n} more runs don't fit; make the window taller to see them`),
   dashHintQueued: 'A model is queued: press x to stop it · Ctrl+C to stop watching; the runs keep going',
   dashCancelConfirm: (models) => `Press x again to stop ${models}, or any other key to cancel`,
-  groupSummary: (total, running, ok, failed, blocked = 0, resumed = 0) => `${total} runs: ${running} running, ${ok} done,${resumed ? `${resumed} resumed, ` : ''}${blocked ? `${blocked} with questions, ` : ''}${failed} failed`,
+  groupSummary: (total, running, ok, failed, blocked = 0, resumed = 0) => `${total} runs: ${en.dots([`${running} running`, `${ok} done`, resumed && `${resumed} resumed`, blocked && `${blocked} with questions`, `${failed} failed`])}`,
   badArg: (a) => `Unknown argument: ${a}`,
   missingValue: (a) => `Missing value for ${a}`,
   missingOpt: (key) => `Missing --${key}`,
@@ -868,6 +871,9 @@ ${schema}`,
   lastMessageTruncated: (file) => `last_message keeps only the first 8000 characters; the full text is in ${file}`,
   badReport: 'The final report is not valid JSON; see last_message',
   trackNote: 'Only changes inside the working directory are tracked',
+  // meta.json held open by another program without write sharing (backup or sync software, or .NET's File.OpenRead)
+  metaWriteGaveUp: (file, sec, err) => `Couldn't write ${file} for ${sec}s (${err}); another program is probably holding it open and not letting others write. Gave up on this write: meta.json keeps the last content written, and the result is in result.json as usual`,
+  metaUnreadable: (file) => `Can't read ${file}: another program is holding it open and not letting others read. Close that program (backup or sync software, for example) and try again`,
 
   // ---------- constraints sent to Codex ----------
   footer: (cwd, addDirs) => `---

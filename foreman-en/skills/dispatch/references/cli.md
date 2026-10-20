@@ -1,6 +1,6 @@
 # Script reference: check, models and result fields
 
-SKILL.md keeps only the decision process and the common commands. Read this when troubleshooting the environment, helping the user pick models, or looking up what a field in the result JSON means. Every subcommand prints its own usage with `--help` (`assets <action> --help` prints that action's options), with exit code 0.
+SKILL.md keeps only the decision process and the common commands. Read this when troubleshooting the environment, helping the user pick models, or looking up what a field in the result JSON means. Every subcommand prints its own usage with `--help` (or `-h`; `assets <action> --help` prints that action's options), and either one with no subcommand prints the overall usage. The exit code is 0 and no file is written. A `--help` or `-h` given as an option's value (`--title -h`, for example) doesn't count.
 
 ## check
 Tests whether the environment works: Node.js, Git, and every agent in the config, with results under `agents.<ID>`.
