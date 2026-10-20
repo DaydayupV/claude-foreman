@@ -183,6 +183,25 @@ for (const [module, cell] of [['run', 'complex'], ['image', 'generate'], ['image
   failed(await h.bridge(['config']), M.configInvalid(`modules.${module}.${cell}`, M.invalid.oneRequired));
 });
 
+for (const module of ['discuss', 'review']) test(`${module} 的必选数不能超过 max_seats，项目配置只按更严的值`, async (t) => {
+  const h = sandbox(t), c = baseConfig(), cwdArgs = ['config', '--cwd', h.cwd];
+  c.agents.second = { ...c.agents.codex }; c.agents.third = { ...c.agents.codex };
+  c.modules[module].complex = [{ agent: 'codex', required: true }, { agent: 'second', required: true }, { agent: 'third', required: true }];
+  c.dispatch.max_seats = 2; h.config(c);
+  failed(await h.bridge(['config']), M.configInvalid(`modules.${module}.complex`, M.requiredOverSeats(3, 2)));
+  // 项目配置调高席位不生效，照样报用户配置的错
+  h.write('.claude/foreman.json', { dispatch: { max_seats: 9 } });
+  failed(await h.bridge(cwdArgs), M.configInvalid(`modules.${module}.complex`, M.requiredOverSeats(3, 2)));
+  // 必选数等于上限可以；项目调低到必选数以下要报错
+  c.dispatch.max_seats = 3; h.config(c);
+  assert.equal(output(await h.bridge(cwdArgs)).effective.dispatch.max_seats, 3);
+  h.write('.claude/foreman.json', { dispatch: { max_seats: 2 } });
+  failed(await h.bridge(cwdArgs), M.projectSeatsBelowRequired(2, `modules.${module}.complex`, 3));
+  // 项目把这一格关掉后没有必选了，调低照常生效
+  h.write('.claude/foreman.json', { dispatch: { max_seats: 2 }, modules: { [module]: { complex: 'claude code' } } });
+  assert.equal(output(await h.bridge(cwdArgs)).effective.dispatch.max_seats, 2);
+});
+
 for (const [module, cell, reason] of [['unknown', 'simple', M.invalid.module], ['image', 'complex', M.invalid.imageCell], ['run', 'draw', M.invalid.level]]) test(`拒绝未知模块或格子 ${module}.${cell}`, async (t) => {
   const h = sandbox(t); h.config({ modules: { [module]: { [cell]: null } } });
   failed(await h.bridge(['config']), M.configInvalid(module === 'unknown' ? 'modules.unknown' : `modules.${module}.${cell}`, reason));

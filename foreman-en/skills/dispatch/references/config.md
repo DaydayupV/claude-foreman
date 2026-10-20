@@ -164,6 +164,7 @@ How image tasks go out: before work starts on each new graphic deliverable, Clau
 - To hand one task to several seats, Claude first creates a dispatch plan (`plan`); the script checks that every required agent has a seat and that the seats don't exceed `dispatch.max_seats`, and then each seat is started. A single-seat handoff is refused when the cell has another required agent.
 - When a required agent is at its parallel limit, its seat waits until a slot frees up. When a required agent fails, runs out of quota or is cancelled, the task counts as incomplete; another candidate doesn't stand in for it.
 - `run`, `generate` and `draw` hand work to one executor at a time, so each of these cells can have at most one required entry.
+- In discussion and review cells, required entries can't outnumber `dispatch.max_seats`: a plan needs a seat for every required agent and can't go over the limit, so with more required entries than that no plan can be created, and loading the config fails right away. Remove some `required` marks or raise `max_seats`. The same error comes up when a project config lowers `max_seats` below a cell's required count (cells the project closes don't count).
 
 ### Effort
 `effort` can be left out, which means the tool's or model's own default. What it takes depends on the type:

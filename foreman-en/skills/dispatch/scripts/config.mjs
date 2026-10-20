@@ -66,6 +66,7 @@ const ROUTE_CELLS = { 1: ['generate'], 2: ['generate', 'draw'], 3: ['generate', 
 // 出图声明和两项检测接口齐全，才可以接 generate 格子。
 const canGenerate = (adapter) => adapter.capabilities.images === true && typeof adapter.images?.list === 'function' && typeof adapter.images?.calls === 'function';
 const cellList = (value) => Array.isArray(value) ? value : isObject(value) ? [value] : [];
+const requiredCount = (value) => cellList(value).filter((item) => item.required).length;
 function eachCell(modules) {
   return Object.entries(MODULE_CELLS).flatMap(([module, cells]) => cells.filter((cell) => Object.hasOwn(modules?.[module] || {}, cell))
     .map((cell) => ({ module, cell, key: `modules.${module}.${cell}`, value: modules[module][cell] })));
@@ -341,7 +342,10 @@ function validateConfig(cfg, adapters, fail = die) {
       check(item.effort === undefined || (adapter.efforts ? adapter.efforts.includes(item.effort) : item.effort === null || text(item.effort)), `${at}.effort`, adapter.efforts?.join(' / ') || why.apiEffort);
       check(item.required === undefined || typeof item.required === 'boolean', `${at}.required`, why.boolean);
     }
-    if (module === 'run' || module === 'image') check(cellList(value).filter((item) => item.required).length <= 1, key, why.oneRequired);
+    const required = requiredCount(value);
+    if (module === 'run' || module === 'image') check(required <= 1, key, why.oneRequired);
+    // 计划要给每个必选各留一席，又不能超过 max_seats，必选多于上限时建不出计划。
+    else check(required <= cfg.dispatch.max_seats, key, M.requiredOverSeats(required, cfg.dispatch.max_seats));
   }
 }
 
@@ -412,6 +416,12 @@ function projectConfig(cfg, project, adapters) {
     } else ignored.push(key);
   }
   if (ignored.length) notice(M.projectIgnored(M.list(ignored)));
+  const seats = allowed.dispatch?.max_seats;
+  if (seats < cfg.dispatch.max_seats) {
+    for (const { key, value } of eachCell(mergeConfig(cfg, allowed).modules)) {
+      if (requiredCount(value) > seats) die(M.projectSeatsBelowRequired(seats, key, requiredCount(value)));
+    }
+  }
   return allowed;
 }
 
