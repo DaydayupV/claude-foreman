@@ -1,18 +1,18 @@
 
-<TIME> ┌ fake-api（API，effort high）
-      │ 讨论 · 合成b · 等级 complex
-      │ 工作目录 <CWD>
-      │ 记录目录 <HOME>/r/b
+<TIME> ┌ fake-api · API · effort high
+      │ discuss · 合成b · level complex
+      │ Working dir <CWD>
+      │ Run dir <HOME>/r/b
       │
-<TIME> ◆ 请求已发出：模型 fake-api，推理强度 high
-<TIME> ⋯ 服务繁忙，请求在排队，还没开始处理
-<TIME> ◆ 排队 1 秒后开始处理
-<TIME> ◆ 思考了 1 秒（4 字），开始输出回答
+<TIME> ◆ Request sent: model fake-api, effort high
+<TIME> ⋯ Service busy; the request is queued and hasn't started
+<TIME> ◆ Started after 1s in the queue
+<TIME> ◆ Thought for 1s (4 characters), now writing the answer
       │
-<TIME> └ ✔ 完成 · 用时 3 秒
-        token：输入 120（缓存 25%），输出 40
+<TIME> └ ✔ done · took 3s
+        tokens: in 120 (cached 25%) · out 40
 
   先建立回归测试，再拆模块
 
-遗留问题
+Open issues
   · 模块边界待确认

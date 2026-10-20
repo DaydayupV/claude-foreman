@@ -7,6 +7,7 @@ import { sandbox, taskArgs, output, failed, json, poll, write, baseConfig, apiAg
 import { sessionStats, usage, discussion } from './fixtures/reports.mjs';
 import { apiServer } from './fake/api-server.mjs';
 const M = MESSAGES.zh;
+const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
 
 test('取消的来源照实写：cancel 命令、实时查看里按 x、旧版的终止标记', async (t) => {
   const h = sandbox(t);
@@ -91,7 +92,7 @@ test('组视图和 status --group 写出计划完不完整、缺了哪个必选'
   const incomplete = await makePlan(h, 'plan-incomplete');
   seat(h, '20000101-a', incomplete, 1, 'codex', 'cancelled', { status: 'cancelled', errors: [M.runCancelled('fake-codex', 'command')] });
   seat(h, '20000101-b', incomplete, 2, 'oc', 'done', { status: 'done', report: discussion });
-  const line = M.watchPlanState(incomplete.plan_id, 'incomplete', M.watchPlanMissing(M.watchPlanSeat('codex', 1, M.statusName('cancelled'))));
+  const line = D.watchPlanState(incomplete.plan_id, 'incomplete', D.watchPlanMissing(D.watchPlanSeat('codex', 1, D.statusName('cancelled'))));
   const watched = await h.bridge(['watch', '--group', 'plan-incomplete']);
   assert.equal(watched.code, 0); assert.ok(watched.stdout.includes(line), watched.stdout);
   const status = await h.bridge(['status', '--group', 'plan-incomplete']);
@@ -100,12 +101,12 @@ test('组视图和 status --group 写出计划完不完整、缺了哪个必选'
   const pending = await makePlan(h, 'plan-pending');
   seat(h, '20000102-a', pending, 2, 'oc', 'done', { status: 'done', report: discussion });
   const waiting = await h.bridge(['status', '--group', 'plan-pending']);
-  assert.ok(waiting.stdout.includes(M.watchPlanState(pending.plan_id, 'pending', M.watchPlanNotStarted(M.watchPlanSeat('codex', 1, null)))), waiting.stdout);
+  assert.ok(waiting.stdout.includes(D.watchPlanState(pending.plan_id, 'pending', D.watchPlanNotStarted(D.watchPlanSeat('codex', 1, null)))), waiting.stdout);
 
   const complete = await makePlan(h, 'plan-complete');
   seat(h, '20000103-a', complete, 1, 'codex', 'done', { status: 'done', report: discussion });
   const done = await h.bridge(['status', '--group', 'plan-complete']);
-  assert.ok(done.stdout.includes(M.watchPlanState(complete.plan_id, 'complete', '')), done.stdout);
+  assert.ok(done.stdout.includes(D.watchPlanState(complete.plan_id, 'complete', '')), done.stdout);
 });
 
 test('项目配置关掉的格子，建计划和启动席位都说明是项目配置关的', async (t) => {

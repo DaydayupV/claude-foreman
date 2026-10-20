@@ -6,6 +6,7 @@ import { sandbox, taskArgs, output, poll, seedRun, expected, json, read, MESSAGE
 import { command } from './fixtures/reports.mjs';
 import { watchRecords, watchText } from './fixtures/watch.mjs';
 const M = MESSAGES.zh;
+const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
 
 test('status 列表按记录排序并汇总当前会话的组', async (t) => {
   const h = sandbox(t);
@@ -21,7 +22,7 @@ test('status 列表按记录排序并汇总当前会话的组', async (t) => {
   assert.ok(group.stdout.includes('20000101-a'));
   assert.ok(group.stdout.includes('20000101-b'));
   assert.ok(!group.stdout.includes('20000101-c'));
-  assert.ok(group.stdout.endsWith(`${M.groupSummary(2, 0, 1, 1)}\n`));
+  assert.ok(group.stdout.endsWith(`${D.groupSummary(2, 0, 1, 1)}\n`));
   assert.deepEqual(output(await h.bridge(['status', '--run', '20000101-b'])), { status: 'failed' });
 });
 
@@ -32,7 +33,7 @@ test('status 对正在运行的任务给出当前命令和活动时间', async (
   await poll(() => h.events(meta.id).some((e) => e.type === 'item.started'), '命令开始事件');
   const status = output(await h.bridge(['status', '--run', meta.id]));
   assert.equal(status.status, 'running');
-  assert.equal(status.activity.step, M.stepCommand('node -e "0"'));
+  assert.equal(status.activity.step, D.stepCommand('node -e "0"'));
   assert.equal(typeof status.activity.idle_min, 'number');
   assert.ok(status.activity.idle_min >= 0);
   output(await h.bridge(['cancel', '--run', meta.id]));
@@ -80,5 +81,5 @@ test('组汇总里交回问题后已续接的任务记作已续接，结果看�
   seedRun(h, '20000101-ask', { group: 'resumed-group' }, { status: 'done', needs_decision: true, report: { status: 'blocked' } });
   seedRun(h, '20000101-answer', { group: 'resumed-group', parent: '20000101-ask' }, { status: 'done', report: { status: 'completed' } });
   const r = await h.bridge(['status', '--group', 'resumed-group']);
-  assert.ok(r.stdout.endsWith(`${M.groupSummary(2, 0, 1, 0, 0, 1)}\n`));
+  assert.ok(r.stdout.endsWith(`${D.groupSummary(2, 0, 1, 0, 0, 1)}\n`));
 });

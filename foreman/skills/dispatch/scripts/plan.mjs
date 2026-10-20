@@ -4,7 +4,8 @@ import path from 'node:path';
 import { ENTRY, USER_CONFIG, MODULE_CELLS, resolveAgentAlias, resolveProfile, validatePlan } from './config.mjs';
 import { RUNS_ROOT, CLAUDE_SESSION, listRuns, readMeta, runOutcome } from './records.mjs';
 import { validateReviewMaterial } from './review-scope.mjs';
-import { M, LANGUAGE, die, need, resolveDir } from './util.mjs';
+import { M, die, need, resolveDir } from './util.mjs';
+import { D } from './format.mjs';
 
 // 读不到时返回 null，不退出进程：实时查看里计划文件被删了也要接着显示。
 function loadPlan(id) {
@@ -135,14 +136,14 @@ function describePlans(runs) {
     const plan = loadPlan(id);
     if (!plan) return [];
     const { state, missing_required: missing, seats: statuses } = planStatus(id, runs, plan);
-    const seats = (list, label) => M.list(list.map((s) => M.watchPlanSeat(s.agent, s.seat, label(s))));
+    const seats = (list, label) => D.list(list.map((s) => D.watchPlanSeat(s.agent, s.seat, label(s))));
     const ended = missing.filter((s) => !['not_started', 'running'].includes(s.status));
     const waiting = missing.filter((s) => s.status === 'not_started');
-    const detail = state === 'incomplete' && ended.length ? M.watchPlanMissing(seats(ended, (s) => (s.status === 'done' ? M.watchPlanNoResult : M.statusName(s.status))))
-      : state === 'pending' && waiting.length ? M.watchPlanNotStarted(seats(waiting, () => null)) : '';
+    const detail = state === 'incomplete' && ended.length ? D.watchPlanMissing(seats(ended, (s) => (s.status === 'done' ? D.watchPlanNoResult : D.statusName(s.status))))
+      : state === 'pending' && waiting.length ? D.watchPlanNotStarted(seats(waiting, () => null)) : '';
     const stale = statuses.filter((s) => s.stale === true);
-    const details = [detail, stale.length ? M.watchPlanStale(seats(stale, () => null)) : ''].filter(Boolean).join(LANGUAGE === 'en' ? '; ' : '；');
-    return [{ id, state, text: M.watchPlanState(id, state, details) }];
+    const details = [detail, stale.length ? D.watchPlanStale(seats(stale, () => null)) : ''].filter(Boolean).join('; ');
+    return [{ id, state, text: D.watchPlanState(id, state, details) }];
   });
 }
 

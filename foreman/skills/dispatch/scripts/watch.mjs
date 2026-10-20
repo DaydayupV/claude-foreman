@@ -3,48 +3,49 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { RUNS_ROOT, requestCancel, listRuns, findRun, readMeta, isRunning, runEnd, runOutcome, groupTally, groupRuns } from './records.mjs';
 import { describePlans } from './plan.mjs';
-import { M, die, sleep, clip, oneLine, plainCommand, RECONNECT, isReconnect, modelOf, whoOf, agentTypeOf, needsDecision, charWidth, textWidth, fitWidth, wrapWidth, usageLine } from './util.mjs';
+import { M, die, sleep, clip, oneLine, plainCommand, RECONNECT, isReconnect, modelOf, agentTypeOf, needsDecision, charWidth, textWidth, fitWidth, wrapWidth } from './util.mjs';
+import { D, TEST_SCREEN, termCols, termRows, C, plain, visibleWidth, shortModel, fullModel, modelLabel, clock, took, outcomeStyle, changedFor,
+  usageLine, commandAction, foldText, thoughtLine, paintPlanWord, replayCommand } from './format.mjs';
 import { avatarFor, introScene, playIntro } from './watch-intro.mjs';
 
-const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
-// 能画实时画面的终端：输出到终端，而且不是 TERM=dumb 这种不认光标控制的终端
-const liveCapable = () => process.stdout.isTTY && process.env.TERM !== 'dumb';
-// 结果里的改动数只算有证据是 Codex 改的；旧记录没有归属信息，按全部改动算。
-// 改名前的记录里，归属到协作方的改动数叫 codex_total。
-// 改动数包括有证据的和协作方自报的；改名前的记录里叫 codex_total。
-const agentTotal = (c) => (c?.agent_total == null && c?.codex_total == null ? undefined : (c.agent_total ?? c.codex_total) + (c.reported_total || 0));
-const changedText = (c) => (c?.available ? M.watchChanged(agentTotal(c) ?? c.files_total, agentTotal(c) == null ? 0 : c.unknown_total) : M.watchNotTracked);
-const paint = (code) => (s) => (useColor ? `\x1b[${code}m${s}\x1b[0m` : s);
-// 讨论和审查本来只读，只有真的改了文件才显示改动数（那是越界，要提醒）。
-const changedFor = (r, m) => (m?.kind === 'exec' || agentTotal(r?.changes) ? changedText(r?.changes) : null);
-const C = { dim: paint('2'), bold: paint('1'), red: paint('31'), green: paint('32'), yellow: paint('33'), cyan: paint('36') };
-// 实时画面里的用时写成 12:03，结束后的用时由 M.duration 写成「19 分 18 秒」
-const clock = (ms) => {
-  const s = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
-  return `${h ? `${h}:${String(m).padStart(2, '0')}` : m}:${String(s % 60).padStart(2, '0')}`;
-};
+// 能画实时画面的终端：输出到终端，而且不是 TERM=dumb 这种不认光标控制的终端（测试用 FOREMAN_TEST_SCREEN 模拟）
+const liveCapable = () => (process.stdout.isTTY && process.env.TERM !== 'dumb') || !!TEST_SCREEN;
 const hhmm = (t) => (t ? new Date(t).toTimeString().slice(0, 5) : '     ');
-// 执行顺利结束时以报告里的状态为准（完成、部分完成、等待决定……）
-const shownStatus = (status, r) => (status === 'done' ? r?.needs_decision ? 'blocked' : r?.report?.status || status : status);
 // 成功的任务不再列出临时的重连提示；旧记录把它记成了错误
 const realErrors = (r, ok) => (r?.errors || []).filter((e) => !(ok && isReconnect(e)));
 const SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+// 运行中的状态词（运行中、思考中、排队中……）用青色，后面的计数和提示用暗色
+const paintLead = (text, word, color = C.cyan) => (word && text.startsWith(word) ? color(word) + C.dim(text.slice(word.length)) : C.dim(text));
+// 结束后的状态：记号和状态词上色，后面的用时、改动和审查期间材料变了的提醒用暗色（和组面板标题行右侧一致）
+function finishedParts(o, durationS, changed, stale) {
+  const { mark, color, word } = outcomeStyle(o);
+  const tail = [took(durationS), changed, stale && D.watchStale].filter(Boolean).join(' · ');
+  const rest = tail ? C.dim(` · ${tail}`) : '';
+  return { mark: color(mark), word: color(word), rest, line: (bold = false) => (bold ? C.bold : plain)(color(`${mark} ${word}`)) + rest };
+}
+// 结果里没有用时的旧记录，按元数据的开始和结束时间算
+const durationOf = (r, m) => r.duration_s ?? (Date.parse(m?.ended_at) - Date.parse(m?.started_at)) / 1000;
+// 只有结果文件时的状态（时间线和详细模式的结尾）：和 records.mjs 的 runOutcome 判断一致
+function resultOutcome(r) {
+  const blocked = r.status === 'needs_input' || r.status === 'done' && (!!r.needs_decision || r.report?.status === 'blocked');
+  return { running: false, status: r.status, result: r, blocked, ok: !blocked && r.status === 'done' && (!r.report?.status || r.report.status === 'completed') };
+}
 
-// 图像任务的标题用格子和路线代替等级，时间线和详细模式共用。
+// 标题行用原词写模式和等级；图像任务用格子和路线代替等级，时间线和详细模式共用。
 function headerLines(meta, id, dir) {
-  const lines = M.watchHeaderLines(M.modeNames[meta.mode] || meta.mode, meta.title || id, meta.level, meta.cwd, dir);
-  if (meta.module === 'image') lines[0] = M.watchImageHead(M.modeNames[meta.mode === 'resume' ? 'resume' : 'image'], meta.title || id, meta.cell, '①②③④'[meta.route - 1]);
+  const lines = D.watchHeaderLines(meta.mode, meta.title || id, meta.level, meta.cwd, dir, fullModel(meta));
+  if (meta.module === 'image') lines[0] = D.watchImageHead(meta.mode === 'resume' ? 'resume' : 'image', meta.title || id, meta.cell, '①②③④'[meta.route - 1]);
   return lines;
 }
 
 function reviewConclusion(report) {
-  if (!M.watchReview[report?.verdict]) return null;
+  if (!D.watchReview[report?.verdict]) return null;
   const findings = report.findings || [];
   const parts = ['high', 'medium', 'low'].map((severity) => {
     const n = findings.filter((f) => f.severity === severity).length;
-    return n ? `${M.severityNames[severity]} ${n}` : null;
+    return n ? `${D.severityNames[severity]} ${n}` : null;
   }).filter(Boolean).join(' · ');
-  return M.watchReview[report.verdict](findings.length, parts);
+  return D.watchReview[report.verdict](findings.length, parts);
 }
 
 async function pickWatchRun(ref) {
@@ -56,10 +57,10 @@ async function pickWatchRun(ref) {
     if (running) return findRun(running);
     if (waited >= 15000) {
       if (!ids[0]) die(M.noRuns);
-      process.stdout.write(`${M.watchFallback}\n`);
+      process.stdout.write(`${D.watchFallback}\n`);
       return findRun(ids[0]);
     }
-    if (waited === 0) process.stdout.write(`${M.watchWaiting}\n`);
+    if (waited === 0) process.stdout.write(`${D.watchWaiting}\n`);
     await sleep(500);
   }
 }
@@ -71,43 +72,44 @@ function verboseRenderer(meta, rel) {
   const out = (sym, text, ts) => process.stdout.write(`${ts ? new Date(ts).toTimeString().slice(0, 8) : live ? new Date().toTimeString().slice(0, 8) : '        '} ${sym} ${text}\n`);
   const header = (id, dir) => {
     const [first, ...rest] = headerLines(meta, id, dir);
-    process.stdout.write(`\n${C.bold(`${whoOf(meta)} · ${first}`)}\n${C.dim(rest.join('\n'))}\n\n`);
+    process.stdout.write(`\n${C.bold(`${modelLabel(meta)} · ${first}`)}\n${C.dim(rest.join('\n'))}\n\n`);
   };
   const show = (ev) => {
     const it = ev.item || {};
     const o = (sym, text) => out(sym, text, ev.ts);
     if (ev.type === 'item.completed' && it.type === 'command_execution' && !commands.has(it.id)) show({ ...ev, type: 'item.started' });
-    if (ev.type === 'thread.started') o('●', M.watchSession(ev.thread_id));
-    else if (ev.type === 'turn.failed') o('✗', M.watchTurnFailed(ev.error?.message || ''));
+    if (ev.type === 'thread.started') o('●', D.watchSession(ev.thread_id));
+    else if (ev.type === 'turn.failed') o('✗', D.watchTurnFailed(ev.error?.message || ''));
     else if (ev.type === 'error') {
       const re = RECONNECT.exec(ev.message || '');
-      o('⚠', re ? M.watchReconnect(re[1], re[2]) : clip(oneLine(ev.message), 300));
+      o('⚠', re ? D.watchReconnect(re[1], re[2]) : clip(oneLine(ev.message), 300));
     } else if (ev.type === 'turn.completed' && ev.usage) {
-      o('Σ', M.watchTokens(ev.usage));
+      o('Σ', D.watchTokens(ev.usage));
     } else if (ev.type === 'image.generated') {
-      o('▣', M.watchImage(ev.path));
+      o('▣', D.watchImage(ev.path));
     } else if (ev.type === 'image.viewed') {
-      o('◉', M.watchImageViewed(ev.path));
+      o('◉', D.watchImageViewed(ev.path));
     } else if (ev.type === 'item.started' && it.type === 'command_execution') {
       commands.add(it.id);
-      o('▶', clip(oneLine(plainCommand(it.command)), 240));
+      const action = commandAction(it);
+      o(action.kind === 'command' ? '▶' : '·', clip(action.kind === 'command' ? oneLine(plainCommand(it.command)) : action.text, 240));
     } else if (ev.type === 'item.completed') {
       if (it.type === 'agent_message') {
         const t = it.text.trim();
         let report = null;
         if (t.startsWith('{')) try { report = JSON.parse(t); } catch { /* 普通消息 */ }
         if (report?.verdict) o('■', reviewConclusion(report));
-        else if (report?.position) o('■', M.watchOpinion(clip(oneLine(report.position), 400)));
-        else if (report?.status) o('■', M.watchReport(report.status, clip(oneLine(report.summary), 300)));
+        else if (report?.position) o('■', D.watchOpinion(clip(oneLine(report.position), 400)));
+        else if (report?.status) o('■', D.watchReport(D.statusName(report.status), clip(oneLine(report.summary), 300)));
         else o('💬', clip(oneLine(t), 600));
       } else if (it.type === 'reasoning') {
         o('…', clip(oneLine(it.text), 200));
       } else if (it.type === 'command_execution') {
         commands.delete(it.id);
         const lines = String(it.aggregated_output || '').replace(/\r/g, '').split('\n').map((x) => x.trimEnd()).filter(Boolean);
-        o(it.exit_code === 0 ? '✓' : '✗', M.watchExit(it.exit_code, lines.length ? clip(lines.slice(-3).join(' ⏎ '), 240) : ''));
+        o(it.exit_code === 0 ? '✓' : '✗', D.watchExit(it.exit_code, lines.length ? clip(lines.slice(-3).join(' ⏎ '), 240) : ''));
       } else if (it.type === 'file_change') {
-        for (const c of it.changes || []) o('✎', `${M.fileKinds[c.kind] || c.kind} ${rel(c.path)}`);
+        for (const c of it.changes || []) o('✎', `${D.fileKinds[c.kind] || c.kind} ${rel(c.path)}`);
       } else if (it.type === 'error') {
         if (!/^Under-development features enabled/.test(it.message)) o('⚠', clip(oneLine(it.message), 300));
       } else if (it.type === 'web_search') {
@@ -121,11 +123,10 @@ function verboseRenderer(meta, rel) {
   };
   const finish = (r, m) => {
     if (r) {
-      const blocked = r.status === 'needs_input' || shownStatus(r.status, r) === 'blocked';
-      const text = M.watchFinished(M.statusName(shownStatus(r.status, r)), M.duration(r.duration_s), changedFor(r, m)) + (r.stale === true ? ` · ${M.watchStale}` : '');
-      out(blocked ? C.yellow('?') : '■', blocked ? C.yellow(text) : text, m?.ended_at);
+      const f = finishedParts(resultOutcome(r), durationOf(r, m), changedFor(r, m), r.stale === true);
+      out(f.mark, f.word + f.rest, m?.ended_at);
     }
-    else out('■', m?.status === 'running' ? M.watchInterrupted : M.watchEnded(m?.status), m?.ended_at);
+    else out(C.red('✗'), m?.status === 'running' ? D.watchInterrupted : D.watchEnded(m?.status), m?.ended_at);
     const usage = usageLine(r, m);
     if (usage) out('Σ', usage, m?.ended_at);
   };
@@ -138,11 +139,11 @@ function apiVerboseRenderer(meta, rel) {
   const show = (ev) => {
     if (!ev.type?.startsWith('api.')) return base.show(ev);
     const out = (text) => process.stdout.write(`${ev.ts ? new Date(ev.ts).toTimeString().slice(0, 8) : '        '} ${text}\n`);
-    if (ev.type === 'api.request') out(M.watchApiRequest(ev.model, ev.effort, ev.attempt));
+    if (ev.type === 'api.request') out(D.watchApiRequest(ev.model, ev.effort, ev.attempt));
     else if (ev.type === 'api.reasoning' || ev.type === 'api.content') out(ev.text);
-    else if (ev.type === 'api.queued') out(M.watchApiQueuedLive(clock(ev.waited_s * 1000)));
-    else if (ev.type === 'api.retry') out(M.watchApiRetry(ev.reason, ev.wait_s));
-    else if (ev.type === 'api.repair') out(M.watchApiRepair(M.list(ev.errors)));
+    else if (ev.type === 'api.queued') out(D.watchApiQueuedLive(clock(ev.waited_s * 1000)));
+    else if (ev.type === 'api.retry') out(D.watchApiRetry(ev.reason, ev.wait_s));
+    else if (ev.type === 'api.repair') out(D.watchApiRepair(D.list(ev.errors)));
     else if (ev.type === 'api.error') out(ev.message);
   };
   return { ...base, show };
@@ -156,8 +157,8 @@ function liveScreen(render, { wheel = false } = {}) {
   let timer = null;
   const draw = () => {
     if (!active) return;
-    const rows = process.stdout.rows || 30;
-    const lines = render(process.stdout.columns || 100, rows).slice(0, rows);
+    const rows = termRows();
+    const lines = render(termCols(), rows).slice(0, rows);
     let out = '';
     lines.forEach((l, i) => { out += `\x1b[${i + 1};1H\x1b[2K${l}`; });
     if (lines.length < rows) out += `\x1b[${lines.length + 1};1H\x1b[J`;
@@ -195,18 +196,17 @@ const LEAVE_SCREEN = '\x1b[0m\x1b[?7h\x1b[?25h\x1b[?1049l';
 const kindOf = (m) => m.kind || (m.mode === 'discuss' ? 'discuss' : m.mode === 'review' ? 'review' : 'exec');
 const introWanted = (o, metas, loadCfg) => liveCapable() && !process.env.NO_COLOR && !o['no-intro']
   && metas.some((m) => isRunning(m) && !m.parent) && loadCfg(metas[0].cwd).dispatch.intro !== false;
-const introOf = (m) => ({ key: avatarFor(m.model_name ?? m.model, agentTypeOf(m)), model: modelOf(m), who: whoOf(m) });
+const introOf = (m) => ({ key: avatarFor(m.model_name ?? m.model, agentTypeOf(m)), model: shortModel(modelOf(m)), who: modelLabel(m) });
 
 // 把一段键盘输入拆成单个按键（方向键、翻页键是 ESC 开头的一串）
 const splitKeys = (s) => s.match(/\x1b\[[0-9;]*[A-Za-z~]|\x1bO[A-Za-z]|[\s\S]/g) || [];
 
-// 简洁模式（默认）：时间线。左边一列是时间，模型说的话是节点（◆），命令、搜索、改动挂在竖线下面，
+// 简洁模式（默认）：时间线。左边一列是时间，模型说的话是节点（◆），命令、读文件、搜索、改动挂在竖线下面，
 // 失败的命令才显示输出。长段文字按宽度折行，接在竖线后面。
-// 任务还在运行时，时间线画在备用屏幕里：最后一行是状态行（用时、命令数、改动数、计划进度），
-// 窗口大小变化时整屏按新宽度重新排版，可以用方向键和翻页键往回翻；结束或退出查看时，
-// 把完整的时间线写进普通屏幕留作记录。任务已经结束时直接按当前宽度输出。
+// 任务还在运行时，时间线画在备用屏幕里：最后一行是状态行（用时、命令数、改动数、计划进度），有思考摘要时
+// 正文末尾跟一行最近一条思考的第一行；窗口大小变化时整屏按新宽度重新排版，可以用方向键和翻页键往回翻；
+// 结束或退出查看时，把完整的时间线写进普通屏幕留作记录。任务已经结束时直接按当前宽度输出。
 function timelineRenderer(meta, rel, { screen: useScreen = false, dir = null } = {}) {
-  const cols = () => process.stdout.columns || 100;
   const TIME_W = 6; // "00:41 "
   const inner = (W) => Math.max(20, W - 1 - TIME_W - 2);
   const rail = () => `${' '.repeat(TIME_W)}${C.dim('│')} `;
@@ -226,32 +226,65 @@ function timelineRenderer(meta, rel, { screen: useScreen = false, dir = null } =
     const e = { render: renderEntry, width: null, lines: null };
     entries.push(e);
     lastCommand = null;
-    if (!screen) for (const l of linesOf(e, cols())) process.stdout.write(`${l}\n`);
+    if (!screen) for (const l of linesOf(e, termCols())) process.stdout.write(`${l}\n`);
   };
 
-  // 一个节点：第一行带时间和符号，其余行接在竖线后面；篇幅超过 maxLines 行的折叠
-  const say = (ts, mark, text, color = (s) => s, maxLines = 20) => {
+  // 一个节点：第一行带时间和记号，其余行接在竖线后面；篇幅超过 maxLines 行的折叠
+  const say = (ts, mark, text, maxLines = 20) => {
     const t = at(ts);
     add((W) => {
       const lines = wrapWidth(String(text).trim(), inner(W));
-      const out = lines.slice(0, maxLines).map((l, i) => (i === 0 ? node(t, mark) : rail()) + color(l));
-      if (lines.length > maxLines) out.push(rail() + C.dim(M.watchMoreLines(lines.length - maxLines)));
+      const out = lines.slice(0, maxLines).map((l, i) => (i === 0 ? node(t, mark) : rail()) + l);
+      if (lines.length > maxLines) out.push(rail() + C.dim(D.watchMoreLines(lines.length - maxLines)));
       return out;
     });
   };
-  // 挂在竖线下的一行，超长截断
-  const sub = (text, color = C.dim) => add((W) => [rail() + color(fitWidth(text, inner(W)))]);
+  // 挂在竖线下的一行，超长截断。动作默认用暗色；mark 是行首单独上色的记号，比如失败的 ✗
+  const sub = (text, { color = C.dim, mark = null, indent = 2 } = {}) => add((W) => {
+    const room = Math.max(4, inner(W) - indent - (mark ? textWidth(mark[0]) + 1 : 0));
+    return [`${rail()}${' '.repeat(indent)}${mark ? `${mark[1](mark[0])} ` : ''}${color(fitWidth(text, room))}`];
+  });
 
-  // 连续的命令只显示前几条，其余折叠成一行；折叠里的命令失败了照样显示。
-  const MAX_COMMANDS = 3;
-  let shownCommands = 0;
-  const commands = new Map(); // item id → 命令文字
-  const folded = new Set(); // 折叠起来的命令 id
-  const flushFolded = () => {
-    if (folded.size) sub(`  ${M.watchFoldedCommands(folded.size)}`);
-    folded.clear();
+  // 一段动作（两句话之间的命令、读文件、搜索）只显示前几条，其余折叠成一行，按种类计数；折叠里失败的照样显示。
+  // 直接输出时，这一段结束才写折叠行；实时画面里折叠行一出现就占好位置，之后再折叠的跟着更新计数。
+  const MAX_ACTIONS = 3;
+  let shownActions = 0;
+  const actions = new Map(); // item id → { kind, text }
+  const folded = new Map(); // 直接输出时这一段折叠起来的 id → 种类，段尾写一行
+  const foldedIn = new Map(); // 实时画面里折叠起来的 id → 它所在的折叠行
+  let foldLine = null; // 实时画面里正在累计的折叠行
+  const countOf = (ids) => {
+    const counts = {};
+    for (const kind of ids.values()) counts[kind] = (counts[kind] || 0) + 1;
+    return counts;
   };
-  const newBlock = () => { flushFolded(); shownCommands = 0; };
+  const fold = (id, kind) => {
+    if (!screen) { folded.set(id, kind); return; }
+    if (!foldLine) {
+      const entry = { width: null, lines: null, ids: new Map() };
+      // 里面的都失败了、单独显示了的时候，折叠行不占行
+      entry.render = (W) => (entry.ids.size ? [`${rail()}  ${C.dim(fitWidth(foldText(countOf(entry.ids)), inner(W) - 2))}`] : []);
+      entries.push(entry);
+      foldLine = entry;
+    }
+    foldLine.ids.set(id, kind);
+    foldLine.width = null;
+    foldedIn.set(id, foldLine);
+    lastCommand = null;
+  };
+  // 命令失败了要单独显示：从折叠行里拿出来，之后再折叠的另起一行，免得计数写在失败的命令上面
+  const unfold = (id) => {
+    folded.delete(id);
+    const entry = foldedIn.get(id);
+    if (entry) { entry.ids.delete(id); entry.width = null; foldedIn.delete(id); }
+    foldLine = null;
+  };
+  const flushFolded = () => {
+    if (folded.size) sub(foldText(countOf(folded)));
+    folded.clear();
+    foldLine = null;
+  };
+  const newBlock = () => { flushFolded(); shownActions = 0; };
   let lastPlan = '';
   let lastFile = '';
 
@@ -259,16 +292,17 @@ function timelineRenderer(meta, rel, { screen: useScreen = false, dir = null } =
     if (!screen) process.stdout.write('\n');
     const lines = headerLines(meta, id, dir);
     add((W) => [
-      node(meta.started_at, C.cyan('┌')) + C.bold(fitWidth(whoOf(meta), inner(W))),
-      ...lines.map((l, i) => rail() + (i ? C.dim(fitWidth(l, inner(W))) : fitWidth(l, inner(W)))),
+      node(meta.started_at, C.dim('┌')) + C.bold(fitWidth(modelLabel(meta), inner(W))),
+      ...lines.map((l, i) => rail() + (i ? C.dim : C.bold)(fitWidth(l, inner(W)))),
       rail().trimEnd(),
     ]);
   };
 
-  // ---- 状态行、翻看 ----
+  // ---- 状态行、思考摘要、翻看 ----
   const started = Date.parse(meta.started_at);
-  const stats = { commands: 0, searches: 0, files: new Set(), plan: null, latest: '' };
+  const stats = { commands: 0, reads: 0, searches: 0, files: new Set(), plan: null, latest: '' };
   const api = { req: null, chars: 0, answerChars: 0, answering: false, queued: false };
+  let thought = null; // 最近一条思考摘要的第一行，只在实时画面里显示，说话后清掉
   let tick = 0;
   let ticker = null;
   let offset = 0; // 往回翻了多少行，0 表示跟着最新的内容
@@ -277,26 +311,30 @@ function timelineRenderer(meta, rel, { screen: useScreen = false, dir = null } =
   let cancelSent = false;
   let lastTotal = 0;
   let lastWidth = 0;
+  // 状态行：模型名加粗，状态词（运行中、思考中、排队中）青色，其余暗色；先按宽度截断再上色
   function statusLine(W) {
     const room = W - 3;
     const spin = C.cyan(SPIN[tick % SPIN.length]);
-    const main = `${modelOf(meta)} · ${api.queued
-      ? M.watchApiQueuedLive(clock(Date.now() - Date.parse(api.req)))
-      : api.req
-      ? M.watchApiLive(api.answering, clock(Date.now() - Date.parse(api.req)), (api.answering ? api.answerChars : api.chars).toLocaleString('en-US'))
-      : M.watchLive({ time: clock(Date.now() - started), commands: stats.commands, searches: stats.searches, files: stats.files.size, plan: stats.plan })}`;
-    if (cancelSent) return `${spin} ${C.yellow(fitWidth(`${main} · ${M.watchCancelSent}`, room))}`;
-    if (confirmCancel) return `${spin} ${C.yellow(fitWidth(M.watchCancelConfirm(modelOf(meta)), room))}`;
-    if (offset) return `${spin} ${C.yellow(fitWidth(`${main} · ${M.watchScrolled(offset)}`, room))}`;
-    const text = main + (stats.latest && !api.req ? ` · ${stats.latest}` : '');
-    const hint = api.queued && dir ? M.watchKeysQueued : M.watchKeys;
-    if (textWidth(main) + textWidth(hint) + 2 > room) return `${spin} ${C.dim(fitWidth(text, room))}`;
+    const model = shortModel(modelOf(meta));
+    const word = api.queued ? D.apiPhases.queued : api.req ? D.apiPhases[api.answering ? 'answering' : 'thinking'] : D.statusName('running');
+    const state = api.queued ? D.watchApiQueuedLive(clock(Date.now() - Date.parse(api.req)))
+      : api.req ? D.watchApiLive(api.answering, clock(Date.now() - Date.parse(api.req)), (api.answering ? api.answerChars : api.chars).toLocaleString('en-US'))
+      : D.dots([`${word} ${clock(Date.now() - started)}`, ...D.liveCounts({ commands: stats.commands, reads: stats.reads, searches: stats.searches, files: stats.files.size, plan: stats.plan })]);
+    const main = D.dots([model, state]);
+    if (cancelSent) return `${spin} ${C.yellow(fitWidth(D.dots([main, D.watchCancelSent]), room))}`;
+    if (confirmCancel) return `${spin} ${C.yellow(fitWidth(D.watchCancelConfirm(model), room))}`;
+    if (offset) return `${spin} ${C.yellow(fitWidth(D.dots([main, D.watchScrolled(offset)]), room))}`;
+    const text = D.dots([main, !api.req && stats.latest]);
+    const styled = (body) => (body.startsWith(`${model} · `) ? C.bold(model) + C.dim(' · ') + paintLead(body.slice(model.length + 3), word) : C.bold(body));
+    const hint = api.queued && dir ? D.watchKeysQueued : D.watchKeys;
+    if (textWidth(main) + textWidth(hint) + 2 > room) return `${spin} ${styled(fitWidth(text, room))}`;
     const body = fitWidth(text, room - textWidth(hint) - 2);
-    return `${spin} ${C.dim(body)}${' '.repeat(room - textWidth(body) - textWidth(hint))}${C.dim(hint)}`;
+    return `${spin} ${styled(body)}${' '.repeat(room - textWidth(body) - textWidth(hint))}${C.dim(hint)}`;
   }
   function render(W, H) {
     const all = entries.flatMap((e) => linesOf(e, W));
-    const room = Math.max(1, H - 1);
+    const thinking = thought ? [`${rail()}  ${C.dim(fitWidth(D.watchThinking(thought), inner(W) - 2))}`] : [];
+    const room = Math.max(1, H - 1 - thinking.length);
     // 往回翻着的时候来了新内容，画面停在原处不动
     if (offset && W === lastWidth) offset += all.length - lastTotal;
     lastTotal = all.length;
@@ -304,10 +342,10 @@ function timelineRenderer(meta, rel, { screen: useScreen = false, dir = null } =
     offset = Math.max(0, Math.min(offset, all.length - room));
     const end = all.length - offset;
     const body = all.slice(Math.max(0, end - room), end);
-    return [...body, ...Array(room - body.length).fill(''), statusLine(W)];
+    return [...body, ...thinking, ...Array(room - body.length).fill(''), statusLine(W)];
   }
   const onKeys = (d) => {
-    const page = Math.max(1, (process.stdout.rows || 30) - 2);
+    const page = Math.max(1, termRows() - 2);
     for (const k of splitKeys(d.toString('utf8'))) {
       if (k === '\x03' || k === 'q') { detach(k === '\x03' ? 130 : 0); return; }
       if ((k === 'x' || k === 'X') && api.queued && dir && !cancelSent) {
@@ -336,27 +374,27 @@ function timelineRenderer(meta, rel, { screen: useScreen = false, dir = null } =
     screen = null;
     if (process.stdin.isTTY) { process.stdin.off('data', onKeys); process.stdin.setRawMode(false); process.stdin.pause(); }
     process.stdout.write('\n');
-    for (const e of entries) for (const l of linesOf(e, cols())) process.stdout.write(`${l}\n`);
+    for (const e of entries) for (const l of linesOf(e, termCols())) process.stdout.write(`${l}\n`);
   };
   // 按 q 或 Ctrl+C 退出查看，任务照常运行
   const detach = (code) => {
     stopLive();
-    process.stdout.write(`${C.dim(M.watchDetached)}\n`);
+    process.stdout.write(`${C.dim(D.watchDetached)}\n`);
     process.exit(code);
   };
 
   const showApi = (ev) => {
     if (ev.type === 'api.request') {
       Object.assign(api, { req: ev.ts, begin: null, chars: 0, answerChars: 0, answering: false, queued: false });
-      say(ev.ts, C.cyan('◆'), M.watchApiRequest(ev.model, ev.effort, ev.attempt));
+      say(ev.ts, '◆', D.watchApiRequest(ev.model, ev.effort, ev.attempt));
     } else if (ev.type === 'api.queued') {
       // 服务繁忙，请求在排队：只在第一次记一笔，状态行显示已经等了多久
-      if (!api.queued) say(ev.ts, C.yellow('⋯'), M.watchApiQueued, C.yellow, 1);
+      if (!api.queued) say(ev.ts, C.yellow('⋯'), D.watchApiQueued, 1);
       api.queued = true;
     } else if ((ev.type === 'api.reasoning' || ev.type === 'api.content') && api.queued) {
       api.queued = false;
       api.begin = ev.ts;
-      say(ev.ts, C.cyan('◆'), M.watchApiDequeued(M.duration((Date.parse(ev.ts) - Date.parse(api.req)) / 1000)));
+      say(ev.ts, '◆', D.watchApiDequeued(D.duration((Date.parse(ev.ts) - Date.parse(api.req)) / 1000)));
       showApi(ev);
     } else if (ev.type === 'api.reasoning') {
       api.chars = ev.total_chars;
@@ -365,59 +403,64 @@ function timelineRenderer(meta, rel, { screen: useScreen = false, dir = null } =
       if (!api.answering) {
         api.answering = true;
         const thought = (Date.parse(ev.ts) - Date.parse(api.begin || api.req)) / 1000; // 排过队的从开始处理算起
-        say(ev.ts, C.cyan('◆'), api.chars ? M.watchApiThought(M.duration(thought), api.chars.toLocaleString('en-US')) : M.watchApiAnswering);
+        say(ev.ts, '◆', api.chars ? D.watchApiThought(D.duration(thought), api.chars.toLocaleString('en-US')) : D.watchApiAnswering);
       }
       api.answerChars = ev.total_chars;
-    } else if (ev.type === 'api.retry') say(ev.ts, C.yellow('⚠'), M.watchApiRetry(ev.reason, ev.wait_s), C.yellow, 3);
-    else if (ev.type === 'api.repair') say(ev.ts, C.yellow('⚠'), M.watchApiRepair(M.list(ev.errors)), C.yellow, 3);
+    } else if (ev.type === 'api.retry') say(ev.ts, C.yellow('⚠'), D.watchApiRetry(ev.reason, ev.wait_s), 3);
+    else if (ev.type === 'api.repair') say(ev.ts, C.yellow('⚠'), D.watchApiRepair(D.list(ev.errors)), 3);
     else if (ev.type === 'api.error' && ev.kind === 'cancelled') { /* 用户终止，结尾那行会写明 */ }
-    else if (ev.type === 'api.error' && ev.kind === 'busy') say(ev.ts, C.yellow('⚠'), M.watchApiDropped(M.duration(ev.waited_s || 0)), C.yellow, 2);
-    else if (ev.type === 'api.error') say(ev.ts, C.red('✗'), oneLine(ev.message), C.red, 3);
+    else if (ev.type === 'api.error' && ev.kind === 'busy') say(ev.ts, C.yellow('⚠'), D.watchApiDropped(D.duration(ev.waited_s || 0)), 2);
+    else if (ev.type === 'api.error') say(ev.ts, C.red('✗'), oneLine(ev.message), 3);
   };
 
   const show = (ev) => {
     if (ev.type?.startsWith('api.')) { showApi(ev); return; }
     const it = ev.item || {};
     // 只有完成事件的工具调用，也要补出命令行供时间线显示。
-    if (ev.type === 'item.completed' && it.type === 'command_execution' && !commands.has(it.id)) show({ ...ev, type: 'item.started' });
+    if (ev.type === 'item.completed' && it.type === 'command_execution' && !actions.has(it.id)) show({ ...ev, type: 'item.started' });
     if (ev.type === 'turn.failed' || ev.type === 'error') {
       newBlock();
       const msg = ev.error?.message || ev.message || '';
       const re = RECONNECT.exec(msg);
-      if (re) say(ev.ts, C.yellow('⚠'), M.watchReconnect(re[1], re[2]), C.yellow, 1);
-      else say(ev.ts, C.red('✗'), oneLine(msg), C.red, 3);
+      if (re) say(ev.ts, C.yellow('⚠'), D.watchReconnect(re[1], re[2]), 1);
+      else say(ev.ts, C.red('✗'), oneLine(msg), 3);
     } else if (ev.type === 'image.generated') {
       flushFolded();
-      sub(`  ▣ ${M.watchImage(path.basename(ev.path))}`, C.green);
+      sub(`▣ ${D.watchImage(path.basename(ev.path))}`);
     } else if (ev.type === 'image.viewed') {
       flushFolded();
-      sub(`  ◉ ${M.watchImageViewed(path.basename(ev.path))}`);
+      sub(`◉ ${D.watchImageViewed(path.basename(ev.path))}`);
     } else if (ev.type === 'item.started' && it.type === 'command_execution') {
-      const text = oneLine(plainCommand(it.command));
-      commands.set(it.id, text);
-      stats.latest = `$ ${text}`;
-      if (shownCommands < MAX_COMMANDS) { sub(`  $ ${text}`); lastCommand = it.id; shownCommands++; } else folded.add(it.id);
+      const action = commandAction(it);
+      actions.set(it.id, action);
+      if (action.kind === 'command') stats.latest = action.text; // 状态行写最近一条命令；读文件和搜索已经在计数里
+      if (shownActions < MAX_ACTIONS) { sub(action.text); lastCommand = it.id; shownActions++; } else fold(it.id, action.kind);
     } else if (ev.type === 'item.completed') {
       if (it.type === 'agent_message') {
         const t = it.text.trim();
         if (t.startsWith('{')) { try { JSON.parse(t); return; } catch { /* 普通消息 */ } } // 最终报告在结束时单独显示
         newBlock();
         stats.latest = '';
-        say(ev.ts, C.cyan('◆'), t);
+        thought = null;
+        say(ev.ts, '◆', t);
+      } else if (it.type === 'reasoning') {
+        thought = thoughtLine(it.text) || thought;
       } else if (it.type === 'command_execution') {
-        stats.commands++;
+        const action = actions.get(it.id) ?? commandAction(it);
+        stats[action.kind === 'read' ? 'reads' : action.kind === 'search' ? 'searches' : 'commands']++;
         if (it.exit_code === 0 || it.exit_code == null) return;
         const lines = String(it.aggregated_output || '').replace(/\r/g, '').split('\n').map((x) => x.trim()).filter(Boolean);
-        folded.delete(it.id);
-        if (lastCommand !== it.id && commands.has(it.id)) sub(`  $ ${commands.get(it.id)}`);
-        sub(`    ✗ ${M.watchExit(it.exit_code, lines.length ? lines.slice(-2).join(' ⏎ ') : '')}`, C.red);
+        const tail = lines.length ? lines.slice(-2).join(' ⏎ ') : '';
+        unfold(it.id);
+        if (lastCommand !== it.id) sub(action.text);
+        sub(action.kind === 'command' ? D.watchExit(it.exit_code, tail) : D.watchToolFailed(tail), { color: plain, mark: ['✗', C.red], indent: 4 });
       } else if (it.type === 'file_change') {
         flushFolded();
         for (const c of it.changes || []) {
           stats.files.add(c.path);
-          const line = `  ✎ ${M.fileKinds[c.kind] || c.kind} ${rel(c.path)}`;
+          const line = `✎ ${D.fileKinds[c.kind] || c.kind} ${rel(c.path)}`;
           if (line === lastFile) continue; // 同一个文件连着改几次只显示一行
-          sub(line, C.green);
+          sub(line);
           lastFile = line;
         }
       } else if (it.type === 'todo_list') {
@@ -429,18 +472,18 @@ function timelineRenderer(meta, rel, { screen: useScreen = false, dir = null } =
         lastPlan = plan;
         newBlock();
         const t = at(ev.ts);
-        add(() => [node(t, C.yellow('◇')) + C.yellow(M.watchPlan(done, items.length))]);
-        for (const x of items) sub(`  ${x.completed ? '✔' : '○'} ${x.text}`, x.completed ? C.dim : (s) => s);
+        add(() => [node(t, '◇') + D.watchPlan(done, items.length)]);
+        for (const x of items) sub(`${x.completed ? '✔' : '○'} ${x.text}`, { color: x.completed ? C.dim : plain });
       } else if (it.type === 'web_search') {
         const q = oneLine(it.query);
         if (!q) return;
         stats.searches++;
         stats.latest = `◎ ${q}`;
         flushFolded();
-        sub(`  ◎ ${q}`);
+        sub(`◎ ${q}`);
       } else if (it.type === 'error' && !/^Under-development features enabled/.test(it.message)) {
         newBlock();
-        say(ev.ts, C.yellow('⚠'), oneLine(it.message), C.yellow, 3);
+        say(ev.ts, C.yellow('⚠'), oneLine(it.message), 3);
       }
     }
   };
@@ -449,7 +492,7 @@ function timelineRenderer(meta, rel, { screen: useScreen = false, dir = null } =
     flushFolded();
     stopLive();
     live = false;
-    const W = cols();
+    const W = termCols();
     const write = (s = '') => process.stdout.write(`${s}\n`);
     // 结论按原文换行输出，超长的行交给终端自动折行；篇幅按约 maxLines 屏幕行估算，超出的折叠。
     const paragraph = (text, indent, maxLines) => {
@@ -462,26 +505,24 @@ function timelineRenderer(meta, rel, { screen: useScreen = false, dir = null } =
         budget -= Math.max(textWidth(l), 1);
         shown++;
       }
-      if (shown < lines.length) write(indent + C.dim(M.watchMoreLines(lines.length - shown)));
+      if (shown < lines.length) write(indent + C.dim(D.watchMoreLines(lines.length - shown)));
     };
     write(rail().trimEnd());
     if (!r) {
-      write(node(m?.ended_at, C.red('└')) + (m?.status === 'running' ? C.red(M.watchInterrupted) : M.watchEnded(m?.status)));
+      write(node(m?.ended_at, C.dim('└')) + (m?.status === 'running' ? `${C.red('✗')} ${D.watchInterrupted}` : D.watchEnded(m?.status)));
       return;
     }
-    const blocked = r.status === 'needs_input' || r.status === 'done' && (r.needs_decision || r.report?.status === 'blocked');
-    const ok = !blocked && r.status === 'done' && (!r.report?.status || r.report.status === 'completed');
-    const color = ok ? C.green : blocked ? C.yellow : C.red;
-    write(node(m?.ended_at, color('└')) + color(C.bold(`${ok ? '✔' : blocked ? '?' : '✗'} ${M.watchFinished(M.statusName(shownStatus(r.status, r)), M.duration(r.duration_s), changedFor(r, m))}${r.stale === true ? ` · ${M.watchStale}` : ''}`)));
+    const o = resultOutcome(r);
+    write(node(m?.ended_at, C.dim('└')) + finishedParts(o, durationOf(r, m), changedFor(r, m), r.stale === true).line(true));
     const usage = usageLine(r, m);
     if (usage) write(' '.repeat(TIME_W + 2) + C.dim(usage));
     const summary = r.report?.summary || r.report?.position;
     const conclusion = reviewConclusion(r.report);
     if (conclusion) {
       write(); paragraph(conclusion, '  ', 12);
-      for (const f of r.report.findings || []) paragraph(M.watchFinding(f, M.severityNames[f.severity]), '  ', 4);
+      for (const f of r.report.findings || []) paragraph(D.watchFinding(f, D.severityNames[f.severity]), '  ', 4);
       if (r.report.unverified?.length) {
-        write(); write(C.yellow(M.watchUnverified));
+        write(); write(C.bold(D.watchUnverified));
         for (const x of r.report.unverified) paragraph(`· ${x}`, '  ', 4);
       }
     }
@@ -489,28 +530,28 @@ function timelineRenderer(meta, rel, { screen: useScreen = false, dir = null } =
     const issues = r.report?.open_issues || r.report?.open_questions || [];
     if (issues.length) {
       write();
-      write(C.yellow(M.watchOpenIssues));
+      write(C.bold(D.watchOpenIssues));
       for (const x of issues) paragraph(`· ${x}`, '  ', 4);
     }
     const asks = r.questions?.filter(needsDecision) ?? r.report?.decision_requests ?? [];
     if (asks.length) {
       write();
-      write(C.yellow(M.watchDecisions));
+      write(C.bold(D.watchDecisions));
       for (const d of asks) {
-        const prefix = d.source === 'permission_denied' ? M.watchDeniedPrefix : d.source === 'input_prompt' ? M.watchInputPromptPrefix : '';
+        const prefix = d.source === 'permission_denied' ? D.watchDeniedPrefix : d.source === 'input_prompt' ? D.watchInputPromptPrefix : '';
         paragraph(`· ${prefix}${d.question}`, '  ', 6);
-        for (const o of d.options || []) paragraph(`- ${o}`, '    ', 3);
-        if (d.recommendation) paragraph(M.watchRecommendation(d.recommendation), '    ', 4);
+        for (const opt of d.options || []) paragraph(`- ${opt}`, '    ', 3);
+        if (d.recommendation) paragraph(D.watchRecommendation(d.recommendation), '    ', 4);
       }
     }
     const midRun = (r.questions || []).filter((q) => q.source === 'asked_mid_run');
     if (midRun.length) {
       write();
-      write(C.yellow(M.watchAskedMidRun));
+      write(C.bold(D.watchAskedMidRun));
       for (const q of midRun) write(`  · ${fitWidth(oneLine(q.question), W - 5)}`);
     }
-    for (const e of realErrors(r, ok)) write(r.status === 'needs_input'
-      ? C.yellow(`? ${fitWidth(oneLine(e), W - 3)}`) : C.red(`✗ ${fitWidth(oneLine(e), W - 3)}`));
+    for (const e of realErrors(r, o.ok)) write(r.status === 'needs_input'
+      ? `${C.yellow('?')} ${fitWidth(oneLine(e), W - 3)}` : `${C.red('✗')} ${fitWidth(oneLine(e), W - 3)}`);
   };
 
   const goLive = () => {
@@ -525,67 +566,75 @@ function timelineRenderer(meta, rel, { screen: useScreen = false, dir = null } =
   return { header, show, finish, goLive };
 }
 
-// 组视图里每个任务的信息流：从 events.jsonl 增量读取，整理成简短的条目，只留最近的一些；
-// 同时记下命令数和 API 的思考进度，放在每块的标题行右侧。
+// 组视图里每个任务的信息流：从 events.jsonl 增量读取。最近说的一段话和最近一条思考摘要单独记着，固定显示在每一块的顶上；
+// 其余是动作（命令、读文件、搜索、改文件、图片，以及请求、排队、出错这些提示），只留最近的一些，按种类计数，放不下时折叠。
+// 同时记下命令、读文件、搜索的次数和 API 的思考进度，放在每块的标题行右侧。API 的思考原文不在面板里显示，
+// 用 watch --run <run_id> --verbose 看。
 function createFeed(run) {
   const cwd = run.meta.cwd;
   const rel = (p) => { const r = path.relative(cwd, p); return r && !r.startsWith('..') && !path.isAbsolute(r) ? r : p; };
   const file = path.join(run.dir, 'events.jsonl');
   const decoder = new TextDecoder('utf-8');
-  const items = []; // { text, style, clip }：clip 的条目只占一行，超出截断；其余按面板宽度折行
-  const stats = { commands: 0, api: false, req: null, chars: 0, answerChars: 0, answering: false, queued: false };
+  const stats = { commands: 0, reads: 0, searches: 0, req: null, chars: 0, answerChars: 0, answering: false, queued: false };
+  // actions 的每一条：{ kind, text, mark: [记号, 颜色] | null, color }；kinds 是全部动作按种类的个数，包括已经丢掉的
+  const feed = { speech: null, thought: null, actions: [], kinds: {}, stats };
   let offset = 0;
   let buf = '';
-  let thinking = null; // API 的思考内容一直追加在同一条里
-  const commands = new Set();
-  const push = (text, style, clip = true) => {
-    items.push({ text, style, clip });
-    if (items.length > 40) items.splice(0, items.length - 40);
+  let seq = 0; // 说话和思考的先后
+  const byId = new Map(); // 工具调用 id → 动作，失败时补上 ✗
+  const warn = (text) => ({ kind: 'other', text, mark: ['⚠', C.yellow], color: plain });
+  const push = (entry) => {
+    feed.actions.push(entry);
+    feed.kinds[entry.kind] = (feed.kinds[entry.kind] || 0) + 1;
+    if (feed.actions.length > 60) feed.actions.splice(0, feed.actions.length - 60);
+    return entry;
   };
   const take = (ev) => {
     const it = ev.item || {};
-    if (ev.type === 'item.completed' && it.type === 'command_execution' && !commands.has(it.id)) take({ ...ev, type: 'item.started' });
+    if (ev.type === 'item.completed' && it.type === 'command_execution' && !byId.has(it.id)) take({ ...ev, type: 'item.started' });
     if (ev.type === 'api.request') {
-      Object.assign(stats, { api: true, req: ev.ts, chars: 0, answerChars: 0, answering: false, queued: false });
-      thinking = null;
-      push(M.watchApiRequest(ev.model, ev.effort, ev.attempt), 'dim');
+      Object.assign(stats, { req: ev.ts, chars: 0, answerChars: 0, answering: false, queued: false });
+      push({ kind: 'other', text: D.watchApiRequest(ev.model, ev.effort, ev.attempt) });
     } else if (ev.type === 'api.queued') {
-      if (!stats.queued) push(`⋯ ${M.watchApiQueued}`, 'yellow');
+      if (!stats.queued) push({ kind: 'other', text: D.watchApiQueued, mark: ['⋯', C.yellow], color: plain });
       stats.queued = true;
     } else if (ev.type === 'api.reasoning') {
       stats.queued = false;
       stats.chars = ev.total_chars;
-      if (!thinking) { thinking = { text: '', style: 'dim', clip: false }; items.push(thinking); }
-      thinking.text = (thinking.text + ev.text).slice(-3000);
     } else if (ev.type === 'api.content') {
       // 回答是 JSON 报告，不逐字展示，进度在标题行右侧
       stats.queued = false;
       stats.answering = true;
       stats.answerChars = ev.total_chars;
-    } else if (ev.type === 'api.retry') push(M.watchApiRetry(ev.reason, ev.wait_s), 'yellow');
-    else if (ev.type === 'api.repair') push(M.watchApiRepair(M.list(ev.errors)), 'yellow');
+    } else if (ev.type === 'api.retry') push(warn(D.watchApiRetry(ev.reason, ev.wait_s)));
+    else if (ev.type === 'api.repair') push(warn(D.watchApiRepair(D.list(ev.errors))));
     else if (ev.type === 'api.error' && ev.kind === 'cancelled') stats.queued = false;
-    else if (ev.type === 'api.error' && ev.kind === 'busy') { stats.queued = false; push(`⚠ ${M.watchApiDropped(M.duration(ev.waited_s || 0))}`, 'yellow'); }
+    else if (ev.type === 'api.error' && ev.kind === 'busy') { stats.queued = false; push(warn(D.watchApiDropped(D.duration(ev.waited_s || 0)))); }
     else if (ev.type === 'api.error' || ev.type === 'turn.failed' || ev.type === 'error') {
       const msg = oneLine(ev.message || ev.error?.message || '');
       const re = RECONNECT.exec(msg);
-      push(re ? `⚠ ${M.watchReconnect(re[1], re[2])}` : `✗ ${msg}`, re ? 'yellow' : 'red');
-    } else if (ev.type === 'image.generated') push(`▣ ${M.watchImage(path.basename(ev.path))}`, 'green');
-    else if (ev.type === 'image.viewed') push(`◉ ${M.watchImageViewed(path.basename(ev.path))}`, 'dim');
-    else if (ev.type === 'item.started' && it.type === 'command_execution') { commands.add(it.id); push(`$ ${oneLine(plainCommand(it.command))}`, 'dim'); }
+      push(re ? warn(D.watchReconnect(re[1], re[2])) : { kind: 'other', text: msg, mark: ['✗', C.red], color: plain });
+    } else if (ev.type === 'image.generated') push({ kind: 'image', text: `▣ ${D.watchImage(path.basename(ev.path))}` });
+    else if (ev.type === 'image.viewed') push({ kind: 'image', text: `◉ ${D.watchImageViewed(path.basename(ev.path))}` });
+    else if (ev.type === 'item.started' && it.type === 'command_execution') byId.set(it.id, push(commandAction(it)));
     else if (ev.type === 'item.completed') {
       if (it.type === 'agent_message') {
         const t = it.text.trim();
         if (t.startsWith('{')) { try { JSON.parse(t); return; } catch { /* 普通消息 */ } } // 最终报告在任务结束后显示
-        push(t, null, false);
+        if (t) feed.speech = { text: t, seq: ++seq };
+      } else if (it.type === 'reasoning') {
+        const line = thoughtLine(it.text);
+        if (line) feed.thought = { text: line, seq: ++seq };
       } else if (it.type === 'command_execution') {
-        commands.delete(it.id);
-        stats.commands++;
-        if (it.exit_code !== 0 && it.exit_code != null) push(`  ${M.watchExit(it.exit_code, '')}`, 'red');
-      } else if (it.type === 'file_change') for (const c of it.changes || []) push(`✎ ${M.fileKinds[c.kind] || c.kind} ${rel(c.path)}`, 'green');
-      else if (it.type === 'web_search') { if (oneLine(it.query)) push(`◎ ${oneLine(it.query)}`, 'dim'); }
-      else if (it.type === 'todo_list') push(M.watchPlan((it.items || []).filter((x) => x.completed).length, (it.items || []).length), 'yellow');
-      else if (it.type === 'error' && !/^Under-development features enabled/.test(it.message)) push(`⚠ ${oneLine(it.message)}`, 'yellow');
+        const action = byId.get(it.id) ?? commandAction(it);
+        stats[action.kind === 'read' ? 'reads' : action.kind === 'search' ? 'searches' : 'commands']++;
+        if (it.exit_code !== 0 && it.exit_code != null) action.mark = ['✗', C.red];
+      } else if (it.type === 'file_change') for (const c of it.changes || []) push({ kind: 'edit', text: `✎ ${D.fileKinds[c.kind] || c.kind} ${rel(c.path)}` });
+      else if (it.type === 'web_search') {
+        const q = oneLine(it.query);
+        if (q) { stats.searches++; push({ kind: 'search', text: `◎ ${q}` }); }
+      } else if (it.type === 'todo_list') push({ kind: 'other', text: `◇ ${D.watchPlan((it.items || []).filter((x) => x.completed).length, (it.items || []).length)}`, color: plain });
+      else if (it.type === 'error' && !/^Under-development features enabled/.test(it.message)) push(warn(oneLine(it.message)));
     }
   };
   const read = () => {
@@ -606,37 +655,74 @@ function createFeed(run) {
       take(ev);
     }
   };
-  return { read, items, stats };
+  feed.read = read;
+  return feed;
 }
 
-// 组视图一块的标题：第一行左边是模型，右边是状态和用时（结束后加上改动），放不下右侧时只留左侧。
-// 同组标题各不相同时（比如角色讨论、拆开的执行任务），第二行写这一块的标题，续接的讨论后面写上第几轮
-function panelHead(run, stats, width, withTitle) {
-  const { running, status, result: r, ok, blocked } = runOutcome(run);
+// 组视图一块的标题：第一行左边是状态记号和模型标签，右边是状态词和用时（结束后加上改动、运行中加上计数）。
+// 模型标签尽量写全：右侧放不下时先截短右侧；最终汇总（wrap）里改成把右侧写到下一行。窗口太窄时只留左侧。
+// 同组标题各不相同时（比如角色讨论、拆开的执行任务），再写一行这一块的标题，续接的讨论后面写上第几轮
+function panelHead(run, stats, width, withTitle, { wrap = false } = {}) {
+  const o = runOutcome(run);
+  const { running, result: r } = o;
   const m = run.meta;
   const elapsed = runEnd(run.dir, m) - Date.parse(m.started_at);
-  const color = running ? C.cyan : ok ? C.green : blocked ? C.yellow : C.red;
-  const left = `${running ? '●' : ok ? '✔' : blocked ? '?' : '✗'} ${whoOf(m)}`;
+  const { mark, color, word: status } = outcomeStyle(o);
   const s = stats;
-  const right = !running ? [M.statusName(shownStatus(status, r)), M.duration(r?.duration_s ?? elapsed / 1000), changedFor(r, m), r?.stale === true ? M.watchStale : null].filter(Boolean).join(' · ')
-    : s.queued ? M.watchApiQueuedLive(clock(Date.now() - Date.parse(s.req)))
-    : s.req ? M.watchApiLive(s.answering, clock(elapsed), (s.answering ? s.answerChars : s.chars).toLocaleString('en-US'))
-    : [M.statusName('running'), clock(elapsed), s.commands ? M.panelCommands(s.commands) : ''].filter(Boolean).join(' · ');
-  let first;
-  if (textWidth(right) + 16 > width) first = color(C.bold(fitWidth(left, width)));
-  else {
-    const l = fitWidth(left, width - textWidth(right) - 2);
-    first = color(C.bold(l)) + ' '.repeat(width - textWidth(l) - textWidth(right)) + C.dim(right);
-  }
-  if (!withTitle || !m.title) return [first];
+  // 右侧先拼成纯文字，截短之后再上色：开头的状态词上色，其余暗色
+  const [word, right] = !running ? [status, D.dots([status, took(r?.duration_s ?? elapsed / 1000), changedFor(r, m), r?.stale === true && D.watchStale])]
+    : s.queued ? [D.apiPhases.queued, D.watchApiQueuedLive(clock(Date.now() - Date.parse(s.req)))]
+    : s.req ? [D.apiPhases[s.answering ? 'answering' : 'thinking'], D.watchApiLive(s.answering, clock(Date.now() - Date.parse(s.req)), (s.answering ? s.answerChars : s.chars).toLocaleString('en-US'))]
+    : [status, D.dots([`${status} ${clock(elapsed)}`, ...D.liveCounts({ commands: s.commands, reads: s.reads, searches: s.searches })])];
+  const paintRight = (text) => paintLead(text, word, running ? C.cyan : color);
+  const label = modelLabel(m);
+  const room = width - 2 - textWidth(label) - 2; // 模型标签写全时右侧还剩的宽度
+  const line = (l, text) => `${color(mark)} ${C.bold(l)}${' '.repeat(Math.max(1, width - 2 - textWidth(l) - textWidth(text)))}${paintRight(text)}`;
+  const lines = [];
+  if (textWidth(right) <= room) lines.push(line(label, right));
+  else if (wrap) lines.push(`${color(mark)} ${C.bold(fitWidth(label, width - 2))}`, `  ${paintRight(fitWidth(right, width - 2))}`);
+  else if (room >= textWidth(word) + 8) lines.push(line(label, fitWidth(right, room)));
+  else if (textWidth(right) + 16 <= width) lines.push(line(fitWidth(label, width - textWidth(right) - 4), right));
+  else lines.push(`${color(mark)} ${C.bold(fitWidth(label, width - 2))}`);
+  if (!withTitle || !m.title) return lines;
   const title = oneLine(m.title);
-  // 标题以全角右括号结尾时（比如"多角色模式［边界清单员］"），括号本身带留白，"·"前不再加空格
-  const gap = /[）］】》〉」』]$/.test(title) ? '' : ' ';
-  const round = m.round > 1 && !title.includes(M.watchRound(m.round)) ? `${gap}· ${M.watchRound(m.round)}` : '';
-  return [first, color(fitWidth(`  ${title}${round}`, width))];
+  const round = m.round > 1 && !title.includes(D.watchRound(m.round)) ? D.watchRound(m.round) : '';
+  return [...lines, `  ${C.bold(fitWidth(D.dots([title, round]), width - 2))}`];
 }
 
-// 组视图的一块：标题行加固定行数的正文。运行中显示最新的信息流，结束后显示结论。
+// 运行中的一块正文：顶上是最近说的一段话（◆，最多 2 行）和比它新的思考摘要，下面是最近的动作，最新的在最下面；
+// 放不下的动作折叠成第一行的"… 另有 N 条命令"，只剩一行时折叠计数和最新一条写在同一行。
+// 行数不够时先省掉思考摘要，再把说的话压成 1 行。
+function liveBody(feed, rows, inner) {
+  if (rows <= 0) return [];
+  const speech = feed.speech ? wrapWidth(feed.speech.text, inner - 2).filter((l) => l.trim()) : [];
+  const acting = feed.actions.length ? 1 : 0;
+  const thinking = feed.thought && (!feed.speech || feed.thought.seq > feed.speech.seq) && Math.min(2, speech.length) + 1 + acting <= rows ? 1 : 0;
+  const speechRows = Math.min(speech.length, 2, Math.max(speech.length ? 1 : 0, rows - thinking - acting));
+  const top = [];
+  if (speechRows) {
+    const more = speech.length > speechRows;
+    top.push(`◆ ${speechRows === 1 && more ? fitWidth(`${speech[0]} ${speech[1]}`, inner - 2) : speech[0]}`);
+    if (speechRows === 2) top.push(`  ${more ? fitWidth(`${speech[1]} ${speech[2]}`, inner - 2) : speech[1]}`);
+  }
+  if (thinking) top.push(C.dim(fitWidth(D.watchThinking(feed.thought.text), inner)));
+  const room = rows - top.length;
+  if (room <= 0 || !feed.actions.length) return top;
+  // lead 是写在同一行前面的折叠计数（只剩一行时用）
+  const line = (a, lead = '') => {
+    const head = `${lead ? C.dim(`${lead} · `) : ''}${a.mark ? `${a.mark[1](a.mark[0])} ` : ''}`;
+    return head + (a.color || C.dim)(fitWidth(a.text, Math.max(4, inner - visibleWidth(head))));
+  };
+  const total = Object.values(feed.kinds).reduce((n, k) => n + k, 0);
+  if (total <= room) return [...top, ...feed.actions.slice(-room).map((a) => line(a))];
+  const shown = feed.actions.slice(feed.actions.length - Math.max(1, room - 1));
+  const hidden = { ...feed.kinds };
+  for (const a of shown) hidden[a.kind]--;
+  if (room === 1) return [...top, line(shown[0], foldText(hidden, false))];
+  return [...top, C.dim(fitWidth(foldText(hidden, false), inner)), ...shown.map((a) => line(a))];
+}
+
+// 组视图的一块：标题行加固定行数的正文。运行中显示最近说的话和动作，结束后显示结论。
 function panelLines(run, feed, rows, width, withTitle) {
   const { running, result: r, ok } = runOutcome(run);
   const head = panelHead(run, feed.stats, width, withTitle);
@@ -646,39 +732,36 @@ function panelLines(run, feed, rows, width, withTitle) {
   const final = conclusion || r?.report?.position || r?.report?.summary;
   const errors = realErrors(r, ok);
   if (!running && (final || errors.length)) {
-    if (final) body = wrapWidth(conclusion || M.watchOpinion(final.trim()), inner).map((l) => ({ l }));
-    for (const e of errors) body.push({ l: fitWidth(`${r.status === 'needs_input' ? '?' : '✗'} ${oneLine(e)}`, inner), style: r.status === 'needs_input' ? 'yellow' : 'red' });
+    if (final) body = wrapWidth(conclusion || D.watchOpinion(final.trim()), inner);
+    for (const e of errors) body.push(`${r.status === 'needs_input' ? C.yellow('?') : C.red('✗')} ${fitWidth(oneLine(e), inner - 2)}`);
     body = body.slice(0, rows);
   } else {
-    for (const item of feed.items) {
-      const lines = item.clip ? [fitWidth(item.text, inner)] : wrapWidth(item.text.trim(), inner);
-      for (const l of lines) body.push({ l, style: item.style });
-    }
-    body = body.slice(-rows);
-    if (!body.length && running) body.push({ l: M.noEvents, style: 'dim' });
+    body = liveBody(feed, rows, inner);
+    if (!body.length && running && rows > 0) body.push(C.dim(D.noEvents));
   }
-  while (body.length < rows) body.push({ l: '' });
-  return [...head, ...body.map(({ l, style }) => `  ${style ? C[style](l) : l}`)];
+  while (body.length < rows) body.push('');
+  return [...head, ...body.map((l) => (l ? `  ${l}` : ''))];
 }
 
 // 组的标题行右侧：运行中、完成、失败各几个，为 0 的不写
 function groupCounts(all) {
   const { running, ok, blocked, failed, resumed } = groupTally(all);
-  return [running && C.cyan(M.groupCount.running(running)), ok && C.green(M.groupCount.ok(ok)), resumed && C.dim(M.groupCount.resumed(resumed)), blocked && C.yellow(M.groupCount.blocked(blocked)), failed && C.red(M.groupCount.failed(failed))].filter(Boolean).join(C.dim(' · '));
+  return [running && C.cyan(D.groupCount.running(running)), ok && C.green(D.groupCount.ok(ok)), resumed && C.dim(D.groupCount.resumed(resumed)), blocked && C.yellow(D.groupCount.blocked(blocked)), failed && C.red(D.groupCount.failed(failed))].filter(Boolean).join(C.dim(' · '));
 }
 
-// 组的标题行：左边是组名和标题，右边是各状态的个数，放不下右侧时只留左侧
-// 组里属于派发计划的任务：每份计划一行，写明完整、进行中还是不完整、缺了哪个必选。实时面板截成一行，最终汇总折行写全。
+// 组里属于派发计划的任务：每份计划一行，写明完整、进行中还是不完整、缺了哪个必选，只给状态词上色。
+// 实时面板截成一行，最终汇总折行写全。
 function planLines(all, width, wrap = false) {
   return describePlans(all).flatMap(({ state, text }) => (wrap ? wrapWidth(text, width) : [fitWidth(text, width)])
-    .map((line) => (state === 'complete' ? C.green : state === 'incomplete' ? C.red : C.dim)(line)));
+    .map((line, i) => (i === 0 ? paintPlanWord(line, state) : line)));
 }
 
+// 组的标题行：左边是组名和标题（默认色加粗），右边是各状态的个数，放不下右侧时只留左侧
 function groupHeadLine(group, title, all, width) {
   const counts = groupCounts(all);
-  const countsW = textWidth(counts.replace(/\x1b\[[0-9;]*m/g, ''));
-  if (countsW + 14 > width) return C.bold(fitWidth(M.groupHeader(group, title, all.length), width));
-  const left = fitWidth(M.groupHeader(group, title, all.length), width - countsW - 2);
+  const countsW = visibleWidth(counts);
+  if (countsW + 14 > width) return C.bold(fitWidth(D.groupHeader(group, title, all.length), width));
+  const left = fitWidth(D.groupHeader(group, title, all.length), width - countsW - 2);
   return C.bold(left) + ' '.repeat(width - textWidth(left) - countsW) + counts;
 }
 
@@ -695,7 +778,7 @@ async function watchGroup(group, o, loadCfg) {
     // 找到的一批都已结束时多等几秒：可能是别的会话用过的同名组，新派出的任务还没登记
     if (runs.some((run) => isRunning(run.meta)) || (runs.length && waited >= 5000)) break;
     if (waited >= 15000) die(M.groupNotFound(group));
-    if (waited === 0 && !runs.length) process.stdout.write(`${M.watchWaiting}\n`);
+    if (waited === 0 && !runs.length) process.stdout.write(`${D.watchWaiting}\n`);
     await sleep(500);
   }
   // 启动动画：画出组里新派出的各位，播放中后登记的任务也会出场；结束后接着用备用屏幕画实时面板
@@ -742,7 +825,7 @@ async function watchGroup(group, o, loadCfg) {
     if (titles.size !== 1) return '';
     const rounds = new Set(all.map((run) => run.meta.round ?? null));
     const round = rounds.size === 1 ? [...rounds][0] : null;
-    return [[...titles][0], round > 1 ? M.watchRound(round) : ''].filter(Boolean).join(' · ');
+    return [[...titles][0], round > 1 ? D.watchRound(round) : ''].filter(Boolean).join(' · ');
   };
 
   if (liveCapable() && anyRunning()) {
@@ -756,18 +839,25 @@ async function watchGroup(group, o, loadCfg) {
       const all = [...known.values()];
       const width = Math.max(20, W - 1);
       for (const run of all) feeds.get(run.id).read();
-      // 顶部标题一行、底部提示一行，每块有分隔线和标题（没有公共标题时多一行写各自的标题）；正文行数按窗口高度平均分，最多 8 行
+      // 顶部标题一行、底部提示一行，每块有分隔线和标题（没有公共标题时多一行写各自的标题）；正文行数按窗口高度平均分，最多 8 行。
+      // 窗口不够高时正文可以一行都不留；连各块的标题都放不下时，最后一行写还有几个任务没显示
       const title = sharedTitle();
       const headRows = title ? 2 : 3;
       const plans = planLines(all, width);
-      const rows = Math.max(2, Math.min(8, Math.floor((H - 2 - plans.length - all.length * headRows) / all.length)));
+      const rows = Math.max(0, Math.min(8, Math.floor((H - 2 - plans.length - all.length * headRows) / all.length)));
       const out = [groupHeadLine(group, title, all, width), ...plans];
-      for (const run of all) out.push(C.dim('─'.repeat(width)), ...panelLines(run, feeds.get(run.id), rows, width, !title));
-      const lines = out.slice(0, H - 1);
+      const heads = []; // 每块标题行在 out 里的位置
+      for (const run of all) {
+        out.push(C.dim('─'.repeat(width)));
+        heads.push(out.length);
+        out.push(...panelLines(run, feeds.get(run.id), rows, width, !title));
+      }
+      const hidden = heads.filter((i) => i >= H - 2).length;
+      const lines = out.length <= H - 1 ? out : hidden ? [...out.slice(0, H - 2), C.dim(fitWidth(D.dashHidden(hidden), width))] : out.slice(0, H - 1);
       while (lines.length < H - 1) lines.push('');
       const queued = queuedRuns();
-      if (confirmCancel && queued.length) lines.push(C.yellow(fitWidth(M.dashCancelConfirm(M.list(queued.map((run) => modelOf(run.meta)))), width)));
-      else lines.push((queued.length ? C.yellow : C.dim)(fitWidth(queued.length ? M.dashHintQueued : M.dashHint, width)));
+      if (confirmCancel && queued.length) lines.push(C.yellow(fitWidth(D.dashCancelConfirm(D.list(queued.map((run) => shortModel(modelOf(run.meta))))), width)));
+      else lines.push((queued.length ? C.yellow : C.dim)(fitWidth(queued.length ? D.dashHintQueued : D.dashHint, width)));
       return lines;
     };
     const screen = liveScreen(render);
@@ -802,13 +892,12 @@ async function watchGroup(group, o, loadCfg) {
     handOff();
   } else if (anyRunning()) {
     // 输出被重定向时（比如被别的程序读取），每个任务状态变化时写一行。
-    process.stdout.write(`${M.groupHeader(group, sharedTitle(), known.size)}\n`);
+    process.stdout.write(`${D.groupHeader(group, sharedTitle(), known.size)}\n`);
     const states = new Map();
     for (;;) {
       for (const run of known.values()) {
-        const { status, result } = runOutcome(run);
-        const shown = M.statusName(shownStatus(status, result));
-        if (states.get(run.id) !== shown) process.stdout.write(`${whoOf(run.meta)}  ${shown}\n`);
+        const shown = outcomeStyle(runOutcome(run)).word;
+        if (states.get(run.id) !== shown) process.stdout.write(`${D.dots([modelLabel(run.meta), shown])}\n`);
         states.set(run.id, shown);
       }
       for (const { id, text } of describePlans([...known.values()])) {
@@ -822,23 +911,24 @@ async function watchGroup(group, o, loadCfg) {
     }
   }
 
-  // 最终汇总：写在正常屏幕里，排版和实时面板一致（标题行、分隔线、每块的标题行），正文不限行数。
+  // 最终汇总：写在正常屏幕里，排版和实时面板一致（标题行、分隔线、每块的标题行），正文不限行数；
+  // 每一块最后一行是回看这一席时间线的命令，不截断，方便整行复制。
   const all = [...known.values()];
   const title = sharedTitle();
-  const width = Math.max(20, (process.stdout.columns || 100) - 1);
+  const width = Math.max(20, termCols() - 1);
   const inner = width - 2;
   const out = ['', groupHeadLine(group, title, all, width), ...planLines(all, width, true)];
   for (const run of all) {
     const { result: r, ok } = runOutcome(run);
-    out.push(C.dim('─'.repeat(width)), ...panelHead(run, feeds.get(run.id).stats, width, !title));
+    out.push(C.dim('─'.repeat(width)), ...panelHead(run, feeds.get(run.id).stats, width, !title, { wrap: true }));
     const usage = usageLine(r, run.meta);
     if (usage) out.push(`  ${C.dim(fitWidth(usage, inner))}`);
     const conclusion = reviewConclusion(r?.report);
     const final = conclusion || r?.report?.position || r?.report?.summary;
-    if (final) for (const l of wrapWidth(conclusion || M.watchOpinion(final.trim()), inner)) out.push(`  ${l}`);
-    for (const e of realErrors(r, ok)) for (const l of wrapWidth(`${r.status === 'needs_input' ? '?' : '✗'} ${oneLine(e)}`, inner)) {
-      out.push(`  ${(r.status === 'needs_input' ? C.yellow : C.red)(l)}`);
-    }
+    if (final) for (const l of wrapWidth(conclusion || D.watchOpinion(final.trim()), inner)) out.push(`  ${l}`);
+    const [mark, color] = r?.status === 'needs_input' ? ['?', C.yellow] : ['✗', C.red];
+    for (const e of realErrors(r, ok)) out.push(...wrapWidth(`${mark} ${oneLine(e)}`, inner).map((l, i) => `  ${i ? l : color(mark) + l.slice(mark.length)}`));
+    out.push(`  ${C.dim(replayCommand(RUNS_ROOT, run.id))}`);
   }
   process.stdout.write(`${out.join('\n')}\n`);
 }

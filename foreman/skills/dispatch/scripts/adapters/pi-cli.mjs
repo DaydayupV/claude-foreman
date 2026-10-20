@@ -7,7 +7,8 @@ import { SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA } from '../config.mjs';
 import { MAX_REVIEW_CHARS } from '../review-scope.mjs';
 import { newRunDir, isCancelled, cancelSource } from '../records.mjs';
 import { startRun, finishDiscussion, execute, eventWriter, runLimits, reportWithRepair, spawnCli, validateSchema } from '../runner.mjs';
-import { M, die, isObject, binCommand, pathCommand, npmEntry, killTree, readAttachments, focusFiles, relativePath, whoOf, closestMatches } from '../util.mjs';
+import { M, die, isObject, binCommand, pathCommand, npmEntry, killTree, readAttachments, focusFiles, relativePath, closestMatches } from '../util.mjs';
+import { D, modelLabel } from '../format.mjs';
 
 function piCommand(agent) {
   if (agent.bin) return binCommand(agent.bin);
@@ -201,7 +202,7 @@ async function executePi(ctx) {
   });
   const run = startRun(context);
   fs.writeFileSync(path.join(dir, 'brief.md'), prompt);
-  process.stderr.write(`foreman: ${M.started(mode, whoOf(run.meta), level, dir)}\n`);
+  process.stderr.write(`foreman: ${D.started(mode, modelLabel(run.meta), level, dir)}\n`);
   return finishDiscussion(run, { ...await piSession(run, schema, access), files, changesNote: M.piNoChanges });
 }
 

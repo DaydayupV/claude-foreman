@@ -1,22 +1,27 @@
 
-任务组 watch-group · 4 个任务                                                       完成 3 · 失败 1
+Group watch-group · 4 runs                                                        done 3 · failed 1
 ───────────────────────────────────────────────────────────────────────────────────────────────────
-✔ fake-codex（Codex CLI，effort high）                                  完成 · 3 秒 · 改动 1 个文件
+✔ fake-codex · Codex CLI · effort high
+  done · took 3s · 1 file changed, plus 1 of unknown origin, 1 from other runs in the group
   合成a
-  token：输入 120（缓存 25%），输出 40
-  观点：合成任务已完成
+  tokens: in 120 (cached 25%) · out 40
+  Position: 合成任务已完成
+  replay: node <HOME>/r/watch.mjs --run a
 ───────────────────────────────────────────────────────────────────────────────────────────────────
-✔ fake-api（API，effort high）                                                          完成 · 3 秒
+✔ fake-api · API · effort high                                                       done · took 3s
   合成b
-  token：输入 120（缓存 25%），输出 40
-  观点：先建立回归测试，再拆模块
+  tokens: in 120 (cached 25%) · out 40
+  Position: 先建立回归测试，再拆模块
+  replay: node <HOME>/r/watch.mjs --run b
 ───────────────────────────────────────────────────────────────────────────────────────────────────
-✔ fake/model（opencode CLI，effort high）                                               完成 · 3 秒
+✔ model · opencode CLI · effort high                                                 done · took 3s
   合成c
-  token：输入 120（缓存 25%），输出 40
-  观点：先建立回归测试，再拆模块
+  tokens: in 120 (cached 25%) · out 40
+  Position: 先建立回归测试，再拆模块
+  replay: node <HOME>/r/watch.mjs --run c
 ───────────────────────────────────────────────────────────────────────────────────────────────────
-✗ fake-codex（Codex CLI，effort high）                                  失败 · 3 秒 · 改动 0 个文件
+✗ fake-codex · Codex CLI · effort high                           failed · took 3s · 0 files changed
   合成d
-  token：输入 120（缓存 25%），输出 40
+  tokens: in 120 (cached 25%) · out 40
   ✗ 合成失败原因
+  replay: node <HOME>/r/watch.mjs --run d

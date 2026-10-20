@@ -6,6 +6,7 @@ import { sandbox, taskArgs, output, failed, poll, json, read, write, baseConfig,
 import { discussion } from './fixtures/reports.mjs';
 import { apiServer } from './fake/api-server.mjs';
 const M = MESSAGES.zh;
+const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
 
 function configure(h, agents) {
   const c = baseConfig(); c.agents.codex.sandbox = { discuss: 'read-only' }; Object.assign(c.agents, agents);
@@ -126,7 +127,7 @@ test('API 保活注释产生排队事件，放行后继续回答', async (t) => 
   const running = h.startBridge(discussArgs(h, 'api'));
   const meta = await h.running();
   await poll(() => h.events(meta.id).some((e) => e.type === 'api.queued'), '收到排队事件');
-  assert.equal(output(await h.bridge(['status', '--run', meta.id])).activity.step, M.stepApiQueued);
+  assert.equal(output(await h.bridge(['status', '--run', meta.id])).activity.step, D.stepApiQueued);
   api.release('queue');
   const r = output(await running.done);
   assert.equal(r.status, 'done');

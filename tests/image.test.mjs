@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { sandbox, output, failed, baseConfig, seedRun, write, json, lines, opencodeAgent, apiAgent, ROOT, MESSAGES } from './helpers.mjs';
 import { report } from './fixtures/reports.mjs';
 const M = MESSAGES.zh;
+const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
 const scripts = path.join(ROOT, 'foreman/skills/dispatch/scripts');
 const labels = ['① 位图', '② 位图 + 矢量混合', '③ 纯矢量（先出参考图）', '④ 纯矢量 / 代码'];
 const question = (text = '图像路线：这次选哪条路线？') => ({ question: text, header: '路线', multiSelect: false, options: labels });
@@ -226,12 +227,13 @@ test('image 只从计划启动并要求 scope，generate 的元数据、执行�
   }
   assert.equal(r.generated_images.length, 1); assert.equal(path.basename(r.generated_images[0]), 'picture.png');
   assert.ok(!r.warnings.includes(M.imageOutsideModule)); assert.equal(r.changes.available, true);
-  assert.ok(execution.stderr.includes('generate），路线 ①')); assert.ok(!execution.stderr.includes('直接指定推理强度'));
+  assert.ok(execution.stderr.includes(`foreman: image started · fake-codex · Codex CLI · effort medium · generate · route ① · run dir ${r.run_dir}`), execution.stderr);
+  assert.ok(!execution.stderr.includes('直接指定推理强度'));
   const list = await h.bridge(['status']);
-  assert.match(list.stdout, /\simage\s+done\s+generate\s/); assert.ok(list.stdout.includes(`${M.statusRoute('①')}合成画面`));
+  assert.match(list.stdout, /\simage\s+✔ done\s+generate\s/); assert.ok(list.stdout.includes(`${D.statusRoute('①')}合成画面`));
   for (const flags of [[], ['--verbose']]) {
     const watched = await h.bridge(['watch', '--run', r.run_id, ...flags]);
-    assert.ok(watched.stdout.includes(M.watchImageHead(M.modeNames.image, '合成画面', 'generate', '①')), watched.stdout);
+    assert.ok(watched.stdout.includes(D.watchImageHead('image', '合成画面', 'generate', '①')), watched.stdout);
   }
   const state = output(await h.bridge(['status', '--plan', p.plan_id]));
   assert.equal(state.state, 'complete'); assert.equal(state.route, 1); assert.equal(state.seats[0].stale, null);
@@ -250,7 +252,7 @@ test('图像续接沿用格子、路线、计划及席位，不读 run 等级且
   assert.deepEqual(second.generated_images.map((p) => path.basename(p)), ['new.png']); assert.equal(second.parent, first.run_id);
   assert.ok((await h.bridge(['status'])).stdout.includes('resume'));
   const watched = await h.bridge(['watch', '--run', second.run_id]);
-  assert.ok(watched.stdout.includes(M.watchImageHead(M.modeNames.resume, second.run_id, 'generate', '②')));
+  assert.ok(watched.stdout.includes(D.watchImageHead('resume', second.run_id, 'generate', '②')));
   c.agents.second = { ...c.agents.codex }; c.modules.image.generate = [{ agent: 'second' }]; h.config(c);
   failed(await h.bridge(['resume', '--run', second.run_id, '--brief', '-']), M.resumeAgentNotInCell('codex', 'modules.image.generate', 'second'));
   c.modules.image.generate = null; h.config(c);
@@ -293,7 +295,7 @@ test('图像任务沿用执行准入：同组写入范围和协作方并发上�
 test('矢量检查排除同组其他席位和范围外的 unknown SVG', async (t) => {
   const h = sandbox(t); configure(h); answer(h, 4);
   const p = output(await h.bridge(planArgs(h, 'draw', 4)));
-  seedRun(h, '20000101-peer', { group: p.group, scope: ['peer'] });
+  seedRun(h, '20000101-peer', { group: p.group, scope: ['peer'], status: 'running', pid: process.pid, ended_at: undefined }); // 和这一席同时在跑
   const s = h.scenario({ files: { 'peer/bitmap.svg': '<svg><image/></svg>', 'outside/bitmap.svg': '<svg><image/></svg>', 'out/own.svg': '<svg><path/></svg>' } });
   const r = output(await h.bridge(launch(p, ['--scope', 'out']), { env: s.env }));
   const peer = r.changes.files.find((f) => f.path === 'peer/bitmap.svg');

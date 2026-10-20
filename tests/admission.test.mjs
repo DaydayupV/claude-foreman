@@ -20,13 +20,15 @@ test('同组 discuss 和 review 不查写入范围，exec 仍检查', async (t) 
   write(path.join(h.runs, '20000101-exec', 'meta.json'), { ...h.records().find((m) => m.id === '20000101-exec'), status: 'done' });
   for (const kind of ['discuss', 'review']) seedRun(h, `20000101-${kind}`, { kind, mode: kind, group: 'scope-group', scope: ['src'], status: 'running', pid: process.pid });
   const executed = output(await h.bridge(taskArgs(h, 'run', args))); assert.equal(executed.kind, 'exec');
+  const execStart = h.records().find((m) => m.id === '20000101-exec').started_at;
   const script = h.write('owner.mjs', `import { initializeRecords, groupScopeOwner, writesFiles } from ${JSON.stringify(url('records.mjs'))};
 initializeRecords(${JSON.stringify(baseConfig())});
-console.log(JSON.stringify({ owner: groupScopeOwner({ id: ${JSON.stringify(executed.run_id)}, cwd: ${JSON.stringify(h.cwd)}, group: 'scope-group', claude_session: 'test-session' })('src/x'),
+const owner = (started_at) => groupScopeOwner({ id: ${JSON.stringify(executed.run_id)}, cwd: ${JSON.stringify(h.cwd)}, group: 'scope-group', claude_session: 'test-session', started_at })('src/x');
+console.log(JSON.stringify({ overlapping: owner(${JSON.stringify(execStart)}), later: owner(new Date().toISOString()),
   writes: ['exec', 'discuss', 'review'].map((kind) => writesFiles({ kind })) }));`);
-  // 已结束的 exec 仍能解释文件归属，review / discuss 不会夺走它。
+  // 运行时间有重叠的 exec 能解释文件归属，review / discuss 不会夺走它；在这个任务开始之前就结束的 exec 不认领。
   const owner = output(await h.start(script).done);
-  assert.equal(owner.owner, '20000101-exec'); assert.deepEqual(owner.writes, [true, false, false]);
+  assert.equal(owner.overlapping, '20000101-exec'); assert.equal(owner.later, null); assert.deepEqual(owner.writes, [true, false, false]);
 });
 
 for (const legacy of [false, true]) test(`活着的登记锁不按年龄被抢（${legacy ? '旧 pid' : 'pid 和 token'}）`, async (t) => {

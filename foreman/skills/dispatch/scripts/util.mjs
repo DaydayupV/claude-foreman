@@ -148,16 +148,6 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const clip = (s, n) => (s.length > n ? `${s.slice(0, n)}…` : s);
 const oneLine = (s) => String(s ?? '').replace(/\r/g, '').split('\n').map((x) => x.trim()).filter(Boolean).join(' ⏎ ');
 
-// 费用按金额大小保留足够精度，零不带小数。
-const formatUsd = (n) => n === 0 ? '0' : n < 0.01 ? n.toPrecision(2) : n < 1 ? n.toFixed(3) : n.toFixed(2);
-
-// status 和 watch 共用同一行用量与费用，只有费用时也照常显示。
-function usageLine(result, meta) {
-  return [result?.usage ? M.tokenSummary(result.usage, result.last_request ?? result.context, M.tokenCount,
-    (result.usage_scope ?? (meta?.mode === 'resume' ? 'session_total' : 'this_run')) === 'session_total') : '',
-  result?.cost_usd != null ? M.costUsd(formatUsd(result.cost_usd)) : ''].filter(Boolean).join(' · ');
-}
-
 function looksLikeQuestion(text) {
   // 只认末尾问号或明确请人决定的说法，普通进度说明不算提问。
   return /[?？]$/.test(text.trimEnd()) || /请确定|请确认|请选择|请决定|要不要|是否需要我|你希望|您希望|please confirm|please choose|should I|do you want|would you like|which option/i.test(text);
@@ -245,11 +235,9 @@ function plainCommand(cmd) {
 
 // 桌面版的终端面板只接受 ASCII 命令；记录目录路径里有非 ASCII 字符时，实时查看的命令发不出去
 const isAscii = (s) => /^[ -~]*$/.test(s);
-// 界面上以模型为主，接入方式作附注；旧记录没有 agent_type 和 model_name，都是 Codex CLI。
+// 旧记录没有 agent_type 和 model_name，都是 Codex CLI。显示用的模型标签见 format.mjs。
 const modelOf = (m) => m?.model || m?.model_name || m?.model_shown || '?';
 const agentTypeOf = (m) => ({ codex: 'codex cli', opencode: 'opencode cli', 'openai-compatible': 'api' })[m?.agent_type] || m?.agent_type || 'codex cli';
-const CHANNEL_KEY = { api: 'api', 'opencode cli': 'opencode', 'pi cli': 'pi' };
-const whoOf = (m) => M.who(modelOf(m), M.channel[CHANNEL_KEY[agentTypeOf(m)] || 'codex'], m?.effort, !m?.model && !!m?.model_name && agentTypeOf(m) === 'codex cli');
 
 // Windows 上文件正被别的进程读着或者正在被删（删除挂起）时，改名、新建、读取和删除会短暂报 EPERM / EACCES / EBUSY：
 // 稍等 25 毫秒再试，最多重试 80 次（约 2 秒）；一直这样就不是暂时的（比如没有写权限），抛出原错误。
@@ -328,4 +316,4 @@ function wrapWidth(s, width) {
   return lines;
 }
 
-export { retryBusy, replaceFile, HERE, LANGUAGE, M, notice, isObject, readJson, die, need, resolveDir, readBrief, MAX_MATERIAL_CHARS, readAttachments, readImages, focusFiles, binCommand, pathCommand, npmEntry, isGitRepo, pidAlive, killTree, relativePath, pathKey, RECONNECT, isReconnect, sleep, clip, oneLine, formatUsd, usageLine, plainCommand, isAscii, modelOf, whoOf, agentTypeOf, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision, closestMatches, charWidth, textWidth, fitWidth, wrapWidth };
+export { retryBusy, replaceFile, HERE, LANGUAGE, M, notice, isObject, readJson, die, need, resolveDir, readBrief, MAX_MATERIAL_CHARS, readAttachments, readImages, focusFiles, binCommand, pathCommand, npmEntry, isGitRepo, pidAlive, killTree, relativePath, pathKey, RECONNECT, isReconnect, sleep, clip, oneLine, plainCommand, isAscii, modelOf, agentTypeOf, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision, closestMatches, charWidth, textWidth, fitWidth, wrapWidth };

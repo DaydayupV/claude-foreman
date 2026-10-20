@@ -6,6 +6,7 @@ import { report, discussion, command } from './fixtures/reports.mjs';
 import { apiServer } from './fake/api-server.mjs';
 import { looksLikeQuestion, looksLikeInputPrompt } from '../foreman/skills/dispatch/scripts/util.mjs';
 const M = MESSAGES.zh;
+const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
 const question = (source, text, extra = {}) => ({ source, question: text, options: [], recommendation: null, detail: null, ...extra });
 const message = (tool, text) => tool === 'codex' ? { type: 'item.completed', item: { type: 'agent_message', text } } : { type: 'text', part: { text } };
 const configure = (h, extra = {}) => {
@@ -87,9 +88,9 @@ for (const tool of ['codex', 'oc', 'api']) {
       assert.equal(r.needs_decision, false);
     }
     const w = await h.bridge(['watch', '--run', first.run_id]);
-    assert.ok(w.stdout.includes(M.watchOpenIssues));
+    assert.ok(w.stdout.includes(D.watchOpenIssues));
     assert.equal(w.stdout.split(discussion.open_questions[0]).length - 1, 1);
-    assert.ok(!w.stdout.includes(M.watchDecisions));
+    assert.ok(!w.stdout.includes(D.watchDecisions));
   });
 }
 
@@ -146,10 +147,10 @@ for (const tool of ['codex', 'oc']) {
     for (const pid of [s.calls()[0].pid, Number(read(childPid))]) assert.throws(() => process.kill(pid, 0));
     const context = output(await h.hook('session-reminder.mjs')).hookSpecificOutput.additionalContext;
     assert.ok(context.includes(r.run_id));
-    assert.ok(context.includes(M.statusName('needs_input')));
+    assert.ok(context.includes('等人回答，已结束')); // 会话提醒是给 Claude 的提示，跟着插件的语言
     const w = await h.bridge(['watch', '--run', r.run_id]);
-    assert.ok(w.stdout.includes(`? ${M.statusName('needs_input')}`));
-    assert.ok(w.stdout.includes(`${M.watchInputPromptPrefix}Continue? (y/n)`));
+    assert.ok(w.stdout.includes(`? ${D.statusName('needs_input')}`));
+    assert.ok(w.stdout.includes(`${D.watchInputPromptPrefix}Continue? (y/n)`));
     assert.ok(!w.stdout.includes('✗'));
     const next = h.scenario({ last_message: tool === 'codex' ? report : discussion }, 'resume');
     const resumed = output(await h.bridge(['resume', '--run', r.run_id, '--brief', '-', '--level', 'complex', '--no-snapshot'], { env: next.env }));
@@ -199,16 +200,16 @@ test('watch 分类显示六种问题，status 与组计数将 needs_input 计入
   seedRun(h, 'questions', { group: 'questions', kind: 'discuss' }, r);
   seedRun(h, 'input', { group: 'questions', status: 'needs_input' }, { ...r, status: 'needs_input', errors: [M.inputWaitDetected(3, 'Continue? (y/n)')] });
   const w = await h.bridge(['watch', '--run', 'questions']);
-  for (const text of [M.watchDecisions, M.watchDeniedPrefix, M.watchInputPromptPrefix, M.watchAskedMidRun, M.watchOpenIssues, ...questions.map((q) => q.question)]) assert.ok(w.stdout.includes(text), text);
+  for (const text of [D.watchDecisions, D.watchDeniedPrefix, D.watchInputPromptPrefix, D.watchAskedMidRun, D.watchOpenIssues, ...questions.map((q) => q.question)]) assert.ok(w.stdout.includes(text), text);
   assert.equal(w.stdout.split(questions.at(-1).question).length - 1, 1);
-  assert.ok(w.stdout.includes(`? ${M.statusName('blocked')}`));
+  assert.ok(w.stdout.includes(`? ${D.statusName('blocked')}`));
   const status = await h.bridge(['status', '--group', 'questions']);
-  assert.ok(status.stdout.includes(`? ${M.statusName('needs_input')}`));
-  assert.ok(status.stdout.includes(`? ${M.statusName('blocked')}`));
-  assert.ok(status.stdout.endsWith(`${M.groupSummary(2, 0, 0, 0, 2)}\n`));
+  assert.ok(status.stdout.includes(`? ${D.statusName('needs_input')}`));
+  assert.ok(status.stdout.includes(`? ${D.statusName('blocked')}`));
+  assert.ok(status.stdout.endsWith(`${D.groupSummary(2, 0, 0, 0, 2)}\n`));
   const group = await h.bridge(['watch', '--group', 'questions']);
-  assert.ok(group.stdout.includes(M.groupCount.blocked(2)), group.stdout);
-  assert.ok(!group.stdout.includes(M.groupCount.failed(2)));
+  assert.ok(group.stdout.includes(D.groupCount.blocked(2)), group.stdout);
+  assert.ok(!group.stdout.includes(D.groupCount.failed(2)));
   assert.ok(!group.stdout.includes('✗'));
   const english = output(await h.start(path.join(ROOT, 'foreman-en/hooks/session-reminder.mjs'), [], { input: JSON.stringify({ cwd: h.cwd }) }).done);
   assert.ok(english.hookSpecificOutput.additionalContext.includes('waiting for an answer, stopped'));

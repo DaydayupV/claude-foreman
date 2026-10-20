@@ -1,8 +1,9 @@
 // 状态列表、终止任务和排队检查；会话统计由入口提供只读函数。
 import fs from 'node:fs';
 import path from 'node:path';
-import { RUNS_ROOT, UNFINISHED_STATUSES, requestCancel, listRuns, findRun, readMeta, isRunning, runEnd, runOutcome, groupRuns, groupSummary, describeActivity } from './records.mjs';
-import { M, die, need, pidAlive, killTree, sleep, modelOf, whoOf, agentTypeOf, replaceFile, usageLine } from './util.mjs';
+import { RUNS_ROOT, UNFINISHED_STATUSES, requestCancel, listRuns, findRun, readMeta, isRunning, runEnd, runOutcome, groupRuns, groupSummary, describeActivity, saveMeta } from './records.mjs';
+import { M, die, need, pidAlive, killTree, sleep, modelOf, agentTypeOf, replaceFile } from './util.mjs';
+import { D, C, padWidth, visibleWidth, modelLabel, clock, took, outcomeStyle, usageLine, paintPlanWord } from './format.mjs';
 import { planStatus, describePlans } from './plan.mjs';
 
 function cmdStatus(o, sessionStats) {
@@ -19,26 +20,33 @@ function cmdStatus(o, sessionStats) {
   }
   const grouped = o.group != null ? groupRuns(o.group) : null;
   const runs = grouped ? grouped.map((r) => r.id) : listRuns().slice(0, Number(o.limit) || 10);
-  const rows = runs.map((rid) => {
+  // 每个任务一行：编号、模式和等级（原词）、状态记号和状态词、模型标签、用时（运行中写 12:03），各列按显示宽度对齐；
+  // 下面一行是运行中的活动情况，或者结束后的用量。颜色只给状态记号和状态词，模型和标题加粗，次要信息用暗色。
+  const records = runs.flatMap((rid) => {
     const dir = path.join(RUNS_ROOT, rid);
-    const m = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8'));
-    if (m.status === 'running' && !pidAlive(m.pid)) m.status = 'interrupted';
-    const mins = ((runEnd(dir, m) - Date.parse(m.started_at)) / 60000).toFixed(1);
-    const { result: r, blocked } = runOutcome({ dir, meta: m });
-    const label = blocked ? `? ${M.statusName(m.status === 'needs_input' ? 'needs_input' : 'blocked')}` : m.status;
-    const status = blocked && process.stdout.isTTY && !process.env.NO_COLOR ? `\x1b[33m${label}\x1b[0m` : label;
+    // meta.json 正被改写时会暂时读不出来，这一次先不列它。进程已退出、记录还是运行中的，交给 runOutcome 判断：
+    // 它会先重读一次（多半是刚写完结果就退出了），还是运行中才算中断。
+    const run = { dir, meta: readMeta(dir) };
+    if (!run.meta) return [];
+    const outcome = runOutcome(run);
+    const m = run.meta;
+    const { mark, color, word } = outcomeStyle(outcome);
+    const r = outcome.result;
+    const elapsed = runEnd(dir, m) - Date.parse(m.started_at);
     const image = m.module === 'image', mode = image && m.mode === 'run' ? 'image' : m.mode;
-    let row = `${rid}  ${mode.padEnd(6)}  ${status.padEnd(11)}  ${(image ? m.cell : m.level || '-').padEnd(7)}  ${whoOf(m)}  ${mins.padStart(6)}min  ${m.group != null ? M.statusGroup(m.group) : ''}${m.round ? M.statusRound(m.round) : ''}${image ? M.statusRoute('①②③④'[m.route - 1]) : ''}${m.title || ''}${r?.stale === true ? ` · ${M.watchStale}` : ''}  @ ${m.cwd}`;
-    if (m.status === 'running') {
+    const cells = [rid, mode, color(`${mark} ${word}`), image ? m.cell : m.level || '-', C.bold(modelLabel(m)),
+      C.dim(outcome.running ? clock(elapsed) : took(r?.duration_s ?? elapsed / 1000))];
+    const tail = `${m.group != null ? D.statusGroup(m.group) : ''}${m.round ? D.statusRound(m.round) : ''}${image ? D.statusRoute('①②③④'[m.route - 1]) : ''}${C.bold(m.title || '')}${r?.stale === true ? ` · ${D.watchStale}` : ''}  ${C.dim(`@ ${m.cwd}`)}`;
+    let detail = '';
+    if (outcome.running) {
       const a = describeActivity(dir);
       const last = sessionStats(m)?.last_request;
-      row += `\n    └ ${M.statusActivity(a.idle_min ?? '-', a.step)}${last ? M.lastRequestNow(last, M.tokenCount) : ''}`;
-    } else {
-      const usage = usageLine(r, m);
-      if (usage) row += `\n    └ ${usage}`;
-    }
-    return row;
+      detail = D.dots([D.statusActivity(a.idle_min ?? '-', a.step), last && D.lastRequestNow(last, D.tokenCount)]);
+    } else detail = usageLine(r, m);
+    return [{ cells, tail, detail }];
   });
+  const widths = records.reduce((w, { cells }) => cells.map((c, i) => Math.max(w[i] || 0, visibleWidth(c))), []);
+  const rows = records.map(({ cells, tail, detail }) => `${cells.map((c, i) => padWidth(c, widths[i])).join('  ')}  ${tail}${detail ? `\n    ${C.dim(`└ ${detail}`)}` : ''}`);
   // 额度是账号级的，取最近一次有记录的任务显示一行
   let quota = null;
   for (const rid of runs) {
@@ -46,8 +54,8 @@ function cmdStatus(o, sessionStats) {
     quota = m && sessionStats(m)?.rate_limit;
     if (quota) break;
   }
-  process.stdout.write(rows.length ? rows.join('\n') + '\n' + (quota ? `\n${M.rateLimit(quota)}\n` : '') : `${M.noRuns}\n`);
-  if (grouped) process.stdout.write(`${[...describePlans(grouped).map((plan) => plan.text), groupSummary(grouped)].join('\n')}\n`);
+  process.stdout.write(rows.length ? rows.join('\n') + '\n' + (quota ? `\n${D.rateLimit(quota)}\n` : '') : `${D.noRuns}\n`);
+  if (grouped) process.stdout.write(`${[...describePlans(grouped).map((plan) => paintPlanWord(plan.text, plan.state)), groupSummary(grouped)].join('\n')}\n`);
 }
 
 // 终止一个正在运行的任务：先留终止标记，让它自己停下、写好结果（收尾要拍快照、读用量，大仓库会慢一些）；
@@ -61,7 +69,7 @@ async function cmdCancel(o, sessionStats) {
     if (!UNFINISHED_STATUSES.includes(status)) { print({ ok: false, status }); return; }
     const m = readMeta(run.dir) || run.meta;
     m.dismissed_at = new Date().toISOString();
-    fs.writeFileSync(path.join(run.dir, 'meta.json'), JSON.stringify(m, null, 2));
+    saveMeta(run.dir, m);
     print({ ok: true, status, dismissed: true });
     return;
   }
@@ -70,12 +78,14 @@ async function cmdCancel(o, sessionStats) {
   for (const until = Date.now() + waitMs; Date.now() < until;) {
     await sleep(Math.min(500, waitMs));
     const m = readMeta(run.dir);
-    if (!isRunning(m)) { print({ ok: true, status: m?.status }); return; }
+    if (m && !isRunning(m)) { print({ ok: true, status: m.status }); return; }
+    // 这一次读不出不等于已经停下：调度进程还活着就接着等，已经退出就不再等，按下面强行结束的收尾补写记录
+    if (!m && !pidAlive(run.meta.pid)) break;
   }
   // 确认它真的退出之后才动它的记录，免得和它自己的收尾交错。非 Windows 上 killTree 只发 SIGTERM，等不到退出就再发 SIGKILL。
   const pid = run.meta.pid;
   const exited = async () => { for (let i = 0; i < 20 && pidAlive(pid); i++) await sleep(150); return !pidAlive(pid); };
-  killTree(pid);
+  if (pidAlive(pid)) killTree(pid); // 已经退出的进程号可能被别的进程复用，不能再结束它
   if (!(await exited()) && process.platform !== 'win32') {
     try { process.kill(-pid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch { /* 已经退出 */ } }
   }
@@ -87,7 +97,7 @@ async function cmdCancel(o, sessionStats) {
   try { written = JSON.parse(fs.readFileSync(path.join(run.dir, 'result.json'), 'utf8')); } catch { /* 没有结果，或者旧版本写了一半 */ }
   Object.assign(m, { status: written?.status ?? 'cancelled', ended_at: new Date().toISOString() });
   if (!written) writeForcedResult(run.dir, m, sessionStats);
-  fs.writeFileSync(path.join(run.dir, 'meta.json'), JSON.stringify(m, null, 2));
+  saveMeta(run.dir, m);
   print({ ok: true, status: m.status, forced: true });
 }
 

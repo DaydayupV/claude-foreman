@@ -63,6 +63,17 @@ test('sandbox 级别也检查写入证据，禁用快照时仍记录工具作证
   assert.equal(r.readonly, 'sandbox'); assert.deepEqual(r.readonly_violation, [{ path: 'source.txt', by: 'agent' }]); assert.deepEqual(r.report, discussion);
 });
 
+test('只读任务的报告把工作目录本身（./）写进 files_changed 不算违规，没有快照时也一样；具体的文件照样算', async (t) => {
+  const h = sandbox(t), c = baseConfig(); c.agents.codex.sandbox = { discuss: 'read-only' }; h.config(c);
+  const root = { path: './', change: '整个目录' };
+  const s = h.scenario({ last_message: { ...discussion, files_changed: [root] } });
+  const r = output(await h.bridge(taskArgs(h, 'discuss', ['--no-snapshot']), { env: s.env }));
+  assert.equal(r.status, 'done'); assert.deepEqual(r.readonly_violation, []);
+  const named = h.scenario({ last_message: { ...discussion, files_changed: [root, { path: 'notes.md', change: '笔记' }] } }, 'named');
+  const bad = output(await h.bridge(taskArgs(h, 'discuss', ['--no-snapshot']), { env: named.env }), 1);
+  assert.equal(bad.status, 'failed'); assert.deepEqual(bad.readonly_violation, [{ path: 'notes.md', by: 'reported' }]);
+});
+
 test('沙箱挡下的写入（file_change 状态为 failed）不算违规，有没有快照都一样', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.codex.sandbox = { discuss: 'read-only' }; h.config(c);
   const change = (type, status) => ({ event: { type, item: { type: 'file_change', changes: [{ path: 'source.txt', kind: 'update' }], status } } });
@@ -95,8 +106,9 @@ test('config 和 check 每方一条 audited 提醒，沙箱配置覆盖后不提
   for (const command of ['config', 'check']) assert.ok(!output(await h.bridge([command])).summary.warnings.some((w) => w.kind === 'readonly_audited'));
 });
 
-for (const lang of ['zh', 'en']) test(`watch 非 TTY 显示审查结论、问题和未验证项，组和详细视图沿用结论（${lang}）`, async (t) => {
-  const h = sandbox(t), m = MESSAGES[lang], findings = ['high', 'medium', 'medium'].map((severity, i) => ({
+// 显示文字中英两个插件一样，都是英文那一套
+for (const lang of ['zh', 'en']) test(`watch 非 TTY 显示审查结论、问题和未验证项，组和详细视图沿用结论（${lang} 插件）`, async (t) => {
+  const h = sandbox(t), m = MESSAGES.en, findings = ['high', 'medium', 'medium'].map((severity, i) => ({
     id: `F${i + 1}`, location: `source.txt:${i + 1}`, issue: 'missing guard', trigger: 'empty input', severity, evidence: 'empty path', suggestion: 'check first',
   }));
   const result = { status: 'done', exit_code: 0, duration_s: 1, report: { ...review, verdict: 'issues_found', findings, unverified: ['runtime unverified'] },

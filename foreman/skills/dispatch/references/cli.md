@@ -1,6 +1,6 @@
 # 脚本参考：check、models 和结果字段
 
-SKILL.md 里只留了决策流程和常用命令。排查环境、帮用户选模型、看结果 JSON 里某个字段的意思时，读这里。
+SKILL.md 里只留了决策流程和常用命令。排查环境、帮用户选模型、看结果 JSON 里某个字段的意思时，读这里。实时查看、`status` 和开工那一行的字段（状态词、用时、计数、模型标签、用量、标签和提示）中英两个插件都写英文，模型和 Claude 写的内容照原文显示。每个子命令加 `--help` 打印这一条的用法（`assets <动作> --help` 打印这个动作的参数），退出码 0。
 
 ## check
 检查环境能不能用：Node.js、Git，以及配置里的每个协作方，结果在 `agents.<代号>` 里。
@@ -31,7 +31,7 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
 - 每一席用 `run / discuss / review --plan <plan_id> --seat <序号> --brief …` 启动：协作方、推理强度、目录、等级和组都取自计划，不能再写 `--agent`；要换推理强度加 `--effort`，换模型加 `--model`（规则同单席派发）；执行席位照常要 `--scope`；审查席位不再写 `--target`、`--file` 和范围参数，脚本按计划重算一次材料，指纹和计划里的不一致就拒绝启动（材料在建计划之后变了），这时按现在的材料重建计划。启动时按当前配置把整份计划重新校验一遍：配置改过（包括这一席的模型或推理强度变了）、必选变了或者项目关了这一格，都会被拒绝，这时重新建计划。同一席只能启动一次，返工用 `resume`，续接沿用原来的计划和席位；计划里的席位续接时不能换等级。
 - 图像计划的席位用 `image --plan <plan_id> --seat <序号> --brief … --title … --scope <输出目录>` 启动：不写 `--level`（格子由计划决定），`--scope` 至少给一个（同组任务的写入范围检查要用；工作目录里被 `.gitignore` 忽略的输出目录会自动并入 `--track`，改动追踪才看得到，工作目录本身和没被忽略的目录不并入），其余参数（`--track`、`--effort`、`--model`、`--add-dir`、`--timeout`、`--stall`）和 `run` 一样。内部按执行任务跑：快照、执行报告、改动归属、`generated_images`、`image_calls` 都和 `run` 相同，记录里 `mode` 是 `run`、`kind` 是 `exec`，另有 `module: "image"`、`cell`、`step`（就是格子）和 `route`，`level` 为 `null`。续接用 `resume --run <run_id> --brief …`，不写 `--level`：从图像格子选派，不查执行的等级，也不再核对确认凭据。
 - 计划不占并发名额；每一席启动时照常按它的协作方计并发。
-- `status --plan <plan_id>` 输出 JSON：每一席的 `run_id`（最新一轮）、`runs`（这一席所有轮次）、`status`（没启动过是 `not_started`）、`ok`（结束后才有：正常结束并交回了有效结果；审查以结构化报告为准，`verdict` 为 `incomplete` 的不算，没有报告时只有 Codex 原生审查的文字算）；`state` 为 `complete`（必选席位都交回了有效结果；没有必选时，每一席都结束、至少一席有效）、`incomplete`（有必选席位结束了但没有有效结果，比如失败、取消、额度用完、等人回答）或 `pending`；`missing_required` 列出还没有有效结果的必选席位和它的状态；每一席的 `stale` 是它最新一轮审查结果里的 `stale`（不是审查或还没有结果时为 `null`），图像计划另有 `route`。审查期间材料变了的席位，实时查看和 `status --group` 会在这一席和计划那一行写"审查期间材料变了（stale）"，计划照样算完整。
+- `status --plan <plan_id>` 输出 JSON：每一席的 `run_id`（最新一轮）、`runs`（这一席所有轮次）、`status`（没启动过是 `not_started`）、`ok`（结束后才有：正常结束并交回了有效结果；审查以结构化报告为准，`verdict` 为 `incomplete` 的不算，没有报告时只有 Codex 原生审查的文字算）；`state` 为 `complete`（必选席位都交回了有效结果；没有必选时，每一席都结束、至少一席有效）、`incomplete`（有必选席位结束了但没有有效结果，比如失败、取消、额度用完、等人回答）或 `pending`；`missing_required` 列出还没有有效结果的必选席位和它的状态；每一席的 `stale` 是它最新一轮审查结果里的 `stale`（不是审查或还没有结果时为 `null`），图像计划另有 `route`。审查期间材料变了的席位，实时查看和 `status --group` 会在这一席和计划那一行写"material changed during the review (stale)"，计划照样算完整。
 
 ## models
 列出本机 Codex、opencode、pi 自带的模型清单（含每个模型支持的推理强度），以及每个 API 协作方的接口列出的模型名（不含推理强度），并核对配置里的模型在不在清单里、不在时给出最接近的写法。只读，不发模型请求。用户问有哪些模型可选、或者要换模型和推理强度时用。
@@ -40,7 +40,7 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
 `run`、`image`、`resume`、`discuss`、`review` 的结果以 JSON 打印到 stdout，主要字段：
 - `report`：协作方的结构化报告：执行报告、讨论报告或审查报告。审查报告有 `verdict`（`issues_found` / `no_issues` / `incomplete`）、`findings`（每条有 `id`、`location`、`issue`、`trigger`、`severity`、`evidence`、`suggestion`，为空是合法结果）、`coverage`（`checked`、`not_checked`）和 `unverified`。Codex 原生审查（审 `diff`、不带说明也不带 `--file`）没有结构化报告：`report` 为 `null`，意见是 `last_message` 里的英文文字。报告不是合法 JSON 时（opencode、pi、API 修复一次后仍不合格），也只有 `last_message`。
 - `last_message`：没有 `report` 时，协作方最后一条回复的原文，只保留前 8000 字，全文在 `run_dir/last-message.txt`。
-- `changes`：脚本追踪到的工作目录内改动。每个文件标有 `by`：`agent` 表示有工具事件证明是执行的协作方改的（改名前的记录里写作 `codex`）；`reported` 表示只有它在报告里自称改过，常见于用命令或脚本写的文件；`unknown` 表示两样都没有。标了 `group_run` 的落在同组另一个任务的写入范围里。
+- `changes`：脚本追踪到的工作目录内改动。每个文件标有 `by`：`agent` 表示有工具事件证明是执行的协作方改的（改名前的记录里写作 `codex`）；`reported` 表示只有它在报告里自称改过，常见于用命令或脚本写的文件；`unknown` 表示两样都没有。报告里写成目录的（以 `/` 结尾，或者在磁盘上是目录）按前缀算，目录下被追踪的文件都记 `reported`；只有这个前缀下一个被追踪的文件都没有时，`notes` 才提示它不在追踪范围内（工作目录本身不算）。标了 `group_run` 的落在同组另一个任务的写入范围里，而且那个任务的运行时间和这个任务有重叠（区间是开始到结束，还在跑的算到现在，旧记录没有结束时间的按最后活动时间算；这个任务开始前就结束了的不认领），个数在 `group_total`；实时查看的结束行和组面板不把它们算进"of unknown origin"，另写"N from other runs in the group"。
 - `notes`：提示信息，比如归属未知的改动、协作方报告了但没追踪到的文件、Codex 的沙箱启动不了命令。
 - `warnings`：要注意的问题，比如审查期间材料又变了；普通执行任务出了图（"出图没有走图像模块"）；路线 ④ 的手画任务出了位图；路线 ③、④ 的手画任务新写或改过的 SVG 里嵌了位图（`<image>`；只查这一席自己的改动；没有快照、或者 `--scope` 在工作目录外时，追踪不到的地方只查执行事件和报告里列出的 SVG，`notes` 里会说明）。
 - `questions` 和 `needs_decision`：协作方要人回答的事，见 SKILL.md 的"协作方要人回答时"。
@@ -50,7 +50,7 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
 - `module`、`cell`、`plan`、`seat`、`role`：这次属于哪个模块和格子；用计划启动的，还有计划的 `plan_id`、席位序号和角色（不是计划派出的为 `null`）。图像任务另有 `step`（generate 或 draw）和 `route`（1–4），`level` 为 `null`。API、opencode 和 pi 协作方的讨论和审查结果没有改动追踪（`changes.available` 为 `false`）；API 协作方的 `files` 列出附带了哪些文件，opencode 和 pi 协作方多一个 `cost_usd`（按厂商价格折算的美元费用），`status` 和实时查看会把它接在 token 用量后面显示。
 - `isolation`、`run_access`：opencode 和 pi 做执行时，写明没有系统沙箱（`tools`）和这次的权限档位。
 - `generated_images`：这一轮新出现的图片原文件（Codex 的在它的图片目录里）。能出图的适配器都通过同一个接口提供这一项和 `image_calls`。
-- `viewed_images`：这一轮 Codex 用 view_image 打开过的图片，`[{ path, ok }]`（读自 Codex 的会话记录；路径是变量、解析不出来时为 "unknown"；`ok` 为 `true` 表示图片读到了，`false` 表示调用了但没读到，`null` 表示没找到结果，或者一段代码里看了几张图、读到的张数对不上，分不清是哪一张没读到）。补丁工具（apply_patch）里写到的 view_image 不算。实时查看的时间线上会出现"打开图片 …"。`commands_executed` 不包括它。
+- `viewed_images`：这一轮 Codex 用 view_image 打开过的图片，`[{ path, ok }]`（读自 Codex 的会话记录；路径是变量、解析不出来时为 "unknown"；`ok` 为 `true` 表示图片读到了，`false` 表示调用了但没读到，`null` 表示没找到结果，或者一段代码里看了几张图、读到的张数对不上，分不清是哪一张没读到）。补丁工具（apply_patch）里写到的 view_image 不算。实时查看的时间线上会出现"Opened image …"。`commands_executed` 不包括它。
 - `image_calls`：这一轮每次出图实际传的参数和结果（读自 Codex 的会话记录）：`transparent_background`、`referenced_image_paths`（没传为 null；用变量传、解析不出来，或者几次调用分不清各自对应哪张图时为 "unknown"）、`num_last_images_to_include`（同样可能是 "unknown"）、`status`（代码里写了调用、但没执行到时为 "not_run"）、`saved_path`、`failure`。任务说明里写了 `referenced_image_paths`、但这一轮的调用都没传参考图时，`warnings` 会提示。
 - `review_target`、`review_scope`：审查对象（`diff`、`files`、`claims`、`visual`），以及范围、文件数和材料指纹；`review_scope.kind` 对 `diff` 是 `uncommitted` / `base` / `commit`，对其他对象就是对象名。非 git 目录里的 `diff` 没有 `review_scope`。`native_review` 为 `true` 表示这次走的是 Codex 原生审查。
 - `stale`：审查结束时重算材料指纹，和开始时不同为 `true`（这份审查可能没覆盖最新的版本，`warnings` 也会提示），相同为 `false`，没有材料指纹时为 `null`。

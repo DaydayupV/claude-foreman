@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ENTRY, defaultRunsRoot, runsMovedNow, resolveAgentAlias, DEFAULT_AGENT_PARALLEL } from './config.mjs';
-import { M, die, pidAlive, sleep, pathKey, clip, oneLine, plainCommand, retryBusy } from './util.mjs';
+import { M, die, pidAlive, sleep, pathKey, clip, oneLine, plainCommand, retryBusy, replaceFile } from './util.mjs';
+import { D } from './format.mjs';
 
 // 终止标记：cancel 命令和实时查看里按 x 时写进任务的记录目录，运行中的任务看到就停下。
 const CANCEL_FILE = 'cancel';
@@ -114,18 +115,42 @@ function listRuns() {
     .reverse();
 }
 
+// status、watch、cancel、resume、await-busy 会随时读 meta.json，直接覆盖会让它们读到空文件或半份 JSON。
+// 先写临时文件再改名；临时文件名带进程号，避免多个进程写同一记录时互相覆盖。
+// 别的程序长时间占着 meta.json、只许写不许改名时（replaceFile 重试约 2 秒仍失败），退回直接覆盖：
+// 读的一方最多短暂读到半份，好过调度进程在事件回调里崩掉、留下没人管的协作方。
+function saveMeta(dir, meta) {
+  const file = path.join(dir, 'meta.json'), tmp = `${file}.${process.pid}.tmp`, text = JSON.stringify(meta, null, 2);
+  try { fs.writeFileSync(tmp, text); replaceFile(tmp, file); }
+  catch (e) {
+    if (!['EPERM', 'EACCES', 'EBUSY'].includes(e.code)) throw e;
+    fs.writeFileSync(file, text);
+    try { fs.rmSync(tmp, { force: true }); } catch { /* 留下的临时文件不影响读取 */ }
+  }
+}
+
 function findRun(ref) {
   const id = ref === 'last' ? listRuns()[0] : ref;
   if (!id) die(M.noRuns);
   const dir = path.join(RUNS_ROOT, id);
-  if (!fs.existsSync(path.join(dir, 'meta.json'))) die(M.runNotFound(ref));
-  return { id, dir, meta: JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')) };
+  const file = path.join(dir, 'meta.json');
+  if (!fs.existsSync(file)) die(M.runNotFound(ref));
+  // 旧版插件共用记录目录，仍可能直接覆盖写（saveMeta 的退路也是）：解析失败时每 25 毫秒再读一次，约 1 秒后仍读不出就抛原错误。
+  // 读文件本身被占用时 retryBusy 另等最多约 2 秒，所以最坏约 3 秒。
+  for (const deadline = Date.now() + 1000; ;) {
+    try { return { id, dir, meta: JSON.parse(retryBusy(() => fs.readFileSync(file, 'utf8'))) }; }
+    catch (e) {
+      if (e.code === 'ENOENT') die(M.runNotFound(ref));
+      if (!(e instanceof SyntaxError) || Date.now() >= deadline) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
 }
 
 // 读 events.jsonl 末尾，给出最后活动时间和当前步骤，用来判断运行中的任务是活着还是卡住。
 function describeActivity(dir) {
   const file = path.join(dir, 'events.jsonl');
-  if (!fs.existsSync(file)) return { idle_min: null, step: M.noEvents };
+  if (!fs.existsSync(file)) return { idle_min: null, step: D.noEvents };
   const st = fs.statSync(file);
   const len = Math.min(st.size, 256 * 1024);
   const chunk = Buffer.alloc(len);
@@ -144,22 +169,25 @@ function describeActivity(dir) {
   }
   let step;
   if (last?.type.startsWith('api.')) {
-    step = last.type === 'api.request' ? M.stepApiWaiting
-      : last.type === 'api.reasoning' ? M.stepApiThinking(last.total_chars)
-      : last.type === 'api.content' ? M.stepApiAnswering(last.total_chars)
-      : last.type === 'api.queued' ? M.stepApiQueued
-      : last.type === 'api.retry' ? M.stepApiRetry(last.reason)
-      : last.type === 'api.repair' ? M.stepApiRepair
+    step = last.type === 'api.request' ? D.stepApiWaiting
+      : last.type === 'api.reasoning' ? D.stepApiThinking(last.total_chars)
+      : last.type === 'api.content' ? D.stepApiAnswering(last.total_chars)
+      : last.type === 'api.queued' ? D.stepApiQueued
+      : last.type === 'api.retry' ? D.stepApiRetry(last.reason)
+      : last.type === 'api.repair' ? D.stepApiRepair
       : last.type === 'api.error' ? last.message
-      : last.type === 'api.usage' ? M.watchTokens(last.usage) : M.watchEnded('done');
-  } else if (last?.type === 'pi.progress') step = last.phase === 'thinking' ? M.stepApiThinking(last.total_chars) : M.stepApiAnswering(last.total_chars);
-  else if (last?.type === 'image.viewed') step = M.stepImageViewed(path.basename(last.path));
-  else if (running.size) step = M.stepCommand(clip(oneLine(plainCommand([...running.values()].pop())), 160));
-  else if (last?.item?.type === 'agent_message') step = M.stepSaid(clip(oneLine(last.item.text), 160));
-  else if (last?.item?.type === 'file_change') step = M.stepFileChanged;
-  else if (last?.type === 'image.generated') step = M.stepImageGenerated;
-  else if (last?.type === 'item.completed' && last.item?.type === 'command_execution') step = M.stepCommandDone;
-  else step = last ? M.stepLastEvent(`${last.type}${last.item?.type ? `/${last.item.type}` : ''}`) : M.noEvents;
+      : last.type === 'api.usage' ? D.watchTokens(last.usage) : D.watchEnded('done');
+  } else if (last?.type === 'pi.progress') step = last.phase === 'thinking' ? D.stepApiThinking(last.total_chars) : D.stepApiAnswering(last.total_chars);
+  else if (last?.type === 'image.viewed') step = D.stepImageViewed(path.basename(last.path));
+  else if (running.size) step = D.stepCommand(clip(oneLine(plainCommand([...running.values()].pop())), 160));
+  else if (last?.item?.type === 'agent_message') step = D.stepSaid(clip(oneLine(last.item.text), 160));
+  else if (last?.item?.type === 'file_change') step = D.stepFileChanged;
+  else if (last?.type === 'image.generated') step = D.stepImageGenerated;
+  else if (last?.type === 'item.completed' && last.item?.type === 'command_execution') {
+    // opencode 和 pi 的读文件、搜索不算命令
+    step = last.item.category === 'read' ? D.stepReadDone : last.item.category === 'search' ? D.stepSearchDone : D.stepCommandDone;
+  }
+  else step = last ? D.stepLastEvent(`${last.type}${last.item?.type ? `/${last.item.type}` : ''}`) : D.noEvents;
   return { idle_min: Number(((Date.now() - st.mtimeMs) / 60000).toFixed(1)), step };
 }
 
@@ -181,6 +209,8 @@ const absolute = (cwd, file) => pathKey(path.resolve(cwd, file.replace(/\\/g, '/
 const writesFiles = (meta) => meta?.kind === 'exec';
 
 // 同组（同一个 Claude 会话）其他执行任务里，写入范围包含这个文件的那一个。归属未知的改动落在别人的范围里时，多半是那个任务改的。
+// 只算运行时间和这个任务有重叠的：区间是 [started_at, ended_at]，还在跑的算到现在，旧记录没有 ended_at 的按 runEnd 算。
+// 这个任务开始之前就已经结束的同组任务，改不了这段时间里的文件，不认领。
 function groupScopeOwner(meta) {
   if (meta.group == null) return () => null;
   const all = listRuns().map((id) => ({ id, meta: readMeta(path.join(RUNS_ROOT, id)) }));
@@ -188,8 +218,10 @@ function groupScopeOwner(meta) {
   const own = new Set([meta.id]);
   for (let parent = meta.parent; parent && !own.has(parent); parent = all.find((r) => r.id === parent)?.meta?.parent) own.add(parent);
   const sameSeat = (m) => meta.plan != null && m.plan === meta.plan && m.seat === meta.seat;
+  const start = Date.parse(meta.started_at), end = meta.ended_at ? Date.parse(meta.ended_at) : Date.now();
+  const overlaps = (r) => Date.parse(r.meta.started_at) <= end && runEnd(path.join(RUNS_ROOT, r.id), r.meta) >= start;
   const others = all.filter((r) => !own.has(r.id) && r.meta && !sameSeat(r.meta)
-    && r.meta.group === meta.group && writesFiles(r.meta) && r.meta.claude_session === meta.claude_session);
+    && r.meta.group === meta.group && writesFiles(r.meta) && r.meta.claude_session === meta.claude_session && overlaps(r));
   return (file) => {
     const a = absolute(meta.cwd, file);
     return others.find((r) => (r.meta.scope || []).some((s) => { const b = absolute(r.meta.cwd, s); return a === b || a.startsWith(`${b}/`); }))?.id ?? null;
@@ -261,10 +293,10 @@ function groupTally(runs) {
 
 function groupSummary(runs) {
   const t = groupTally(runs);
-  return M.groupSummary(runs.length, t.running, t.ok, t.failed, t.blocked, t.resumed);
+  return D.groupSummary(runs.length, t.running, t.ok, t.failed, t.blocked, t.resumed);
 }
 
 const readMeta = (dir) => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')); } catch { return null; } };
 const isRunning = (m) => m?.status === 'running' && pidAlive(m.pid);
 
-export { RUNS_ROOT, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, findRun, describeActivity, groupRuns, checkAdmission, runEnd, runOutcome, groupTally, groupSummary, groupScopeOwner, absolute, readMeta, isRunning, writesFiles };
+export { RUNS_ROOT, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, saveMeta, findRun, describeActivity, groupRuns, checkAdmission, runEnd, runOutcome, groupTally, groupSummary, groupScopeOwner, absolute, readMeta, isRunning, writesFiles };

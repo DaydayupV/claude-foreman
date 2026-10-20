@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { sandbox, baseConfig, piAgent, taskArgs, output, failed, read, seedRun, ROOT, PI, MESSAGES } from './helpers.mjs';
 import { report, discussion } from './fixtures/reports.mjs';
 const M = MESSAGES.zh;
+const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
 const SCRIPTS = path.join(ROOT, 'foreman/skills/dispatch/scripts');
 const GUARD = path.join(SCRIPTS, 'adapters/pi-guard.mjs');
 const ISOLATE = ['--no-extensions', '--no-skills', '--no-prompt-templates', '--no-themes', '--no-mcp', '--no-approve', '--offline'];
@@ -122,8 +123,8 @@ for (const access of ['edit', 'shell']) test(`执行（${access}）：工具、�
   assert.equal(events.some((e) => e.type === 'item.started' && e.item.command === 'npm test'), access === 'shell');
   const watch = await h.bridge(['watch', '--run', r.run_id]);
   assert.equal(watch.code, 0);
-  assert.ok(watch.stdout.includes('read source.txt'));
-  if (access === 'shell') assert.ok(watch.stdout.includes('npm test'));
+  assert.ok(watch.stdout.includes(D.actionRead('source.txt')) && !watch.stdout.includes('$ read'));
+  if (access === 'shell') assert.ok(watch.stdout.includes('$ npm test'));
 });
 
 test('执行报告不合格时，同一会话、不开任何工具修复一次，用量累加', async (t) => {
@@ -280,5 +281,5 @@ test('流式输出期间定期写进度，status 显示思考或回答了多少�
   assert.deepEqual(progress.map((e) => [e.phase, e.total_chars]), [['thinking', 4], ['thinking', 8], ['answering', 3]]);
   assert.equal((await h.bridge(['watch', '--run', r.run_id])).code, 0);
   seedRun(h, '20000101-thinking', { agent: 'pi', agent_type: 'pi cli', status: 'running', pid: process.pid }, null, [{ type: 'pi.progress', phase: 'thinking', total_chars: 42 }]);
-  assert.equal(output(await h.bridge(['status', '--run', '20000101-thinking'])).activity.step, M.stepApiThinking(42));
+  assert.equal(output(await h.bridge(['status', '--run', '20000101-thinking'])).activity.step, D.stepApiThinking(42));
 });

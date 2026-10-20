@@ -1,0 +1,6 @@
+20000101-d  run      ● running             complex  fake-codex · Codex CLI · effort high             <CLOCK>         合成任务  @ <CWD>
+    └ last activity <N> min ago · Running: node -e "0"
+20000101-c  run      ? questions returned  complex  fake-codex · Codex CLI · effort high             took 1m 1s   合成任务  @ <CWD>
+20000101-b  run      ✗ failed              complex  fake-codex · Codex CLI · effort high             took 3s      合成任务  @ <CWD>
+20000101-a  discuss  ✔ done                complex  deepseek-v4.1-flash · opencode CLI · effort max  took 9m 32s  合成讨论  @ <CWD>
+    └ tokens: in 585k (cached 86%) · out 19k · last request 81k / window 486k · cost $0.066

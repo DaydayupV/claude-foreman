@@ -1,0 +1,18 @@
+Group live-group · 合成讨论：登记锁原地重试 · 4 runs  running 4
+Plan 20000101-000000-plan: in progress
+───────────────────────────────────────────────────────────────
+● gpt-6-astra · Codex CLI · effort max  running <CLOCK> · command…
+  ◆ 先看一下登记锁现在怎么加锁、怎么回收残留锁，再对照 Windows…
+───────────────────────────────────────────────────────────────
+● deepseek-v4.1-flash · o…  running <CLOCK> · reads 3 · searches 2
+  … 2 more reads, 2 more searches · read tests/admission.test.…
+───────────────────────────────────────────────────────────────
+● mimo-v2.6-pro · pi CLI · effort high  running <CLOCK> · reads 1…
+  ◆ 我先读登记锁的代码，再看测试。
+───────────────────────────────────────────────────────────────
+● kimi-k2.6 · API · effort default  thinking <CLOCK> · 3,200 char…
+  Request sent: model kimi-k2.6, effort default
+
+
+
+Press Ctrl+C to stop watching; the runs keep going

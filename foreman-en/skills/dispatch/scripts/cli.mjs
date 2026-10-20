@@ -3,33 +3,55 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, DEFAULT_AGENT_PARALLEL, CLAUDE_CODE, cellList, eachEntry, mapCells, resolveAgentAlias, detectEnvironment, projectFile, loadConfig, resolveProfile, validatePlan, unknownAgentError } from './config.mjs';
-import { cmdPlan, readPlan } from './plan.mjs';
-import { buildSummary } from './summary.mjs';
-import { RUNS_ROOT, initializeRecords, findRun, readMeta } from './records.mjs';
-import { adapters } from './adapters/index.mjs';
-import { validateReviewMaterial } from './review-scope.mjs';
-import { cmdWatch } from './watch.mjs';
-import { cmdStatus, cmdCancel, cmdAwaitBusy } from './status.mjs';
-import { cmdAssets } from './assets.mjs';
 import { M, die, need, resolveDir, readBrief, isGitRepo, isAscii, agentTypeOf, closestMatches, pathKey } from './util.mjs';
+
+// 不带值的选项；其余选项都把下一个参数当作它的值。
+const FLAGS = new Set(['uncommitted', 'no-snapshot', 'verbose', 'no-intro', 'snap', 'vector', 'allow-edge']);
+
+// --help 只打印这一条子命令的用法（assets 可以带动作），退出码 0。和 parseArgs 一样走一遍参数，
+// 写在某个选项的值里的（比如 --title --help）不算。
+function helpText([cmd, ...rest]) {
+  if (cmd === '--help') return M.usage;
+  const action = cmd === 'assets' && rest[0] && !rest[0].startsWith('--') ? rest.shift() : null;
+  let asked = false;
+  for (let i = 0; i < rest.length && !asked; i++) {
+    asked = rest[i] === '--help';
+    if (rest[i].startsWith('--') && !FLAGS.has(rest[i].slice(2))) i++;
+  }
+  if (!asked) return null;
+  if (cmd !== 'assets') return Object.hasOwn(M.help, cmd) ? M.help[cmd] : die(M.usage);
+  return !action ? M.assetsUsage : Object.hasOwn(M.assetsActions, action) ? M.assetsHelp(action) : die(M.assetsUsage);
+}
+const HELP = helpText(process.argv.slice(2));
+if (HELP) { process.stdout.write(`${HELP}\n`); process.exit(0); }
+
+// 其余模块在 --help 之后才加载：config.mjs 一加载就会迁移旧版的配置和偏好文件，--help 不该写任何文件。
+const { USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, DEFAULT_AGENT_PARALLEL, CLAUDE_CODE, cellList, eachEntry, mapCells, resolveAgentAlias, detectEnvironment, projectFile, loadConfig, resolveProfile, validatePlan, unknownAgentError } = await import('./config.mjs');
+const { cmdPlan, readPlan } = await import('./plan.mjs');
+const { buildSummary } = await import('./summary.mjs');
+const records = await import('./records.mjs');
+const { adapters } = await import('./adapters/index.mjs');
+const { validateReviewMaterial } = await import('./review-scope.mjs');
+const { cmdWatch } = await import('./watch.mjs');
+const { cmdStatus, cmdCancel, cmdAwaitBusy } = await import('./status.mjs');
+const { cmdAssets } = await import('./assets.mjs');
 
 // 先加载配置，再迁移记录和重写启动器；这些步骤仍在解析参数之前完成。
 const load = (cwd) => loadConfig(cwd, adapters);
 const CONFIG = load(null);
-initializeRecords(CONFIG);
+records.initializeRecords(CONFIG);
+const { RUNS_ROOT, findRun, readMeta } = records; // 记录目录在 initializeRecords 之后才定下来
 
 function parseArgs(argv) {
   const [cmd, ...rest] = argv;
   const opts = { 'add-dir': [], track: [], scope: [], file: [], ...(cmd === 'plan' ? { seat: [] } : {}) };
   // assets 的第一个参数是动作（template、cut 等），不是选项。
   if (cmd === 'assets' && rest[0] && !rest[0].startsWith('--')) opts.action = rest.shift();
-  const flags = new Set(['uncommitted', 'no-snapshot', 'verbose', 'no-intro', 'snap', 'vector', 'allow-edge']);
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (!a.startsWith('--')) die(M.badArg(a));
     const key = a.slice(2);
-    if (flags.has(key)) { opts[key] = true; continue; }
+    if (FLAGS.has(key)) { opts[key] = true; continue; }
     const val = rest[++i];
     if (val === undefined) die(M.missingValue(a));
     if (key === 'add-dir' || key === 'track' || key === 'scope' || key === 'file' || key === 'seat' && cmd === 'plan') opts[key].push(val);

@@ -5,7 +5,8 @@ import path from 'node:path';
 import { ENTRY, DISCUSS_SCHEMA, REVIEW_SCHEMA } from '../config.mjs';
 import { newRunDir, cancelSource } from '../records.mjs';
 import { startRun, finishDiscussion, eventWriter, runLimits, watchCancellation, reportWithRepair, validateSchema } from '../runner.mjs';
-import { M, die, isObject, readAttachments, MAX_MATERIAL_CHARS, whoOf, modelOf } from '../util.mjs';
+import { M, die, isObject, readAttachments, MAX_MATERIAL_CHARS, modelOf } from '../util.mjs';
+import { D, modelLabel } from '../format.mjs';
 
 // 回答和报错里出现 key 时打码。key 太短时不替换，否则会把正文里的普通字母也换掉，弄坏 JSON 报告。
 const redactKey = (s, key) => (key && key.length >= 8 ? s.replaceAll(key, '[REDACTED]') : s);
@@ -66,7 +67,7 @@ async function executeApi(ctx) {
   const event = eventWriter(dir);
   fs.writeFileSync(path.join(dir, 'brief.md'), prompt);
   fs.writeFileSync(path.join(dir, 'messages.json'), JSON.stringify(history, null, 2));
-  process.stderr.write(`foreman: ${M.started(mode, whoOf(meta), level, dir)}\n`);
+  process.stderr.write(`foreman: ${D.started(mode, modelLabel(meta), level, dir)}\n`);
   // 提醒 Claude 在后台启动排队检查：服务繁忙时好及时问用户要不要终止这一方
   if (cfg.dispatch.busy_ask_min > 0) {
     const target = meta.group != null ? `--group ${meta.group}` : `--run ${id}`;

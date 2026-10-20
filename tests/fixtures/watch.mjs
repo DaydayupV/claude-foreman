@@ -19,9 +19,11 @@ export function watchRecords(h) {
       events: [event({ type: 'api.request', attempt: 1, model: 'fake-api', effort: 'high' }, 0),
         event({ type: 'api.queued', waited_s: 0 }, 0), event({ type: 'api.reasoning', text: '合成推理', total_chars: 4 }),
         event({ type: 'api.content', text: JSON.stringify(discussion), total_chars: 100 }, 2)] },
+    // opencode 的读文件、搜索工具事件和适配器翻译出来的一样，带 tool 和 category
     { id: 'c', name: 'oc', type: 'opencode cli', kind: 'discuss', model: 'fake/model', report: discussion,
       events: [event({ type: 'thread.started', thread_id: 'synthetic-opencode' }),
-        event({ type: 'item.completed', item: { id: 'opencode-1', type: 'command_execution', command: 'read source.txt', exit_code: 0 } })] },
+        event({ type: 'item.completed', item: { id: 'opencode-1', tool: 'read', category: 'read', type: 'command_execution', command: 'read source.txt', exit_code: 0 } }),
+        event({ type: 'item.completed', item: { id: 'opencode-2', tool: 'grep', category: 'search', type: 'command_execution', command: 'grep TODO src', exit_code: 0 } })] },
     { id: 'd', name: 'codex', type: 'codex cli', kind: 'exec', model: 'fake-codex', report: null,
       events: [event({ type: 'error', message: '合成失败原因' })], status: 'failed' },
   ];
@@ -30,6 +32,9 @@ export function watchRecords(h) {
     const result = { run_id: spec.id, status, duration_s: 3, usage, usage_scope: 'this_run', report: spec.report,
       changes: { available: true, files_total: 1, agent_total: 1, unknown_total: 0 }, errors: spec.status ? ['合成失败原因'] : [] };
     if (spec.kind === 'discuss') result.changes = { available: false, agent_total: 0 };
+    // 另有两个文件没有证据：一个归属未知，一个落在同组另一个任务的写入范围里（只标在 files 上，旧记录没有 group_total）
+    if (spec.id === 'a') Object.assign(result.changes, { files_total: 3, unknown_total: 2, files: [{ status: 'M', path: 'source.txt', by: 'agent' },
+      { status: 'A', path: 'other.txt', by: 'unknown' }, { status: 'A', path: 'out/b.txt', by: 'unknown', group_run: 'b' }] });
     // 失败的执行任务没有改动：执行任务即使改动为 0 也要显示改动数
     if (spec.status === 'failed') result.changes = { available: true, files_total: 0, agent_total: 0, unknown_total: 0 };
     seedRun(h, spec.id, { agent: spec.name, agent_type: spec.type, model: spec.model, kind: spec.kind,

@@ -1,15 +1,17 @@
 
-<TIME> ┌ fake/model（opencode CLI，effort high）
-      │ 讨论 · 合成c · 等级 complex
-      │ 工作目录 <CWD>
-      │ 记录目录 <HOME>/r/c
+<TIME> ┌ model · opencode CLI · effort high
+      │ discuss · 合成c · level complex
+      │ Model fake/model
+      │ Working dir <CWD>
+      │ Run dir <HOME>/r/c
       │
-      │   $ read source.txt
+      │   read source.txt
+      │   search TODO src
       │
-<TIME> └ ✔ 完成 · 用时 3 秒
-        token：输入 120（缓存 25%），输出 40
+<TIME> └ ✔ done · took 3s
+        tokens: in 120 (cached 25%) · out 40
 
   先建立回归测试，再拆模块
 
-遗留问题
+Open issues
   · 模块边界待确认

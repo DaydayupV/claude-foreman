@@ -5,6 +5,7 @@ import path from 'node:path';
 import { sandbox, baseConfig, opencodeAgent, apiAgent, taskArgs, output, failed, json, read, write, poll, seedRun, ROOT, MESSAGES } from './helpers.mjs';
 import { report } from './fixtures/reports.mjs';
 const M = MESSAGES.zh;
+const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
 const configure = (h, access = 'edit') => {
   const c = baseConfig();
   c.agents.oc = { ...opencodeAgent(), ...(access === undefined ? {} : { run_access: access }) };
@@ -88,8 +89,10 @@ for (const access of ['edit', 'shell']) test(`opencode ${access} 执行：权限
   for (const extra of [[], ['--verbose']]) {
     const watch = await h.bridge(['watch', '--run', r.run_id, ...extra]);
     assert.equal(watch.code, 0); assert.match(watch.stdout, /✎.*source.txt/);
-    assert.ok(watch.stdout.includes('read source.txt'));
-    assert.ok(watch.stdout.includes('grep before'));
+    // 读文件和搜索不算命令：写成"读 …""搜索 …"，不加 $
+    assert.ok(watch.stdout.includes(D.actionRead('source.txt')));
+    assert.ok(watch.stdout.includes(D.actionSearch('before')));
+    assert.ok(!watch.stdout.includes('$ read') && !watch.stdout.includes('$ grep'));
     if (access === 'shell') assert.ok(watch.stdout.includes('node --version'));
   }
 });

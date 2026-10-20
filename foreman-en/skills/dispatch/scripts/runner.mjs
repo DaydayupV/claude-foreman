@@ -2,10 +2,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { CLAUDE_SESSION, checkAdmission, groupScopeOwner, absolute, isCancelled, cancelSource } from './records.mjs';
+import { CLAUDE_SESSION, checkAdmission, groupScopeOwner, absolute, isCancelled, cancelSource, saveMeta } from './records.mjs';
 import { makeTracker } from './tracker.mjs';
 import { computeReviewMaterial, computeReviewScope } from './review-scope.mjs';
-import { M, die, notice, relativePath, pathKey, whoOf, modelOf, replaceFile, killTree, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision } from './util.mjs';
+import { M, die, notice, relativePath, pathKey, modelOf, replaceFile, killTree, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision } from './util.mjs';
+import { D, modelLabel } from './format.mjs';
 
 const INPUT_WAIT_MIN = 3;
 
@@ -77,7 +78,7 @@ function collectQuestions({ mode, kind, agent_type, report, last = '', messages 
     recommendation: q.recommendation ?? null, detail: q.detail ?? null }));
 }
 
-function startRun(ctx, { started = Date.now(), track = [], modelShown = ctx.model, modelName = modelShown, sandbox = null, atomic = true } = {}) {
+function startRun(ctx, { started = Date.now(), track = [], modelShown = ctx.model, modelName = modelShown, sandbox = null } = {}) {
   const { id, dir, cwd, model, mode, kind, level, effort, agentName, agent, opts } = ctx;
   const meta = {
     id, mode, kind, title: ctx.title || null, cwd, model, model_shown: modelShown, model_name: modelName, level, effort,
@@ -92,13 +93,7 @@ function startRun(ctx, { started = Date.now(), track = [], modelShown = ctx.mode
     started_at: new Date(started).toISOString(), status: 'running', pid: process.pid, session_id: ctx.sessionId || null,
     claude_session: CLAUDE_SESSION,
   };
-  const writeMeta = () => {
-    const file = path.join(dir, 'meta.json');
-    // 同组任务会并发读取元数据，替换完整文件，避免把半份 JSON 当成没有记录。
-    const target = atomic || meta.group != null ? `${file}.tmp` : file;
-    fs.writeFileSync(target, JSON.stringify(meta, null, 2));
-    if (target !== file) replaceFile(target, file);
-  };
+  const writeMeta = () => saveMeta(dir, meta);
   let rejection;
   try {
     writeMeta();
@@ -275,10 +270,10 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
     return [pathKey(rel), rel];
   })).values()];
   const { sandbox, modelShown, modelName } = describe(ctx);
-  const run = startRun({ ...ctx, isolation }, { started, track, sandbox, modelShown, modelName, atomic: false });
+  const run = startRun({ ...ctx, isolation }, { started, track, sandbox, modelShown, modelName });
   const { meta, writeMeta } = run;
   fs.writeFileSync(path.join(dir, 'brief.md'), prompt);
-  process.stderr.write(`foreman: ${ctx.module === 'image' ? M.startedImage(mode === 'resume' ? 'resume' : 'image', whoOf(meta), ctx.cell, '①②③④'[ctx.route - 1], dir) : M.started(mode, whoOf(meta), level, dir)}\n`);
+  process.stderr.write(`foreman: ${ctx.module === 'image' ? D.startedImage(mode === 'resume' ? 'resume' : 'image', modelLabel(meta), ctx.cell, '①②③④'[ctx.route - 1], dir) : D.started(mode, modelLabel(meta), level, dir)}\n`);
   if (snapshotRequired) notice(M.unsandboxedRun(agent.run_access));
 
   const warnings = [];
@@ -318,7 +313,16 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
   notes.push(...(r.notes || []));
 
   const claimed = report?.files_changed || (kind !== 'exec' ? parseReport(last, {}, validateSchema).report?.files_changed : null);
-  const reported = (Array.isArray(claimed) ? claimed : []).filter((f) => typeof f?.path === 'string').map((f) => relativePath(cwd, f.path));
+  // 报告里写成目录的（以 / 结尾，或者在磁盘上是目录）按前缀算：目录下被追踪的文件都算它自称改过的。工作目录本身和工作目录外的不算。
+  const claims = (Array.isArray(claimed) ? claimed : []).filter((f) => typeof f?.path === 'string').map((f) => {
+    const rel = relativePath(cwd, f.path);
+    const inside = rel !== '.' && rel !== '..' && !rel.startsWith('../') && !path.isAbsolute(rel);
+    let dir = /[\\/]$/.test(f.path);
+    if (!dir && inside) try { dir = fs.statSync(path.resolve(cwd, rel)).isDirectory(); } catch { /* 不存在的按文件算 */ }
+    return { rel, key: pathKey(rel), dir: dir && inside, root: rel === '.' };
+  });
+  const reported = claims.map((c) => c.rel);
+  const underClaimedDir = (key) => claims.some((c) => c.dir && key.startsWith(`${c.key}/`));
   const agentPaths = new Set([...r.fileChanges].map((f) => pathKey(relativePath(cwd, f))));
   let changes = { available: false, agent_total: 0, reported_total: 0, unknown_total: 0 };
   if (tracker) {
@@ -328,10 +332,10 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
   }
   const tracked = [...(changes.files || []), ...(changes.large_files_changed || [])];
   // 归属分三种：agent 有工具事件作证据；reported 只有协作方在报告里自称改过（比如用脚本写的文件）；unknown 都没有，可能是别人改的。
-  const reportedPaths = new Set(reported.map(pathKey));
+  const reportedPaths = new Set(claims.map((c) => c.key));
   for (const file of tracked) {
     const key = pathKey(relativePath(cwd, file.path));
-    file.by = agentPaths.has(key) ? 'agent' : reportedPaths.has(key) ? 'reported' : 'unknown';
+    file.by = agentPaths.has(key) ? 'agent' : reportedPaths.has(key) || underClaimedDir(key) ? 'reported' : 'unknown';
   }
   changes.agent_total = tracked.filter((f) => f.by === 'agent').length;
   changes.reported_total = tracked.filter((f) => f.by === 'reported').length;
@@ -339,10 +343,13 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
   const ownerOf = groupScopeOwner(meta);
   const groupOwned = tracked.filter((f) => f.by === 'unknown').map((f) => ({ f, owner: ownerOf(relativePath(cwd, f.path)) })).filter((x) => x.owner);
   for (const { f, owner } of groupOwned) f.group_run = owner;
+  changes.group_total = groupOwned.length;
   if (groupOwned.length) notes.push(M.groupScopeChanges(groupOwned.length, M.list([...new Set(groupOwned.map((x) => x.owner))])));
   if (changes.unknown_total > groupOwned.length) notes.push(M.unattributedChanges(changes.unknown_total - groupOwned.length));
-  const trackedPaths = new Set(tracked.map((f) => pathKey(relativePath(cwd, f.path))));
-  const untracked = [...new Map(reported.filter((f) => !trackedPaths.has(pathKey(f))).map((f) => [pathKey(f), f])).values()];
+  // 自称改过、却没追踪到的：文件看它本身，目录看前缀下有没有被追踪的文件；工作目录本身不算一条自称的改动
+  const trackedKeys = tracked.map((f) => pathKey(relativePath(cwd, f.path)));
+  const untracked = [...new Map(claims.filter((c) => !c.root && !trackedKeys.includes(c.key) && !(c.dir && trackedKeys.some((k) => k.startsWith(`${c.key}/`))))
+    .map((c) => [c.key, c.rel])).values()];
   if (untracked.length) notes.push(M.reportedNotTracked(untracked));
 
   if (kind === 'exec' && ctx.module !== 'image' && r.images.length) warnings.push(M.imageOutsideModule);
@@ -426,7 +433,7 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
     // 拍了快照时以实际改动的归属为准，自报但没改动的不算；完成的写文件事件在快照外（比如被忽略的文件）也算。没有快照时只能看事件和自报。
     ...(kind !== 'exec' ? { readonly_violation: [...new Map([
       ...(changes.available ? tracked.filter((f) => f.by !== 'unknown').map(({ path, by }) => [pathKey(relativePath(cwd, path)), { path: relativePath(cwd, path), by }])
-        : reported.map((path) => [pathKey(path), { path, by: 'reported' }])),
+        : claims.filter((c) => !c.root).map((c) => [c.key, { path: c.rel, by: 'reported' }])),
       ...[...r.fileChanges].map((path) => [pathKey(relativePath(cwd, path)), { path: relativePath(cwd, path), by: 'agent' }]),
     ]).values()] } : {}),
     last_message: report ? undefined : last.slice(0, 8000),

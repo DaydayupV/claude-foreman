@@ -4,9 +4,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { sandbox, output, failed, baseConfig, seedRun, write, json, poll, opencodeAgent, MESSAGES } from './helpers.mjs';
 import { readViewedImages } from '../foreman/skills/dispatch/scripts/image-calls.mjs';
-import { formatUsd } from '../foreman/skills/dispatch/scripts/util.mjs';
+import { formatUsd } from '../foreman/skills/dispatch/scripts/format.mjs';
 import { discussion, review } from './fixtures/reports.mjs';
 const M = MESSAGES.zh;
+const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
 const raw = (payload, timestamp = new Date().toISOString()) => ({ timestamp, type: 'response_item', payload });
 const viewed = (file, call_id = 'view-code') => raw({ type: 'custom_tool_call', name: 'exec', call_id,
   input: `const r = await tools.view_image({path:${JSON.stringify(file)}}); image(r.image_url);` });
@@ -26,15 +27,15 @@ test('stale 在席位、计划行、status 和 watch 结束行显示，完整性
   assert.equal(r.stale, true); assert.equal(r.status, 'done'); assert.deepEqual(r.report, review);
   const state = output(await h.bridge(['status', '--plan', p.plan_id]));
   assert.equal(state.state, 'complete'); assert.equal(state.seats[0].stale, true);
-  const detail = M.watchPlanStale(M.watchPlanSeat('codex', 1, null));
+  const detail = D.watchPlanStale(D.watchPlanSeat('codex', 1, null));
   for (const args of [['status'], ['status', '--group', p.group], ['watch', '--run', r.run_id], ['watch', '--run', r.run_id, '--verbose'], ['watch', '--group', p.group]]) {
-    const display = await h.bridge(args); assert.equal(display.code, 0); assert.ok(display.stdout.includes(M.watchStale), display.stdout);
-    if (args.includes('--group')) assert.ok(display.stdout.includes(M.watchPlanState(p.plan_id, 'complete', detail)), display.stdout);
-    if (args[0] === 'status') assert.ok(display.stdout.includes(`材料审查 · ${M.watchStale}`));
+    const display = await h.bridge(args); assert.equal(display.code, 0); assert.ok(display.stdout.includes(D.watchStale), display.stdout);
+    if (args.includes('--group')) assert.ok(display.stdout.includes(D.watchPlanState(p.plan_id, 'complete', detail)), display.stdout);
+    if (args[0] === 'status') assert.ok(display.stdout.includes(`材料审查 · ${D.watchStale}`));
   }
   const saved = json(p.file); saved.seats.push({ seat: 2, agent: 'second', role: null, required: true }); write(p.file, saved);
   const pending = await h.bridge(['status', '--group', p.group]);
-  assert.ok(pending.stdout.includes(`${M.watchPlanNotStarted(M.watchPlanSeat('second', 2, null))}；${detail}`));
+  assert.ok(pending.stdout.includes(`${D.watchPlanNotStarted(D.watchPlanSeat('second', 2, null))}; ${detail}`));
   const english = await h.bridge(['status', '--group', p.group], { env: { FOREMAN_LANG: 'en' } });
   assert.ok(english.stdout.includes(`${MESSAGES.en.watchPlanNotStarted(MESSAGES.en.watchPlanSeat('second', 2, null))}; ${MESSAGES.en.watchPlanStale(MESSAGES.en.watchPlanSeat('codex', 1, null))}`));
   seedRun(h, 'latest-review', { module: 'review', mode: 'review', kind: 'review', plan: p.plan_id, seat: 1, started_at: new Date(Date.now() + 1000).toISOString() }, { status: 'done', report: review, stale: false });
@@ -114,7 +115,7 @@ test('运行中增量采集 view_image，事件、活动步骤、时间线和续
   await poll(() => h.calls().some((c) => c.operation === 'exec'), '假工具开始');
   write(file, JSON.stringify(viewed(picture)) + '\n');
   await poll(() => h.events(meta.id).some((e) => e.type === 'image.viewed'), '看图实时事件');
-  assert.equal(output(await h.bridge(['status', '--run', meta.id])).activity.step, M.stepImageViewed('login-button.png'));
+  assert.equal(output(await h.bridge(['status', '--run', meta.id])).activity.step, D.stepImageViewed('login-button.png'));
   fs.appendFileSync(file, JSON.stringify(viewOutput()) + '\n');
   output(await h.bridge(['cancel', '--run', meta.id]));
   const result = output(await running.done, 1);
@@ -122,9 +123,9 @@ test('运行中增量采集 view_image，事件、活动步骤、时间线和续
   assert.equal(result.commands_executed, 0); assert.equal(result.generated_images, undefined);
   assert.deepEqual(h.events(meta.id).filter((e) => e.type === 'image.viewed').map((e) => e.path), [picture]);
   const timeline = await h.bridge(['watch', '--run', meta.id]);
-  assert.ok(timeline.stdout.includes(`│   ◉ ${M.watchImageViewed('login-button.png')}`), timeline.stdout);
+  assert.ok(timeline.stdout.includes(`│   ◉ ${D.watchImageViewed('login-button.png')}`), timeline.stdout);
   const verbose = await h.bridge(['watch', '--run', meta.id, '--verbose']);
-  assert.ok(verbose.stdout.includes(`◉ ${M.watchImageViewed(picture)}`));
+  assert.ok(verbose.stdout.includes(`◉ ${D.watchImageViewed(picture)}`));
   const nextPicture = path.join(h.cwd, 'next.png');
   const resume = h.scenario({ append_rollout: true, rollout: [viewed(nextPicture, 'next-view'), viewOutput('next-view')].map(({ timestamp, ...r }) => r) }, 'resume-views');
   const next = output(await h.bridge(['resume', '--run', meta.id, '--level', 'complex', '--brief', '-', '--no-snapshot'], { env: resume.env }));
@@ -139,11 +140,11 @@ test('opencode 费用在 status、watch 两种结束用量和组汇总显示，�
   assert.equal(r.cost_usd, 0.00138);
   for (const args of [['status'], ['watch', '--run', r.run_id], ['watch', '--run', r.run_id, '--verbose'], ['watch', '--group', 'cost-group']]) {
     const display = await h.bridge(args); assert.equal(display.code, 0);
-    assert.ok(display.stdout.split('\n').some((s) => s.includes('token') && s.endsWith(` · ${M.costUsd('0.0014')}`)), display.stdout);
+    assert.ok(display.stdout.split('\n').some((s) => s.includes('token') && s.endsWith(` · ${D.costUsd('0.0014')}`)), display.stdout);
   }
   seedRun(h, 'cost-only', { group: 'cost-only' }, { status: 'done', duration_s: 1, usage: null, cost_usd: 0, errors: [] });
   for (const args of [['status', '--group', 'cost-only'], ['watch', '--run', 'cost-only'], ['watch', '--run', 'cost-only', '--verbose'], ['watch', '--group', 'cost-only']]) {
-    const display = await h.bridge(args); assert.ok(display.stdout.includes(M.costUsd('0')), display.stdout); assert.ok(!display.stdout.includes('token'));
+    const display = await h.bridge(args); assert.ok(display.stdout.includes(D.costUsd('0')), display.stdout); assert.ok(!display.stdout.includes('token'));
   }
   assert.deepEqual([0, 0.001, 0.00138, 0.125, 1.234].map(formatUsd), ['0', '0.0010', '0.0014', '0.125', '1.23']);
 });

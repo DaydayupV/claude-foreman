@@ -5,6 +5,7 @@ import path from 'node:path';
 import { sandbox, taskArgs, output, failed, json, read, write, poll, baseConfig, seedRun, MESSAGES } from './helpers.mjs';
 import { report, usage, sessionStats, command } from './fixtures/reports.mjs';
 const M = MESSAGES.zh;
+const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
 
 test('执行成功写报告、补丁、事件归属和会话用量', async (t) => {
   const h = sandbox(t);
@@ -159,17 +160,53 @@ test('交回问题的执行任务提示 Claude 决定，watch 用问号列出问
   assert.ok(r.notes.includes(M.needsDecisionNote(1)));
   const w = await h.bridge(['watch', '--run', r.run_id]);
   assert.equal(w.code, 0, w.stderr);
-  assert.ok(w.stdout.includes(`? ${M.watchFinished(M.statusName('blocked'), M.duration(r.duration_s), null).split(' · ')[0]}`));
-  for (const text of [M.watchDecisions, '· 合成问题', '- 选项甲', '- 选项乙', M.watchRecommendation('选项甲，已按它做了')]) assert.ok(w.stdout.includes(text), text);
+  assert.ok(w.stdout.includes(`? ${D.watchFinished(D.statusName('blocked'), M.duration(r.duration_s), null).split(' · ')[0]}`));
+  for (const text of [D.watchDecisions, '· 合成问题', '- 选项甲', '- 选项乙', D.watchRecommendation('选项甲，已按它做了')]) assert.ok(w.stdout.includes(text), text);
 });
 
 test('来源不明的改动落在同组其他任务的范围里时，标出是哪个任务', async (t) => {
   const h = sandbox(t), s = h.scenario({ files: { 'other/x.txt': 'sibling\n', 'loose.txt': 'synthetic\n' } });
-  seedRun(h, '20000101-sibling', { group: 'owner-group', scope: ['other'] }, { status: 'done' });
+  seedRun(h, '20000101-sibling', { group: 'owner-group', scope: ['other'], status: 'running', pid: process.pid, ended_at: undefined }); // 和这个任务同时在跑
   const r = output(await h.bridge(taskArgs(h, 'run', ['--group', 'owner-group', '--scope', 'mine']), { env: s.env }));
   assert.equal(r.changes.files.find((f) => f.path === 'other/x.txt').group_run, '20000101-sibling');
   assert.equal(r.changes.files.find((f) => f.path === 'loose.txt').group_run, undefined);
+  assert.equal(r.changes.group_total, 1);
   assert.ok(r.notes.includes(M.groupScopeChanges(1, '20000101-sibling')));
+  assert.ok(r.notes.includes(M.unattributedChanges(1)));
+  // 时间线的结束行和组面板不把归同组任务的文件算进归属未知
+  const sibling = path.join(h.runs, '20000101-sibling', 'meta.json');
+  write(sibling, { ...json(sibling), status: 'done', ended_at: new Date().toISOString() });
+  const changed = D.watchChanged(0, 1, 1);
+  assert.ok((await h.bridge(['watch', '--run', r.run_id])).stdout.includes(`· ${changed}\n`));
+  assert.ok((await h.bridge(['watch', '--group', 'owner-group'])).stdout.includes(changed));
+});
+
+test('同组任务只有运行时间和这个任务重叠的才能认领它的改动：开始前就结束的不认领，有重叠的认领', async (t) => {
+  const h = sandbox(t), s = h.scenario({ files: { 'early/a.txt': 'a\n', 'late/b.txt': 'b\n', 'old/c.txt': 'c\n' } });
+  const ago = (seconds) => new Date(Date.now() - seconds * 1000).toISOString();
+  seedRun(h, '20000101-early', { group: 'overlap-group', scope: ['early'], started_at: ago(120), ended_at: ago(60) }, { status: 'done' });
+  // late 在这个任务跑的时候还没结束（结束时间写在以后）；old 是没有 ended_at 的中断记录，按最后活动时间算，在这个任务开始之前
+  seedRun(h, '20000101-late', { group: 'overlap-group', scope: ['late'], started_at: ago(120), ended_at: new Date(Date.now() + 60000).toISOString() }, { status: 'done' });
+  seedRun(h, '20000101-old', { group: 'overlap-group', scope: ['old'], status: 'interrupted', started_at: ago(120), ended_at: undefined });
+  const r = output(await h.bridge(taskArgs(h, 'run', ['--group', 'overlap-group', '--scope', 'mine']), { env: s.env }));
+  assert.deepEqual(Object.fromEntries(r.changes.files.map((f) => [f.path, f.group_run ?? null])),
+    { 'early/a.txt': null, 'late/b.txt': '20000101-late', 'old/c.txt': null });
+  assert.equal(r.changes.group_total, 1);
+  assert.ok(r.notes.includes(M.groupScopeChanges(1, '20000101-late')));
+  assert.ok(r.notes.includes(M.unattributedChanges(2)));
+});
+
+test('报告里写成目录的改动按前缀归属：目录下被追踪的文件都算自称改过的，前缀下没有被追踪的文件才提示没追踪到', async (t) => {
+  const h = sandbox(t);
+  h.initGit();
+  const claimed = { ...report, files_changed: ['out/', 'gen', 'empty/', './', 'gone.txt'].map((p) => ({ path: p, change: '合成' })) };
+  const s = h.scenario({ last_message: claimed, files: { 'out/a.txt': 'a\n', 'out/sub/b.txt': 'b\n', 'gen/c.txt': 'c\n', 'output.txt': 'x\n' } });
+  const r = output(await h.bridge(taskArgs(h), { env: s.env }));
+  // gen 没写斜杠，但在磁盘上是目录；out 前缀不会套到 output.txt 上；工作目录本身（./）不算自称改了所有文件
+  assert.deepEqual(Object.fromEntries(r.changes.files.map((f) => [f.path, f.by])),
+    { 'gen/c.txt': 'reported', 'out/a.txt': 'reported', 'out/sub/b.txt': 'reported', 'output.txt': 'unknown' });
+  assert.deepEqual([r.changes.reported_total, r.changes.unknown_total], [3, 1]);
+  assert.ok(r.notes.includes(M.reportedNotTracked(['empty', 'gone.txt'])), r.notes.join('\n'));
   assert.ok(r.notes.includes(M.unattributedChanges(1)));
 });
 

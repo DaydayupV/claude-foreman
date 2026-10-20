@@ -19,7 +19,8 @@
 - `fixtures/png.mjs`：在内存里画纯色矩形并写成 PNG（RGB 或 RGBA），给 assets 测试用。
 - opencode 另支持 `models`、`session_id`、`export_messages`、`export_error` 和可选 `step_finish`。导出的消息可以用 `created: "old"` 模拟本轮开始前的历史。
 - `fake/api-server.mjs`：按请求序号提供 SSE 剧本，支持正常流、保活排队、401/402、拒绝 `response_format`、报告修复、残缺流和取消；请求保存在测试内存中。
-- `fixtures/`：完全合成的报告、用量和四类 watch 记录。`expected/`：五份已人工核对的非 TTY 文本；仅替换临时路径为 `<HOME>`/`<CWD>`，事件时刻为 `<TIME>`，状态、用量、文案和排版均保留。
+- `fixtures/`：完全合成的报告、用量和四类 watch 记录；`fixtures/watch-live.mjs` 是一场还在进行的四方讨论（Codex、opencode、pi、API），pid 用测试进程自己，任务就算在运行。`expected/`：已人工核对的文本（插件自己写的字段中英两个插件都是英文，所以只有一份）：五份非 TTY 的 watch 输出、两份组视图实时面板的画面（100x30、64x18）、一份 status 列表；仅替换临时路径为 `<HOME>`/`<CWD>`，事件时刻为 `<TIME>`，运行中的计时为 `<CLOCK>`，状态、用量、文案和排版均保留。
+- 实时画面：环境变量 `FOREMAN_TEST_SCREEN=<宽>x<高>` 让 watch 把输出当成这么大的终端，照常画备用屏幕；测试从输出里取第一帧，按每行的光标定位拆回各行再比对。设了它又把 `NO_COLOR` 设成空时照常上色，用来核对颜色。
 
 ## 覆盖清单
 
@@ -100,7 +101,7 @@
 | 24 第一期配置和迁移 | modules.test.mjs、structure-migration.test.mjs | 模块遍历顺序一致，单对象只在内存规范为列表；levels 迁移一次备份，顺序强度不变且不补格子或 required；已有备份加时间戳，校验失败的 levels 不改原文；用户和项目不能同时写 levels 和 modules；空列表、重复、能力、required 类型、缺少 agent、对象类型、max_seats 和执行格子多个必选校验；未知模块或格子；旧单对象已写 agent 时也保留逐字段继承；图像引用参与旧类型改名、去重与 codex 保留判断；check 和 summary 覆盖仅用于图像的协作方、强度和 shell 提醒 |
 | 25 第一期项目收紧 | project-tightening.test.mjs | 项目保留用户顺序和必选，忽略模型及其他字段，解析旧代号；时长和席位取严（含 stall_min / busy_ask_min 的 0）；项目先校验 dispatch；只降低 Codex 和 pi 的有序强度，未写时不能加，opencode / api 不能改；不能只去掉必选；各模块过滤为空报错；用户关闭的格子不能打开；整格关闭记 closed_by_project，点名及续接均拒绝；用户自己的 Claude 格子可点名并标 outside_cell |
 | 26 第一期选派和计划 | plan.test.mjs | 三模块单席必须选格子并遵守候选和必选；计划先校验格子、候选、必选、能力、席位上限和参数，失败不落盘；保存同方多席、角色、理由、默认模型和启动命令，不占任务名额；启动参数配对及一致性；启动时按当前配置重验整份计划；同一席并发只启动一次；准入拒绝不消耗席位；旧代号席位；续接沿用计划席位角色且不查其他必选；四种适配器的模型覆盖规则及标记；status 的三种 state、missing_required、最新续接和有效结果判定；status / watch 不把 plans 当任务 |
-| 27 第一期并发和锁 | admission.test.mjs、run.test.mjs、structure-migration.test.mjs | 同组 discuss 和 review 不查写入范围，exec 仍检查；groupScopeOwner 只认 exec；协作方跨组跨会话及旧代号并发计数不变；活着的登记锁不按年龄被抢（旧 pid 和 pid/token）；死锁回收及一分钟等待上限；读不出持有者的旧锁放一会儿后清掉；登记锁和清理锁正被删除时短暂报 EPERM、EACCES、EBUSY 只是稍等再试，一直报错才抛出原错误，删除前每次重试都重新确认锁还是残留的或自己的；显式释放和退出清理只删自己的 token |
+| 27 第一期并发和锁 | admission.test.mjs、run.test.mjs、structure-migration.test.mjs | 同组 discuss 和 review 不查写入范围，exec 仍检查；groupScopeOwner 只认 exec，而且只认运行时间有重叠的；协作方跨组跨会话及旧代号并发计数不变；活着的登记锁不按年龄被抢（旧 pid 和 pid/token）；死锁回收及一分钟等待上限；读不出持有者的旧锁放一会儿后清掉；登记锁和清理锁正被删除时短暂报 EPERM、EACCES、EBUSY 只是稍等再试，一直报错才抛出原错误，删除前每次重试都重新确认锁还是残留的或自己的；显式释放和退出清理只删自己的 token |
 | 28 第一期偏好来源 | hooks.test.mjs | 新旧位置的用户和项目偏好分开标注来源与硬规则；英文偏好来源标注与硬规则一致，plans 不算未完成任务 |
 | 29 续接换格子的必选 | plan.test.mjs | 无计划续接换格子重验必选，同格返工保留豁免且兼容旧 level；计划续接禁止换格子（包括 Claude 格子） |
 | 30 计划席位配置重验 | plan.test.mjs | 计划保存的模型和强度必须匹配当前格子，覆盖参数不能绕过重验；覆盖模型按当前提供方检查并标记 |
@@ -120,11 +121,18 @@
 | 44 冒烟修复：stale | image-smoke.test.mjs | status、status --group、watch 两种结束行与组汇总、计划行和席位显示 stale，计划仍完整；最新轮结果为准，stale 与未启动必选同时说明，中英文分隔符一致 |
 | 45 冒烟修复：看图步骤 | image-smoke.test.mjs | 代码和函数形式的 view_image、字面量及未知路径、成功失败未结束、since 过滤；运行中增量写事件及活动步骤，时间线和详细模式显示，续接只读本轮新增日志且不增加命令数；同一 call_id 合并调用并累计图片数，部分成功记未知，后续文字不抹掉成功；输出先到和末行无换行仍能配对；apply_patch 中的看图及出图代码不记调用；会话文件中途被删仍保留结果并正常结束；一次读不满时读到文件末尾，收尾时没写完的末行留到下次 |
 | 46 冒烟修复：费用和措辞 | image-smoke.test.mjs | opencode 费用接在 status/watch 用量行及组汇总后，只有费用也显示、零和小额格式；审查默认 uncommitted 为 true，旧 false 计划仍审未提交改动；项目关格仅在显式 agent 时提点名 |
+| 47 显示统一：标签、状态词、用时、数字和分隔符（中英两个插件都用英文那一套，显示得一样） | display.test.mjs、status-watch.test.mjs | status 表：状态词和用时写英文，中英两个插件一样；模式和等级写原词，模型标签去掉提供方前缀，各列按显示宽度对齐；开工那一行中英两个插件都写 <模式> started · <模型> · <接入方式> · effort · level · run dir，用" · "分隔；watch --run 非 TTY 的Codex 执行输出与期望一致；watch --group 非 TTY 的四类任务汇总与期望一致 |
+| 48 组视图实时面板 | display.test.mjs | 组视图实时面板按 100x30 的终端排版：每席顶上是最近说的话，下面是折叠后的动作；组视图实时面板按 64x18 的终端排版：每席顶上是最近说的话，下面是折叠后的动作；实时面板只给状态记号和状态词上色：模型名、标题和组名加粗，动作、计数和思考摘要用暗色，说的话用默认色；组视图窗口不够高时先压缩正文，连各块的标题都放不下时，最后一行写还有几个任务没显示；组视图汇总的回看命令：记录目录带空格时给路径加引号，整行复制就能运行 |
+| 49 时间线的实时画面 | display.test.mjs | 时间线的实时画面：读文件和搜索不算命令，思考摘要只留最近一条的第一行，折叠行跟在失败的命令后面 |
+| 50 子命令 --help | display.test.mjs | 子命令认 --help：只打印这一条的用法，退出码 0，不生成配置文件，也不迁移旧版的配置（写在选项值里的 --help 不算） |
+| 51 目录归属和归同组任务 | run.test.mjs | 报告里写成目录的改动按前缀归属：目录下被追踪的文件都算自称改过的，前缀下没有被追踪的文件才提示没追踪到；来源不明的改动落在同组其他任务的范围里时，标出是哪个任务（group_total、时间线结束行和组汇总里的"N from other runs in the group"）；同组任务只有运行时间和这个任务重叠的才能认领它的改动：开始前就结束的不认领，有重叠的认领 |
+| 52 元数据读写竞态 | meta-writes.test.mjs | findRun 读到空文件或半份 JSON 时稍等再读，一直读不出才抛出原错误；meta.json 改名一直失败时退回直接覆盖写，不抛错也不留临时文件；cancel 等待时 meta.json 读不出不算已停下，调度进程退出后不再等满就补写记录；meta.json 一律先写临时文件再改名，并发读不会读到半份（执行、cancel 标记已处理、强行结束） |
+| 52 只读任务的根目录声明 | readonly-review.test.mjs | 只读任务的报告把工作目录本身（./）写进 files_changed 不算违规，没有快照时也一样；具体的文件照样算 |
 
 ## 说明
 
 - 整套约 90 秒，大头是几处真实等待：Codex 卡死检测每 30 秒查一次，测试要等无活动的任务真的被判卡死；API 断流后的重试固定等 5 秒；已结束任务组的 watch 固定停留 5 秒。
 - Node 24 第一次运行 `config` 时可能附带 DEP0190 警告，测试只核对插件自己的提示行。
-- 不覆盖：真实的 Codex 和 opencode、外部 API、终端里的实时画面（TTY）。这些发布前按设计文档 9.2 节的清单手工冒烟。
+- 不覆盖：真实的 Codex 和 opencode、外部 API、真实终端里的按键、翻看和窗口大小变化（实时画面的排版用 `FOREMAN_TEST_SCREEN` 模拟的固定宽高核对）。这些发布前按设计文档 9.2 节的清单手工冒烟。
 - 改了 watch 的排版，要人工核对新输出后再更新 `expected/` 里的文本。
 - 加了新行为，同时在上面的覆盖表里补一行。
