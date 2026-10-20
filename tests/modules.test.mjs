@@ -65,6 +65,45 @@ for (const note of [MESSAGES.zh.levelsNote, MESSAGES.en.levelsNote, '手写的�
   assert.equal(fs.existsSync(`${h.userConfig}.bak`), false);
 });
 
+test('dispatch 缺 max_seats 时显式写进配置：放在 busy_ask_min 后面，只备份和提示一次，其余不变', async (t) => {
+  const h = sandbox(t), c = baseConfig();
+  delete c.dispatch.max_seats;
+  h.config({ ...c, levels: M.levelsNote });
+  const before = read(h.userConfig), bak = `${h.userConfig}.bak`;
+  const results = await Promise.all(Array.from({ length: 4 }, () => h.bridge(['config'])));
+  results.forEach((r) => output(r));
+  assert.equal(results.filter((r) => r.stderr.includes(M.configMaxSeatsAdded(h.userConfig, bak, 6))).length, 1);
+  assert.equal(read(bak), before);
+  const after = json(h.userConfig);
+  assert.deepEqual(Object.keys(after.dispatch), ['watch', 'timeout_min', 'stall_min', 'busy_ask_min', 'max_seats']);
+  assert.deepEqual(after, { ...c, dispatch: { ...c.dispatch, max_seats: 6 }, levels: M.levelsNote });
+  const again = await h.bridge(['config']);
+  assert.equal(again.stderr, '');
+  assert.deepEqual(fs.readdirSync(path.dirname(h.userConfig)).filter((name) => name.includes('.bak')), ['config.json.bak']);
+});
+
+test('补 max_seats 时：没有 modules 的配置不加 levels 说明，没有 dispatch 的配置和项目配置都不改', async (t) => {
+  const h = sandbox(t), agents = baseConfig().agents;
+  h.config({ dispatch: { auto: false, runs_dir: null }, agents });
+  output(await h.bridge(['config']));
+  assert.deepEqual(json(h.userConfig), { dispatch: { auto: false, max_seats: 6, runs_dir: null }, agents });
+  const again = await h.bridge(['config']);
+  assert.equal(again.stderr, '');
+
+  const bare = sandbox(t);
+  bare.config({ agents });
+  const plain = read(bare.userConfig);
+  output(await bare.bridge(['config']));
+  assert.equal(read(bare.userConfig), plain);
+
+  const p = sandbox(t);
+  p.config();
+  const project = p.write('.claude/foreman.json', { dispatch: { timeout_min: 0.5 } });
+  const original = read(project);
+  output(await p.bridge(['config']));
+  assert.equal(read(project), original);
+});
+
 test('levels 是字符串却没有 modules 时报错，文件不变', async (t) => {
   const h = sandbox(t);
   h.config({ agents: baseConfig().agents, levels: M.levelsNote });

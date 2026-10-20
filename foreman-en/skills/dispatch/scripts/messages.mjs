@@ -2,6 +2,7 @@
 // 中英两个插件共用这份文件，由同目录的 language.json 决定用哪种语言。
 
 const zh = {
+  configMaxSeatsAdded: (file, bak, seats) => `已在配置文件 ${file} 的 dispatch 里显式写上 "max_seats": ${seats}（一份派发计划最多几个席位；原来没写时也按 ${seats} 算，行为不变），要改上限直接改这一项。原文件备份在 ${bak}`,
   configModulesMigrated: (file, bak) => `已把配置文件 ${file} 里的 levels 改写成 modules：每一格的协作方、推理强度和顺序都没变，run 和 review 的单个条目改成了只有一项的列表。有一处行为变化：以前讨论一级里写的协作方全部参加，现在它们是候选，由 Claude 按规则挑选；想保留全员参加，就给这些条目加上 "required": true（/foreman:setup 可以帮着标）。配置里还没有图像块（出图 generate、手画 draw 两格），要用时运行 /foreman:setup 添加。文件里的 levels 留成了一行说明：旧版插件读到会直接报错，不会悄悄改成全由 Claude 自己做。原文件备份在 ${bak}`,
   levelsNote: '已改为 modules 写法（见下面的 modules）。读到这一行报错，说明 foreman 插件还是旧版，请升级',
   configBothFormats: (file) => `配置文件 ${file} 里同时写了 levels 和 modules，不知道以哪个为准。请删掉 levels（旧写法），只保留 modules`,
@@ -510,6 +511,7 @@ ${schema}`,
 };
 
 const en = {
+  configMaxSeatsAdded: (file, bak, seats) => `Added "max_seats": ${seats} to dispatch in the config file ${file} (the most seats one dispatch plan may use; it was already ${seats} while unset, so nothing changes); edit it there to change the limit. The original is backed up at ${bak}`,
   configModulesMigrated: (file, bak) => `Rewrote levels as modules in the config file ${file}: every cell keeps its agents, reasoning efforts and order, and single run and review entries became one-item lists. One behavior change: everyone listed at a discussion level used to take part; now they are candidates and Claude picks among them by its rules. To keep everyone taking part, add "required": true to those entries (/foreman-en:setup can mark them). The config has no image block yet (the generate and draw cells); run /foreman-en:setup to add it when you need it. levels is kept in the file as a one-line note, so an old version of the plugin stops with an error instead of quietly having Claude do everything. The original is backed up at ${bak}`,
   levelsNote: 'Moved to modules (see modules below). If an error points here, the foreman plugin is an old version; please update it',
   configBothFormats: (file) => `The config file ${file} has both levels and modules, so it's unclear which one counts. Delete levels (the old form) and keep only modules`,

@@ -232,12 +232,25 @@ function renameAgentsByModel(config, adapters) {
   return { config: { ...config, agents }, aliases: Object.fromEntries(Object.entries(aliases).filter(([a, b]) => a !== b)) };
 }
 
+// 把默认的 max_seats 插在 busy_ask_min 后面（没有就放在 runs_dir 前面，再没有就放最后），和新生成的配置顺序一致。
+function withMaxSeats(dispatch) {
+  const entries = Object.entries(dispatch);
+  let at = entries.findIndex(([key]) => key === 'busy_ask_min') + 1;
+  if (!at) at = entries.findIndex(([key]) => key === 'runs_dir');
+  if (at < 0) at = entries.length;
+  entries.splice(at, 0, ['max_seats', DEFAULT_CONFIG.dispatch.max_seats]);
+  return Object.fromEntries(entries);
+}
+
 function migrateStructure(config, file, base, project, adapters) {
   if (!project && migratedConfigs.has(file)) return migratedConfigs.get(file);
   const converted = migrateConfig(config, file, base, project);
   if (project) return converted.config;
-  if (!converted.old && !converted.modules) return config;
+  // dispatch.max_seats 是 1.2.0 新加的，从旧版改写过来的配置里没有它；dispatch 里缺这一项时显式写进文件，打开配置就能看到上限。
+  const addSeats = isObject(config.dispatch) && !Object.hasOwn(config.dispatch, 'max_seats');
+  if (!converted.old && !converted.modules && !addSeats) return config;
   let result = structuredClone(converted.config);
+  if (isObject(result.dispatch) && !Object.hasOwn(result.dispatch, 'max_seats')) result.dispatch = withMaxSeats(result.dispatch);
   if (converted.old && isObject(config.agents) && !Object.hasOwn(config.agents, 'codex')
     && !eachEntry(result.modules).some(({ item }) => item?.agent === 'codex')) delete result.agents.codex;
   for (const agent of Object.values(result.agents || {})) if (Object.hasOwn(OLD_TYPES, agent?.type)) agent.type = OLD_TYPES[agent.type];
@@ -281,12 +294,14 @@ function migrateStructure(config, file, base, project, adapters) {
     }
     // 旧版插件只认 levels 对象，缺了 levels 会悄悄把九格都当成 "claude code"。改写后的文件只写 modules，
     // 所以每次改写都把 levels 留成一行说明，旧版读到字符串就报错退出；文件里原来有说明就沿用。
+    // 没有 modules 的文件（只补 max_seats 时会遇到）不加说明：只有说明没有 modules，新版读到也会报错。
     const { modules, ...rest } = result;
-    result = { ...rest, levels: converted.note || M.levelsNote, modules };
+    result = modules === undefined ? rest : { ...rest, levels: converted.note || M.levelsNote, modules };
     fs.writeFileSync(tmp, JSON.stringify(result, null, 2) + '\n', { flag: 'wx' });
     replaceFile(tmp, file);
     if (converted.old) notice(M.configStructureMigrated(file, bak, M.list(Object.entries(renamed.aliases).map(([a, b]) => `${a} → ${b}`))));
     if (converted.modules) notice(M.configModulesMigrated(file, bak));
+    if (addSeats) notice(M.configMaxSeatsAdded(file, bak, result.dispatch.max_seats));
   } catch (e) {
     notice(M.configMigrateFailed(file, e.message));
   } finally {
