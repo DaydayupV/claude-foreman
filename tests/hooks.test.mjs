@@ -72,6 +72,17 @@ test('会话提醒以已退出任务的结果为准，没有结果仍提醒中�
   assert.ok(context.includes('missing-result｜run｜合成任务｜调度进程已退出，没有结果'));
 });
 
+test('会话提醒优先采用活进程号对应记录的中断结果，不回写元数据', async (t) => {
+  const h = sandbox(t), id = 'interrupted-with-live-pid';
+  const dir = seedRun(h, id, { status: 'running', pid: process.pid }, { status: 'interrupted' });
+  seedRun(h, 'done-with-live-pid', { status: 'running', pid: process.pid }, { status: 'done' });
+  const file = path.join(dir, 'meta.json'), before = fs.readFileSync(file, 'utf8');
+  const context = output(await h.hook('session-reminder.mjs')).hookSpecificOutput.additionalContext;
+  assert.ok(context.includes(`${id}｜run｜合成任务｜调度进程已退出，没有结果`));
+  assert.equal(context.includes('done-with-live-pid'), false);
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+});
+
 for (const [label, command] of [
   ['codex exec', 'codex exec "synthetic"'], ['codex review', 'codex review --uncommitted'],
   ['node codex.js exec', 'node "C:/synthetic/bin/codex.js" exec -'], ['npx Codex', 'npx @openai/codex exec -'],

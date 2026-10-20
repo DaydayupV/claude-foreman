@@ -254,33 +254,54 @@ function sessionFile(sessionId, startedAt) {
   return null;
 }
 
-// 从 Codex 自己的会话记录里读最后一次 token 统计：累计用量、最近一次请求、窗口和额度。
-// exec --json 只在结尾给一次总用量，这些数只有会话记录里有。找不到就返回 null。
+// 从 Codex 自己的会话记录里读 token 统计：累计用量、最近一次请求、窗口和额度。exec --json 只在结尾给一次总用量。
+// 累计用量两种记录都看：每次请求一完成就写 token_usage_record，token_count 要等命令输出回来才写，
+// 命令执行期间被取消时它会漏掉最后一次请求，之后一直偏低，哪怕它写在后面。所以两种各取最新一条，用 total_tokens 大的那个，不相加。
+// 最近一次请求、窗口和额度只有 token_count 有。两种都没有就返回 null。
+// 先读末尾 1 MB；缺一种记录、文件又更大时，再读末尾 4 MB 扫一遍（最新的那条被一大段输出挤出 1 MB 时，续接相减会出负数），还缺就按读到的算。
 function codexSessionStats(sessionId, startedAt) {
   const file = sessionFile(sessionId, startedAt);
   if (!file) return null;
-  let chunk;
+  let count = null, record = null;
   try {
     const st = fs.statSync(file);
-    const len = Math.min(st.size, 1024 * 1024);
-    chunk = Buffer.alloc(len);
     const fd = fs.openSync(file, 'r');
-    try { fs.readSync(fd, chunk, 0, len, st.size - len); } finally { fs.closeSync(fd); }
+    try {
+      for (const mb of [1, 4]) {
+        const len = Math.min(st.size, mb * 1024 * 1024);
+        const chunk = Buffer.alloc(len);
+        fs.readSync(fd, chunk, 0, len, st.size - len);
+        ({ count, record } = latestUsageRecords(chunk, sessionId));
+        if ((count && record) || st.size <= len) break;
+      }
+    } finally { fs.closeSync(fd); }
   } catch { return null; } // 会话记录被锁或刚被删掉：这次没有统计，结果照常落盘
+  if (!count && !record) return null;
+  const usage = count?.info?.total_token_usage;
+  const threadUsage = record?.thread_token_usage;
+  const tokens = (u) => u?.total_tokens ?? (u?.input_tokens ?? 0) + (u?.output_tokens ?? 0);
+  const last = count?.info?.last_token_usage;
+  const rl = count?.rate_limits?.primary;
+  return {
+    total_token_usage: tokens(threadUsage) > tokens(usage) ? threadUsage : usage || threadUsage || null,
+    last_request: last && count.info.model_context_window ? { tokens: last.total_tokens ?? last.input_tokens, window: count.info.model_context_window } : null,
+    rate_limit: rl ? { used_percent: rl.used_percent, window_minutes: rl.window_minutes, resets_at: rl.resets_at } : null,
+  };
+}
+
+function latestUsageRecords(chunk, sessionId) {
   const lines = chunk.toString('utf8').split('\n');
+  let count = null, record = null;
   for (let i = lines.length - 1; i >= 0; i--) {
-    if (!lines[i].includes('"token_count"')) continue;
-    let p;
-    try { p = JSON.parse(lines[i]).payload; } catch { continue; }
-    const last = p?.info?.last_token_usage;
-    const rl = p?.rate_limits?.primary;
-    return {
-      total_token_usage: p?.info?.total_token_usage || null,
-      last_request: last && p.info.model_context_window ? { tokens: last.total_tokens ?? last.input_tokens, window: p.info.model_context_window } : null,
-      rate_limit: rl ? { used_percent: rl.used_percent, window_minutes: rl.window_minutes, resets_at: rl.resets_at } : null,
-    };
+    if (!lines[i].includes('"token_count"') && !lines[i].includes('"token_usage_record"')) continue;
+    let ev;
+    try { ev = JSON.parse(lines[i]); } catch { continue; }
+    const p = ev.payload;
+    if (!count && p?.type === 'token_count') count = p;
+    else if (!record && ev.type === 'token_usage_record' && (p?.thread_id == null || p.thread_id === sessionId)) record = p;
+    if (count && record) break;
   }
-  return null;
+  return { count, record };
 }
 
 function validate(agent, key, check, text) {

@@ -126,6 +126,53 @@ function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
+// 启动时间用于识别进程号复用；查不到时交给调用方决定，不能据此强行结束进程。
+// Windows 上按系统目录里的完整路径调用 PowerShell，PATH 被精简过也查得到。
+function processStartedAt(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  const powershell = path.join(process.env.SystemRoot || 'C:/Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  try {
+    const r = process.platform === 'win32'
+      ? spawnSync(fs.existsSync(powershell) ? powershell : 'powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')`], { encoding: 'utf8', windowsHide: true, timeout: 15000 })
+      : spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, timeout: 15000 });
+    const started = r.status === 0 ? Date.parse(r.stdout.trim()) : NaN;
+    return Number.isFinite(started) ? started : null;
+  } catch { return null; }
+}
+
+// 确认是同一个进程才结束整棵进程树：返回 killed（已发出结束，退没退出由调用方再看）、other（进程号已属于别的程序）或 null（核对不了，没动它）。
+// Windows 上在同一次 PowerShell 里先拿住进程句柄再核对、结束，拿住句柄期间进程号不会被复用。
+// 其他平台仍有极短竞态；Linux/macOS 按顺序分配进程号，刚退出就被复用的可能极小。
+function killTreeIfSame(pid, latestStart) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    const latest = Date.parse(latestStart);
+    if (!Number.isFinite(latest)) return null;
+    if (process.platform === 'win32') {
+      const powershell = path.join(process.env.SystemRoot || 'C:/Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+      const command = `$ErrorActionPreference = 'Stop'; $p = $null
+try {
+  $p = Get-Process -Id ${pid} -ErrorAction Stop
+  $handle = $p.Handle
+  if ($null -eq $handle -or $handle -eq [IntPtr]::Zero) { exit 1 }
+  $started = [DateTimeOffset]::new($p.StartTime.ToUniversalTime())
+  $latest = [DateTimeOffset]::Parse('${new Date(latest).toISOString()}')
+  if ($started.ToUnixTimeMilliseconds() -gt $latest.ToUnixTimeMilliseconds()) { [Console]::WriteLine('other'); exit 0 }
+  & "$env:SystemRoot\\System32\\taskkill.exe" /pid ${pid} /T /F | Out-Null
+  [Console]::WriteLine('killed')
+} catch { exit 1 } finally { if ($null -ne $p) { $p.Dispose() } }`;
+      const r = spawnSync(fs.existsSync(powershell) ? powershell : 'powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+      const result = r.stdout?.trim();
+      return r.status === 0 && ['killed', 'other'].includes(result) ? result : null;
+    }
+    const started = processStartedAt(pid);
+    if (started === null) return null;
+    if (started > latest) return 'other';
+    try { process.kill(-pid, 'SIGTERM'); } catch { try { process.kill(pid, 'SIGTERM'); } catch { /* 已经退出 */ } }
+    return 'killed';
+  } catch { return null; }
+}
+
 function killTree(pid) {
   if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
   // codex 以独立进程组启动，负 pid 连同它起的子进程一起结束。
@@ -316,4 +363,4 @@ function wrapWidth(s, width) {
   return lines;
 }
 
-export { retryBusy, replaceFile, HERE, LANGUAGE, M, notice, isObject, readJson, die, need, resolveDir, readBrief, MAX_MATERIAL_CHARS, readAttachments, readImages, focusFiles, binCommand, pathCommand, npmEntry, isGitRepo, pidAlive, killTree, relativePath, pathKey, RECONNECT, isReconnect, sleep, clip, oneLine, plainCommand, isAscii, modelOf, agentTypeOf, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision, closestMatches, charWidth, textWidth, fitWidth, wrapWidth };
+export { retryBusy, replaceFile, HERE, LANGUAGE, M, notice, isObject, readJson, die, need, resolveDir, readBrief, MAX_MATERIAL_CHARS, readAttachments, readImages, focusFiles, binCommand, pathCommand, npmEntry, isGitRepo, pidAlive, processStartedAt, killTreeIfSame, killTree, relativePath, pathKey, RECONNECT, isReconnect, sleep, clip, oneLine, plainCommand, isAscii, modelOf, agentTypeOf, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision, closestMatches, charWidth, textWidth, fitWidth, wrapWidth };

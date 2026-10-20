@@ -73,7 +73,9 @@ function unfinishedRuns(root, cwd) {
     const age = now - new Date(m.started_at).getTime();
     if (!(age >= 0 && age <= 7 * 86400000)) return false;
     if (m.status === 'running') {
-      try { process.kill(m.pid, 0); } catch { m.status = readJson(path.join(root, m.id, 'result.json'))?.status || 'interrupted'; }
+      const status = readJson(path.join(root, m.id, 'result.json'))?.status;
+      if (status) m.status = status;
+      else try { process.kill(m.pid, 0); } catch { m.status = 'interrupted'; }
     }
     // 等输入的任务也要交回问题；其他异常仍只提醒执行任务。
     if (m.status !== 'needs_input' && (m.kind || (m.mode === 'review' ? 'review' : 'exec')) !== 'exec') return false;

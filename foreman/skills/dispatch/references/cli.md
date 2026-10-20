@@ -42,10 +42,10 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
 - `last_message`：没有 `report` 时，协作方最后一条回复的原文，只保留前 8000 字，全文在 `run_dir/last-message.txt`。
 - `changes`：脚本追踪到的工作目录内改动。每个文件标有 `by`：`agent` 表示有工具事件证明是执行的协作方改的（改名前的记录里写作 `codex`）；`reported` 表示只有它在报告里自称改过，常见于用命令或脚本写的文件；`unknown` 表示两样都没有。报告里写成目录的（以 `/` 结尾，或者在磁盘上是目录）按前缀算，目录下被追踪的文件都记 `reported`；只有这个前缀下一个被追踪的文件都没有时，`notes` 才提示它不在追踪范围内（工作目录本身不算）。标了 `group_run` 的落在同组另一个任务的写入范围里，而且那个任务的运行时间和这个任务有重叠（区间是开始到结束，还在跑的算到现在，旧记录没有结束时间的按最后活动时间算；这个任务开始前就结束了的不认领），个数在 `group_total`；实时查看的结束行和组面板不把它们算进"of unknown origin"，另写"N from other runs in the group"。
 - `notes`：提示信息，比如归属未知的改动、协作方报告了但没追踪到的文件、Codex 的沙箱启动不了命令。
-- `warnings`：要注意的问题，比如审查期间材料又变了；普通执行任务出了图（"出图没有走图像模块"）；路线 ④ 的手画任务出了位图；路线 ③、④ 的手画任务新写或改过的 SVG 里嵌了位图（`<image>`；只查这一席自己的改动；没有快照、或者 `--scope` 在工作目录外时，追踪不到的地方只查执行事件和报告里列出的 SVG，`notes` 里会说明）。
+- `warnings`：要注意的问题，比如审查期间材料又变了；普通执行任务出了图（"出图没有走图像模块"）；路线 ④ 的手画任务出了位图；路线 ③、④ 的手画任务新写或改过的 SVG 里嵌了位图（`<image>`；只查这一席自己的改动；没有快照、或者 `--scope` 在工作目录外时，追踪不到的地方只查执行事件和报告里列出的 SVG，`notes` 里会说明）；收尾时 `meta.json` 一直写不进（多半是备份或同步软件占着它，约 15 秒后放弃），这时它停在上一次写好的内容，结果照常在 `result.json` 里（这条提示只在打印出来的结果里，`result.json` 里没有）。
 - `questions` 和 `needs_decision`：协作方要人回答的事，见 SKILL.md 的"协作方要人回答时"。
 - `session_id`、`run_dir`：完整 diff 在 `run_dir/diff.patch`，审查的补丁在 `run_dir/review.patch`。
-- token 消耗：`usage` 是本次调用的输入、缓存、输出 token（`usage_scope` 为 `session_total` 时是整个会话的累计量）；`last_request` 是最近一次请求的用量和模型上下文窗口；`rate_limit` 是 Codex 额度的已用比例；`quota_resets_at` 是额度预计恢复的时间。被取消的任务只记得到取消前已经完成的请求的用量（正在进行的那次，厂商不报用量），一次都没完成时 `usage` 为 `null`，`notes` 里有说明；`errors` 写明是 `cancel` 命令、用户在实时查看里按 x，还是调度进程收到了终止信号。`cancel` 最多等 30 秒让任务自己停下，等不到就强行结束它，补写一份最简结果（带上会话记录里读得到的用量）。
+- token 消耗：`usage` 是本次调用的输入、缓存、输出 token（`usage_scope` 为 `session_total` 时是整个会话的累计量）；`last_request` 是最近一次请求的用量和模型上下文窗口；`rate_limit` 是 Codex 额度的已用比例；`quota_resets_at` 是额度预计恢复的时间。Codex 的用量读自它自己的会话记录，每次请求一完成就有累计值，所以命令执行期间取消也记得到。被取消的任务只记得到取消前已经完成的请求的用量（正在进行的那次，厂商不报用量），一次都没完成时 `usage` 为 `null`，`notes` 里有说明；`errors` 写明是 `cancel` 命令、用户在实时查看里按 x，还是调度进程收到了终止信号。`cancel` 怎么处理各种任务见下面的"cancel 和 status"。
 - `agent`、`model_shown`、`effort`：这次交给了哪个协作方、实际用的模型和推理强度。`model_overridden` 为 `true` 表示这次用 `--model` 换了模型；`outside_cell` 为 `true` 表示格子是 `"claude code"`、这次是用 `--agent` 点名派出的。
 - `module`、`cell`、`plan`、`seat`、`role`：这次属于哪个模块和格子；用计划启动的，还有计划的 `plan_id`、席位序号和角色（不是计划派出的为 `null`）。图像任务另有 `step`（generate 或 draw）和 `route`（1–4），`level` 为 `null`。API、opencode 和 pi 协作方的讨论和审查结果没有改动追踪（`changes.available` 为 `false`）；API 协作方的 `files` 列出附带了哪些文件，opencode 和 pi 协作方多一个 `cost_usd`（按厂商价格折算的美元费用），`status` 和实时查看会把它接在 token 用量后面显示。
 - `isolation`、`run_access`：opencode 和 pi 做执行时，写明没有系统沙箱（`tools`）和这次的权限档位。
@@ -56,3 +56,15 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
 - `stale`：审查结束时重算材料指纹，和开始时不同为 `true`（这份审查可能没覆盖最新的版本，`warnings` 也会提示），相同为 `false`，没有材料指纹时为 `null`。
 - `readonly`：讨论和审查的只读保障：`tools`（opencode、pi、API）、`sandbox`（Codex 在只读沙箱里）或 `audited`（Codex 没有只读沙箱，只靠规则和事后对比快照）。
 - `readonly_violation`：讨论或审查里有证据的写入，列出 `[{ path, by }]`；这时 `status` 为 `failed`，`errors` 里有说明，改动没有自动还原。
+
+## cancel 和 status
+- `result.json` 只在任务结束时写。它写好了，`status`、实时查看、`cancel` 和会话开始时的提醒就都按它的状态算，不看调度进程的进程号：收尾时写不进 `meta.json` 的任务，磁盘上的 `meta.json` 会一直停在 `running`，而这个进程号以后可能分给别的程序。`cancel` 遇到这种任务、调度进程又已经退出时，顺手把终态写回 `meta.json`；只读的命令不写。
+- `cancel --run <run_id>` 输出一段 JSON，`ok` 表示这次有没有做成：
+  - 运行中的任务：先核对这个进程号还是不是当初的调度进程（比对进程的启动时间，Windows 上用 PowerShell 查，不弹窗），再留终止标记，最多等 30 秒让它自己停下、写好结果（`ok: true`，`status` 是它自己写的状态）。等不到时再核对一次，确认是同一个进程才强行结束它，补写一份最简结果（带上会话记录里读得到的用量），输出 `forced: true`。
+  - 查不到进程的启动时间时不强行结束，记录也不动：`ok: false`、`status: "running"`，`error` 说明怎么手动处理。
+  - 进程号已经属于别的程序（它在任务开始之后才启动），或者等待期间调度进程自己退出、没留下结果：不结束任何进程，只把任务标成已处理（`status: "interrupted"`、`dismissed: true`），`note` 说明是哪种情况。
+  - 已经结束、没正常完成的任务（`interrupted`、`stalled`、`timeout`、`quota_exhausted`、`needs_input`）：标成已处理（`dismissed: true`），会话开始时的提醒不再列它。
+  - 其他已经结束的任务（比如 `done`、`failed`、`cancelled`）：`ok: false`，`note` 说明没有可取消的。
+  - 写不进 `meta.json` 时：标成已处理的返回 `ok: false` 和 `error`；强行结束的仍返回 `ok: true`，带 `warning`。
+- `status` 列表不列出读不了 `meta.json` 的任务（被别的程序占着、不许别人读，或者内容不完整），末尾一行写明有几个。`status --run <run_id>` 读不了 `meta.json`、但读得出 `result.json` 时，输出 `result.json`，在 `warnings` 末尾注明；两个都读不了时报错。
+- 标成已处理、又没有结束时间的任务，用时算到运行目录里除 `meta.json` 以外最晚修改的那个文件（标记已处理会改写 `meta.json`）。

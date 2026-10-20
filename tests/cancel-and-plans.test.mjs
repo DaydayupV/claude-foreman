@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { sandbox, taskArgs, output, failed, json, poll, write, baseConfig, apiAgent, opencodeAgent, seedRun, MESSAGES } from './helpers.mjs';
+import { pathToFileURL } from 'node:url';
+import { setTimeout as pause } from 'node:timers/promises';
+import { processStartedAt } from '../foreman/skills/dispatch/scripts/util.mjs';
+import { sandbox, taskArgs, output, failed, json, poll, write, read, BRIDGE, baseConfig, apiAgent, opencodeAgent, seedRun, MESSAGES } from './helpers.mjs';
 import { sessionStats, usage, discussion } from './fixtures/reports.mjs';
 import { apiServer } from './fake/api-server.mjs';
 const M = MESSAGES.zh;
@@ -62,7 +65,8 @@ test('调度进程没在时限内停下时，cancel 强行结束它并补写结�
   const h = sandbox(t);
   const sleeper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });
   t.after(() => { try { process.kill(sleeper.pid); } catch { /* 已结束 */ } });
-  const started = new Date(Date.now() - 60000);
+  await new Promise((resolve) => sleeper.once('spawn', resolve));
+  const started = new Date();
   seedRun(h, 'forced-run', { status: 'running', pid: sleeper.pid, ended_at: undefined, session_id: 'forced-session', started_at: started.toISOString() });
   const day = new Date(), pad = (n) => String(n).padStart(2, '0');
   write(path.join(h.home, '.codex', 'sessions', String(day.getFullYear()), pad(day.getMonth() + 1), pad(day.getDate()), 'rollout-forced-session.jsonl'),
@@ -119,23 +123,207 @@ test('项目配置关掉的格子，建计划和启动席位都说明是项目�
   assert.equal(h.records().length, 0);
 });
 
-test('强行结束时调度进程已经写好结果，不覆盖它，元数据跟结果走', async (t) => {
+test('结果已完成时优先于活进程号，cancel 不结束它，进程退出后才回写终态', async (t) => {
   const h = sandbox(t);
   const sleeper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });
   t.after(() => { try { process.kill(sleeper.pid); } catch { /* 已结束 */ } });
-  const written = { status: 'done', report: discussion, errors: [], notes: [] };
-  seedRun(h, 'late-result', { status: 'running', pid: sleeper.pid, ended_at: undefined }, written);
+  await new Promise((resolve) => sleeper.once('spawn', resolve));
+  const written = { status: 'done', session_id: 'recovered-session', duration_s: 1, report: discussion, errors: [], notes: [] };
+  const dir = seedRun(h, 'late-result', { status: 'running', pid: sleeper.pid, session_id: null, ended_at: undefined }, written);
+  const file = path.join(dir, 'meta.json'), before = read(file);
+  const list = await h.bridge(['status']);
+  assert.equal(list.code, 0); assert.match(list.stdout, /late-result\s+run\s+✔ done/);
+  assert.equal((await h.bridge(['watch', '--run', 'late-result'])).code, 0);
+  assert.equal(read(file), before);
   const out = output(await h.bridge(['cancel', '--run', 'late-result'], { env: { FOREMAN_TEST_CANCEL_WAIT_MS: '300' } }));
-  assert.deepEqual(out, { run_id: 'late-result', ok: true, status: 'done', forced: true });
+  assert.deepEqual(out, { run_id: 'late-result', ok: false, status: 'done', note: M.cancelAlreadyEnded });
+  assert.doesNotThrow(() => process.kill(sleeper.pid, 0));
   assert.deepEqual(h.result('late-result'), written);
-  assert.equal(json(path.join(h.runs, 'late-result', 'meta.json')).status, 'done');
+  assert.equal(read(file), before);
+  assert.equal(fs.existsSync(path.join(dir, 'cancel')), false);
+  process.kill(sleeper.pid);
+  await poll(() => sleeper.exitCode !== null || sleeper.signalCode !== null, '无关进程退出');
+  assert.deepEqual(output(await h.bridge(['cancel', '--run', 'late-result'])), out);
+  const settled = json(file);
+  assert.equal(settled.status, 'done'); assert.equal(settled.session_id, 'recovered-session');
+  assert.equal(settled.ended_at, new Date(Date.parse(settled.started_at) + 1000).toISOString());
+  assert.deepEqual(h.result('late-result'), written);
+});
+
+test('活进程比 started_at 晚 500 毫秒启动时，cancel 判成复用，不留终止标记也不结束进程', async (t) => {
+  const h = sandbox(t), sleeper = h.start(h.write('unrelated.mjs', 'setInterval(() => {}, 1000);'));
+  await new Promise((resolve) => sleeper.child.once('spawn', resolve));
+  const started = processStartedAt(sleeper.child.pid); assert.notEqual(started, null);
+  const id = 'reused-pid', dir = seedRun(h, id, { status: 'running', pid: sleeper.child.pid, started_at: new Date(started - 500).toISOString(), ended_at: undefined });
+  const began = Date.now();
+  const r = output(await h.bridge(['cancel', '--run', id], { timeout: 10000 }));
+  assert.deepEqual(r, { run_id: id, ok: true, status: 'interrupted', dismissed: true, note: M.cancelPidReused(sleeper.child.pid) });
+  assert.ok(Date.now() - began < 10000, '不应等满 30 秒');
+  assert.doesNotThrow(() => process.kill(sleeper.child.pid, 0));
+  assert.equal(fs.existsSync(path.join(dir, 'cancel')), false); assert.equal(fs.existsSync(path.join(dir, 'result.json')), false);
+  const m = json(path.join(dir, 'meta.json'));
+  assert.equal(m.status, 'interrupted'); assert.ok(Number.isFinite(Date.parse(m.dismissed_at)));
+});
+
+test('强行结束前再次核对身份：进程号复用只标记中断，查不到启动时间就拒绝结束且不改记录', async (t) => {
+  for (const reused of [true, false]) await t.test(reused ? '等待后复用' : '始终查不到', async (t) => {
+    const h = sandbox(t), sleeper = h.start(h.write('still-alive.mjs', 'setInterval(() => {}, 1000);'));
+    await new Promise((resolve) => sleeper.child.once('spawn', resolve));
+    const started_at = new Date().toISOString(), id = 'verify-again';
+    const dir = seedRun(h, id, { status: 'running', pid: sleeper.child.pid, started_at, ended_at: undefined });
+    const file = path.join(dir, 'meta.json'), before = read(file), checked = path.join(h.home, 'kill-checked');
+    const preload = h.write('process-identity.mjs', `import fs from 'node:fs';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+const spawn = childProcess.spawnSync;
+let queries = 0;
+childProcess.spawnSync = (file, args, options) => {
+  const powershell = String(file).toLowerCase().endsWith('powershell.exe');
+  if (powershell || file === 'ps') {
+    const killing = powershell ? args[args.indexOf('-Command') + 1].includes('taskkill.exe') : ++queries > 1;
+    if (killing) {
+      fs.writeFileSync(${JSON.stringify(checked)}, 'checked');
+      if (${reused}) {
+        const meta = JSON.parse(fs.readFileSync(${JSON.stringify(file)}, 'utf8'));
+        fs.writeFileSync(${JSON.stringify(file)}, JSON.stringify({ ...meta, session_id: 'fresh-session' }));
+      }
+      return { status: ${reused ? 0 : 1}, stdout: powershell ? 'other' : ${JSON.stringify(new Date(Date.parse(started_at) + 60000).toISOString())} };
+    }
+    return { status: ${reused ? 0 : 1}, stdout: ${JSON.stringify(started_at)} };
+  }
+  if (file === 'taskkill') throw new Error('不能结束未经核实的进程');
+  return spawn(file, args, options);
+};
+syncBuiltinESMExports();
+await import(${JSON.stringify(pathToFileURL(BRIDGE).href)});`);
+    const r = output(await h.bridge(['cancel', '--run', id], { env: { NODE_OPTIONS: '--import ' + pathToFileURL(preload).href, FOREMAN_TEST_CANCEL_WAIT_MS: '50' } }));
+    assert.deepEqual(r, reused ? { run_id: id, ok: true, status: 'interrupted', dismissed: true, note: M.cancelPidReused(sleeper.child.pid) }
+      : { run_id: id, ok: false, status: 'running', error: M.cancelUnverified(sleeper.child.pid) });
+    assert.doesNotThrow(() => process.kill(sleeper.child.pid, 0));
+    assert.equal(read(checked), 'checked', '强行结束应走 killTreeIfSame');
+    assert.equal(fs.existsSync(path.join(dir, 'cancel')), true); assert.equal(fs.existsSync(path.join(dir, 'result.json')), false);
+    if (reused) { const m = json(file); assert.equal(m.status, 'interrupted'); assert.ok(m.dismissed_at); assert.equal(m.session_id, 'fresh-session'); }
+    else assert.equal(read(file), before);
+  });
+});
+
+test('身份核对期间已正常收尾时，入口和强行结束前都重读终态，不覆盖 session_id', async (t) => {
+  for (const atEntry of [true, false]) await t.test(atEntry ? '入口核对' : '核对并结束', async (t) => {
+    const h = sandbox(t), sleeper = h.start(h.write('finishes-during-check.mjs', 'setInterval(() => {}, 1000);'));
+    await new Promise((resolve) => sleeper.child.once('spawn', resolve));
+    const id = 'finished-during-check', started_at = new Date().toISOString();
+    const dir = seedRun(h, id, { status: 'running', pid: sleeper.child.pid, started_at, ended_at: undefined, session_id: null });
+    const file = path.join(dir, 'meta.json'), resultFile = path.join(dir, 'result.json');
+    const meta = { ...json(file), status: 'done', session_id: 'finished-session', ended_at: started_at };
+    const result = { status: 'done', session_id: 'finished-session', duration_s: 0 };
+    const script = h.write('finish-on-check.mjs', `import fs from 'node:fs';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+const spawn = childProcess.spawnSync;
+let queries = 0;
+childProcess.spawnSync = (file, args, options) => {
+  if (String(file).toLowerCase().endsWith('powershell.exe') || file === 'ps') {
+    const killing = args.includes('-Command') && args[args.indexOf('-Command') + 1].includes('taskkill.exe');
+    if (++queries === ${atEntry ? 1 : 2}) {
+      fs.writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify(${JSON.stringify(result)}));
+      fs.writeFileSync(${JSON.stringify(file)}, JSON.stringify(${JSON.stringify(meta)}));
+      return { status: 0, stdout: killing ? 'other' : ${JSON.stringify(new Date(Date.parse(started_at) + 500).toISOString())} };
+    }
+    return { status: 0, stdout: ${JSON.stringify(started_at)} };
+  }
+  if (file === 'taskkill') throw new Error('不能结束已经完成的任务');
+  return spawn(file, args, options);
+};
+syncBuiltinESMExports();
+await import(${JSON.stringify(pathToFileURL(BRIDGE).href)});`);
+    const r = output(await h.start(script, ['cancel', '--run', id], { env: { FOREMAN_TEST_CANCEL_WAIT_MS: '50' } }).done);
+    assert.deepEqual(r, { run_id: id, ok: false, status: 'done', note: M.cancelAlreadyEnded });
+    assert.deepEqual(json(file), meta); assert.deepEqual(h.result(id), result);
+    assert.doesNotThrow(() => process.kill(sleeper.child.pid, 0));
+    assert.equal(fs.existsSync(path.join(dir, 'cancel')), !atEntry);
+  });
+});
+
+test('身份核对期间已正常收尾、之后元数据一直读不出时，cancel 不动记录并报错', async (t) => {
+  const h = sandbox(t), sleeper = h.start(h.write('finishes-then-locked.mjs', 'setInterval(() => {}, 1000);'));
+  await new Promise((resolve) => sleeper.child.once('spawn', resolve));
+  const id = 'finished-then-locked', started_at = new Date().toISOString();
+  const dir = seedRun(h, id, { status: 'running', pid: sleeper.child.pid, started_at, ended_at: undefined, session_id: null });
+  const file = path.join(dir, 'meta.json'), resultFile = path.join(dir, 'result.json');
+  const meta = { ...json(file), status: 'done', session_id: 'finished-session', ended_at: started_at };
+  const result = { status: 'done', session_id: 'finished-session', duration_s: 0 };
+  const script = h.write('finish-then-lock.mjs', `import fs from 'node:fs';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+const spawn = childProcess.spawnSync, read = fs.readFileSync;
+let locked = false;
+fs.readFileSync = (target, ...args) => {
+  if (locked && String(target) === ${JSON.stringify(file)}) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+  return read(target, ...args);
+};
+childProcess.spawnSync = (target, args, options) => {
+  if (String(target).toLowerCase().endsWith('powershell.exe') || target === 'ps') {
+    fs.writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify(${JSON.stringify(result)}));
+    fs.writeFileSync(${JSON.stringify(file)}, JSON.stringify(${JSON.stringify(meta)}));
+    locked = true;
+    return { status: 0, stdout: ${JSON.stringify(new Date(Date.parse(started_at) + 500).toISOString())} };
+  }
+  return spawn(target, args, options);
+};
+syncBuiltinESMExports();
+await import(${JSON.stringify(pathToFileURL(BRIDGE).href)});`);
+  const r = output(await h.start(script, ['cancel', '--run', id]).done);
+  assert.deepEqual(r, { run_id: id, ok: false, status: 'running', error: M.metaUnreadable(file) });
+  assert.deepEqual(json(file), meta); assert.deepEqual(h.result(id), result);
+  assert.doesNotThrow(() => process.kill(sleeper.child.pid, 0));
+});
+
+test('结果为 timeout 而元数据仍 running 时，cancel 等 runner 收尾退出后再标记已处理（磁盘上的元数据一时读不出也等）', async (t) => {
+  for (const busyOnce of [false, true]) await t.test(busyOnce ? '元数据一时读不出' : '元数据读得出', async (t) => {
+    const h = sandbox(t), sleeper = h.start(h.write('retrying-finish.mjs', 'setInterval(() => {}, 1000);'));
+    await new Promise((resolve) => sleeper.child.once('spawn', resolve));
+    const id = 'dismiss-after-finish', started_at = new Date().toISOString();
+    const result = { status: 'timeout', session_id: 'finished-session', duration_s: 1 };
+    const dir = seedRun(h, id, { status: 'running', pid: sleeper.child.pid, started_at, ended_at: undefined, session_id: null }, result);
+    const file = path.join(dir, 'meta.json'), waiting = path.join(h.home, 'waiting-for-finish');
+    // 入口依次读三次 meta.json：findRun、按结果补齐的那次、看磁盘原样的那次；第三次报 EBUSY 时也要等 runner 收尾
+    const script = h.write('observe-finish-wait.mjs', `import fs from 'node:fs';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+const spawn = childProcess.spawnSync, read = fs.readFileSync;
+let reads = 0;
+fs.readFileSync = (target, ...args) => {
+  if (${busyOnce} && String(target) === ${JSON.stringify(file)} && ++reads === 3) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+  return read(target, ...args);
+};
+childProcess.spawnSync = (target, args, options) => {
+  const result = spawn(target, args, options);
+  if (String(target).toLowerCase().endsWith('powershell.exe') || target === 'ps') fs.writeFileSync(${JSON.stringify(waiting)}, 'waiting');
+  return result;
+};
+syncBuiltinESMExports();
+await import(${JSON.stringify(pathToFileURL(BRIDGE).href)});`);
+    const cancel = h.start(script, ['cancel', '--run', id], { env: { FOREMAN_TEST_CANCEL_WAIT_MS: '5000' } });
+    await poll(() => fs.existsSync(waiting), 'cancel 开始等待收尾');
+    await pause(300);
+    assert.equal(cancel.child.exitCode, null); assert.equal(json(file).dismissed_at, undefined);
+    const finished = { ...json(file), status: 'timeout', session_id: 'finished-session', ended_at: new Date().toISOString() };
+    write(file, finished);
+    sleeper.stop(); await sleeper.done;
+    assert.deepEqual(output(await cancel.done), { run_id: id, ok: true, status: 'timeout', dismissed: true });
+    const settled = json(file);
+    assert.ok(Number.isFinite(Date.parse(settled.dismissed_at)));
+    assert.deepEqual({ ...settled, dismissed_at: undefined }, { ...finished, dismissed_at: undefined });
+    assert.deepEqual(h.result(id), result); assert.equal(fs.existsSync(path.join(dir, 'cancel')), false);
+  });
 });
 
 test('强行结束时结果只写了一半，换成补写的最简结果，之后 status 照常读', async (t) => {
   const h = sandbox(t);
   const sleeper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });
   t.after(() => { try { process.kill(sleeper.pid); } catch { /* 已结束 */ } });
-  seedRun(h, 'half-result', { status: 'running', pid: sleeper.pid, ended_at: undefined, group: 'half' });
+  await new Promise((resolve) => sleeper.once('spawn', resolve));
+  seedRun(h, 'half-result', { status: 'running', pid: sleeper.pid, started_at: new Date().toISOString(), ended_at: undefined, group: 'half' });
   fs.writeFileSync(path.join(h.runs, 'half-result', 'result.json'), '{"status":"do');
   const out = output(await h.bridge(['cancel', '--run', 'half-result'], { env: { FOREMAN_TEST_CANCEL_WAIT_MS: '300' } }));
   assert.deepEqual(out, { run_id: 'half-result', ok: true, status: 'cancelled', forced: true });

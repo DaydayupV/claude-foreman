@@ -200,8 +200,11 @@ fs.renameSync = (from, to, ...args) => {
   const first = output(await h.bridge(taskArgs(h, 'run', ['--no-snapshot']), { env: { ...s.env, NODE_OPTIONS: '--import ' + pathToFileURL(preload).href, FOREMAN_TEST_META_WAIT_MS: '300' } }));
   const file = path.join(first.run_dir, 'meta.json'), before = read(file);
   assert.equal(json(file).status, 'running'); assert.equal(json(file).session_id, null); assert.equal(h.result(first.run_id).session_id, 'result-session');
-  assert.deepEqual(output(await h.bridge(['cancel', '--run', first.run_id])), { run_id: first.run_id, ok: false, status: 'done' });
-  assert.equal(read(file), before); assert.equal(json(file).dismissed_at, undefined);
+  const warning = read(path.join(first.run_dir, 'stderr.log')).trimEnd();
+  assert.equal(first.warnings.at(-1), warning); assert.ok(warning.includes('放弃这次写入'));
+  assert.equal(h.result(first.run_id).warnings.includes(warning), false);
+  assert.deepEqual(output(await h.bridge(['cancel', '--run', first.run_id])), { run_id: first.run_id, ok: false, status: 'done', note: M.cancelAlreadyEnded });
+  assert.notEqual(read(file), before); assert.equal(json(file).status, 'done'); assert.equal(json(file).session_id, 'result-session'); assert.equal(json(file).dismissed_at, undefined);
   const resumed = output(await h.bridge(['resume', '--run', first.run_id, '--brief', '-', '--level', 'complex', '--no-snapshot'], { env: s.env }));
   assert.equal(resumed.session_id, 'result-session'); assert.deepEqual(s.calls().at(-1).args.slice(-2), ['result-session', '-']);
   assert.deepEqual(s.calls().at(-1).args.slice(0, 2), ['exec', 'resume']);
@@ -238,7 +241,8 @@ fs.renameSync = (from, to, ...args) => {
 
 test('cancel 等待期间进程退出而元数据未更新时采用结果状态', async (t) => {
   const h = sandbox(t), sleeper = h.start(h.write('wait-cancel.mjs', 'setInterval(() => {}, 1000);'));
-  const dir = seedRun(h, 'completed-while-waiting', { status: 'running', pid: sleeper.child.pid });
+  await new Promise((resolve) => sleeper.child.once('spawn', resolve));
+  const dir = seedRun(h, 'completed-while-waiting', { status: 'running', pid: sleeper.child.pid, started_at: new Date().toISOString() });
   const handle = h.startBridge(['cancel', '--run', 'completed-while-waiting']);
   await poll(() => fs.existsSync(path.join(dir, 'cancel')), 'cancel 开始等待');
   fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({ status: 'done', session_id: 'finished' }));
@@ -259,14 +263,15 @@ fs.readFileSync = (file, ...args) => {
   return read(file, ...args);
 };`);
   const out = output(await h.bridge(['cancel', '--run', 'result-late'], { env: { NODE_OPTIONS: '--import ' + pathToFileURL(preload).href } }));
-  assert.deepEqual(out, { run_id: 'result-late', ok: false, status: 'done' });
+  assert.deepEqual(out, { run_id: 'result-late', ok: false, status: 'done', note: M.cancelAlreadyEnded });
   assert.equal(json(path.join(dir, 'meta.json')).dismissed_at, undefined);
 });
 
 test('强行结束前一刻调度进程自己收完了尾、结果正被占着时，cancel 照原样返回，不改成已取消', async (t) => {
   const h = sandbox(t), sleeper = h.start(h.write('finishing.mjs', 'setInterval(() => {}, 1000);'));
+  await new Promise((resolve) => sleeper.child.once('spawn', resolve));
   const written = { status: 'done', session_id: 'finished' };
-  const dir = seedRun(h, 'finished-at-kill', { status: 'done', pid: sleeper.child.pid }, written);
+  const dir = seedRun(h, 'finished-at-kill', { status: 'done', pid: sleeper.child.pid, started_at: new Date().toISOString() }, written);
   const metaFile = path.join(dir, 'meta.json'), resultFile = path.join(dir, 'result.json');
   // 调度进程活着时 meta.json 读出来还是运行中（它在被结束的那一刻才写完终态）；result.json 一直被占着
   const preload = h.write('finished-at-kill.mjs', `import fs from 'node:fs';
@@ -312,11 +317,12 @@ await import(${JSON.stringify(pathToFileURL(CODEX).href)});`);
   } finally { if (holder.exitCode === null && holder.signalCode === null) holder.kill(); await closed; }
 });
 
-test('cancel 等待时 meta.json 读不出不算已停下，调度进程退出后不再等满就补写记录', async (t) => {
+test('cancel 等待时 meta.json 读不出不算已停下，进程自行退出后只标记中断，不补写结果', async (t) => {
   const h = sandbox(t), id = 'unreadable-meta';
   const sleeper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });
   t.after(() => { try { process.kill(sleeper.pid); } catch { /* 已结束 */ } });
-  const dir = seedRun(h, id, { status: 'running', pid: sleeper.pid, ended_at: undefined });
+  await new Promise((resolve) => sleeper.once('spawn', resolve));
+  const dir = seedRun(h, id, { status: 'running', pid: sleeper.pid, started_at: new Date().toISOString(), ended_at: undefined });
   const started = Date.now();
   const handle = h.startBridge(['cancel', '--run', id], { env: { FOREMAN_TEST_CANCEL_WAIT_MS: '15000' } });
   await poll(() => fs.existsSync(path.join(dir, 'cancel')), '终止标记');
@@ -326,16 +332,18 @@ test('cancel 等待时 meta.json 读不出不算已停下，调度进程退出�
   assert.equal(handle.child.exitCode, null);
   process.kill(sleeper.pid);
   const out = output(await handle.done);
-  assert.deepEqual(out, { run_id: id, ok: true, status: 'cancelled', forced: true });
+  assert.deepEqual(out, { run_id: id, ok: true, status: 'interrupted', dismissed: true, note: M.cancelRunnerGone });
   assert.ok(Date.now() - started < 10000, '调度进程退出后不应等满 15 秒');
-  assert.equal(json(path.join(dir, 'meta.json')).status, 'cancelled');
-  assert.equal(h.result(id).status, 'cancelled');
+  const m = json(path.join(dir, 'meta.json'));
+  assert.equal(m.status, 'interrupted'); assert.ok(Number.isFinite(Date.parse(m.dismissed_at)));
+  assert.equal(fs.existsSync(path.join(dir, 'result.json')), false);
 });
 
 test('cancel 的结束写入被占用时，标记已处理返回错误，强行结束仍返回成功并带警告', async (t) => {
   for (const forced of [false, true]) await t.test(forced ? '强行结束' : '标记已处理', async (t) => {
     const h = sandbox(t), sleeper = forced ? h.start(h.write('sleeper.mjs', 'setInterval(() => {}, 1000);')) : null;
-    const id = 'blocked-cancel', dir = seedRun(h, id, { status: forced ? 'running' : 'interrupted', pid: sleeper?.child.pid ?? 0 });
+    if (sleeper) await new Promise((resolve) => sleeper.child.once('spawn', resolve));
+    const id = 'blocked-cancel', dir = seedRun(h, id, { status: forced ? 'running' : 'interrupted', pid: sleeper?.child.pid ?? 0, started_at: new Date().toISOString() });
     const script = h.write('cancel-blocked.mjs', `import fs from 'node:fs';
 const file = ${JSON.stringify(path.join(dir, 'meta.json'))}, write = fs.writeFileSync, rename = fs.renameSync;
 fs.writeFileSync = (target, ...args) => {
@@ -381,7 +389,8 @@ await import(${JSON.stringify(pathToFileURL(BRIDGE).href)});`);
     if (scene !== 'run') {
       const sleeper = scene === 'forced' ? spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true }) : null;
       if (sleeper) t.after(() => { try { process.kill(sleeper.pid); } catch { /* 已结束 */ } });
-      seedRun(h, scene, { status: sleeper ? 'running' : 'interrupted', pid: sleeper?.pid ?? 0, ended_at: undefined });
+      if (sleeper) await new Promise((resolve) => sleeper.once('spawn', resolve));
+      seedRun(h, scene, { status: sleeper ? 'running' : 'interrupted', pid: sleeper?.pid ?? 0, started_at: new Date().toISOString(), ended_at: undefined });
       args = ['cancel', '--run', scene];
     }
     const handle = h.start(script, args, { env: { FOREMAN_TEST_CANCEL_WAIT_MS: '300' } });

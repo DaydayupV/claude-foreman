@@ -163,11 +163,13 @@ function metaWriteWarning(dir) {
   return M.metaWriteGaveUp(path.join(dir, 'meta.json'), sec, error);
 }
 
-// 收尾写不进元数据时，从结果补齐内存里的终态，不回写磁盘。
+// 收尾写不进元数据时，结果里的终态优先于进程号（可能已被复用），只补齐内存。
 function settleMeta(dir, meta) {
-  if (meta?.status !== 'running' || pidAlive(meta.pid)) return meta;
+  if (meta?.status !== 'running') return meta;
+  const file = path.join(dir, 'result.json');
+  if (!fs.existsSync(file)) return meta;
   let result;
-  try { result = JSON.parse(fs.readFileSync(path.join(dir, 'result.json'), 'utf8')); } catch { return meta; }
+  try { result = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return meta; }
   if (!result?.status) return meta;
   const settled = { ...meta, status: result.status };
   if (!settled.session_id && result.session_id) settled.session_id = result.session_id;
@@ -178,7 +180,7 @@ function settleMeta(dir, meta) {
   return settled;
 }
 
-function findRun(ref) {
+function findRun(ref, { tolerateUnreadable = false } = {}) {
   const id = ref === 'last' ? listRuns()[0] : ref;
   if (!id) die(M.noRuns);
   const dir = path.join(RUNS_ROOT, id);
@@ -190,6 +192,7 @@ function findRun(ref) {
     try { return { id, dir, meta: settleMeta(dir, JSON.parse(retryBusy(() => fs.readFileSync(file, 'utf8')))) }; }
     catch (e) {
       if (e.code === 'ENOENT') die(M.runNotFound(ref));
+      if (tolerateUnreadable && (['EPERM', 'EACCES', 'EBUSY'].includes(e.code) || e instanceof SyntaxError && Date.now() >= deadline)) return { id, dir, meta: null };
       if (['EPERM', 'EACCES', 'EBUSY'].includes(e.code)) die(M.metaUnreadable(file));
       if (!(e instanceof SyntaxError) || Date.now() >= deadline) throw e;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
@@ -305,15 +308,20 @@ function checkAdmission(meta, cfg) {
   return null;
 }
 
-// 任务的结束时间。中断的任务没写结束时间，用记录文件最后修改的时间，也就是最后一次活动的时间。
+// 中断任务用最后活动时间；标记已处理会改写元数据，需排除它、临时文件和终止标记。
 function runEnd(dir, meta) {
   if (meta.ended_at) return Date.parse(meta.ended_at);
   if (isRunning(meta)) return Date.now();
   let last = 0;
-  for (const file of ['events.jsonl', 'meta.json']) {
-    try { last = Math.max(last, fs.statSync(path.join(dir, file)).mtimeMs); } catch { /* 没有这个文件 */ }
+  let files = ['events.jsonl', 'meta.json'];
+  if (meta.dismissed_at) {
+    try { files = fs.readdirSync(dir).filter((file) => file !== 'meta.json' && !file.startsWith('meta.json.') && file !== CANCEL_FILE); }
+    catch { files = []; } // 目录刚被删掉
   }
-  return last || Date.now();
+  for (const file of files) {
+    try { const st = fs.statSync(path.join(dir, file)); if (st.isFile()) last = Math.max(last, st.mtimeMs); } catch { /* 没有这个文件 */ }
+  }
+  return last || (meta.dismissed_at ? Date.parse(meta.started_at) : Date.now());
 }
 
 function runOutcome(run) {

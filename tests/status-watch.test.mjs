@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { sandbox, taskArgs, output, poll, seedRun, expected, json, read, MESSAGES } from './helpers.mjs';
+import { spawn } from 'node:child_process';
+import { sandbox, taskArgs, output, failed, poll, seedRun, expected, json, read, MESSAGES } from './helpers.mjs';
 import { command } from './fixtures/reports.mjs';
 import { watchRecords, watchText } from './fixtures/watch.mjs';
 const M = MESSAGES.zh;
@@ -69,13 +70,67 @@ test('cancel 对已完成任务不改结果，对未正常结束任务标记已�
     const dir = seedRun(h, status, { status }, { status });
     const original = read(path.join(dir, 'result.json'));
     const r = output(await h.bridge(['cancel', '--run', status]));
-    if (['done', 'failed', 'cancelled'].includes(status)) assert.deepEqual(r, { run_id: status, ok: false, status });
+    if (['done', 'failed', 'cancelled'].includes(status)) assert.deepEqual(r, { run_id: status, ok: false, status, note: M.cancelAlreadyEnded });
     else {
       assert.deepEqual(r, { run_id: status, ok: true, status, dismissed: true });
       assert.ok(Number.isFinite(Date.parse(json(path.join(dir, 'meta.json')).dismissed_at)));
     }
     assert.equal(read(path.join(dir, 'result.json')), original);
     assert.equal(fs.existsSync(path.join(dir, 'cancel')), false);
+  }
+});
+
+test('status 列出读不了的记录数，单任务退回结果并追加警告，两个文件都读不了仍报原错误', async (t) => {
+  const h = sandbox(t), id = 'unreadable-status', written = { status: 'done', warnings: ['已有提示'] };
+  const dir = seedRun(h, id, {}, written), file = path.join(dir, 'meta.json');
+  const resultFile = path.join(dir, 'result.json'), originalResult = read(resultFile);
+  let holder, closed, stdout = '', stderr = '';
+  if (process.platform === 'win32') {
+    const command = `[Console]::OutputEncoding = [Text.UTF8Encoding]::new(); $held = [IO.File]::Open('${file.replaceAll("'", "''")}','Open','Read','None'); try { [Console]::WriteLine('已占住'); [Console]::ReadLine() | Out-Null } finally { $held.Dispose() }`;
+    holder = spawn(path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'), ['-NoProfile', '-NonInteractive', '-Command', command], { env: h.env, windowsHide: true });
+    holder.stdout.setEncoding('utf8').on('data', (s) => { stdout += s; });
+    holder.stderr.setEncoding('utf8').on('data', (s) => { stderr += s; });
+    closed = new Promise((resolve, reject) => { holder.once('error', reject); holder.once('close', resolve); });
+  } else fs.writeFileSync(file, '{"id":');
+  try {
+    if (holder) await poll(() => stdout.includes('已占住'), 'PowerShell 独占 meta.json');
+    const onlyUnreadable = await h.bridge(['status']);
+    assert.equal(onlyUnreadable.code, 0); assert.equal(onlyUnreadable.stdout, D.statusUnreadable(1) + '\n');
+    const fallback = output(await h.bridge(['status', '--run', id]));
+    assert.deepEqual(fallback, { ...written, warnings: [...written.warnings, M.metaUnreadableUsedResult(file)] });
+    assert.equal(read(resultFile), originalResult);
+    seedRun(h, 'readable-status', {}, { status: 'done' });
+    const mixed = await h.bridge(['status']);
+    assert.equal(mixed.code, 0); assert.ok(mixed.stdout.includes('readable-status'));
+    assert.ok(mixed.stdout.endsWith(D.statusUnreadable(1) + '\n'), mixed.stdout);
+    fs.writeFileSync(resultFile, '{"status":');
+    const bothUnreadable = await h.bridge(['status', '--run', id]);
+    if (holder) failed(bothUnreadable, M.metaUnreadable(file));
+    else { assert.equal(bothUnreadable.code, 1); assert.match(bothUnreadable.stderr, /SyntaxError/); }
+  } finally {
+    if (holder) { holder.stdin.end(); assert.equal(await closed, 0, stderr); }
+  }
+});
+
+test('已处理的中断任务按其他文件最后活动时间算用时，排除元数据、残留临时文件、终止标记和目录', async (t) => {
+  const h = sandbox(t), start = Date.now() - 14 * 60000;
+  for (const empty of [false, true]) {
+    const id = empty ? 'dismissed-empty' : 'dismissed-files';
+    const dir = seedRun(h, id, { status: 'interrupted', started_at: new Date(start).toISOString(), ended_at: undefined, dismissed_at: new Date().toISOString() });
+    fs.writeFileSync(path.join(dir, 'meta.json.49320.tmp'), '{}'); fs.writeFileSync(path.join(dir, 'cancel'), '');
+    fs.mkdirSync(path.join(dir, '.shadow'));
+    if (empty) fs.rmSync(path.join(dir, 'events.jsonl'));
+    else for (const file of ['brief.md', 'events.jsonl', 'stderr.log']) {
+      fs.writeFileSync(path.join(dir, file), '最后活动');
+      fs.utimesSync(path.join(dir, file), new Date(start + 1000), new Date(start + 1000));
+    }
+    const late = new Date(start + 13 * 60000);
+    for (const file of ['meta.json', 'meta.json.49320.tmp', 'cancel', '.shadow']) fs.utimesSync(path.join(dir, file), late, late);
+  }
+  const list = await h.bridge(['status']); assert.equal(list.code, 0);
+  for (const [id, sec] of [['dismissed-files', 1], ['dismissed-empty', 0]]) {
+    const row = list.stdout.split('\n').find((line) => line.startsWith(id));
+    assert.ok(row?.includes(D.took(D.duration(sec))), list.stdout);
   }
 });
 

@@ -154,7 +154,7 @@ function finishRun(run, result, code = result.exit_code, observed = {}) {
   const resultFile = path.join(run.ctx.dir, 'result.json');
   fs.writeFileSync(`${resultFile}.tmp`, JSON.stringify(result, null, 2));
   replaceFile(`${resultFile}.tmp`, resultFile);
-  saveMeta(run.ctx.dir, run.meta, { final: true }); // 在 result.json 之后写，watch 看到状态变化时结果已经就绪
+  if (!saveMeta(run.ctx.dir, run.meta, { final: true })) result.warnings.push(metaWriteWarning(run.ctx.dir)); // 结果已经落盘，提示只加到 stdout
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');
   process.exitCode = code;
   return result;
