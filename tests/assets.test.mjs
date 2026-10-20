@@ -272,6 +272,19 @@ test('assets 参数错误给出用法或原因', async (t) => {
   failed(await h.bridge(['assets', 'cut', '--image', image, '--out', path.join(h.cwd, 'cut'), '--palette', 'red']), M.assetsBadColor('red'));
 });
 
+test('assets 不读配置、不碰记录目录：配置缺失或写坏了照样能用', async (t) => {
+  const h = sandbox(t, { config: false }), legacy = path.join(h.home, '.claude/codex-runs');
+  fs.mkdirSync(legacy, { recursive: true });
+  const template = (name) => h.bridge(['assets', 'template', '--out', path.join(h.cwd, `${name}.png`), '--cols', 1, '--rows', 1]);
+  output(await template('missing'));
+  assert.ok(!fs.existsSync(h.userConfig));
+  h.config('{ broken');
+  output(await template('broken'));
+  // 旧记录目录没被搬走，新的记录目录和 watch 启动器都没有生成。
+  assert.ok(fs.existsSync(legacy));
+  assert.ok(!fs.existsSync(h.runs));
+});
+
 test('结果的 image_calls 列出每次出图的参数，要求传参考图却没传时提示', async (t) => {
   const h = sandbox(t);
   const call = (input) => ({ type: 'response_item', payload: { type: 'custom_tool_call', name: 'exec', input } });

@@ -37,9 +37,10 @@ const { cmdStatus, cmdCancel, cmdAwaitBusy } = await import('./status.mjs');
 const { cmdAssets } = await import('./assets.mjs');
 
 // 先加载配置，再迁移记录和重写启动器；这些步骤仍在解析参数之前完成。
+// assets 例外：它只在本机处理图片，用不到配置和记录目录，所以两步都跳过，配置缺失或写坏了也照样能用。
 const load = (cwd) => loadConfig(cwd, adapters);
-const CONFIG = load(null);
-records.initializeRecords(CONFIG);
+const CONFIG = process.argv[2] === 'assets' ? null : load(null);
+if (CONFIG) records.initializeRecords(CONFIG);
 const { RUNS_ROOT, findRun, readMeta } = records; // 记录目录在 initializeRecords 之后才定下来
 
 function parseArgs(argv) {
