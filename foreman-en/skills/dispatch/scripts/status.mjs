@@ -45,6 +45,7 @@ function cmdStatus(o, sessionStats) {
     if (!run.meta) { unreadable++; return []; }
     const outcome = runOutcome(run);
     const m = run.meta;
+    if (m.participant === 'host') return [{ cells: [rid, 'submit', D.hostSubmitted(new Date(m.submitted_at).toTimeString().slice(0, 5), m.round), m.level, C.bold(modelLabel(m)), ''], tail: `${D.statusGroup(m.group)}  ${C.dim(`@ ${m.cwd}`)}`, detail: '' }];
     const { mark, color, word } = outcomeStyle(outcome);
     const r = outcome.result;
     const elapsed = runEnd(dir, m) - Date.parse(m.started_at);
@@ -84,6 +85,7 @@ function sameRunner(meta) {
 // 进程已退出或进程号被复用、没有结果的记为中断；其他未正常完成的任务只标记为已处理。
 async function cmdCancel(o, sessionStats) {
   const run = findRun(need(o, 'run'));
+  if (run.meta.participant === 'host') die(M.hostNoCancel(run.id));
   const print = (x) => process.stdout.write(`${JSON.stringify({ run_id: run.id, ...x }, null, 2)}\n`);
   const dismiss = (m, status, note) => {
     Object.assign(m, { status, dismissed_at: new Date().toISOString() });

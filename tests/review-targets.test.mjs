@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { sandbox, output, failed, baseConfig, opencodeAgent, piAgent, apiAgent, read, json, write, poll, ROOT, MESSAGES } from './helpers.mjs';
+import { plannedSandbox as sandbox, output, failed, baseConfig, opencodeAgent, piAgent, apiAgent, read, json, write, poll, ROOT, MESSAGES } from './helpers.mjs';
 import { review } from './fixtures/reports.mjs';
 import { apiServer } from './fake/api-server.mjs';
 const M = MESSAGES.zh;
@@ -39,7 +39,7 @@ test('四种审查对象的参数错误在登记和调用前拒绝', async (t) =
     failed(await h.bridge(['review', '--cwd', h.cwd, '--level', 'normal', ...material]), M.missingOpt('brief'));
     failed(await h.bridge(args(h, material), { input: '  ' }), M.emptyBrief);
   }
-  assert.equal(h.records().length, 0); assert.equal(h.calls().length, 0);
+  assert.equal(h.records().filter((m) => m.participant !== 'host').length, 0); assert.equal(h.calls().length, 0);
 });
 
 for (const target of ['files', 'claims']) for (const git of [true, false]) test(`${target} 审查能读${git ? '干净仓库' : '非 Git 目录'}，范围和整文件指纹正确`, async (t) => {
@@ -138,7 +138,7 @@ test('API 非 Git 的 diff 沿用普通开头，材料超限在登记和请求�
     assert.equal(rejected.code, 2); assert.equal(rejected.stdout, '');
     assert.ok(rejected.stderr.includes(target === 'diff' ? '要审查的改动共' : '材料共'), rejected.stderr);
   }
-  assert.equal(h.records().length, 1); assert.equal(api.requests.length, 1);
+  assert.equal(h.records().filter((m) => m.participant !== 'host').length, 1); assert.equal(api.requests.length, 1);
 });
 
 for (const agent of ['oc', 'pi', 'api']) test(`visual 在单席、格外点名、计划和席位启动都拒绝 ${agent}`, async (t) => {
@@ -151,7 +151,7 @@ for (const agent of ['oc', 'pi', 'api']) test(`visual 在单席、格外点名�
   const plan = json(p.file); plan.seats[0] = { ...plan.seats[0], agent, model: c.agents[agent].model, effort: null };
   write(p.file, plan); c.modules.review.normal = [{ agent }]; h.config(c);
   failed(await h.bridge(launch(p)), message);
-  assert.equal(h.records().length, 0); assert.equal(h.calls().length, 0); assert.equal(api.requests.length, 0);
+  assert.equal(h.records().filter((m) => m.participant !== 'host').length, 0); assert.equal(h.calls().length, 0); assert.equal(api.requests.length, 0);
 });
 
 test('Codex visual 审查逐图提示，图片路径和能力可见，不把图片当文本', async (t) => {
@@ -185,11 +185,11 @@ test('席位启动拒绝材料覆盖和变化，原材料可启动，旧计划�
   }
   h.write('source.txt', 'changed\n'); failed(await h.bridge(launch(p)), M.planMaterialChanged(p.plan_id));
   fs.unlinkSync(path.join(h.cwd, 'source.txt')); failed(await h.bridge(launch(p)), M.planMaterialChanged(p.plan_id));
-  assert.equal(h.records().length, 0); assert.equal(h.calls().length, 0);
+  assert.equal(h.records().filter((m) => m.participant !== 'host').length, 0); assert.equal(h.calls().length, 0);
   h.write('source.txt', 'original\n'); const r = output(await h.bridge(launch(p)));
   assert.equal(r.review_scope.fingerprint, p.review.fingerprint); assert.equal(r.stale, false);
   h.initGit(); h.write('source.txt', 'diff material\n');
-  const old = output(await h.bridge(planArgs(h))); const saved = json(old.file); delete saved.review; write(old.file, saved);
+  const old = output(await h.bridge(planArgs(h))); const saved = json(old.file); delete saved.review; delete saved.host; write(old.file, saved);
   const legacy = output(await h.bridge(launch(old))); assert.equal(legacy.review_target, 'diff'); assert.equal(legacy.stale, false);
 });
 
@@ -206,7 +206,7 @@ test('diff 计划拒绝附件变化，审查结束时也复核补丁之外的附
   const p = output(await h.bridge(planArgs(h, ['--file', '../evidence.txt:1-1'])));
   write(attachment, 'first\nchanged\n');
   failed(await h.bridge(launch(p)), M.planMaterialChanged(p.plan_id));
-  assert.equal(h.records().length, 0); assert.equal(h.calls().length, 0);
+  assert.equal(h.records().filter((m) => m.participant !== 'host').length, 0); assert.equal(h.calls().length, 0);
   write(attachment, 'first\noriginal\n');
   const gate = path.join(h.home, 'release'), s = h.scenario({ steps: [{ wait_for: gate }] });
   const running = h.startBridge(launch(p), { env: s.env }); await poll(() => s.calls().length, '审查开始');
@@ -232,14 +232,14 @@ test('diff 计划的改动被撤回后拒绝席位，非 Git 计划没有指纹'
   const r = output(await h.bridge(launch(plain))); assert.equal(r.stale, null);
   h.initGit(); h.write('source.txt', 'change\n'); const p = output(await h.bridge(planArgs(h)));
   h.write('source.txt', 'before\n'); failed(await h.bridge(launch(p)), M.planMaterialChanged(p.plan_id));
-  assert.equal(h.records().length, 1); assert.equal(h.calls().length, 1);
+  assert.equal(h.records().filter((m) => m.participant !== 'host').length, 1); assert.equal(h.calls().length, 1);
 });
 
 for (const agent of ['oc', 'pi']) test(`${agent} 的 diff 补丁超限时不登记、不调用`, async (t) => {
   const h = sandbox(t); configure(h, agent); h.initGit(); h.write('source.txt', 'x'.repeat(200001));
   const r = await h.bridge(args(h)); assert.equal(r.code, 2); assert.equal(r.stdout, '');
   const chars = Number(/共 (\d+) 字符/.exec(r.stderr)?.[1]); assert.ok(chars > 200000);
-  assert.ok(r.stderr.includes(M.reviewTooLarge(chars, 200000))); assert.equal(h.records().length, 0); assert.equal(h.calls().length, 0);
+  assert.ok(r.stderr.includes(M.reviewTooLarge(chars, 200000))); assert.equal(h.records().filter((m) => m.participant !== 'host').length, 0); assert.equal(h.calls().length, 0);
 });
 
 for (const change of ['修改', '删除', 'Git 错误']) test(`审查结束时${change}材料不会丢失结果，stale 和原始错误如实记录`, async (t) => {

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { sandbox, output, failed, baseConfig, opencodeAgent, piAgent, apiAgent, taskArgs, read, json, write, poll, seedRun, MESSAGES } from './helpers.mjs';
+import { plannedSandbox as sandbox, output, failed, baseConfig, opencodeAgent, piAgent, apiAgent, taskArgs, read, json, write, poll, seedRun, MESSAGES } from './helpers.mjs';
 import { discussion, review, report } from './fixtures/reports.mjs';
 import { apiServer } from './fake/api-server.mjs';
 const M = MESSAGES.zh;
@@ -32,7 +32,7 @@ for (const kind of ['discuss', 'review']) for (const source of ['foreman', 'conf
 for (const kind of ['discuss', 'review']) test(`audited ${M.modeNames[kind]}拒绝禁用快照，拍照失败不启动`, async (t) => {
   const h = sandbox(t);
   failed(await h.bridge(taskArgs(h, kind, ['--no-snapshot'])), M.auditedNoSnapshot(kind));
-  assert.equal(h.records().length, 0); assert.equal(h.calls().length, 0);
+  assert.equal(h.records().filter((m) => m.participant !== 'host').length, 0); assert.equal(h.calls().length, 0);
   const r = output(await h.bridge(taskArgs(h, kind), { env: { PATH: h.home } }), 1);
   assert.equal(r.status, 'failed'); assert.equal(r.readonly, 'audited'); assert.equal(r.session_id, null);
   assert.equal(h.calls().length, 0); assert.equal(json(path.join(r.run_dir, 'meta.json')).status, 'failed');

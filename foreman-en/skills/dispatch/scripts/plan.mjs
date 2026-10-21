@@ -59,6 +59,7 @@ function routeConfirmation(sessionId, route) {
 }
 
 function cmdPlan(o, load, adapters) {
+  if (o['host-role'] != null && !['discuss', 'review'].includes(o.module)) die(M.hostRoleOnly);
   if (o.module !== 'review' && (o.target != null || o.file.length || o.uncommitted || o.base != null || o.commit != null)) die(M.planReviewOnly);
   if (!Object.hasOwn(MODULE_CELLS, o.module)) die(M.planModuleChoices(M.list(Object.keys(MODULE_CELLS))));
   if (o.module === 'image') {
@@ -74,14 +75,16 @@ function cmdPlan(o, load, adapters) {
     return { seat: i + 1, agent: resolveAgentAlias(match[1], cfg, true), role: match[2]?.trim() || null };
   });
   const plan = { module: o.module, cell: o.cell, seats, ...(o.module === 'image' ? { route: Number(o.route) } : {}) };
+  if (['discuss', 'review'].includes(o.module)) plan.host = { seat: 0, role: o['host-role'] ?? null };
   if (o.module === 'review') {
     const material = validateReviewMaterial({ ...o, cwd });
     plan.review = { target: o.target || 'diff', file: o.file, uncommitted: (o.target || 'diff') === 'diff' && !o.base && !o.commit,
       base: o.base ?? null, commit: o.commit ?? null, fingerprint: material?.fingerprint ?? null };
   }
   const cell = validatePlan(cfg, plan, adapters);
+  if (cell.outside_cell) plan.outside_cell = true;
   plan.seats = seats.map((seat) => {
-    const profile = resolveProfile(cfg, { ...seat, module: o.module, cell: o.cell }, {}, adapters);
+    const profile = resolveProfile(cfg, { ...seat, module: o.module, cell: o.cell, ...(plan.outside_cell ? { plan: true, outside_cell: true } : {}) }, {}, adapters);
     return { ...seat, model: profile.model ?? null, effort: profile.effort, required: cell.required.includes(seat.agent) };
   });
   if (o.module === 'image') plan.route_confirmation = routeConfirmation(CLAUDE_SESSION, plan.route);
@@ -97,10 +100,15 @@ function cmdPlan(o, load, adapters) {
     try { fs.writeFileSync(file, JSON.stringify(plan, null, 2) + '\n', { flag: 'wx' }); break; }
     catch (e) { if (e.code !== 'EEXIST') throw e; }
   }
-  const placeholders = M.planPlaceholders;
-  const brief = o.module === 'discuss' ? placeholders.topic : o.module === 'review' ? placeholders.review : placeholders.brief;
-  const commands = seats.map((seat) => `node "${ENTRY}" ${o.module} --plan ${plan.plan_id} --seat ${seat.seat} --brief "${brief}" --title "${placeholders.title}"${['run', 'image'].includes(o.module) ? ` --scope "${o.module === 'image' ? placeholders.outDir : placeholders.scope}"` : ''}`);
+  const commands = startCommands(plan);
+  if (plan.host) commands.unshift(`node "${ENTRY}" submit --plan ${plan.plan_id} --report "${M.planPlaceholders.answer}"`);
   process.stdout.write(JSON.stringify({ ...plan, file, commands }, null, 2) + '\n');
+}
+
+function startCommands(plan) {
+  const p = M.planPlaceholders, module = plan.module;
+  const brief = module === 'discuss' ? p.topic : module === 'review' ? p.review : p.brief;
+  return plan.seats.map((seat) => `node "${ENTRY}" ${module} --plan ${plan.plan_id} --seat ${seat.seat} --brief "${brief}" --title "${p.title}"${['run', 'image'].includes(module) ? ` --scope "${module === 'image' ? p.outDir : p.scope}"` : ''}`);
 }
 
 // 不给 runs 时从全部记录里找这份计划的任务；实时查看传入组里的任务，免得每秒把全部记录读一遍。
@@ -122,7 +130,7 @@ function planStatus(id, runs = null, plan = readPlan(id)) {
   const required = seats.filter((seat) => seat.required);
   const needed = ['run', 'image'].includes(plan.module) ? seats : required;
   const ended = (seat) => seat.run_id !== null && seat.status !== 'running';
-  const state = needed.length ? needed.every((seat) => seat.ok === true) ? 'complete'
+  let state = needed.length ? needed.every((seat) => seat.ok === true) ? 'complete'
     : needed.some((seat) => ended(seat) && !seat.ok) ? 'incomplete' : 'pending'
     : seats.every(ended) ? seats.some((seat) => seat.ok) ? 'complete' : 'incomplete' : 'pending';
   // 补漏席还没交回有效结果（没启动、还在跑、失败或结果无效）都算没跑完。
@@ -130,8 +138,22 @@ function planStatus(id, runs = null, plan = readPlan(id)) {
     const role = seat.role?.trim().toLowerCase();
     return (role === '补漏' || role === 'gap') && seat.ok !== true;
   });
+  const missing = needed.filter((seat) => seat.ok !== true).map(({ seat, agent, status }) => ({ seat, agent, status, label: labels.get(seat) ?? D.statusName(status) }));
+  let host;
+  if (plan.host) {
+    const answers = runs.filter((run) => run.meta.participant === 'host');
+    const external = runs.filter((run) => run.meta.participant !== 'host');
+    const first = answers[0]?.meta.submitted_at;
+    host = { seat: 0, role: plan.host.role, status: answers.length ? 'submitted' : 'missing',
+      rounds: answers.map(({ id: run_id, meta: m }) => ({ round: m.round, run_id, submitted_at: m.submitted_at, report_sha256: m.report_sha256, model: m.model, author: m.author })),
+      before_external_start: !external.length ? null : !!first && Date.parse(first) < Math.min(...external.map((run) => Date.parse(run.meta.started_at))) };
+    if (!answers.length) {
+      if (state === 'complete') state = 'pending';
+      missing.unshift({ seat: 0, agent: 'claude-code', status: 'not_submitted', label: D.hostNotSubmitted });
+    }
+  }
   return { plan_id: id, module: plan.module, cell: plan.cell, ...(plan.module === 'image' ? { route: plan.route } : {}), group: plan.group, created_at: plan.created_at, state, seats,
-    missing: needed.filter((seat) => seat.ok !== true).map(({ seat, agent, status }) => ({ seat, agent, status, label: labels.get(seat) ?? D.statusName(status) })),
+    ...(host ? { host } : {}), missing,
     missing_required: required.filter((seat) => seat.ok !== true).map(({ seat, agent, status }) => ({ seat, agent, status })),
     gap_unfinished: gap.map(({ seat, agent, status }) => ({ seat, agent, status })) };
 }
@@ -143,7 +165,7 @@ function describePlans(runs, all = runs.all ?? runs) {
     if (!plan) return [];
     const { state, missing, seats: statuses, gap_unfinished: gap } = planStatus(id, all, plan);
     const seats = (list, label) => D.list(list.map((s) => D.watchPlanSeat(s.agent, s.seat, label(s))));
-    const ended = missing.filter((s) => !['not_started', 'running'].includes(s.status));
+    const ended = missing.filter((s) => !['not_started', 'running', 'not_submitted'].includes(s.status));
     const waiting = missing.filter((s) => s.status === 'not_started');
     const detail = state === 'incomplete' && ended.length ? D.watchPlanMissing(seats(ended, (s) => s.label))
       : state === 'pending' && waiting.length ? D.watchPlanNotStarted(seats(waiting, () => null)) : '';
@@ -153,10 +175,10 @@ function describePlans(runs, all = runs.all ?? runs) {
       const seat = statuses.find((seat) => seat.seat === s.seat);
       return outcomeStyle(runOutcome(all.find((run) => run.id === seat.run_id))).word;
     };
-    const details = [detail, stale.length ? D.watchPlanStale(seats(stale, () => null)) : '',
+    const details = [missing.some((s) => s.status === 'not_submitted') ? D.hostNotSubmitted : '', detail, stale.length ? D.watchPlanStale(seats(stale, () => null)) : '',
       gap.length ? D.watchPlanGap(seats(gap, gapLabel)) : ''].filter(Boolean).join('; ');
     return [{ id, state, text: D.watchPlanState(id, state, details) }];
   });
 }
 
-export { cmdPlan, readPlan, planStatus, describePlans, routeConfirmation };
+export { cmdPlan, readPlan, startCommands, planStatus, describePlans, routeConfirmation };

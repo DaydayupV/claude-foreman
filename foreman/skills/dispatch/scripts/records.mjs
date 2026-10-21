@@ -260,20 +260,41 @@ function groupScopeOwner(meta) {
 
 // 准入检查（在登记锁内）：同一协作方正在运行的任务不超过它的 max_parallel，所有组和会话都算，
 // 因为服务商的限流和额度是按账号的；同组的执行任务写入范围不能重叠。
-function checkAdmission(meta, cfg) {
+// 登记锁内读全部记录：一时读不出的（正被替换、被占用）合计最多重读约 1 秒，仍读不出的列进 unreadable，由调用方拒绝。
+function readRunsLocked(exceptId) {
   const runs = [], unreadable = [], deadline = Date.now() + 1000;
-  for (const id of listRuns().filter((id) => id !== meta.id)) {
+  for (const id of listRuns().filter((id) => id !== exceptId)) {
     const dir = path.join(RUNS_ROOT, id), file = path.join(dir, 'meta.json');
     for (;;) {
-      try { runs.push({ id, dir, meta: settleMeta(dir, JSON.parse(fs.readFileSync(file, 'utf8'))) }); break; }
-      catch (e) {
+      try {
+        const meta = JSON.parse(fs.readFileSync(file, 'utf8'));
+        // 内容是 null、数字这类合法 JSON 但不是记录的，和读不出一样处理。
+        if (!meta || typeof meta !== 'object') throw new Error('not a record');
+        runs.push({ id, dir, meta: settleMeta(dir, meta) }); break;
+      } catch (e) {
         if (e.code === 'ENOENT') break;
         if (Date.now() >= deadline) { unreadable.push(file); break; }
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
       }
     }
   }
+  return { runs, unreadable };
+}
+
+function checkAdmission(meta, cfg) {
+  const { runs, unreadable } = readRunsLocked(meta.id);
   if (unreadable.length) return M.admissionUnreadable(M.list(unreadable));
+  if (['discuss', 'review'].includes(meta.kind) && meta.plan && meta.participant !== 'host') {
+    // 不引入 plan.mjs，避免计划状态反过来引用记录时形成循环。计划文件被删了照样要查：这份计划交过答卷，就说明它有 Claude Code 席。
+    const file = path.join(RUNS_ROOT, 'plans', `${meta.plan}.json`);
+    let plan = null;
+    try { plan = JSON.parse(fs.readFileSync(file, 'utf8')); }
+    catch (e) { if (e.code !== 'ENOENT') return M.planUnreadable(file); }
+    const answers = runs.filter((run) => run.meta.plan === meta.plan && run.meta.participant === 'host');
+    const round = meta.kind === 'review' ? 1 : meta.round ?? 1;
+    // 按轮次核对，不按份数：同一轮多出来的答卷不能顶替下一轮的。
+    if ((plan?.host || answers.length) && !answers.some((run) => (run.meta.round ?? 0) >= round)) return M.hostAnswerRequired(meta.plan, round);
+  }
   // 拿锁前还没有的任务是之后才登记的，都是刚启动的 runner，直接算在运行；拿锁前就有、当时没核对上的
   // （元数据一时读不出、进程号刚被复用）很少见，才在锁内补查。
   const running = runs.filter((r) => isRunning(r.meta, { query: !listedBeforeLock || listedBeforeLock.has(r.id) }));
@@ -363,6 +384,7 @@ function groupTally(runs, all = runs.all ?? runs) {
   for (const run of runs) if (seatOf(run) && latest.get(seatOf(run)) > run.id) resumedIds.add(run.id);
   const tally = { running: 0, ok: 0, blocked: 0, failed: 0, resumed: 0 };
   for (const run of runs) {
+    if (run.meta.participant === 'host') { tally.submitted = (tally.submitted || 0) + 1; continue; }
     const o = runOutcome(run);
     tally[o.running ? 'running' : o.ok ? 'ok' : resumedIds.has(run.id) ? 'resumed' : o.blocked ? 'blocked' : 'failed']++;
   }
@@ -371,7 +393,7 @@ function groupTally(runs, all = runs.all ?? runs) {
 
 function groupSummary(runs) {
   const t = groupTally(runs);
-  return D.groupSummary(runs.length, t.running, t.ok, t.failed, t.blocked, t.resumed);
+  return D.groupSummary(runs.length, t.running, t.ok, t.failed, t.blocked, t.resumed, t.submitted);
 }
 
 // settle 为 false 时原样返回磁盘上的内容，不用 result.json 兜底（cancel 要分清是元数据真写成了结束，还是只有结果写好了）
@@ -410,4 +432,4 @@ function isRunning(m, { query = true } = {}) {
   return runnerCheck(m) !== 'other';
 }
 
-export { RUNS_ROOT, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, saveMeta, metaWriteWarning, settleMeta, findRun, describeActivity, groupRuns, checkAdmission, runEnd, runOutcome, resultValid, groupTally, groupSummary, groupScopeOwner, absolute, readMeta, checkRunners, isRunning, writesFiles };
+export { RUNS_ROOT, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, saveMeta, metaWriteWarning, settleMeta, findRun, describeActivity, groupRuns, checkAdmission, readRunsLocked, runEnd, runOutcome, resultValid, groupTally, groupSummary, groupScopeOwner, absolute, readMeta, checkRunners, isRunning, writesFiles };

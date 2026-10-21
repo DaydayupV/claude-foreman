@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { sandbox, baseConfig, opencodeAgent, taskArgs, output, read, lines, MESSAGES } from './helpers.mjs';
+import { plannedSandbox as sandbox, baseConfig, opencodeAgent, taskArgs, output, read, lines, MESSAGES } from './helpers.mjs';
 import { review } from './fixtures/reports.mjs';
 import { opencodeRetry } from './fixtures/opencode-retry.mjs';
 import { opencodeRetryNoFinish } from './fixtures/opencode-retry-nofinish.mjs';

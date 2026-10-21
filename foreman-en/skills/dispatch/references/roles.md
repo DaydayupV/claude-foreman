@@ -1,6 +1,6 @@
 # Role discussions
 
-Follow this when a discussion uses role mode (see "Choosing the mode" under "1. Settling the approach: discussion" in SKILL.md): each participant gets a role card and checks the same topic from its own angle. The normal-mode rules (no leaning in the brief, Claude writes its own proposal first, decisions by evidence, the round limit) all still apply; this file only covers what role mode adds.
+Follow this when a discussion uses role mode (see "Choosing the mode" under "1. Settling the approach: discussion" in SKILL.md): each participant gets a role card and checks the same topic from its own angle. The normal-mode rules (no leaning in the brief, the Claude Code seat submits first, decisions by evidence, the round limit) all still apply; this file only covers what role mode adds. The Claude Code seat (see "The Claude Code seat" in SKILL.md) takes part in role assignment like the external seats, and "participants" below includes it.
 
 When a review (an evidence review, for example) gives its seats different angles, write the role cards, assign them and confirm with the pop-up the same way, with three differences: the shared body is the review brief; in the role card, "You still give a full answer to the shared questions, not just a list of risks" becomes "You still review everything the review rules ask for and return a review report", and the rules are the review rules (read-only, report only issues with evidence, output in the review schema); reviews can't be resumed, so there's no round 2, and Claude merges the seats' findings and checks each one (level 3 also gets a gap pass; see "Gap pass" under "5. Review" in SKILL.md).
 
@@ -44,12 +44,13 @@ Keep a role card under 10 lines, in this format:
 - When the topic needs a role that isn't listed, Claude writes one in the same format and sets its suggested tier and tool needs. Roles the user defines in the preference files are picked from along with the presets.
 
 ## What each kind of participant can do in a discussion
+- **The Claude Code seat**: reads code and runs read-only commands, and also sees the whole conversation and the user's preferences. Its tier comes from the model the user picked in Claude Code, looked up in `references/model-tiers.md`.
 - **Codex**: reads code and runs read-only commands.
 - **opencode and pi agents**: only read, search and list files inside the project directory; can't run commands.
 - **API agents**: see only the brief and the files attached with `--file`.
 
 ## Assigning roles
-Participants can only come from this cell's candidates (`resolved_modules.<discuss|review>.<level>`; `plan` refuses a seat that isn't one of them), and each keeps the effort configured there. Go in this order:
+External participants can only come from this cell's candidates (`resolved_modules.<discuss|review>.<level>`; `plan` refuses a seat that isn't one of them), and each keeps the effort configured there; the Claude Code seat always takes part. Go in this order:
 
 1. **Tool access is a hard gate**: if the participant's tools can't do what the role needs, it can't take the role.
 2. **Required candidates first**: a candidate marked required (`required`) always takes a seat; `plan` refuses a plan that leaves one out.
@@ -59,7 +60,8 @@ Participants can only come from this cell's candidates (`resolved_modules.<discu
 6. **Two seats for a core role at level 3**: on a level 3 topic, one core role can be played by two different base models, each in its own seat with the same role card. One model reached through api, pi and opencode counts as one base model (compared after dropping the `provider/` prefix).
 7. **Never merge core roles**: each core role has a seat of its own and never shares a role card with another role. When seats run short, drop minor roles first, or fold their checks into the overall reviewer; never drop a core role. In the user's multi-role trial, after one role was merged into another seat, 4 of the 5 issues that were missed belonged to it.
 8. **No free qualifying participant: give a strong model another session**: when a core role has no free participant that meets its suggested tier, have a strong model open another session for it first, as before. Each extra session takes one of that agent's concurrency slots (`max_parallel`; tasks from other groups and sessions count too; if it's full, start the extra one once earlier tasks finish), and it isn't independent evidence: several seats of one model agreeing count as one.
-9. **Seat count**: no more than `dispatch.max_seats` (6 by default) seats, however many candidates the cell has (with extra sessions of one model there can be more seats than candidates); required agents always take a seat, and a review's gap seat counts too.
+9. **Seat count**: no more than `dispatch.max_seats` (6 by default) seats, however many candidates the cell has (with extra sessions of one model there can be more seats than candidates); required agents always take a seat, and the Claude Code seat and a review's gap seat count too.
+10. **The Claude Code seat's role**: assigned by the same rules; it doesn't get a fixed role just because it decides in the end. It can be the overall reviewer, but that seat isn't reserved for it. When it authored the design under discussion or the changes under review, say so in the assignment table and leave the key outside angles to the external seats.
 
 Participants configured for the level but given no seat this time are shown in the pop-up as "not in this discussion", with the reason (such as no seats left, or the tools can't do it).
 
@@ -72,15 +74,15 @@ First list the full assignment in the message: seat number, model (tier), role, 
 
   ```
   Start the role discussion with this assignment?
+  ⓪ Claude Code · opus-5.5 (strong) → Overall reviewer
   ① gemini-4-argon (strong) → Math / correctness (core)
   ② gpt-6-astra (strong) → Fact checker
-  ③ gpt-6-astra (strong, second session) → Overall reviewer
-  ④ deepseek-v4.1-flash (mid) → Maintenance and compatibility
-  ⑤ mimo-v2.6-pro (weak) → Edge-case lister
-  ⑥ glm-5.3-flash (weak, breadth seat, round 1 only) → Math / correctness (core, second seat)
+  ③ deepseek-v4.1-flash (mid) → Maintenance and compatibility
+  ④ mimo-v2.6-pro (weak) → Edge-case lister
+  ⑤ glm-5.3-flash (weak, breadth seat, round 1 only) → Math / correctness (core, second seat)
   Not in this discussion: qwen3.8-flash (weak, no seats left)
   ```
-- Option one, "Start as suggested (Recommended)": sum it up in one sentence in its description (such as "Start the 6 seats as above; gpt-6-astra opens two sessions"); `preview` can also hold the full table with reasons.
+- Option one, "Start as suggested (Recommended)": sum it up in one sentence in its description (such as "Start the 6 seats as above, including the Claude Code seat"); `preview` can also hold the full table with reasons.
 - Option two, "Adjust": then ask again, with at most two questions: which roles to swap out or add (multi-select, 2–4 preset roles relevant to the topic; the user writes custom roles under "Other"); and whether Claude reassigns or the user writes the assignment (under "Other": "seat number + change"). Show the new assignment and have the user confirm once more.
 - Option three, "Use a normal discussion instead".
 
@@ -88,7 +90,9 @@ First list the full assignment in the message: seat number, model (tier), role, 
 - When AskUserQuestion isn't available (for example when running without interaction), list the assignment in the chat, ask there and wait for the answer. Never skip the confirmation.
 
 ## Starting it
-- First create a plan with `plan --module discuss --cell <level> --group <name>`, one `--seat <agent>=<role>` per seat (a model playing two roles is written twice), with the reasons for the assignment in `--why`. Then one `discuss --plan <plan_id> --seat <n>` per seat, each with its own brief (shared body + its role card).
+- First create a plan with `plan --module discuss --cell <level> --group <name>`, one `--seat <agent>=<role>` per external seat (a model playing two roles is written twice), the Claude Code seat's role as `--host-role "<role>"`, and the reasons for the assignment in `--why`.
+- Next, Claude Code writes its answer around its own role card's checks and `submit`s it. The answer has the same format as in the normal mode (the schema allows no extra fields); the role card's text goes into the decision record.
+- Then one `discuss --plan <plan_id> --seat <n>` per external seat, each with its own brief (shared body + its role card).
 - Always set `--title` to "Role mode [<role name>]", such as "Role mode [Edge-case lister]". Each panel in the live view shows the model on its first line and this title on its second.
 - Don't pass `--title` when resuming for round 2: the resume keeps the previous title, and the live view adds "· round 2" to the second line itself.
 - When one model takes several roles, each role is a new `discuss`; don't `resume` the first role into the second.
@@ -96,7 +100,7 @@ First list the full assignment in the message: seat number, model (tier), role, 
 
 ## Round 2
 - When to hold it: the participants really disagree on the shared questions, or a role raised a risk that can be backed up and that nobody else addressed. Roles simply looking at different things isn't disagreement.
-- Resume only the seats that aren't breadth seats. Points a breadth seat raised in round 1 that Claude confirmed go to the others as part of an anonymous proposal or as Claude's own challenges.
+- The Claude Code seat first submits this round's challenges as its answer, then the external seats are resumed. Resume only the seats that aren't breadth seats. Points a breadth seat raised in round 1 that Claude Code confirmed go to the others as part of an anonymous proposal.
 - Label the proposals anonymously as "Proposal A / B / …", removing both model and role names but keeping each proposal's goals, constraints and evidence.
 - The resume brief asks each participant to first find the most serious problem in the other proposals against the shared goal, then add what its own role sees; if another proposal has already dealt with its concern, it should say so plainly instead of digging in to stay in character.
 
@@ -104,7 +108,7 @@ First list the full assignment in the message: seat number, model (tier), role, 
 - Several roles agreeing doesn't add evidence, and roles played by the same model count for even less. Decide only by evidence, constraints and reversibility.
 - The decision record adds to the usual format:
   - Mode: role mode;
-  - The assignment table: seat, model, effort, role, run_id, marking core roles and breadth seats;
+  - The assignment table: seat, model, effort, role, run_id, marking core roles and breadth seats; list the Claude Code seat too, with its self-reported model and its answer's run_id, noting when it's the author;
   - Role cards: the role cards actually used, or where the briefs are;
   - Missing viewpoints: for seats that failed or were stopped, say which role's view is missing; Claude checks the key questions itself;
   - Which roles came from the same model.

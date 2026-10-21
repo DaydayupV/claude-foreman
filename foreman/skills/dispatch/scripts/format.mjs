@@ -27,7 +27,7 @@ const shortModel = (model) => String(model).slice(String(model).lastIndexOf('/')
 const fullModel = (m) => (modelOf(m).includes('/') ? modelOf(m) : null);
 // 模型标签：<模型> · <接入方式> · 推理强度 <强度>。旧记录没有 agent_type 和 model_name，都是 Codex CLI。
 const CHANNEL_KEY = { api: 'api', 'opencode cli': 'opencode', 'pi cli': 'pi' };
-const modelLabel = (m) => D.modelLabel(shortModel(modelOf(m)), D.channel[CHANNEL_KEY[agentTypeOf(m)] || 'codex'], m?.effort,
+const modelLabel = (m) => m?.participant === 'host' ? `Claude Code${m.model ? ` · ${m.model}` : ''}` : D.modelLabel(shortModel(modelOf(m)), D.channel[CHANNEL_KEY[agentTypeOf(m)] || 'codex'], m?.effort,
   !m?.model && !!m?.model_name && agentTypeOf(m) === 'codex cli');
 
 // 运行中的计时写成 12:03，结束后写"用时 19 分 18 秒"

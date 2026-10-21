@@ -144,8 +144,9 @@ function median(values) {
 }
 
 function countUnique(groups) {
+  const modelKey = (row) => JSON.stringify([row.participant === 'host', row.model]);
   for (const runs of groups.values()) {
-    if (new Set(runs.map((run) => run.row.model)).size < 2) continue;
+    if (new Set(runs.map((run) => modelKey(run.row))).size < 2) continue;
     const roots = new Map(runs.map((run) => [run.id, run.root]));
     const entries = new Map();
     for (const run of runs) {
@@ -177,7 +178,7 @@ function countUnique(groups) {
     for (const [key, { rows }] of entries) {
       const root = find(key);
       if (!issues.has(root)) issues.set(root, new Map());
-      for (const row of rows) issues.get(root).set(row.model, row);
+      for (const row of rows) issues.get(root).set(modelKey(row), row);
     }
     for (const models of issues.values()) if (models.size === 1) models.values().next().value.unique++;
   }
@@ -198,10 +199,11 @@ function cmdStats(o, statsOf) {
     return { id, dir, meta, running, result: meta && !running ? readRecord(dir, 'result.json') : null };
   });
   const rows = new Map(), seatTimes = new Map(), groups = new Map();
-  const rowFor = (model, module) => {
-    const key = JSON.stringify([model, module]);
+  const rowFor = (meta, result, module) => {
+    const host = meta.participant === 'host', model = host ? meta.model ?? 'claude-code' : baseModel(meta, result);
+    const key = JSON.stringify([host, model, module]);
     if (!rows.has(key)) {
-      const row = { model, module, seats: 0, runs: 0, findings_reported: module === 'review' ? 0 : null,
+      const row = { model, module, ...(host ? { participant: 'host', self_judged: true } : {}), seats: 0, runs: 0, findings_reported: module === 'review' ? 0 : null,
         judged_runs: 0, judged: 0, accepted: 0, partial: 0, rejected: 0, unique: null, unique_basis_runs: 0,
         rework: ['run', 'image'].includes(module) ? { seats: 0, reworked: 0, rate: null } : null,
         duration_s: { total: 0, median_per_seat: null, missing_runs: 0 },
@@ -216,7 +218,7 @@ function cmdStats(o, statsOf) {
     if (root.running || o.module != null && module !== o.module || cutoff != null && !(Date.parse(root.meta.started_at) >= cutoff)) continue;
     totals.seats++;
     totals.runs += rounds.filter((run) => !run.running).length;
-    const rootRow = rowFor(baseModel(root.meta, root.result), module);
+    const rootRow = rowFor(root.meta, root.result, module);
     rootRow.seats++;
     if (rootRow.rework) {
       rootRow.rework.seats++;
@@ -228,40 +230,42 @@ function cmdStats(o, statsOf) {
         return outcome.status === 'done' && resultValid(parent.meta, outcome.result) && !outcome.blocked;
       })) rootRow.rework.reworked++;
     }
-    const durations = rounds.map(durationOf);
-    if (!rounds.some((run) => run.running) && durations.every((n) => n != null)) seatTimes.get(rootRow).push(durations.reduce((sum, n) => sum + n, 0));
+    const host = root.meta.participant === 'host', durations = host ? [] : rounds.map(durationOf);
+    if (!host && !rounds.some((run) => run.running) && durations.every((n) => n != null)) seatTimes.get(rootRow).push(durations.reduce((sum, n) => sum + n, 0));
     let cumulative = [0, 0, 0];
     for (const [i, run] of rounds.entries()) {
       // 同一席重启的那一轮是新会话，会话累计用量从零算起。
       if (!run.meta.parent) cumulative = [0, 0, 0];
       if (run.running) continue;
-      const { meta, result } = run, row = rowFor(baseModel(meta, result), module);
+      const { meta, result } = run, row = rowFor(meta, result, module);
       run.row = row;
       row.runs++;
-      if (durations[i] == null) row.duration_s.missing_runs++;
-      else row.duration_s.total += durations[i];
-      let usage = result?.usage, scope = result?.usage_scope ?? (meta.mode === 'resume' ? 'session_total' : 'this_run');
-      // 只有这条续接链的最后一轮（后面没有接着它续的）能从会话记录补读用量。
-      if (usage == null && agentTypeOf(meta) === 'codex cli' && meta.session_id && !rounds.some((other) => other.meta.parent === run.id)) {
-        usage = statsOf(meta)?.total_token_usage;
-        scope = 'session_total';
+      if (!host) {
+        if (durations[i] == null) row.duration_s.missing_runs++;
+        else row.duration_s.total += durations[i];
+        let usage = result?.usage, scope = result?.usage_scope ?? (meta.mode === 'resume' ? 'session_total' : 'this_run');
+        // 只有这条续接链的最后一轮（后面没有接着它续的）能从会话记录补读用量。
+        if (usage == null && agentTypeOf(meta) === 'codex cli' && meta.session_id && !rounds.some((other) => other.meta.parent === run.id)) {
+          usage = statsOf(meta)?.total_token_usage;
+          scope = 'session_total';
+        }
+        if (usage != null) {
+          // 会话累计值先扣掉之前各轮；累计倒退时这轮缺失，但仍以新累计值为下一轮基线。
+          const values = TOKEN_FIELDS.map((key) => usage[key] ?? 0);
+          usage = scope === 'session_total' ? values.map((n, j) => n - cumulative[j]) : values;
+          cumulative = scope === 'session_total' ? values : cumulative.map((n, j) => n + values[j]);
+          if (usage.some((n) => n < 0)) usage = null;
+        }
+        if (usage == null) row.tokens.missing_runs++;
+        else {
+          for (const [j, key] of ['input', 'cached_input', 'output'].entries()) row.tokens[key] = (row.tokens[key] ?? 0) + usage[j];
+          row.tokens.runs++;
+        }
+        if (Number.isFinite(result?.cost_usd)) {
+          row.cost_usd.total = (row.cost_usd.total ?? 0) + result.cost_usd;
+          row.cost_usd.runs++;
+        } else if (['opencode cli', 'pi cli'].includes(agentTypeOf(meta))) row.cost_usd.missing_runs++;
       }
-      if (usage != null) {
-        // 会话累计值先扣掉之前各轮；累计倒退时这轮缺失，但仍以新累计值为下一轮基线。
-        const values = TOKEN_FIELDS.map((key) => usage[key] ?? 0);
-        usage = scope === 'session_total' ? values.map((n, j) => n - cumulative[j]) : values;
-        cumulative = scope === 'session_total' ? values : cumulative.map((n, j) => n + values[j]);
-        if (usage.some((n) => n < 0)) usage = null;
-      }
-      if (usage == null) row.tokens.missing_runs++;
-      else {
-        for (const [j, key] of ['input', 'cached_input', 'output'].entries()) row.tokens[key] = (row.tokens[key] ?? 0) + usage[j];
-        row.tokens.runs++;
-      }
-      if (Number.isFinite(result?.cost_usd)) {
-        row.cost_usd.total = (row.cost_usd.total ?? 0) + result.cost_usd;
-        row.cost_usd.runs++;
-      } else if (['opencode cli', 'pi cli'].includes(agentTypeOf(meta))) row.cost_usd.missing_runs++;
       const findings = findingsOf(result, module);
       if (findings) row.findings_reported += findings.length;
       const hasVerdict = fs.existsSync(path.join(run.dir, 'verdict.json'));

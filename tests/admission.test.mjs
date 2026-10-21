@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as pause } from 'node:timers/promises';
-import { sandbox, output, failed, baseConfig, taskArgs, seedRun, write, json, poll, ROOT, MESSAGES } from './helpers.mjs';
+import { plannedSandbox as sandbox, output, failed, baseConfig, taskArgs, seedRun, write, json, poll, ROOT, MESSAGES } from './helpers.mjs';
 import { discussion } from './fixtures/reports.mjs';
 const M = MESSAGES.zh;
 const url = (file) => pathToFileURL(path.join(ROOT, 'foreman/skills/dispatch/scripts', file)).href;

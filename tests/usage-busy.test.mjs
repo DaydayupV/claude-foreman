@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { sandbox, baseConfig, apiAgent, taskArgs, seedRun, write, json, output, poll, MESSAGES } from './helpers.mjs';
+import { plannedSandbox as sandbox, baseConfig, apiAgent, taskArgs, seedRun, write, json, output, poll, MESSAGES } from './helpers.mjs';
 import { discussion, review } from './fixtures/reports.mjs';
 import { apiServer } from './fake/api-server.mjs';
 
@@ -69,7 +69,7 @@ for (const mode of ['discuss', 'review']) test(`API ${mode} 未返回用量时�
   assert.deepEqual(r.report, report); assert.equal(r.usage, null); assert.equal(r.usage_scope, null); assert.ok(r.notes.includes(M.apiUsageMissing));
   assert.equal(h.result(r.run_id).usage, null); assert.equal(h.events(r.run_id).some((e) => e.type === 'api.usage'), false);
   const stats = output(await h.bridge(['stats']));
-  assert.deepEqual(stats.rows[0].tokens, { input: null, cached_input: null, output: null, runs: 0, missing_runs: 1 });
+  assert.deepEqual(stats.rows.find((r) => r.participant !== 'host').tokens, { input: null, cached_input: null, output: null, runs: 0, missing_runs: 1 });
 });
 
 test('API 明确返回零用量时保留零值，不记缺失提示', async (t) => {

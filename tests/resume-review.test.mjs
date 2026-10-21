@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { sandbox, taskArgs, output, failed, json, read, MESSAGES } from './helpers.mjs';
+import { plannedSandbox as sandbox, taskArgs, output, failed, json, read, MESSAGES } from './helpers.mjs';
 import { discussion, usage, sessionStats } from './fixtures/reports.mjs';
 const M = MESSAGES.zh;
 

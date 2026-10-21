@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { sandbox, output, failed, read, json, write, CODEX, OPENCODE, ROOT, baseConfig, seedRun, taskArgs, MESSAGES } from './helpers.mjs';
+import { plannedSandbox as sandbox, output, failed, read, json, write, CODEX, OPENCODE, ROOT, baseConfig, seedRun, taskArgs, MESSAGES } from './helpers.mjs';
 import { discussion } from './fixtures/reports.mjs';
 import { apiServer } from './fake/api-server.mjs';
 const M = MESSAGES.zh;

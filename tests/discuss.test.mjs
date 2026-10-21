@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { sandbox, taskArgs, output, failed, poll, json, read, write, baseConfig, apiAgent, opencodeAgent, MESSAGES } from './helpers.mjs';
+import { plannedSandbox as sandbox, taskArgs, output, failed, poll, json, read, write, baseConfig, apiAgent, opencodeAgent, MESSAGES } from './helpers.mjs';
 import { discussion } from './fixtures/reports.mjs';
 import { apiServer } from './fake/api-server.mjs';
 const M = MESSAGES.zh;
@@ -68,7 +68,7 @@ test('API 附件超过材料上限时拒绝请求', async (t) => {
   assert.match(r.stderr, /超过上限 300000/);
   assert.match(r.stderr, /large.txt: 300003/);
   assert.equal(api.requests.length, 0);
-  assert.equal(h.records().length, 0);
+  assert.equal(h.records().filter((m) => m.participant !== 'host').length, 0);
 });
 
 test('API 拒绝 response_format 后去掉该字段重试', async (t) => {

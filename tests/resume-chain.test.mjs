@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { sandbox, output, failed, seedRun, taskArgs, baseConfig, write, json, poll, ROOT, BRIDGE, MESSAGES } from './helpers.mjs';
+import { plannedSandbox as sandbox, plannedArgs, output, failed, seedRun, taskArgs, baseConfig, write, json, poll, ROOT, BRIDGE, MESSAGES } from './helpers.mjs';
 import { report, discussion, review } from './fixtures/reports.mjs';
 const M = MESSAGES.zh;
 const url = (file) => JSON.stringify(pathToFileURL(path.join(ROOT, 'foreman/skills/dispatch/scripts', file)).href);
@@ -231,7 +231,7 @@ test('审查席失败或无有效结果可以重启，有运行轮次或有效�
   assert.equal(s.calls().length, 3);
   // status --group 把重启前的那几轮算成"已续接"，不算失败
   const grouped = await h.bridge(['status', '--group', 'restart']);
-  assert.ok(grouped.stdout.includes(MESSAGES.en.groupSummary(3, 0, 1, 0, 0, 2)), grouped.stdout);
+  assert.ok(grouped.stdout.includes(MESSAGES.en.groupSummary(4, 0, 1, 0, 0, 2, 1)), grouped.stdout);
 });
 
 test('非审查席重启提示最新一轮，而不是最初一轮', async (t) => {
@@ -379,7 +379,7 @@ childProcess.spawnSync = (file, args, options) => file === 'git' && args.include
   ? { status: 128, stdout: '', stderr: 'synthetic coverage failure' } : spawn(file, args, options);
 syncBuiltinESMExports();
 await import(${JSON.stringify(pathToFileURL(BRIDGE).href)});`);
-  const r = output(await h.start(script, taskArgs(h, 'discuss'), { env: s.env }).done, 1);
+  const r = output(await h.start(script, plannedArgs(h, taskArgs(h, 'discuss')), { env: s.env }).done, 1);
   assert.equal(r.changes.available, true); assert.deepEqual(r.changes.files, []);
   assert.deepEqual(r.readonly_violation, ['unchanged.txt', 'src'].map((path) => ({ path, by: 'reported' })));
   assert.ok(r.warnings.includes(M.trackingFailed(M.gitFailed('check-ignore', 'synthetic coverage failure'))));

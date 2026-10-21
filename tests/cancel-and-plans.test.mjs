@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as pause } from 'node:timers/promises';
 import { processStartedAt } from '../foreman/skills/dispatch/scripts/util.mjs';
-import { sandbox, taskArgs, output, failed, json, poll, write, read, BRIDGE, baseConfig, apiAgent, opencodeAgent, seedRun, MESSAGES } from './helpers.mjs';
+import { plannedSandbox as sandbox, hostArgs, taskArgs, output, failed, json, poll, write, read, BRIDGE, baseConfig, apiAgent, opencodeAgent, seedRun, MESSAGES } from './helpers.mjs';
 import { sessionStats, usage, discussion } from './fixtures/reports.mjs';
 import { apiServer } from './fake/api-server.mjs';
 const M = MESSAGES.zh;
@@ -87,7 +87,11 @@ const planConfig = (h) => {
   c.modules.discuss.complex = [{ agent: 'codex', effort: 'max', required: true }, { agent: 'oc' }];
   h.config(c);
 };
-const makePlan = async (h, group) => output(await h.bridge(['plan', '--cwd', h.cwd, '--module', 'discuss', '--cell', 'complex', '--group', group, '--seat', 'codex', '--seat', 'oc']));
+const makePlan = async (h, group) => {
+  const p = output(await h.bridge(['plan', '--cwd', h.cwd, '--module', 'discuss', '--cell', 'complex', '--group', group, '--seat', 'codex', '--seat', 'oc']));
+  output(await h.bridge(['submit', '--plan', p.plan_id, '--report', write(path.join(h.home, 'host.json'), discussion)]));
+  return p;
+};
 const seat = (h, id, plan, n, agent, status, result) => seedRun(h, id, { mode: 'discuss', kind: 'discuss', module: 'discuss', cell: 'complex', plan: plan.plan_id, seat: n,
   group: plan.group, agent, agent_type: agent === 'oc' ? 'opencode cli' : 'codex cli', model: agent === 'oc' ? 'fake/model' : 'fake-codex', status }, result);
 
@@ -120,7 +124,7 @@ test('项目配置关掉的格子，建计划和启动席位都说明是项目�
   failed(await h.bridge(['plan', '--cwd', h.cwd, '--module', 'discuss', '--cell', 'complex', '--group', 'closed-now', '--seat', 'codex']), M.planCellClosedByProject('modules.discuss.complex'));
   failed(await h.bridge(['discuss', '--plan', p.plan_id, '--seat', '1', '--brief', '-']), M.planCellClosedByProject('modules.discuss.complex'));
   failed(await h.bridge(['plan', '--cwd', h.cwd, '--module', 'run', '--cell', 'simple', '--group', 'user-closed', '--seat', 'codex']), M.planCellClosed('modules.run.simple'));
-  assert.equal(h.records().length, 0);
+  assert.equal(h.records().filter((m) => m.participant !== 'host').length, 0);
 });
 
 test('结果已完成时优先于活进程号，cancel 不结束它，进程退出后才回写终态', async (t) => {
@@ -359,6 +363,7 @@ test('计划状态里的审查：没审完或格式不合格的不算有效，Co
   for (const [name, result, state] of cases) {
     const p = output(await h.bridge(['plan', '--cwd', h.cwd, '--module', 'review', '--cell', 'complex', '--group', `review-${name}`,
       '--seat', 'codex', '--target', 'files', '--file', 'source.txt']));
+    output(await h.bridge(hostArgs(h, p)));
     seedRun(h, `20000104-${name}`, { mode: 'review', kind: 'review', module: 'review', cell: 'complex', plan: p.plan_id, seat: 1, group: p.group },
       { status: 'done', ...result });
     assert.equal(output(await h.bridge(['status', '--plan', p.plan_id])).state, state, name);

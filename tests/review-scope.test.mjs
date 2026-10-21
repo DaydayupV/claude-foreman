@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { sandbox, output, failed, write, ROOT, MESSAGES } from './helpers.mjs';
+import { plannedSandbox as sandbox, output, failed, write, ROOT, MESSAGES } from './helpers.mjs';
 const M = MESSAGES.zh;
 const compute = (h, opts = {}) => h.start(path.join(ROOT, 'tests/fixtures/review-scope.mjs'), [JSON.stringify({ cwd: h.cwd, ...opts })]).done;
 const commitAll = (h) => { h.git(['add', '.']); h.git(['commit', '--quiet', '-m', 'synthetic changes']); return h.git(['rev-parse', 'HEAD']); };

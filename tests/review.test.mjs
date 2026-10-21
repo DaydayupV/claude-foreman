@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { sandbox, output, failed, read, json, baseConfig, opencodeAgent, ROOT, MESSAGES } from './helpers.mjs';
+import { plannedSandbox as sandbox, output, failed, read, json, baseConfig, opencodeAgent, ROOT, MESSAGES } from './helpers.mjs';
 import { MAX_REVIEW_CHARS } from '../foreman/skills/dispatch/scripts/review-scope.mjs';
 const M = MESSAGES.zh;
 const configure = (h, agent = 'oc') => {
@@ -53,7 +53,7 @@ test('opencode 审查材料超限直接拒绝且不启动，Codex 没有该上�
   assert.equal(r.code, 2); assert.equal(r.stdout, '');
   const chars = Number(/共 (\d+) 字符/.exec(r.stderr)?.[1]);
   assert.ok(chars > MAX_REVIEW_CHARS); assert.ok(r.stderr.includes(M.reviewTooLarge(chars, MAX_REVIEW_CHARS)));
-  assert.equal(h.calls().length, 0); assert.equal(h.records().length, 0);
+  assert.equal(h.calls().length, 0); assert.equal(h.records().filter((m) => m.participant !== 'host').length, 0);
   configure(h, 'codex');
   const native = output(await h.bridge(args(h)));
   assert.equal(native.review_scope.files_total, 1); assert.ok(read(path.join(native.run_dir, 'review.patch')).length > MAX_REVIEW_CHARS);

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { sandbox, output, failed, baseConfig, seedRun, write, json, poll, opencodeAgent, MESSAGES } from './helpers.mjs';
+import { plannedSandbox as sandbox, output, failed, baseConfig, seedRun, write, json, poll, opencodeAgent, MESSAGES } from './helpers.mjs';
 import { readViewedImages } from '../foreman/skills/dispatch/scripts/image-calls.mjs';
 import { formatUsd } from '../foreman/skills/dispatch/scripts/format.mjs';
 import { discussion, review } from './fixtures/reports.mjs';

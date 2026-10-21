@@ -6,7 +6,7 @@ import path from 'node:path';
 import { M, die, need, resolveDir, readBrief, isGitRepo, isAscii, agentTypeOf, closestMatches, pathKey } from './util.mjs';
 
 // 不带值的选项；其余选项都把下一个参数当作它的值。
-const FLAGS = new Set(['uncommitted', 'no-snapshot', 'verbose', 'no-intro', 'snap', 'vector', 'allow-edge']);
+const FLAGS = new Set(['uncommitted', 'no-snapshot', 'verbose', 'no-intro', 'snap', 'vector', 'allow-edge', 'author']);
 
 // --help（或 -h）只打印这一条子命令的用法（assets 可以带动作），退出码 0。和 parseArgs 一样走一遍参数，
 // 写在某个选项的值里的（比如 --title --help、--title -h）不算。
@@ -37,6 +37,7 @@ const { cmdWatch } = await import('./watch.mjs');
 const { cmdStatus, cmdCancel, cmdAwaitBusy } = await import('./status.mjs');
 const { cmdAssets } = await import('./assets.mjs');
 const { cmdJudge, cmdStats } = await import('./stats.mjs');
+const { cmdSubmit } = await import('./submissions.mjs');
 
 // 先加载配置，再迁移记录和重写启动器；这些步骤仍在解析参数之前完成。
 // assets 例外：它只在本机处理图片，用不到配置和记录目录，所以两步都跳过，配置缺失或写坏了也照样能用。
@@ -79,7 +80,7 @@ function dispatchProfile(o, module) {
     o.cwd = plan.cwd;
     o.group = plan.group;
     if (module !== 'image') o.level = plan.cell;
-    seat = { ...plan.seats[Number(o.seat) - 1], module, cell: plan.cell, plan: plan.plan_id };
+    seat = { ...plan.seats[Number(o.seat) - 1], module, cell: plan.cell, plan: plan.plan_id, outside_cell: plan.outside_cell };
   }
   const cwd = resolveDir(need(o, 'cwd'));
   const cfg = load(cwd);
@@ -107,6 +108,7 @@ async function cmdImage(o) {
 }
 
 async function cmdDiscuss(o) {
+  if (!o.plan) die(M.discussReviewNeedsPlan('discuss'));
   const { cwd, cfg, profile } = dispatchProfile(o, 'discuss');
   const brief = readBrief(o);
   return adapters[profile.agent.type].execute({ cfg, ...profile, mode: 'discuss', kind: 'discuss', cwd, brief, title: o.title, round: 1, opts: o });
@@ -114,6 +116,7 @@ async function cmdDiscuss(o) {
 
 async function cmdResume(o) {
   const parent = findRun(need(o, 'run'));
+  if (parent.meta.participant === 'host') die(M.hostNoResume(parent.id));
   if (isRunning(parent.meta)) die(M.resumeParentRunning(parent.id));
   const runs = listRuns().map((id) => ({ id, meta: readMeta(path.join(RUNS_ROOT, id)) }));
   let latest = parent;
@@ -152,7 +155,7 @@ async function cmdResume(o) {
   const cfg = load(parent.meta.cwd);
   const brief = readBrief(o);
   // 什么模型都没配置时沿用上一轮记录的模型，同一会话不中途换模型。
-  const profile = resolveProfile(cfg, { module: image ? 'image' : discuss ? 'discuss' : 'run', cell: image ? parent.meta.cell : undefined, plan: parent.meta.plan, seat: parent.meta.seat, role: parent.meta.role }, o, adapters, parent.meta.model, parent.meta.agent || 'codex', parent.meta.cell ?? parent.meta.level);
+  const profile = resolveProfile(cfg, { module: image ? 'image' : discuss ? 'discuss' : 'run', cell: image ? parent.meta.cell : undefined, plan: parent.meta.plan, seat: parent.meta.seat, role: parent.meta.role, outside_cell: parent.meta.outside_cell }, o, adapters, parent.meta.model, parent.meta.agent || 'codex', parent.meta.cell ?? parent.meta.level);
   return adapters[profile.agent.type].execute({ cfg, ...profile, mode: 'resume', kind, cwd: parent.meta.cwd, brief, addDirs,
     ...(image ? { step: parent.meta.step, route: parent.meta.route } : {}),
     title: o.title || parent.meta.title, parent: parent.id, parentDir: parent.dir, sessionId: parent.meta.session_id,
@@ -160,6 +163,7 @@ async function cmdResume(o) {
 }
 
 async function cmdReview(o) {
+  if (!o.plan) die(M.discussReviewNeedsPlan('review'));
   if (o.plan && (o.target != null || o.file.length || o.uncommitted || o.base != null || o.commit != null)) die(M.planMaterialFlags(o.plan));
   const { cwd, cfg, profile, plan } = dispatchProfile(o, 'review');
   if (plan) Object.assign(o, plan.review || { target: 'diff', file: [], uncommitted: true, base: null, commit: null });
@@ -202,7 +206,7 @@ function cmdConfig(o) {
 
 // 所有协作方都报告，仅被等级引用的协作方影响总体结果。
 async function cmdCheck(o) {
-  const cfg = load(null);
+  const cfg = load(o.cwd ? resolveDir(o.cwd) : null);
   if (o.agent) o.agent = resolveAgentAlias(o.agent, cfg, true);
   if (o.agent && !Object.hasOwn(cfg.agents, o.agent)) die(unknownAgentError('--agent', o.agent, cfg));
   const nodeOk = Number(process.versions.node.split('.')[0]) >= 18;
@@ -276,6 +280,6 @@ const { cmd, opts } = parseArgs(process.argv.slice(2));
 // 新建任务组时组名只用 ASCII：实时查看要把它写进终端命令，桌面版的终端面板只接受 ASCII 命令。
 if (['run', 'discuss', 'resume', 'review', 'image', 'plan'].includes(cmd) && opts.group != null && !/^[A-Za-z0-9._-]{1,64}$/.test(opts.group)) die(M.badGroupName(opts.group));
 const statsOf = (meta) => adapters[agentTypeOf(meta)]?.stats?.(meta.session_id, meta.started_at);
-const commands = { run: cmdRun, discuss: cmdDiscuss, resume: cmdResume, review: cmdReview, image: cmdImage, plan: (o) => cmdPlan(o, load, adapters), judge: cmdJudge, stats: (o) => cmdStats(o, statsOf), status: (o) => cmdStatus(o, statsOf), watch: (o) => cmdWatch(o, load), config: cmdConfig, check: cmdCheck, models: cmdModels, cancel: (o) => cmdCancel(o, statsOf), 'await-busy': (o) => cmdAwaitBusy(o, CONFIG, load), assets: cmdAssets };
+const commands = { run: cmdRun, discuss: cmdDiscuss, resume: cmdResume, review: cmdReview, image: cmdImage, plan: (o) => cmdPlan(o, load, adapters), submit: (o) => cmdSubmit(o, load), judge: cmdJudge, stats: (o) => cmdStats(o, statsOf), status: (o) => cmdStatus(o, statsOf), watch: (o) => cmdWatch(o, load), config: cmdConfig, check: cmdCheck, models: cmdModels, cancel: (o) => cmdCancel(o, statsOf), 'await-busy': (o) => cmdAwaitBusy(o, CONFIG, load), assets: cmdAssets };
 if (!commands[cmd]) die(M.usage);
 await commands[cmd](opts);

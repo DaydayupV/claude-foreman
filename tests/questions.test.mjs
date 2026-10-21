@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { sandbox, taskArgs, output, json, read, baseConfig, opencodeAgent, apiAgent, seedRun, ROOT, MESSAGES } from './helpers.mjs';
+import { plannedSandbox as sandbox, taskArgs, output, json, read, baseConfig, opencodeAgent, apiAgent, seedRun, ROOT, MESSAGES } from './helpers.mjs';
 import { report, discussion, command } from './fixtures/reports.mjs';
 import { apiServer } from './fake/api-server.mjs';
 import { looksLikeQuestion, looksLikeInputPrompt } from '../foreman/skills/dispatch/scripts/util.mjs';

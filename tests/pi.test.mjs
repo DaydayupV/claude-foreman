@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { sandbox, baseConfig, piAgent, taskArgs, output, failed, read, seedRun, ROOT, PI, MESSAGES } from './helpers.mjs';
+import { plannedSandbox as sandbox, baseConfig, piAgent, taskArgs, output, failed, read, seedRun, ROOT, PI, MESSAGES } from './helpers.mjs';
 import { report, discussion } from './fixtures/reports.mjs';
 const M = MESSAGES.zh;
 const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套

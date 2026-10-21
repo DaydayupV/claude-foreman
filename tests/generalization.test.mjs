@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { sandbox, output, failed, json, write, baseConfig, apiAgent, opencodeAgent, CODEX, OPENCODE, PI, ROOT, BRIDGE, MESSAGES } from './helpers.mjs';
+import { plannedSandbox as sandbox, output, failed, json, write, baseConfig, apiAgent, opencodeAgent, CODEX, OPENCODE, PI, ROOT, BRIDGE, MESSAGES } from './helpers.mjs';
 import { apiServer } from './fake/api-server.mjs';
 import { discussion } from './fixtures/reports.mjs';
 const M = MESSAGES.zh;
@@ -45,18 +45,18 @@ for (const mode of modes) test(`${mode} 的 Claude 等级、点名分派与 effo
   c.modules = self();
   h.config(c);
   const opts = mode === 'discuss' ? { env: h.scenario({ last_message: discussion }).env } : {};
-  failed(await h.bridge(args(h, mode, ['--level', 'simple']), opts), mode === 'run' ? M.levelForClaude('simple') : M.levelIsClaude(`modules.${mode}.simple`));
-  failed(await h.bridge(args(h, mode, ['--level', 'simple', '--model', 'override']), opts), mode === 'run' ? M.levelForClaude('simple') : M.levelIsClaude(`modules.${mode}.simple`));
+  failed(await h.bridge(args(h, mode, ['--level', 'simple']), opts), mode === 'run' ? M.levelForClaude('simple') : M.discussReviewNeedsPlan(mode));
+  failed(await h.bridge(args(h, mode, ['--level', 'simple', '--model', 'override']), opts), mode === 'run' ? M.levelForClaude('simple') : M.discussReviewNeedsPlan(mode));
   for (const [i, level] of levels.entries()) {
     const r = output(await h.bridge(args(h, mode, ['--level', level, '--agent', 'codex']), opts));
     assert.equal(r.effort, ['medium', 'high', 'max'][i]);
     assert.equal(r.agent_type, 'codex cli');
   }
-  failed(await h.bridge(args(h, mode, ['--effort', 'low']), opts), M.missingLevel('simple / normal / complex'));
+  failed(await h.bridge(args(h, mode, ['--effort', 'low']), opts), mode === 'run' ? M.missingLevel('simple / normal / complex') : M.discussReviewNeedsPlan(mode));
   c.agents.second = { ...c.agents.codex };
   h.config(c);
-  failed(await h.bridge(args(h, mode, ['--effort', 'high']), opts), M.missingLevel('simple / normal / complex'));
-  failed(await h.bridge(args(h, mode, ['--level', 'simple', '--effort', 'high']), opts), mode === 'run' ? M.levelForClaude('simple') : M.levelIsClaude(`modules.${mode}.simple`));
+  failed(await h.bridge(args(h, mode, ['--effort', 'high']), opts), mode === 'run' ? M.missingLevel('simple / normal / complex') : M.discussReviewNeedsPlan(mode));
+  failed(await h.bridge(args(h, mode, ['--level', 'simple', '--effort', 'high']), opts), mode === 'run' ? M.levelForClaude('simple') : M.discussReviewNeedsPlan(mode));
   const entry = { agent: 'second' };
   c.modules[mode].normal = mode === 'discuss' ? [entry] : entry;
   h.config(c);
@@ -67,7 +67,7 @@ for (const mode of modes) test(`${mode} 的 Claude 等级、点名分派与 effo
   assert.equal(omitted.effort, null);
   assert.ok(!h.calls().filter((call) => call.operation === 'exec').at(-1).args.some((arg) => arg.includes('model_reasoning_effort')));
   h.config({ agents: {}, modules: self() });
-  failed(await h.bridge(args(h, mode, ['--effort', 'high']), opts), M.missingLevel('simple / normal / complex'));
+  failed(await h.bridge(args(h, mode, ['--effort', 'high']), opts), mode === 'run' ? M.missingLevel('simple / normal / complex') : M.discussReviewNeedsPlan(mode));
 });
 
 test('opencode 未授权时不能执行、API 不能执行，Claude 等级点名时不传强度', async (t) => {
@@ -97,8 +97,8 @@ test('讨论多参与方需要选择，未知代号和非法 Codex 强度被拒�
   c.agents.second = { ...c.agents.codex };
   c.modules.discuss.normal.push({ agent: 'second' });
   h.config(c);
-  failed(await h.bridge(args(h, 'discuss', ['--level', 'normal'])), M.agentRequired('modules.discuss.normal', 'codex、second'));
-  failed(await h.bridge(args(h, 'discuss', ['--level', 'normal', '--effort', 'low'])), M.agentRequired('modules.discuss.normal', 'codex、second'));
+  failed(await h.bridge(args(h, 'discuss', ['--level', 'normal'])), M.discussReviewNeedsPlan('discuss'));
+  failed(await h.bridge(args(h, 'discuss', ['--level', 'normal', '--effort', 'low'])), M.discussReviewNeedsPlan('discuss'));
   failed(await h.bridge(args(h, 'run', ['--effort', 'high', '--agent', 'missing'])), M.unknownAgentFlag('missing'));
   failed(await h.bridge(args(h, 'run', ['--level', 'complex', '--effort', 'invalid', '--agent', 'codex'])), M.effortChoices('low / medium / high / xhigh / max / ultra'));
   for (const effort of [null, 'invalid']) {

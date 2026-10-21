@@ -3,8 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as pause } from 'node:timers/promises';
+import { discussion, review } from './fixtures/reports.mjs';
 export { MESSAGES } from '../foreman/skills/dispatch/scripts/messages.mjs';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -162,6 +163,81 @@ export function sandbox(t, { config = true } = {}) {
   });
   return h;
 }
+
+// 旧用例仍验证外部席的行为；只在这里补齐新协议要求的计划和答卷。
+export function plannedArgs(h, values) {
+  const args = values.map(String), cmd = args[0];
+  if (!['discuss', 'review', 'resume'].includes(cmd)) return args;
+  const opt = (name) => { const i = args.lastIndexOf(`--${name}`); return i < 0 ? null : args[i + 1]; };
+  const call = (command) => {
+    const r = spawnSync(process.execPath, [BRIDGE, ...command], { cwd: h.cwd, env: h.env, encoding: 'utf8', windowsHide: true, timeout: 20000 });
+    return r.status === 0 ? JSON.parse(r.stdout) : null;
+  };
+  let failedSubmit;
+  const submit = (plan) => {
+    const file = write(path.join(h.home, `host-${plan.module}.json`), plan.module === 'discuss' ? discussion : review);
+    const command = ['submit', '--plan', plan.plan_id, '--report', file];
+    if (!call(command)) failedSubmit = command;
+  };
+  let plan;
+  if (cmd === 'resume') {
+    const records = h.records(), id = opt('run') === 'last' ? records.map((m) => m.id).sort().at(-1) : opt('run');
+    const parent = records.find((m) => m.id === id);
+    if (!parent?.plan || parent.participant === 'host') return args;
+    const file = path.join(h.runs, 'plans', `${parent.plan}.json`);
+    if (!fs.existsSync(file)) return args;
+    plan = json(file);
+    let done = 0;
+    for (let m = parent; m; m = records.find((r) => r.id === m.parent)) if (m.status === 'done') done++;
+    const max = json(h.userConfig).dispatch?.discuss_max_rounds ?? 2;
+    if (plan.host && plan.module === 'discuss' && done + 1 <= max) {
+      while (!failedSubmit && h.records().filter((m) => m.plan === plan.plan_id && m.participant === 'host').length < done + 1) submit(plan);
+      args[args.lastIndexOf('--run') + 1] = id;
+    }
+    return failedSubmit || args;
+  }
+  if (opt('plan')) {
+    const file = path.join(h.runs, 'plans', `${opt('plan')}.json`);
+    if (!fs.existsSync(file)) return args;
+    plan = json(file);
+  }
+  else {
+    if (!opt('level')) return args;
+    const configArgs = ['config', '--cwd', opt('cwd') || h.cwd];
+    const url = (name) => pathToFileURL(path.join(ROOT, 'foreman/skills/dispatch/scripts', name)).href;
+    const script = `import { loadConfig } from ${JSON.stringify(url('config.mjs'))}; import { adapters } from ${JSON.stringify(url('adapters/index.mjs'))}; console.log(JSON.stringify(loadConfig(process.argv[1], adapters)));`;
+    const loaded = spawnSync(process.execPath, ['--input-type=module', '-e', script, opt('cwd') || h.cwd], { cwd: h.cwd, env: h.env, encoding: 'utf8', windowsHide: true, timeout: 20000 });
+    if (loaded.status !== 0) return configArgs;
+    const cfg = JSON.parse(loaded.stdout), entry = cfg.modules[cmd][opt('level')], candidates = Array.isArray(entry) ? entry : typeof entry === 'object' && entry ? [entry] : [];
+    const required = candidates.filter((item) => item.required);
+    const agent = opt('agent') || (required.length === 1 ? required[0].agent : candidates.length === 1 ? candidates[0].agent : null);
+    if (!agent) return args;
+    const planArgs = ['plan', '--cwd', opt('cwd') || h.cwd, '--module', cmd, '--cell', opt('level'), '--group', opt('group') || `test-plan-${h.nextPlan = (h.nextPlan || 0) + 1}`, '--seat', agent];
+    const material = new Set(['target', 'file', 'base', 'commit', 'uncommitted']);
+    const launch = [cmd];
+    for (let i = 1; i < args.length; i++) {
+      const key = args[i].slice(2), flag = ['uncommitted', 'no-snapshot'].includes(key), value = flag ? [] : [args[i + 1]];
+      if (cmd === 'review' && material.has(key)) planArgs.push(args[i], ...value);
+      else if (!['cwd', 'level', 'group', 'agent'].includes(key)) launch.push(args[i], ...value);
+      if (!flag) i++;
+    }
+    plan = call(planArgs);
+    if (!plan) return planArgs;
+    args.splice(0, args.length, ...launch, '--plan', plan.plan_id, '--seat', '1');
+  }
+  if (plan.host && !h.records().some((m) => m.plan === plan.plan_id && m.participant === 'host')) submit(plan);
+  return failedSubmit || args;
+}
+
+export function plannedSandbox(t, options) {
+  const h = sandbox(t, options), bridge = h.bridge, startBridge = h.startBridge;
+  h.bridge = (args, opts) => bridge(plannedArgs(h, args), opts);
+  h.startBridge = (args, opts) => startBridge(plannedArgs(h, args), opts);
+  return h;
+}
+
+export const hostArgs = (h, plan) => ['submit', '--plan', plan.plan_id, '--report',
+  write(path.join(h.home, `host-${plan.module}.json`), plan.module === 'discuss' ? discussion : review)];
 
 export function output(r, code = 0) {
   assert.equal(r.code, code, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);

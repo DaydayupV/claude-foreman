@@ -158,7 +158,7 @@ test('levels 里代号写错时，报错带上最接近的代号', async (t) => 
 
 test('--agent 写错时先提示最接近的代号，不报和等级不符', async (t) => {
   const h = sandbox(t), hint = M.unknownAgentFlag('codexx') + M.closestHint('codex');
-  failed(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'codexx'])), hint);
+  failed(await h.bridge(taskArgs(h, 'run', ['--level', 'simple', '--agent', 'codexx'])), hint);
   failed(await h.bridge(taskArgs(h, 'run', ['--agent', 'codexx'])), hint);
 });
 

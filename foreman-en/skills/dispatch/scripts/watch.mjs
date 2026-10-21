@@ -11,6 +11,7 @@ import { avatarFor, introScene, playIntro } from './watch-intro.mjs';
 // 能画实时画面的终端：输出到终端，而且不是 TERM=dumb 这种不认光标控制的终端（测试用 FOREMAN_TEST_SCREEN 模拟）
 const liveCapable = () => (process.stdout.isTTY && process.env.TERM !== 'dumb') || !!TEST_SCREEN;
 const hhmm = (t) => (t ? new Date(t).toTimeString().slice(0, 5) : '     ');
+const hostLine = (m) => `${D.hostSubmitted(hhmm(m.submitted_at), m.round)}${m.model ? ` · ${m.model}` : ''}`;
 // 成功的任务不再列出临时的重连提示；旧记录把它记成了错误
 const realErrors = (r, ok) => (r?.errors || []).filter((e) => !(ok && isReconnect(e)));
 const SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
@@ -650,6 +651,7 @@ function createFeed(run) {
     }
   };
   const read = () => {
+    if (run.meta.participant === 'host') return;
     let size;
     try { size = fs.statSync(file).size; } catch { return; }
     if (size <= offset) return;
@@ -701,6 +703,7 @@ function wrapPanelRight(right, width) {
 // 组视图一块的标题：先保留状态和时钟，再放可选信息；右侧预留 40 列容纳常见计数或 API 进度，标签通常至少留 8 列以便辨认。
 // 同组标题各不相同时（比如角色讨论、拆开的执行任务），再写一行这一块的标题，续接的讨论后面写上第几轮
 function panelHead(run, stats, width, withTitle, { wrap = false } = {}) {
+  if (run.meta.participant === 'host') return wrapWidth(hostLine(run.meta), width);
   const o = runOutcome(run);
   const { running, result: r } = o;
   const m = run.meta;
@@ -766,6 +769,7 @@ function liveBody(feed, rows, inner) {
 
 // 组视图的一块：标题行加固定行数的正文。运行中显示最近说的话和动作，结束后显示结论。
 function panelLines(run, feed, rows, width, withTitle) {
+  if (run.meta.participant === 'host') return panelHead(run, null, width, false);
   const { running, result: r, ok } = runOutcome(run);
   const head = panelHead(run, feed.stats, width, withTitle);
   const inner = width - 2;
@@ -786,8 +790,8 @@ function panelLines(run, feed, rows, width, withTitle) {
 
 // 组的标题行右侧：运行中、完成、失败各几个，为 0 的不写
 function groupCounts(all) {
-  const { running, ok, blocked, failed, resumed } = groupTally(all);
-  return [running && C.cyan(D.groupCount.running(running)), ok && C.green(D.groupCount.ok(ok)), resumed && C.dim(D.groupCount.resumed(resumed)), blocked && C.yellow(D.groupCount.blocked(blocked)), failed && C.red(D.groupCount.failed(failed))].filter(Boolean).join(C.dim(' · '));
+  const { running, ok, blocked, failed, resumed, submitted } = groupTally(all);
+  return [running && C.cyan(D.groupCount.running(running)), ok && C.green(D.groupCount.ok(ok)), submitted && C.dim(D.groupCount.submitted(submitted)), resumed && C.dim(D.groupCount.resumed(resumed)), blocked && C.yellow(D.groupCount.blocked(blocked)), failed && C.red(D.groupCount.failed(failed))].filter(Boolean).join(C.dim(' · '));
 }
 
 // 组里属于派发计划的任务：每份计划一行，写明完整、进行中还是不完整、缺了哪个必选，只给状态词上色。
@@ -846,8 +850,8 @@ async function watchGroup(group, o, loadCfg) {
   let introPlayed = false;
   let handOff = () => {};
   if (introWanted(o, runs.map((run) => run.meta), loadCfg)) {
-    const fresh = (list) => list.filter((run) => !run.meta.parent).map((run) => introOf(run.meta));
-    const first = runs.find((run) => !run.meta.parent).meta;
+    const fresh = (list) => list.filter((run) => run.meta.participant !== 'host' && !run.meta.parent).map((run) => introOf(run.meta));
+    const first = runs.find((run) => run.meta.participant !== 'host' && !run.meta.parent).meta;
     const kind = runs.some((run) => kindOf(run.meta) === 'discuss') ? 'discuss' : kindOf(first);
     // meta.json 正被替换时会暂时读不到，组里的任务就会从列表里消失：见过的任务都记着，读不到的不算结束
     const seen = new Map(runs.map((run) => [run.id, run]));
@@ -970,8 +974,8 @@ async function watchGroup(group, o, loadCfg) {
     for (;;) {
       checkRunners([...known.values()].map((run) => run.meta));
       for (const run of known.values()) {
-        const shown = outcomeStyle(runOutcome(run)).word;
-        if (states.get(run.id) !== shown) process.stdout.write(`${D.dots([modelLabel(run.meta), shown])}\n`);
+        const host = run.meta.participant === 'host', shown = host ? hostLine(run.meta) : outcomeStyle(runOutcome(run)).word;
+        if (states.get(run.id) !== shown) process.stdout.write(`${host ? shown : D.dots([modelLabel(run.meta), shown])}\n`);
         states.set(run.id, shown);
       }
       for (const { id, text } of describePlans([...known.values()], planRuns)) {
@@ -993,6 +997,7 @@ async function watchGroup(group, o, loadCfg) {
   const inner = width - 2;
   const out = ['', groupHeadLine(group, title, all, width), ...planLines(all, width, true, planRuns)];
   for (const run of all) {
+    if (run.meta.participant === 'host') { out.push(C.dim('─'.repeat(width)), ...wrapWidth(hostLine(run.meta), width)); continue; }
     const { result: r, ok } = runOutcome(run);
     out.push(C.dim('─'.repeat(width)), ...panelHead(run, feeds.get(run.id).stats, width, !title, { wrap: true }));
     const usage = usageLine(r, run.meta);
@@ -1009,6 +1014,7 @@ async function watchGroup(group, o, loadCfg) {
 async function cmdWatch(o, loadCfg) {
   if (o.group != null) return watchGroup(o.group, o, loadCfg);
   const { id, dir, meta } = await pickWatchRun(o.run);
+  if (meta.participant === 'host') { process.stdout.write(`${hostLine(meta)}\n`); return; }
   let handOff = null;
   if (introWanted(o, [meta], loadCfg)) {
     // 时间线也画在备用屏幕里，动画结束后不用退出；--verbose 逐行输出在普通屏幕里，要先退出

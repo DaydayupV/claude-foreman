@@ -592,14 +592,16 @@ function validatePlan(cfg, plan, adapters) {
   } else if (plan.route != null) die(M.planRouteImageOnly);
   const cell = resolveCell(cfg, plan.module, plan.cell);
   if (cell.closedByProject) die(M.planCellClosedByProject(cell.key));
-  if (cell.closed) die(M.planCellClosed(cell.key));
+  const outside = !!plan.host && ['discuss', 'review'].includes(plan.module) && cfg.modules[plan.module][plan.cell] === CLAUDE_CODE;
+  if (cell.closed && !outside) die(M.planCellClosed(cell.key));
   const names = cell.candidates.map((item) => item.agent);
   for (const seat of plan.seats) {
     if (plan.module === 'image' && plan.cell === 'generate' && seat.role) die(M.generateNoRoles);
     const name = resolveAgentAlias(seat.agent, cfg);
-    if (!names.includes(name)) die(M.agentNotInLevel(name, cell.key, M.list(names)));
+    if (!outside && !names.includes(name)) die(M.agentNotInLevel(name, cell.key, M.list(names)));
+    if (!Object.hasOwn(cfg.agents, name)) die(unknownAgentError('--seat', name, cfg));
     const agent = cfg.agents[name], adapter = adapters[agent.type];
-    const candidate = cell.candidates.find((item) => item.agent === name);
+    const candidate = outside ? { effort: adapter.defaultEffort?.(plan.cell) ?? null } : cell.candidates.find((item) => item.agent === name);
     if (Object.hasOwn(seat, 'model') && seat.model !== (candidate.model || agent.model || null)
       || Object.hasOwn(seat, 'effort') && seat.effort !== (candidate.effort ?? null)) die(M.planSeatChanged(plan.plan_id, seat.seat, cell.key));
     const mode = plan.module === 'image' ? 'run' : plan.module;
@@ -615,8 +617,9 @@ function validatePlan(cfg, plan, adapters) {
     const planned = new Set(plan.required.map((name) => resolveAgentAlias(name, cfg)));
     if (planned.size !== cell.required.length || cell.required.some((name) => !planned.has(name))) die(M.planRequiredChanged(plan.plan_id, cell.key));
   }
-  if (plan.seats.length > cfg.dispatch.max_seats) die(M.planTooManySeats(plan.seats.length, cfg.dispatch.max_seats));
-  return cell;
+  const n = plan.seats.length + (plan.host ? 1 : 0);
+  if (n > cfg.dispatch.max_seats) die(plan.host ? M.planTooManySeatsWithHost(n, cfg.dispatch.max_seats) : M.planTooManySeats(n, cfg.dispatch.max_seats));
+  return { ...cell, ...(outside ? { outside_cell: true } : {}) };
 }
 
 function resolveProfile(cfg, seat, o, adapters, fallbackModel = null, parentAgent = null, parentCell = null) {
@@ -648,9 +651,10 @@ function resolveProfile(cfg, seat, o, adapters, fallbackModel = null, parentAgen
   if (cell.closed) {
     if (cell.closedByProject) die(M.cellClosedByProject(cell.key, o.agent != null));
     if (image) die(M.imageCellClosed(cell.key));
-    if (!requested) die(seat.module === 'run' ? M.levelForClaude(level) : M.levelIsClaude(cell.key));
-    const adapter = adapters[cfg.agents[requested]?.type];
-    entry = { agent: requested, effort: adapter?.defaultEffort?.(level) ?? null };
+    const name = requested || (seat.plan && seat.outside_cell ? selected : null);
+    if (!name) die(seat.module === 'run' ? M.levelForClaude(level) : M.levelIsClaude(cell.key));
+    const adapter = adapters[cfg.agents[name]?.type];
+    entry = { agent: name, effort: adapter?.defaultEffort?.(level) ?? null };
     outside = true;
   } else {
     const single = !image && (parentAgent ? parentCell !== level : !seat.seat);
