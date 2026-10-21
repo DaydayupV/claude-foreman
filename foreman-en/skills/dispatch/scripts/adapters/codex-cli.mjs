@@ -7,7 +7,7 @@ import { SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA } from '../config.mjs';
 import { newRunDir } from '../records.mjs';
 import { execute, eventWriter, imageScanner, watchCancellation, spawnCli, validateSchema } from '../runner.mjs';
 import { readImageCalls, missingReferences, readViewedImages } from '../image-calls.mjs';
-import { M, die, isObject, binCommand, pathCommand, npmEntry, killTree, isReconnect, readAttachments, readImages, focusFiles, closestMatches } from '../util.mjs';
+import { M, die, isObject, binCommand, pathCommand, npmEntry, killTree, isReconnect, readAttachments, readImages, focusFiles, closestMatches, pathKey, notice } from '../util.mjs';
 
 const capabilities = { modes: ['run', 'review', 'discuss'], isolation: 'os', reads_code: true, reads_images: true, native_schema: true, native_review: true, images: true, resume: true, command_start_events: true };
 
@@ -35,6 +35,47 @@ function codexConfigValue(key, table = null) {
   try { text = fs.readFileSync(file, 'utf8'); } catch { return null; }
   const part = table == null ? text.split(/^\s*\[/m)[0] : (text.split(new RegExp(`^\\s*\\[${table}\\]\\s*$`, 'm'))[1] || '').split(/^\s*\[/m)[0];
   return new RegExp(`^\\s*${key}\\s*=\\s*["']([^"']+)["']`, 'm').exec(part)?.[1] || null;
+}
+
+const codexConfigFile = () => path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'config.toml');
+
+// 续接的 -c 会覆盖整个数组，先读出用户配的可写目录；不解析 profile。
+// 没配这一项返回空数组；配了但读不懂返回 null，调用方这时不能再用 -c 覆盖它。
+function codexWritableRoots() {
+  let text;
+  try { text = fs.readFileSync(codexConfigFile(), 'utf8'); }
+  catch (e) { return e.code === 'ENOENT' ? [] : null; }
+  const name = (word) => `(?:${word}|"${word}"|'${word}')`;
+  const table = name('sandbox_workspace_write'), key = name('writable_roots');
+  // 顶层的点号键写法（sandbox_workspace_write.writable_roots = …），或者 [sandbox_workspace_write] 表里的键。
+  const top = text.split(/^\s*\[/m)[0];
+  const dotted = new RegExp(`^[ \\t]*${table}[ \\t]*\\.[ \\t]*(?=${key}[ \\t]*=)`, 'm').exec(top);
+  const header = new RegExp(`^[ \\t]*\\[[ \\t]*${table}[ \\t]*\\][ \\t]*(?:#.*)?$`, 'm').exec(text);
+  const part = dotted ? top.slice(dotted.index + dotted[0].length)
+    : header ? text.slice(header.index + header[0].length).split(/^\s*\[/m)[0] : null;
+  const assign = part && new RegExp(`^[ \\t]*${key}[ \\t]*=[ \\t]*`, 'm').exec(part);
+  if (!assign) return [];
+  let rest = part.slice(assign.index + assign[0].length);
+  if (rest[0] !== '[') return null;
+  rest = rest.slice(1);
+  const trim = (s) => s.replace(/^(?:\s+|#[^\n]*(?:\n|$))*/, '');
+  const roots = [];
+  try {
+    for (;;) {
+      rest = trim(rest);
+      if (rest[0] === ']') return roots;
+      if (rest.startsWith('"""') || rest.startsWith("'''")) return null;
+      const token = /^(?:"(?:\\.|[^"\\\r\n])*"|'[^'\r\n]*')/.exec(rest)?.[0];
+      if (!token) return null;
+      // TOML 的八位 Unicode 转义先转成 JSON 可读的字符串片段，转义过的反斜杠保持原样。
+      roots.push(token[0] === "'" ? token.slice(1, -1) : JSON.parse(token.replace(/\\(?:U([\da-fA-F]{8})|.)/g,
+        (escape, point) => point ? JSON.stringify(String.fromCodePoint(parseInt(point, 16))).slice(1, -1) : escape)));
+      rest = trim(rest.slice(token.length));
+      if (rest[0] === ']') return roots;
+      if (rest[0] !== ',') return null;
+      rest = rest.slice(1);
+    }
+  } catch { return null; }
 }
 
 // 没配置模型时从 Codex 的配置读出实际模型名，只用于显示，让用户知道用的是哪个模型。
@@ -401,7 +442,12 @@ async function executeCodex(ctx) {
     prompt = `${brief}${focusFiles(files)}\n\n${M.discussFooter(cwd)}\n`;
   } else if (mode === 'resume') {
     const discuss = kind === 'discuss';
+    const configured = addDirs.length ? codexWritableRoots() : [];
+    if (configured === null) notice(M.codexWritableRootsUnread(codexConfigFile()));
+    const writable = addDirs.length && configured ? [...new Map([...configured, ...addDirs]
+      .map((dir) => [pathKey(path.resolve(cwd, dir)), dir])).values()] : [];
     args = ['exec', 'resume', '--json', '--skip-git-repo-check', ...codexOptions(agent, { model, effort, mode: discuss ? 'discuss' : 'run' }),
+      ...(writable.length ? ['-c', `sandbox_workspace_write.writable_roots=[${writable.map((dir) => JSON.stringify(dir)).join(',')}]`] : []),
       '--output-schema', discuss ? DISCUSS_SCHEMA : SCHEMA, '-o', last, ctx.sessionId, '-'];
     prompt = `${brief}${focusFiles(files)}\n\n${discuss ? M.discussResumeFooter : M.resumeFooter}\n`;
   } else {

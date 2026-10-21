@@ -41,15 +41,23 @@ function piRunsModel(words) {
   return true;
 }
 
-// npx 先跳过它自己的选项，再看要运行的包；-p / --package 后面跟的就是包名。
+// npx 先跳过它自己的选项（带值的连值一起跳过），再看要运行的包：-p / --package 可以写几次，
+// 写了它们时第一个非选项参数是要执行的程序名，没写时它就是包名；-c / --call 后面是一整条要执行的命令。
+const NPX_VALUE_OPTIONS = new Set(['--cache', '--registry', '--userconfig', '--prefix', '-w', '--workspace', '--node-options', '--loglevel', '--script-shell']);
 function npxPackage(tokens, i) {
+  const unquote = (s) => (s || '').replace(/^["']|["']$/g, '');
+  const pkgs = [];
   for (let n = i + 1; n < tokens.length; n++) {
-    const t = tokens[n].replace(/^["']|["']$/g, '');
-    if (t === '-p' || t === '--package') return { pkg: (tokens[n + 1] || '').replace(/^["']|["']$/g, ''), rest: n + 3 };
-    if (t.startsWith('--package=')) return { pkg: t.slice('--package='.length), rest: n + 2 };
-    if (!t.startsWith('-')) return { pkg: t, rest: n + 1 };
+    const t = unquote(tokens[n]);
+    if (t === '-p' || t === '--package') { pkgs.push(unquote(tokens[++n])); continue; }
+    if (t.startsWith('--package=')) { pkgs.push(t.slice('--package='.length)); continue; }
+    if (t === '-c' || t === '--call') return { pkgs, rest: tokens.length, call: unquote(tokens[n + 1]) };
+    if (t.startsWith('--call=')) return { pkgs, rest: tokens.length, call: unquote(tokens[n].slice('--call='.length)) };
+    if (NPX_VALUE_OPTIONS.has(t)) { n++; continue; }
+    if (t.startsWith('-')) continue;
+    return { pkgs: pkgs.length ? pkgs : [t], rest: n + 1 };
   }
-  return { pkg: '', rest: tokens.length };
+  return { pkgs, rest: tokens.length };
 }
 
 const base = (p) => p.replace(/^["']|["']$/g, '').split(/[\\/]/).pop().toLowerCase();
@@ -82,20 +90,24 @@ function splitSegments(command) {
 // 只看每段命令开头真正被执行的程序，文字里提到调用不算。
 function callsAgentDirectly(command) {
   for (const segment of splitSegments(command)) {
-    const tokens = segment.replace(/^[\s(`$&.]+/, '').match(/"[^"]*"|'[^']*'|\S+/g) || [];
+    // 引号可以出现在一个参数中间（--call="codex exec"），整段算一个参数。
+    const tokens = segment.replace(/^[\s(`$&.]+/, '').match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
     let i = 0;
     while (i < tokens.length && /^\w+=/.test(tokens[i])) i++; // 跳过 VAR=value 前缀
     const first = base(tokens[i] || '');
     let rest;
     let opencode = false, pi = false;
+    const npx = /^npx(\.cmd)?$/.test(first) ? npxPackage(tokens, i) : null;
+    if (npx?.call && callsAgentDirectly(npx.call)) return true;
+    const npxRuns = (pattern) => !!npx && npx.pkgs.some((pkg) => pattern.test(pkg));
     if (/^codex(\.exe|\.cmd|\.ps1)?$/.test(first)) rest = tokens.slice(i + 1);
     else if (/^node(\.exe)?$/.test(first) && base(tokens[i + 1] || '') === 'codex.js') rest = tokens.slice(i + 2);
-    else if (/^npx(\.cmd)?$/.test(first) && /^(@openai\/codex|codex)(@.*)?$/.test((tokens[i + 1] || '').replace(/["']/g, ''))) rest = tokens.slice(i + 2);
+    else if (npxRuns(/^(@openai\/codex|codex)(@.*)?$/)) rest = tokens.slice(npx.rest);
     else if (/^opencode(\.exe|\.cmd|\.ps1)?$/.test(first)) { rest = tokens.slice(i + 1); opencode = true; }
-    else if (/^npx(\.cmd)?$/.test(first) && /^(opencode-ai|@opencode\/cli)(@.*)?$/.test((tokens[i + 1] || '').replace(/["']/g, ''))) { rest = tokens.slice(i + 2); opencode = true; }
+    else if (npxRuns(/^(opencode-ai|@opencode\/cli)(@.*)?$/)) { rest = tokens.slice(npx.rest); opencode = true; }
     else if (/^pi(\.exe|\.cmd|\.ps1)?$/.test(first)) { rest = tokens.slice(i + 1); pi = true; }
     else if (/^node(\.exe)?$/.test(first) && PI_ENTRY.test((tokens[i + 1] || '').replace(/^["']|["']$/g, ''))) { rest = tokens.slice(i + 2); pi = true; }
-    else if (/^npx(\.cmd)?$/.test(first) && /^@earendil-works\/pi-coding-agent(@.*)?$/.test(npxPackage(tokens, i).pkg)) { rest = tokens.slice(npxPackage(tokens, i).rest); pi = true; }
+    else if (npxRuns(/^@earendil-works\/pi-coding-agent(@.*)?$/)) { rest = tokens.slice(npx.rest); pi = true; }
     else continue;
     const words = rest.map((t) => t.replace(/^["']|["']$/g, ''));
     if (pi) {

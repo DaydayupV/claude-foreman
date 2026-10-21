@@ -2,10 +2,41 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { sandbox, output, failed, ROOT, MESSAGES } from './helpers.mjs';
+import { sandbox, output, failed, write, ROOT, MESSAGES } from './helpers.mjs';
 const M = MESSAGES.zh;
 const compute = (h, opts = {}) => h.start(path.join(ROOT, 'tests/fixtures/review-scope.mjs'), [JSON.stringify({ cwd: h.cwd, ...opts })]).done;
 const commitAll = (h) => { h.git(['add', '.']); h.git(['commit', '--quiet', '-m', 'synthetic changes']); return h.git(['rev-parse', 'HEAD']); };
+
+test('diff 指纹包含附件路径、行范围和完整内容，非 Git 目录仍返回 null', async (t) => {
+  const h = sandbox(t);
+  assert.equal(output(await compute(h, { file: ['missing.txt'] })), null);
+  h.initGit(); h.write('source.txt', 'changed\n');
+  const attachment = write(path.join(h.home, 'evidence.txt'), 'first\nsecond\n');
+  write(path.join(h.home, 'copy.txt'), 'first\nsecond\n');
+  const plain = output(await compute(h)), first = output(await compute(h, { file: ['../evidence.txt:1-1'] }));
+  assert.notEqual(first.fingerprint, plain.fingerprint);
+  assert.deepEqual({ ...first, fingerprint: plain.fingerprint }, plain);
+  for (const file of ['../copy.txt:1-1', '../evidence.txt:1-2']) {
+    assert.notEqual(output(await compute(h, { file: [file] })).fingerprint, first.fingerprint);
+  }
+  write(attachment, 'first\nchanged\n');
+  const changed = output(await compute(h, { file: ['../evidence.txt:1-1'] }));
+  assert.notEqual(changed.fingerprint, first.fingerprint);
+  assert.equal(changed.patch, first.patch); assert.deepEqual(changed.files, first.files);
+});
+
+test('超过 1 MiB 的未跟踪文件只改内容也会改变指纹，不增加文件字段或补丁', async (t) => {
+  const h = sandbox(t); h.initGit();
+  const bytes = Buffer.alloc(1024 * 1024 + 1, 'x'), file = h.write('large.txt', bytes), stat = fs.statSync(file);
+  const first = output(await compute(h));
+  assert.deepEqual(first.files, [{ path: 'large.txt', status: 'A', binary: false, too_large: true, old_path: null }]);
+  bytes[bytes.length - 1] = 121; write(file, bytes); fs.utimesSync(file, stat.atime, stat.mtime);
+  const changed = output(await compute(h));
+  assert.notEqual(changed.fingerprint, first.fingerprint);
+  assert.equal(changed.patch, first.patch); assert.deepEqual(changed.files, first.files);
+  bytes[bytes.length - 1] = 120; write(file, bytes);
+  assert.equal(output(await compute(h)).fingerprint, first.fingerprint);
+});
 
 test('未提交范围合并暂存、未暂存和未跟踪文件，指纹稳定且不改索引', async (t) => {
   const h = sandbox(t); h.initGit();

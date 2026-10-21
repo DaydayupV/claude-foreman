@@ -205,12 +205,17 @@ function queuedSeconds(dir) {
 
 // 在后台盯着一组或一个任务：有 API 协作方排队超过 --after 分钟就退出，列出是哪几个；全部结束也退出。
 // Claude 收到它退出的通知后，按输出决定要不要问用户终止排队的那一方。
-async function cmdAwaitBusy(o, config) {
+async function cmdAwaitBusy(o, config, load) {
   if (o.group == null && !o.run) die(M.missingOpt('group'));
   if (o.after != null && !(Number(o.after) > 0)) die(M.badAfter(config.dispatch.busy_ask_min));
-  const after = Number(o.after ?? config.dispatch.busy_ask_min);
+  const thresholds = new Map();
+  const afterOf = (run) => {
+    if (o.after != null) return Number(o.after);
+    const cwd = run.meta.cwd;
+    if (!thresholds.has(cwd)) thresholds.set(cwd, (load ? load(cwd) : config).dispatch.busy_ask_min);
+    return thresholds.get(cwd);
+  };
   const print = (x) => process.stdout.write(`${JSON.stringify(x, null, 2)}\n`);
-  if (!(after > 0)) { print({ busy: [], running: [], done: true, disabled: true }); return; }
   const pick = () => (o.group != null ? groupRuns(o.group, Date.now() - 86400000) : [findRun(o.run)]);
   // 刚派出的任务可能还没登记，最多等 30 秒
   for (let waited = 0; o.group != null && !pick().length; waited += 1000) {
@@ -219,9 +224,13 @@ async function cmdAwaitBusy(o, config) {
   }
   for (;;) {
     const runs = pick();
+    if (o.after == null && runs.every((run) => !(afterOf(run) > 0))) {
+      print({ busy: [], running: [], done: true, disabled: true }); return;
+    }
     checkRunners(runs.map((run) => run.meta));
     const running = runs.filter((run) => isRunning(run.meta) && !['opencode cli', 'pi cli'].includes(agentTypeOf(run.meta)));
-    const busy = running.map((run) => ({ run, s: queuedSeconds(run.dir) })).filter((x) => x.s != null && x.s >= after * 60);
+    const busy = running.map((run) => ({ run, s: queuedSeconds(run.dir), after: afterOf(run) }))
+      .filter((x) => x.after > 0 && x.s != null && x.s >= x.after * 60);
     if (busy.length || !running.length) {
       print({
         busy: busy.map(({ run, s }) => ({ run_id: run.id, agent: run.meta.agent, model: modelOf(run.meta), queued_min: Number((s / 60).toFixed(1)) })),

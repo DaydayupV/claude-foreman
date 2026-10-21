@@ -1,7 +1,7 @@
 // 详细事件、时间线、组视图和终端实时画面，只读取统一记录。
 import fs from 'node:fs';
 import path from 'node:path';
-import { RUNS_ROOT, requestCancel, listRuns, findRun, readMeta, checkRunners, isRunning, runEnd, runOutcome, groupTally, groupRuns } from './records.mjs';
+import { RUNS_ROOT, requestCancel, listRuns, findRun, readMeta, checkRunners, isRunning, runEnd, runOutcome, resultValid, groupTally, groupRuns } from './records.mjs';
 import { describePlans } from './plan.mjs';
 import { M, die, sleep, clip, oneLine, plainCommand, RECONNECT, isReconnect, modelOf, agentTypeOf, needsDecision, charWidth, textWidth, fitWidth, wrapWidth } from './util.mjs';
 import { D, TEST_SCREEN, termCols, termRows, C, plain, visibleWidth, shortModel, fullModel, modelLabel, clock, took, outcomeStyle, changedFor,
@@ -28,7 +28,8 @@ const durationOf = (r, m) => r.duration_s ?? (Date.parse(m?.ended_at) - Date.par
 // 只有结果文件时的状态（时间线和详细模式的结尾）：和 records.mjs 的 runOutcome 判断一致
 function resultOutcome(r) {
   const blocked = r.status === 'needs_input' || r.status === 'done' && (!!r.needs_decision || r.report?.status === 'blocked');
-  return { running: false, status: r.status, result: r, blocked, ok: !blocked && r.status === 'done' && (!r.report?.status || r.report.status === 'completed') };
+  const valid = resultValid(r, r);
+  return { running: false, status: r.status, result: r, blocked, valid, ok: !blocked && valid && r.status === 'done' && (!r.report?.status || r.report.status === 'completed') };
 }
 
 // 标题行用原词写模式和等级；图像任务用格子和路线代替等级，时间线和详细模式共用。
@@ -791,8 +792,8 @@ function groupCounts(all) {
 
 // 组里属于派发计划的任务：每份计划一行，写明完整、进行中还是不完整、缺了哪个必选，只给状态词上色。
 // 实时面板截成一行，最终汇总折行写全。
-function planLines(all, width, wrap = false) {
-  return describePlans(all).flatMap(({ state, text }) => (wrap ? wrapWidth(text, width) : [fitWidth(text, width)])
+function planLines(all, width, wrap = false, planRuns = all) {
+  return describePlans(all, planRuns).flatMap(({ state, text }) => (wrap ? wrapWidth(text, width) : [fitWidth(text, width)])
     .map((line, i) => (i === 0 ? paintPlanWord(line, state) : line)));
 }
 
@@ -806,13 +807,29 @@ function groupHeadLine(group, title, all, width) {
 }
 
 async function watchGroup(group, o, loadCfg) {
-  // 被续接过的任务（讨论的上一轮、返工前的那次）由续接的新任务代替，不再单独显示
-  const current = (runs) => {
-    const replaced = new Set(runs.map((run) => run.meta.parent).filter(Boolean));
-    return runs.filter((run) => !replaced.has(run.id));
+  // 续接和同席重启都由最新轮次代替，不再单独显示。
+  const current = (runs, all = runs.all ?? runs) => {
+    const children = new Map(), latest = new Map(), seen = new Set();
+    const seatOf = (run) => run.meta.plan && run.meta.seat != null ? `${run.meta.plan}:${run.meta.seat}` : null;
+    for (const run of all) {
+      const parent = run.meta.parent;
+      if (parent && (!children.has(parent) || run.id > children.get(parent).id)) children.set(parent, run);
+      const seat = seatOf(run);
+      if (seat && (!latest.has(seat) || run.id > latest.get(seat).id)) latest.set(seat, run);
+    }
+    return runs.flatMap((run) => {
+      if (seatOf(run)) run = latest.get(seatOf(run));
+      else while (children.has(run.id)) run = children.get(run.id);
+      if (seen.has(run.id)) return [];
+      seen.add(run.id);
+      return [run];
+    });
   };
+  let planRuns = [];
   const recentRuns = () => {
-    const runs = current(groupRuns(group, Date.now() - 86400000)).reverse();
+    const grouped = groupRuns(group, Date.now() - 86400000);
+    planRuns = grouped.all;
+    const runs = current(grouped).reverse();
     checkRunners(runs.map((run) => run.meta));
     return runs;
   };
@@ -898,7 +915,7 @@ async function watchGroup(group, o, loadCfg) {
       // 窗口不够高时正文可以一行都不留；连各块的标题都放不下时，最后一行写还有几个任务没显示
       const title = sharedTitle();
       const headRows = title ? 2 : 3;
-      const plans = planLines(all, width);
+      const plans = planLines(all, width, false, planRuns);
       const rows = Math.max(0, Math.min(8, Math.floor((H - 2 - plans.length - all.length * headRows) / all.length)));
       const out = [groupHeadLine(group, title, all, width), ...plans];
       const heads = []; // 每块标题行在 out 里的位置
@@ -957,7 +974,7 @@ async function watchGroup(group, o, loadCfg) {
         if (states.get(run.id) !== shown) process.stdout.write(`${D.dots([modelLabel(run.meta), shown])}\n`);
         states.set(run.id, shown);
       }
-      for (const { id, text } of describePlans([...known.values()])) {
+      for (const { id, text } of describePlans([...known.values()], planRuns)) {
         if (states.get(id) !== text) process.stdout.write(`${text}\n`);
         states.set(id, text);
       }
@@ -974,7 +991,7 @@ async function watchGroup(group, o, loadCfg) {
   const title = sharedTitle();
   const width = Math.max(20, termCols() - 1);
   const inner = width - 2;
-  const out = ['', groupHeadLine(group, title, all, width), ...planLines(all, width, true)];
+  const out = ['', groupHeadLine(group, title, all, width), ...planLines(all, width, true, planRuns)];
   for (const run of all) {
     const { result: r, ok } = runOutcome(run);
     out.push(C.dim('─'.repeat(width)), ...panelHead(run, feeds.get(run.id).stats, width, !title, { wrap: true }));

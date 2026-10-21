@@ -74,6 +74,8 @@ async function executeApi(ctx) {
     process.stderr.write(`foreman: ${M.busyHint(`node "${ENTRY}" await-busy ${target}`, cfg.dispatch.busy_ask_min)}\n`);
   }
   const usage = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 };
+  let gotUsage = false;
+  let completedRequests = 0, requestsWithUsage = 0;
   const notes = [];
   const warnings = [];
   const errors = [];
@@ -101,6 +103,7 @@ async function executeApi(ctx) {
         const reply = await chatStream({ url: agent.base_url, apiKey, body, timeoutMs: deadline - Date.now(), stallMs: stallMin * 60000, signal: cancel.signal,
           onEvent: (ev) => {
             if (ev.type === 'api.usage') {
+              gotUsage = true;
               ev.usage = apiUsage(ev.usage);
               for (const key of Object.keys(usage)) usage[key] += ev.usage[key];
             }
@@ -108,6 +111,8 @@ async function executeApi(ctx) {
             event(ev);
           },
         });
+        completedRequests++;
+        if (reply.usage) requestsWithUsage++;
         // 去掉 response_format 后成功了，才说明 400 是它引起的；模型名写错之类的 400 不该归到它头上。
         if (formatRemoved && !notes.includes(M.apiNoResponseFormat)) notes.push(M.apiNoResponseFormat);
         return reply;
@@ -162,9 +167,11 @@ async function executeApi(ctx) {
       : M.apiError(agentName, e.kind, e.status, message));
   }
   clearInterval(cancelCheck);
+  const usageMissing = !gotUsage || requestsWithUsage < completedRequests;
+  if (usageMissing && meta.status !== 'cancelled') notes.push(M.apiUsageMissing);
   fs.writeFileSync(path.join(dir, 'last-message.txt'), last);
   fs.writeFileSync(path.join(dir, 'messages.json'), JSON.stringify(last || meta.status === 'done' ? [...history, { role: 'assistant', content: last }] : history, null, 2));
-  return finishDiscussion(run, { usage, errors, notes, warnings, report, last, files, changesNote: M.apiNoChanges });
+  return finishDiscussion(run, { usage: gotUsage && (meta.status === 'cancelled' || !usageMissing) ? usage : null, errors, notes, warnings, report, last, files, changesNote: M.apiNoChanges });
 }
 
 // 厂商接口列出的模型 ID。兼容 OpenAI 的接口一般都有 /models，但不给推理强度，那部分要查厂商文档。

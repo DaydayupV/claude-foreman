@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { sandbox, taskArgs, failed, seedRun, expected, normalize, json, write, baseConfig, MESSAGES } from './helpers.mjs';
-import { command } from './fixtures/reports.mjs';
+import { command, discussion } from './fixtures/reports.mjs';
 import { liveGroup, frameOf, steadyClock } from './fixtures/watch-live.mjs';
 import { watchRecords } from './fixtures/watch.mjs';
 import { textWidth } from '../foreman/skills/dispatch/scripts/util.mjs';
@@ -34,7 +34,7 @@ test('40 列的四席标题都保留状态词和时钟，API 排队和回答时�
     assert.equal(heads.length, 4);
     heads.forEach((head, i) => assert.ok(head.includes(`${i === 3 ? phase : 'running'} <CLOCK>`), head));
   }
-  seedRun(h, seats[0].id, { ...json(path.join(h.runs, seats[0].id, 'meta.json')), status: 'done', pid: 0 }, { status: 'done', duration_s: 3, stale: true });
+  seedRun(h, seats[0].id, { ...json(path.join(h.runs, seats[0].id, 'meta.json')), status: 'done', pid: 0 }, { status: 'done', duration_s: 3, stale: true, report: discussion });
   const finished = await frameOf(h, ['watch', '--group', group, '--no-intro'], { FOREMAN_TEST_SCREEN: '40x30' });
   const head = finished.find((line) => line.startsWith('✔ '));
   assert.match(head, /^✔ .+ {2,}done · took 3s · …$/);
@@ -185,7 +185,7 @@ test('status 表：状态词和用时写英文，中英两个插件一样；模�
   const h = sandbox(t);
   const usage = { input_tokens: 585000, cached_input_tokens: 503100, output_tokens: 19000 };
   seedRun(h, '20000101-a', { mode: 'discuss', kind: 'discuss', agent: 'oc', agent_type: 'opencode cli', model: 'opencode-go/deepseek-v4.1-flash', effort: 'max', title: '合成讨论' },
-    { status: 'done', duration_s: 572, usage, usage_scope: 'this_run', last_request: { tokens: 81000, window: 486000 }, cost_usd: 0.066 });
+    { status: 'done', duration_s: 572, usage, usage_scope: 'this_run', last_request: { tokens: 81000, window: 486000 }, cost_usd: 0.066, report: discussion });
   seedRun(h, '20000101-b', { status: 'failed' }, { status: 'failed', duration_s: 3 });
   seedRun(h, '20000101-c', {}, { status: 'done', needs_decision: true, duration_s: 61 });
   seedRun(h, '20000101-d', { status: 'running', pid: process.pid, ended_at: undefined }, null, [command('item.started')]);

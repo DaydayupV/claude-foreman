@@ -42,7 +42,7 @@ const shownStatus = (status, r) => (status === 'done' ? r?.needs_decision ? 'blo
 // o 是 runOutcome 的结果：运行中 ●、完成 ✔、交回问题和等人回答 ?，其余 ✗
 function outcomeStyle(o) {
   const style = o.running ? { mark: '●', color: C.cyan } : o.ok ? { mark: '✔', color: C.green } : o.blocked ? { mark: '?', color: C.yellow } : { mark: '✗', color: C.red };
-  return { ...style, word: D.statusName(o.running ? 'running' : shownStatus(o.status, o.result)) };
+  return { ...style, word: D.statusName(o.running ? 'running' : o.status === 'done' && !o.blocked && o.valid === false ? 'no_result' : shownStatus(o.status, o.result)) };
 }
 
 // 改动数包括有证据的和协作方自报的；改名前的记录里叫 codex_total。落在同组其他任务写入范围里的（group_run）不算归属未知。

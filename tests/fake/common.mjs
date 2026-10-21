@@ -3,7 +3,9 @@ import path from 'node:path';
 import { setTimeout as pause } from 'node:timers/promises';
 import { spawn } from 'node:child_process';
 
+// 剧本里内容写成 null 表示删掉这个文件。
 export function write(file, content) {
+  if (content === null) { fs.rmSync(file, { force: true }); return; }
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, content);
 }

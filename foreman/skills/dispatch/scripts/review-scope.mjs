@@ -30,7 +30,9 @@ export function validateReviewMaterial(options, plan = null) {
 }
 
 export function computeReviewMaterial({ cwd, target = 'diff', file = [], uncommitted, base, commit }) {
-  if (target === 'diff') return isGitRepo(cwd) ? { ...computeReviewScope({ cwd, uncommitted, base, commit }), target } : null;
+  if (target === 'diff' && !isGitRepo(cwd)) return null;
+  const scope = target === 'diff' ? computeReviewScope({ cwd, uncommitted, base, commit }) : null;
+  if (scope && !file.length) return { ...scope, target };
   const entries = file.map((spec) => {
     const match = /:(\d+)-(\d+)$/.exec(spec);
     const range = match ? [Number(match[1]), Number(match[2])] : null;
@@ -38,7 +40,8 @@ export function computeReviewMaterial({ cwd, target = 'diff', file = [], uncommi
     const shown = rel.startsWith('../') || rel === '..' || path.isAbsolute(rel) ? full : rel;
     return [shown, range, createHash('sha256').update(fs.readFileSync(full)).digest('hex')];
   });
-  const fingerprint = createHash('sha256').update(JSON.stringify(entries)).digest('hex');
+  const fingerprint = createHash('sha256').update(JSON.stringify(scope ? [scope.fingerprint, entries] : entries)).digest('hex');
+  if (scope) return { ...scope, target, fingerprint };
   return { target, kind: target, description: M.reviewScopeTarget[target](entries.length), base: null, merge_base: null,
     commit: null, files: entries.map(([path, range]) => ({ path, range })), patch: '', fingerprint };
 }
@@ -86,9 +89,15 @@ export function computeReviewScope({ cwd, uncommitted, base, commit }) {
   for (const file of untracked) entries.push({ path: file, status: 'A', binary: false, too_large: false, old_path: null });
   entries.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
   let patch = '';
+  const hashes = [];
   for (const file of entries) {
     if (untracked.has(file.path) && fs.lstatSync(path.join(cwd, file.path)).size > MAX_UNTRACKED_BYTES) {
       file.too_large = true;
+      const hash = createHash('sha256'), buffer = Buffer.alloc(64 * 1024), fd = fs.openSync(path.join(cwd, file.path), 'r');
+      try {
+        for (let n; (n = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0;) hash.update(buffer.subarray(0, n));
+      } finally { fs.closeSync(fd); }
+      hashes.push([file.path, hash.digest('hex')]);
       continue;
     }
     const bytes = untracked.has(file.path)
@@ -104,6 +113,8 @@ export function computeReviewScope({ cwd, uncommitted, base, commit }) {
     } else file.binary = /^Binary files /m.test(text);
     patch += text;
   }
-  const fingerprint = createHash('sha256').update(patch).update(JSON.stringify(entries)).digest('hex');
+  const hash = createHash('sha256').update(patch).update(JSON.stringify(entries));
+  if (hashes.length) hash.update(JSON.stringify(hashes));
+  const fingerprint = hash.digest('hex');
   return { kind, description, base: baseSha, merge_base: mergeBase, commit: commitSha, files: entries, patch, fingerprint };
 }

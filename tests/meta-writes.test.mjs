@@ -128,7 +128,7 @@ fs.readFileSync = (file, ...args) => {
 console.log(JSON.stringify(['占用', '半份', '完整', '恢复可读'].map((value) => { mode = value; const run = { dir, meta }; return { ...runOutcome(run), meta: run.meta }; })));`);
   const outcomes = output(await h.start(script).done);
   for (const o of outcomes.slice(0, 2)) { assert.equal(o.result, null); assert.equal(o.status, 'interrupted'); }
-  assert.equal(outcomes[2].status, 'done'); assert.equal(outcomes[2].ok, true); assert.equal(outcomes[2].result.status, 'done');
+  assert.equal(outcomes[2].status, 'done'); assert.equal(outcomes[2].ok, false); assert.equal(outcomes[2].valid, false); assert.equal(outcomes[2].result.status, 'done');
   assert.equal(outcomes[2].meta.session_id, 'recovered-session');
   assert.equal(outcomes[2].meta.ended_at, new Date(Date.parse(outcomes[2].meta.started_at) + 12000).toISOString());
   assert.equal(outcomes[3].status, 'done'); assert.equal(outcomes[3].result.status, 'done');

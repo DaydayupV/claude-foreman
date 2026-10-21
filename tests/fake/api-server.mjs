@@ -47,10 +47,10 @@ export async function apiServer(t, scenarios = [{}], { models } = {}) {
     const answer = scene.answer ?? discussion;
     data({ choices: [{ delta: { content: typeof answer === 'string' ? answer : JSON.stringify(answer) } }] });
     if (scene.disconnect) { res.end(); return; }
-    data({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: scene.usage || {
+    data({ choices: [{ delta: {}, finish_reason: 'stop' }], ...(scene.usage === null ? {} : { usage: scene.usage || {
       prompt_tokens: 100, prompt_tokens_details: { cached_tokens: 20 },
       completion_tokens: 40, completion_tokens_details: { reasoning_tokens: 10 },
-    } });
+    } }) });
     res.end('data: [DONE]\n\n');
   });
   server.listen(0, '127.0.0.1');

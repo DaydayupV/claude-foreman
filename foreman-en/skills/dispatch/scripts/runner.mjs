@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { CLAUDE_SESSION, checkAdmission, groupScopeOwner, absolute, isCancelled, cancelSource, saveMeta, metaWriteWarning } from './records.mjs';
 import { makeTracker } from './tracker.mjs';
-import { computeReviewMaterial, computeReviewScope } from './review-scope.mjs';
+import { computeReviewMaterial } from './review-scope.mjs';
 import { M, die, notice, relativePath, pathKey, modelOf, replaceFile, killTree, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision } from './util.mjs';
 import { D, modelLabel } from './format.mjs';
 
@@ -89,7 +89,7 @@ function startRun(ctx, { started = Date.now(), track = [], modelShown = ctx.mode
     agent: agentName, agent_type: agent.type, sandbox, parent: ctx.parent || null,
     ...(kind === 'review' ? { review_target: ctx.reviewTarget } : {}),
     ...(kind === 'exec' && ctx.isolation === 'tools' ? { isolation: ctx.isolation, run_access: agent.run_access } : {}),
-    track, group: opts.group ?? null, scope: opts.scope, round: ctx.round ?? null,
+    track, add_dir: ctx.addDirs ?? [], group: opts.group ?? null, scope: opts.scope, round: ctx.round ?? null,
     started_at: new Date(started).toISOString(), status: 'running', pid: process.pid, session_id: ctx.sessionId || null,
     claude_session: CLAUDE_SESSION,
   };
@@ -133,7 +133,7 @@ function finishRun(run, result, code = result.exit_code, observed = {}) {
       // 结束时材料可能已被删掉，不能调用会 die 的附件校验，否则结果无法落盘。
       try {
         const options = { ...run.ctx.opts, cwd: run.ctx.cwd };
-        after = (scope.target === 'diff' ? computeReviewScope(options) : computeReviewMaterial(options)).fingerprint;
+        after = computeReviewMaterial(options).fingerprint;
       }
       catch (e) { result.warnings.push(e.message); }
       result.stale = after !== scope.fingerprint;
@@ -167,7 +167,7 @@ function finishDiscussion(run, { usage, cost, commands = 0, errors, notes, warni
   return finishRun(run, {
     run_id: id, mode, kind: ctx.kind, status: meta.status, title: meta.title, cwd, track: [], group: meta.group, round: meta.round, scope: meta.scope,
     agent: agentName, agent_type: agent.type, model, model_shown: meta.model_shown, level, effort, sandbox: null, parent: meta.parent, session_id: meta.session_id,
-    exit_code: meta.status === 'done' ? 0 : 1, duration_s: Math.round((Date.now() - started) / 1000), usage, usage_scope: 'this_run',
+    exit_code: meta.status === 'done' ? 0 : 1, duration_s: Math.round((Date.now() - started) / 1000), usage: usage ?? null, usage_scope: usage == null ? null : 'this_run',
     ...(cost !== undefined ? { cost_usd: cost } : {}),
     last_request: null, rate_limit: null, quota_resets_at: null, commands_executed: commands, errors, notes, warnings, report,
     last_message: report ? undefined : last, changes: { available: false, note: changesNote },
@@ -243,8 +243,8 @@ function svgEmbedsBitmap(file) {
       const bytes = fs.readSync(fd, chunk, 0, chunk.length, null);
       if (!bytes) return false;
       const text = tail + chunk.toString('utf8', 0, bytes);
-      if (/<image/i.test(text)) return true;
-      tail = text.slice(-5);
+      if (/<(?:[A-Za-z_][\w.-]*:)?image(?=[\s/>])/i.test(text)) return true;
+      tail = /<[\w:.-]*$/.exec(text)?.[0] || '';
     }
   } catch { return false; }
   finally { if (fd !== undefined) fs.closeSync(fd); }
@@ -286,7 +286,7 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
     let snapshotError = null;
     if (!opts['no-snapshot']) {
       try {
-        tracker = makeTracker(dir, cwd, track);
+        tracker = makeTracker(dir, cwd, track, { ignored: kind !== 'exec' });
         process.once('exit', cleanup);
         before = tracker.snap('before');
       }
@@ -319,7 +319,7 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
     notes.push(...(r.notes || []));
 
     const claimed = report?.files_changed || (kind !== 'exec' ? parseReport(last, {}, validateSchema).report?.files_changed : null);
-    // 报告里写成目录的（以 / 结尾，或者在磁盘上是目录）按前缀算：目录下被追踪的文件都算它自称改过的。工作目录本身和工作目录外的不算。
+    // 报告里写成目录的按前缀算归属；工作目录本身不算自报改动。
     const claims = (Array.isArray(claimed) ? claimed : []).filter((f) => typeof f?.path === 'string').map((f) => {
       const rel = relativePath(cwd, f.path);
       const inside = rel !== '.' && rel !== '..' && !rel.startsWith('../') && !path.isAbsolute(rel);
@@ -331,8 +331,20 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
     const underClaimedDir = (key) => claims.some((c) => c.dir && key.startsWith(`${c.key}/`));
     const agentPaths = new Set([...r.fileChanges].map((f) => pathKey(relativePath(cwd, f))));
     let changes = { available: false, agent_total: 0, reported_total: 0, unknown_total: 0 };
+    let outsideClaims = [];
     if (tracker) {
-      try { changes = { available: true, ...tracker.diff(before, tracker.snap('after'), path.join(dir, 'diff.patch')) }; }
+      try {
+        changes = { available: true, ...tracker.diff(before, tracker.snap('after'), path.join(dir, 'diff.patch')) };
+        if (kind !== 'exec') {
+          try {
+            const covered = tracker.covers(reported, claims.filter((c) => c.dir).map((c) => c.rel));
+            outsideClaims = claims.filter((c, i) => !c.root && !covered[i]);
+          } catch (e) {
+            outsideClaims = claims.filter((c) => !c.root);
+            warnings.push(M.trackingFailed(e.message));
+          }
+        }
+      }
       catch (e) { warnings.push(M.trackingFailed(e.message)); }
       finally { tracker.cleanup(); }
     }
@@ -362,6 +374,7 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
     if (ctx.module === 'image' && ctx.cell === 'draw') {
       const mark = '①②③④'[ctx.route - 1];
       if (ctx.route === 4 && r.images.length) warnings.push(M.vectorRouteImages(mark));
+      if (ctx.route === 3 && r.images.length) warnings.push(M.drawStepImages(mark));
       if ([3, 4].includes(ctx.route)) {
         const untrackedScope = opts.scope.some((scope) => { const rel = relativePath(cwd, scope); return rel === '..' || rel.startsWith('../') || path.isAbsolute(rel); });
         if (!changes.available || untrackedScope) notes.push(M.vectorCheckPartial(mark));
@@ -436,8 +449,9 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
       notes,
       warnings: [...warnings, ...r.warnings.filter((w) => !/^Under-development features enabled/.test(w))],
       report,
-      // 拍了快照时以实际改动的归属为准，自报但没改动的不算；完成的写文件事件在快照外（比如被忽略的文件）也算。没有快照时只能看事件和自报。
+      // 快照范围内自报却没改动的不算，快照范围外的自报仍是写入证据。
       ...(kind !== 'exec' ? { readonly_violation: [...new Map([
+        ...outsideClaims.map((c) => [c.key, { path: c.rel, by: 'reported' }]),
         ...(changes.available ? tracked.filter((f) => f.by !== 'unknown').map(({ path, by }) => [pathKey(relativePath(cwd, path)), { path: relativePath(cwd, path), by }])
           : claims.filter((c) => !c.root).map((c) => [c.key, { path: c.rel, by: 'reported' }])),
         ...[...r.fileChanges].map((path) => [pathKey(relativePath(cwd, path)), { path: relativePath(cwd, path), by: 'agent' }]),

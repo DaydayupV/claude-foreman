@@ -1,8 +1,9 @@
 // 核实意见的去留，以及按基础模型和模块汇总本地实测记录。
 import fs from 'node:fs';
 import path from 'node:path';
-import { RUNS_ROOT, listRuns, findRun, readMeta, checkRunners, isRunning, runOutcome } from './records.mjs';
-import { M, die, need, isObject, modelOf, agentTypeOf, replaceFile, sleep } from './util.mjs';
+import { RUNS_ROOT, listRuns, findRun, readMeta, checkRunners, isRunning, runOutcome, resultValid } from './records.mjs';
+import { M, die, need, isObject, modelOf, agentTypeOf, replaceFile } from './util.mjs';
+import { acquireLock } from './locks.mjs';
 
 const MODULES = ['discuss', 'review', 'run', 'image'];
 const VERDICTS = ['accept', 'partial', 'reject'];
@@ -34,30 +35,17 @@ function peerKey(meta, module) {
     JSON.stringify(['group', meta.group, meta.claude_session ?? null, module]) : null;
 }
 const findingsOf = (result, module) => module === 'review' && Array.isArray(result?.report?.findings) ? result.report.findings.map((f) => f.id) : null;
+function firstRun(run) {
+  while (run.meta.parent) run = findRun(run.meta.parent);
+  return run.id;
+}
 function checkId(id, run, ids) {
   if (!/^[A-Za-z][A-Za-z0-9._-]{0,31}$/.test(id)) die(M.judgeBadId(id));
   if (ids && !ids.includes(id)) die(M.judgeUnknownId(id, run, ids.length ? M.list(ids) : M.judgeNoIds));
 }
 
 async function lockVerdict(file) {
-  const lock = `${file}.lock`, content = JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), deadline = Date.now() + 5000;
-  for (;;) {
-    try { fs.writeFileSync(lock, content, { flag: 'wx' }); break; }
-    catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      try { if (Date.now() - fs.statSync(lock).mtimeMs > 30000) fs.rmSync(lock); }
-      catch (error) { if (error.code !== 'ENOENT') throw error; }
-      if (Date.now() >= deadline) die(M.judgeBusy(file));
-      await sleep(25);
-    }
-  }
-  const release = () => {
-    process.removeListener('exit', release);
-    try { if (fs.readFileSync(lock, 'utf8') === content) fs.rmSync(lock, { force: true }); }
-    catch (error) { if (error.code !== 'ENOENT') throw error; }
-  };
-  // die 会直接退出进程，校验失败时也要释放自己持有的锁。
-  process.once('exit', release);
+  const { release } = await acquireLock(`${file}.lock`, { waitMs: 5000, legacy: true, busy: ({ file: lock }) => die(M.judgeBusy(file, lock)) });
   return release;
 }
 
@@ -86,6 +74,7 @@ async function cmdJudge(o) {
     const other = findRun(ref), otherModule = moduleOf(other.meta);
     if (other.id === run.id) die(M.judgeSameSelf(value));
     if (!peerKey(meta, module) || peerKey(meta, module) !== peerKey(other.meta, otherModule)) die(M.judgeSameNotPeer(value, other.id));
+    if (meta.plan ? meta.seat === other.meta.seat : firstRun(run) === firstRun(other)) die(M.judgeSameSeat(value, other.id));
     if (isRunning(other.meta)) die(M.judgeSameRunning(value, other.id));
     checkId(otherId, other.id, findingsOf(readRecord(other.dir, 'result.json'), otherModule));
     if (!links.has(id)) links.set(id, new Set());
@@ -130,11 +119,16 @@ function seatChains(runs, totals) {
       }
     }
     if (!root) continue;
-    run.root = root.id;
-    if (!chains.has(root.id)) chains.set(root.id, { root, module: moduleOf(root.meta), rounds: [] });
-    chains.get(root.id).rounds.push(run);
+    const key = root.meta.plan && root.meta.seat != null ? JSON.stringify([root.meta.plan, root.meta.seat]) : root.id;
+    if (!chains.has(key)) chains.set(key, { root, module: moduleOf(root.meta), rounds: [] });
+    const chain = chains.get(key);
+    if (root.id < chain.root.id) Object.assign(chain, { root, module: moduleOf(root.meta) });
+    chain.rounds.push(run);
   }
-  for (const chain of chains.values()) chain.rounds.sort((a, b) => Date.parse(a.meta.started_at) - Date.parse(b.meta.started_at) || a.id.localeCompare(b.id));
+  for (const chain of chains.values()) {
+    chain.rounds.sort((a, b) => a.id.localeCompare(b.id));
+    for (const run of chain.rounds) run.root = chain.root.id;
+  }
   return [...chains.values()];
 }
 function durationOf({ meta, result }) {
@@ -229,13 +223,17 @@ function cmdStats(o, statsOf) {
       if (rounds.some((run) => {
         if (run.running) return false;
         const parent = rounds.find((p) => p.id === run.meta.parent);
-        return parent && runOutcome(parent).ok;
+        if (!parent) return false;
+        const outcome = runOutcome(parent);
+        return outcome.status === 'done' && resultValid(parent.meta, outcome.result) && !outcome.blocked;
       })) rootRow.rework.reworked++;
     }
     const durations = rounds.map(durationOf);
     if (!rounds.some((run) => run.running) && durations.every((n) => n != null)) seatTimes.get(rootRow).push(durations.reduce((sum, n) => sum + n, 0));
     let cumulative = [0, 0, 0];
     for (const [i, run] of rounds.entries()) {
+      // 同一席重启的那一轮是新会话，会话累计用量从零算起。
+      if (!run.meta.parent) cumulative = [0, 0, 0];
       if (run.running) continue;
       const { meta, result } = run, row = rowFor(baseModel(meta, result), module);
       run.row = row;
@@ -243,7 +241,8 @@ function cmdStats(o, statsOf) {
       if (durations[i] == null) row.duration_s.missing_runs++;
       else row.duration_s.total += durations[i];
       let usage = result?.usage, scope = result?.usage_scope ?? (meta.mode === 'resume' ? 'session_total' : 'this_run');
-      if (usage == null && agentTypeOf(meta) === 'codex cli' && meta.session_id && i === rounds.length - 1) {
+      // 只有这条续接链的最后一轮（后面没有接着它续的）能从会话记录补读用量。
+      if (usage == null && agentTypeOf(meta) === 'codex cli' && meta.session_id && !rounds.some((other) => other.meta.parent === run.id)) {
         usage = statsOf(meta)?.total_token_usage;
         scope = 'session_total';
       }

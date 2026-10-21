@@ -167,11 +167,12 @@ test('opencode 续接同一会话和组范围 track，权限变化记入 notes',
   h.write('.gitignore', 'ignored.txt\n'); h.write('ignored.txt', 'before');
   const s = h.scenario({ last_message: report });
   const first = output(await h.bridge(taskArgs(h, 'run', ['--group', 'work', '--scope', 'src', '--track', 'ignored.txt']), { env: s.env }));
-  const resume = ['resume', '--run', first.run_id, '--level', 'complex', '--brief', '-'];
-  const same = output(await h.bridge(resume, { env: s.env }));
+  // 续接只能接最新的一轮，每次都接上一轮
+  const resume = (run) => ['resume', '--run', run.run_id, '--level', 'complex', '--brief', '-'];
+  const same = output(await h.bridge(resume(first), { env: s.env }));
   assert.equal(same.run_access, 'edit'); assert.equal(same.session_id, first.session_id); assert.deepEqual(same.notes, []);
   c.agents.oc.run_access = 'shell'; h.config(c);
-  const second = output(await h.bridge(resume, { env: s.env, input: '续接合成任务' }));
+  const second = output(await h.bridge(resume(same), { env: s.env, input: '续接合成任务' }));
   assert.equal(second.session_id, first.session_id); assert.equal(second.run_access, 'shell');
   assert.equal(second.group, 'work'); assert.deepEqual(second.scope, ['src']); assert.deepEqual(second.track, ['ignored.txt']);
   assert.ok(second.notes.includes(M.runAccessChanged('edit', 'shell')));
@@ -179,7 +180,7 @@ test('opencode 续接同一会话和组范围 track，权限变化记入 notes',
   assert.equal(call.args[call.args.indexOf('--session') + 1], first.session_id);
   assert.deepEqual(JSON.parse(call.env.OPENCODE_CONFIG_CONTENT).agent['foreman-run'].permission, permissions('shell'));
   assert.equal(call.stdin, `续接合成任务\n\n${M.resumeFooter}\n\n${M.opencodeRunResumeFooter}\n`);
-  failed(await h.bridge([...resume, '--no-snapshot']), M.snapshotRequired);
+  failed(await h.bridge([...resume(second), '--no-snapshot']), M.snapshotRequired);
 });
 
 test('opencode 执行准入仍拦截同组 scope 重叠', async (t) => {

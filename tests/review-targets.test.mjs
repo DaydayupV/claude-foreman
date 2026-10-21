@@ -193,6 +193,28 @@ test('席位启动拒绝材料覆盖和变化，原材料可启动，旧计划�
   const legacy = output(await h.bridge(launch(old))); assert.equal(legacy.review_target, 'diff'); assert.equal(legacy.stale, false);
 });
 
+test('Windows 上计划目录比较忽略路径大小写', { skip: process.platform !== 'win32' }, async (t) => {
+  const h = sandbox(t); configure(h); h.write('source.txt', 'evidence\n');
+  const p = output(await h.bridge(planArgs(h, ['--target', 'files', '--file', 'source.txt'])));
+  const r = output(await h.bridge(launch(p, ['--cwd', h.cwd.toUpperCase()])));
+  assert.equal(r.review_scope.fingerprint, p.review.fingerprint); assert.equal(r.stale, false);
+});
+
+test('diff 计划拒绝附件变化，审查结束时也复核补丁之外的附件', async (t) => {
+  const h = sandbox(t); configure(h); h.initGit(); h.write('source.txt', 'change\n');
+  const attachment = write(path.join(h.home, 'evidence.txt'), 'first\noriginal\n');
+  const p = output(await h.bridge(planArgs(h, ['--file', '../evidence.txt:1-1'])));
+  write(attachment, 'first\nchanged\n');
+  failed(await h.bridge(launch(p)), M.planMaterialChanged(p.plan_id));
+  assert.equal(h.records().length, 0); assert.equal(h.calls().length, 0);
+  write(attachment, 'first\noriginal\n');
+  const gate = path.join(h.home, 'release'), s = h.scenario({ steps: [{ wait_for: gate }] });
+  const running = h.startBridge(launch(p), { env: s.env }); await poll(() => s.calls().length, '审查开始');
+  write(attachment, 'first\nchanged\n'); write(gate, 'go');
+  const r = output(await running.done);
+  assert.equal(r.stale, true); assert.ok(r.warnings.includes(M.reviewScopeChanged)); assert.deepEqual(r.report, review);
+});
+
 for (const scope of ['uncommitted', 'base', 'commit']) test(`diff 计划保存 ${scope} 参数并用同一份材料启动`, async (t) => {
   const h = sandbox(t); configure(h); const sha = h.initGit(); h.write('source.txt', 'change\n');
   const flags = scope === 'uncommitted' ? ['--uncommitted'] : [`--${scope}`, scope === 'base' ? 'HEAD' : sha];
@@ -228,11 +250,11 @@ for (const change of ['修改', '删除', 'Git 错误']) test(`审查结束时${
   const running = h.startBridge(launch(p), { env: s.env }); await poll(() => s.calls().length, '审查开始');
   if (change === '修改') h.write('source.txt', 'changed\n');
   else if (change === '删除') fs.unlinkSync(path.join(h.cwd, 'source.txt'));
-  else write(path.join(h.cwd, '.git/HEAD'), 'invalid head\n');
+  else write(path.join(h.cwd, '.git/index'), Buffer.from([0]));
   write(gate, 'go'); const r = output(await running.done);
   assert.equal(r.stale, true); assert.ok(r.warnings.includes(M.reviewScopeChanged)); assert.deepEqual(r.report, review);
   if (change === '删除') assert.ok(r.warnings.some((w) => w.includes('ENOENT')));
-  if (change === 'Git 错误') assert.ok(r.warnings.some((w) => w.includes('not a git repository')));
+  if (change === 'Git 错误') assert.ok(r.warnings.some((w) => w.includes('index file smaller than expected')));
   assert.equal(json(path.join(r.run_dir, 'result.json')).stale, true);
 });
 

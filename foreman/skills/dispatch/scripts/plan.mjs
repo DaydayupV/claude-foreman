@@ -5,7 +5,7 @@ import { ENTRY, USER_CONFIG, MODULE_CELLS, resolveAgentAlias, resolveProfile, va
 import { RUNS_ROOT, CLAUDE_SESSION, listRuns, readMeta, checkRunners, runOutcome } from './records.mjs';
 import { validateReviewMaterial } from './review-scope.mjs';
 import { M, die, need, resolveDir } from './util.mjs';
-import { D } from './format.mjs';
+import { D, outcomeStyle } from './format.mjs';
 
 // 读不到时返回 null，不退出进程：实时查看里计划文件被删了也要接着显示。
 function loadPlan(id) {
@@ -107,25 +107,23 @@ function cmdPlan(o, load, adapters) {
 function planStatus(id, runs = null, plan = readPlan(id)) {
   runs = (runs ?? listRuns().map((rid) => { const dir = path.join(RUNS_ROOT, rid); return { id: rid, dir, meta: readMeta(dir) }; }))
     .filter((run) => run.meta?.plan === id)
-    .sort((a, b) => Date.parse(a.meta.started_at) - Date.parse(b.meta.started_at) || a.id.localeCompare(b.id));
+    .sort((a, b) => a.id.localeCompare(b.id));
   checkRunners(runs.map((run) => run.meta)); // 运行中的几席一次核对完
+  const labels = new Map();
   const seats = plan.seats.map((seat) => {
     const rounds = runs.filter((run) => run.meta.seat === seat.seat), latest = rounds.at(-1);
     const outcome = latest && runOutcome(latest);
-    const module = latest?.meta.module || (latest?.meta.kind === 'discuss' || latest?.meta.mode === 'discuss' ? 'discuss'
-      : latest?.meta.kind === 'review' || latest?.meta.mode === 'review' ? 'review' : 'run');
-    // 审查以结构化报告为准，没审完（incomplete）不算；没有报告时，只有 Codex 原生审查和第 2 期以前的旧记录的文字算数。
+    if (outcome) labels.set(seat.seat, outcomeStyle(outcome).word);
     const r = outcome?.result;
-    const valid = outcome?.ok && (module !== 'review' ? !!r?.report : r?.report ? r.report.verdict !== 'incomplete'
-      : !!r?.last_message?.trim() && (r.native_review || r.review_target === undefined));
-    return { seat: seat.seat, agent: seat.agent, role: seat.role, required: seat.required,
+    return { seat: seat.seat, agent: seat.agent, role: seat.role, required: plan.required ? plan.required.includes(seat.agent) : seat.required,
       run_id: latest?.id ?? null, runs: rounds.map((run) => run.id), status: outcome?.status ?? 'not_started',
-      ok: !latest || outcome.running ? null : !!valid, stale: module === 'review' ? r?.stale ?? null : null };
+      ok: !latest || outcome.running ? null : outcome.ok, stale: plan.module === 'review' ? r?.stale ?? null : null };
   });
   const required = seats.filter((seat) => seat.required);
+  const needed = ['run', 'image'].includes(plan.module) ? seats : required;
   const ended = (seat) => seat.run_id !== null && seat.status !== 'running';
-  const state = required.length ? required.every((seat) => seat.ok === true) ? 'complete'
-    : required.some((seat) => ended(seat) && !seat.ok) ? 'incomplete' : 'pending'
+  const state = needed.length ? needed.every((seat) => seat.ok === true) ? 'complete'
+    : needed.some((seat) => ended(seat) && !seat.ok) ? 'incomplete' : 'pending'
     : seats.every(ended) ? seats.some((seat) => seat.ok) ? 'complete' : 'incomplete' : 'pending';
   // 补漏席还没交回有效结果（没启动、还在跑、失败或结果无效）都算没跑完。
   const gap = seats.filter((seat) => {
@@ -133,24 +131,30 @@ function planStatus(id, runs = null, plan = readPlan(id)) {
     return (role === '补漏' || role === 'gap') && seat.ok !== true;
   });
   return { plan_id: id, module: plan.module, cell: plan.cell, ...(plan.module === 'image' ? { route: plan.route } : {}), group: plan.group, created_at: plan.created_at, state, seats,
+    missing: needed.filter((seat) => seat.ok !== true).map(({ seat, agent, status }) => ({ seat, agent, status, label: labels.get(seat) ?? D.statusName(status) })),
     missing_required: required.filter((seat) => seat.ok !== true).map(({ seat, agent, status }) => ({ seat, agent, status })),
     gap_unfinished: gap.map(({ seat, agent, status }) => ({ seat, agent, status })) };
 }
 
-// 组里每份计划一行：完整、进行中还是不完整，缺了哪个必选。实时查看和 status --group 用；计划文件读不到的跳过。
-function describePlans(runs) {
+// 组里每份计划一行，列出还没交回有效结果的席位；计划文件读不到的跳过。
+function describePlans(runs, all = runs.all ?? runs) {
   return [...new Set(runs.map((run) => run.meta?.plan).filter(Boolean))].flatMap((id) => {
     const plan = loadPlan(id);
     if (!plan) return [];
-    const { state, missing_required: missing, seats: statuses, gap_unfinished: gap } = planStatus(id, runs, plan);
+    const { state, missing, seats: statuses, gap_unfinished: gap } = planStatus(id, all, plan);
     const seats = (list, label) => D.list(list.map((s) => D.watchPlanSeat(s.agent, s.seat, label(s))));
     const ended = missing.filter((s) => !['not_started', 'running'].includes(s.status));
     const waiting = missing.filter((s) => s.status === 'not_started');
-    const detail = state === 'incomplete' && ended.length ? D.watchPlanMissing(seats(ended, (s) => (s.status === 'done' ? D.watchPlanNoResult : D.statusName(s.status))))
+    const detail = state === 'incomplete' && ended.length ? D.watchPlanMissing(seats(ended, (s) => s.label))
       : state === 'pending' && waiting.length ? D.watchPlanNotStarted(seats(waiting, () => null)) : '';
     const stale = statuses.filter((s) => s.stale === true);
+    const gapLabel = (s) => {
+      if (s.status === 'not_started') return D.watchPlanGapNotStarted;
+      const seat = statuses.find((seat) => seat.seat === s.seat);
+      return outcomeStyle(runOutcome(all.find((run) => run.id === seat.run_id))).word;
+    };
     const details = [detail, stale.length ? D.watchPlanStale(seats(stale, () => null)) : '',
-      gap.length ? D.watchPlanGap(seats(gap, (s) => (s.status === 'not_started' ? D.watchPlanGapNotStarted : s.status === 'done' ? D.watchPlanNoResult : D.statusName(s.status)))) : ''].filter(Boolean).join('; ');
+      gap.length ? D.watchPlanGap(seats(gap, gapLabel)) : ''].filter(Boolean).join('; ');
     return [{ id, state, text: D.watchPlanState(id, state, details) }];
   });
 }

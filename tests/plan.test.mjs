@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { once } from 'node:events';
 import { pathToFileURL } from 'node:url';
-import { sandbox, output, failed, baseConfig, seedRun, liveStart, taskArgs, write, json, opencodeAgent, piAgent, apiAgent, ROOT, BRIDGE, MESSAGES } from './helpers.mjs';
+import { sandbox, output, failed, baseConfig, seedRun, liveStart, taskArgs, write, json, poll, opencodeAgent, piAgent, apiAgent, ROOT, BRIDGE, MESSAGES } from './helpers.mjs';
 import { discussion } from './fixtures/reports.mjs';
 import { apiServer } from './fake/api-server.mjs';
 const M = MESSAGES.zh;
@@ -112,24 +112,31 @@ test('启动重新校验整份计划，新增必选、移除候选和项目关�
 
 test('同一席并发只启动一次，续接沿用计划席位角色且不查其他必选', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex };
+  c.dispatch.discuss_max_rounds = 4;
   c.modules.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second', required: true }]; h.config(c);
-  const p = output(await h.bridge(planArgs(h, 'discuss', ['codex=方案', 'second=质疑']))), scenario = h.scenario({ last_message: discussion });
-  const results = await Promise.all([h.bridge(launch(p), { env: scenario.env }), h.bridge(launch(p), { env: scenario.env })]);
+  const gate = path.join(h.home, 'release-seat');
+  const p = output(await h.bridge(planArgs(h, 'discuss', ['codex=方案', 'second=质疑']))), scenario = h.scenario({ last_message: discussion, steps: [{ wait_for: gate }] });
+  const handles = [h.startBridge(launch(p), { env: scenario.env }), h.startBridge(launch(p), { env: scenario.env })];
+  const active = await h.running((m) => m.plan === p.plan_id);
+  await poll(() => handles.some((handle) => handle.stderr.includes(M.seatRoundRunning(p.plan_id, 1, active.id))), '同席并发被拒绝');
+  write(gate, 'go');
+  const results = await Promise.all(handles.map((handle) => handle.done));
   const first = output(results.find((r) => r.code === 0));
-  failed(results.find((r) => r.code === 2), M.seatAlreadyStarted(p.plan_id, 1, first.run_id));
+  failed(results.find((r) => r.code === 2), M.seatRoundRunning(p.plan_id, 1, first.run_id));
   const r = output(await h.bridge(['resume', '--run', first.run_id, '--level', 'complex', '--brief', '-'], { env: scenario.env }));
   for (const record of [r, json(path.join(h.runs, r.run_id, 'meta.json'))]) assert.deepEqual([record.module, record.cell, record.plan, record.seat, record.role], ['discuss', 'complex', p.plan_id, 1, '方案']);
   assert.equal(r.parent, first.run_id);
   const status = output(await h.bridge(['status', '--plan', p.plan_id]));
   assert.deepEqual(status.seats[0].runs, [first.run_id, r.run_id]);
   c.modules.discuss.normal = [{ agent: 'codex' }]; h.config(c);
-  failed(await h.bridge(['resume', '--run', first.run_id, '--level', 'normal', '--brief', '-']), M.resumePlanCellChanged(p.plan_id, 'complex', 'normal'));
+  failed(await h.bridge(['resume', '--run', r.run_id, '--level', 'normal', '--brief', '-']), M.resumePlanCellChanged(p.plan_id, 'complex', 'normal'));
   c.modules.discuss.simple = 'claude code'; h.config(c);
-  failed(await h.bridge(['resume', '--run', first.run_id, '--level', 'simple', '--agent', 'codex', '--brief', '-']), M.resumePlanCellChanged(p.plan_id, 'complex', 'simple'));
+  failed(await h.bridge(['resume', '--run', r.run_id, '--level', 'simple', '--agent', 'codex', '--brief', '-']), M.resumePlanCellChanged(p.plan_id, 'complex', 'simple'));
 });
 
 test('无计划续接换格子重验必选，同格返工保留豁免且兼容旧 level', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex };
+  c.dispatch.discuss_max_rounds = 4;
   c.modules.discuss.complex = [{ agent: 'codex' }, { agent: 'second', required: true }]; h.config(c);
   seedRun(h, '20000101-plain', { kind: 'discuss', mode: 'discuss', level: 'simple', status: 'timeout' });
   const args = ['resume', '--run', '20000101-plain', '--level', 'complex', '--brief', '-'];
@@ -144,7 +151,7 @@ test('无计划续接换格子重验必选，同格返工保留豁免且兼容�
   const same = output(await h.bridge(['resume', '--run', changed.run_id, '--level', 'complex', '--brief', '-'], { env: scenario.env }));
   assert.equal(same.parent, changed.run_id);
   c.modules.discuss.simple = [{ agent: 'second' }]; h.config(c);
-  failed(await h.bridge(['resume', '--run', '20000101-plain', '--level', 'simple', '--brief', '-']), M.resumeAgentNotInCell('codex', 'modules.discuss.simple', 'second'));
+  failed(await h.bridge(['resume', '--run', same.run_id, '--level', 'simple', '--brief', '-']), M.resumeAgentNotInCell('codex', 'modules.discuss.simple', 'second'));
 });
 
 test('计划保存的模型和强度必须匹配当前格子，覆盖参数不能绕过重验', async (t) => {

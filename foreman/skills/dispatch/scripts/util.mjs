@@ -126,6 +126,12 @@ function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
+// 锁用的存活判断：没权限探测（EPERM，比如持有者在管理员终端里）也算进程还在，宁可多等，不能抢走活着的锁。
+// 任务是否在运行仍用 pidAlive：进程号被系统进程复用时，那里要能把记录判成中断。
+function pidExists(pid) {
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+}
+
 // 启动时间用于识别进程号复用；查不到时交给调用方决定，不能据此强行结束进程。
 // Windows 上按系统目录里的完整路径调用 PowerShell，PATH 被精简过也查得到。
 function processStartTimes(pids, { timeoutMs = 15000 } = {}) {
@@ -199,7 +205,7 @@ function relativePath(cwd, file) {
   return path.relative(cwd, path.resolve(cwd, file.replace(/\\/g, '/'))).replace(/\\/g, '/') || '.';
 }
 
-const pathKey = (file) => process.platform === 'win32' ? file.toLowerCase() : file;
+const pathKey = (file) => ['win32', 'darwin'].includes(process.platform) ? file.toLowerCase() : file;
 
 // Codex 断线后自动重连时会发 error 事件（"Reconnecting... 1/5 …"），这只是临时状况，不算失败。
 const RECONNECT = /^Reconnecting\.\.\.\s*(\d+)\/(\d+)/;
@@ -377,4 +383,4 @@ function wrapWidth(s, width) {
   return lines;
 }
 
-export { retryBusy, replaceFile, HERE, LANGUAGE, M, notice, isObject, readJson, die, need, resolveDir, readBrief, MAX_MATERIAL_CHARS, readAttachments, readImages, focusFiles, binCommand, pathCommand, npmEntry, isGitRepo, pidAlive, processStartTimes, processStartedAt, killTreeIfSame, killTree, relativePath, pathKey, RECONNECT, isReconnect, sleep, clip, oneLine, plainCommand, isAscii, modelOf, agentTypeOf, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision, closestMatches, charWidth, textWidth, fitWidth, wrapWidth };
+export { retryBusy, replaceFile, HERE, LANGUAGE, M, notice, isObject, readJson, die, need, resolveDir, readBrief, MAX_MATERIAL_CHARS, readAttachments, readImages, focusFiles, binCommand, pathCommand, npmEntry, isGitRepo, pidAlive, pidExists, processStartTimes, processStartedAt, killTreeIfSame, killTree, relativePath, pathKey, RECONNECT, isReconnect, sleep, clip, oneLine, plainCommand, isAscii, modelOf, agentTypeOf, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision, closestMatches, charWidth, textWidth, fitWidth, wrapWidth };

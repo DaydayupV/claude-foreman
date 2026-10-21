@@ -40,6 +40,8 @@ function splitTop(text) {
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
     if (c === '"' || c === "'" || c === '`') { i = skipString(text, i); if (i < 0) break; continue; }
+    if (c === '/' && text[i + 1] === '/') { const end = text.indexOf('\n', i); i = end < 0 ? text.length : end; continue; }
+    if (c === '/' && text[i + 1] === '*') { const end = text.indexOf('*/', i + 2); i = end < 0 ? text.length : end + 1; continue; }
     if (c === '(' || c === '[' || c === '{') depth++;
     else if (c === ')' || c === ']' || c === '}') depth--;
     else if (c === ',' && depth === 0) { out.push(text.slice(from, i)); from = i + 1; }
@@ -69,8 +71,11 @@ function objectProps(args) {
   if (!text.startsWith('{') || closing(text, 1) !== text.length - 1) return null;
   const props = new Map();
   let spread = false;
-  for (const entry of splitTop(text.slice(1, -1))) {
-    if (entry.startsWith('...')) { spread = true; continue; }
+  for (let entry of splitTop(text.slice(1, -1))) {
+    entry = entry.replace(/^(?:(?:\/\*[\s\S]*?\*\/|\/\/[^\n]*(?:\n|$))\s*)+/, '');
+    if (!entry) continue;
+    // 后面的展开可能覆盖此前属性，只有展开之后明确写出的值才确定。
+    if (entry.startsWith('...')) { spread = true; props.clear(); continue; }
     let colon = -1;
     for (let i = 0, depth = 0; i < entry.length; i++) {
       const c = entry[i];

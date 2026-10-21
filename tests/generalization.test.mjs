@@ -244,5 +244,6 @@ test('续接到 "claude code" 的等级时必须给等级并点名，推理强�
   assert.equal(named.agent, 'codex');
   assert.equal(named.effort, 'high');
   failed(await h.bridge(['resume', '--run', named.run_id, '--brief', '-', '--no-snapshot', '--effort', 'low']), M.missingLevel('simple / normal / complex'));
-  assert.equal(output(await h.bridge([...resume, '--level', 'normal', '--agent', 'codex', '--effort', 'low'])).effort, 'low');
+  // 续接只能接最新的一轮，所以从 named 接着续
+  assert.equal(output(await h.bridge(['resume', '--run', named.run_id, '--brief', '-', '--no-snapshot', '--level', 'normal', '--agent', 'codex', '--effort', 'low'])).effort, 'low');
 });

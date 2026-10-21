@@ -33,7 +33,8 @@ test('stale 在席位、计划行、status 和 watch 结束行显示，完整性
     if (args.includes('--group')) assert.ok(display.stdout.includes(D.watchPlanState(p.plan_id, 'complete', detail)), display.stdout);
     if (args[0] === 'status') assert.ok(display.stdout.includes(`材料审查 · ${D.watchStale}`));
   }
-  const saved = json(p.file); saved.seats.push({ seat: 2, agent: 'second', role: null, required: true }); write(p.file, saved);
+  // 必选以计划的 required 名单为准
+  const saved = json(p.file); saved.seats.push({ seat: 2, agent: 'second', role: null, required: true }); saved.required.push('second'); write(p.file, saved);
   const pending = await h.bridge(['status', '--group', p.group]);
   assert.ok(pending.stdout.includes(`${D.watchPlanNotStarted(D.watchPlanSeat('second', 2, null))}; ${detail}`));
   const english = await h.bridge(['status', '--group', p.group], { env: { FOREMAN_LANG: 'en' } });

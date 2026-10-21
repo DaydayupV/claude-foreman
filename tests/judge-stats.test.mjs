@@ -11,6 +11,8 @@ const review = { module: 'review', mode: 'review', kind: 'review' };
 const report = (...ids) => ({ status: 'done', report: { findings: ids.map((id) => ({ id })) } });
 const usage = (input, cached = 0, out = 0) => ({ input_tokens: input, cached_input_tokens: cached, output_tokens: out });
 const verdict = (dir, items) => write(path.join(dir, 'verdict.json'), { items });
+const released = (dir, generation) => assert.deepEqual(fs.readdirSync(dir).filter((name) => name.startsWith('verdict.json.')),
+  [`verdict.json.lock.${generation}`, `verdict.json.lock.${generation}.done`]);
 
 test('judge 写入规定字段、保留未修改条目，第二次调用覆盖去留并补齐 unjudged', async (t) => {
   const h = sandbox(t), dir = seedRun(h, 'review-a', { ...review, group: 'audit' }, report('F1', 'F2', 'F3'));
@@ -52,8 +54,8 @@ test('judge 拒绝空调用、不合格或未知编号、冲突、运行中任�
 
 test('judge --same 校验语法、自指、同伴、两端编号、目标存在以及左侧去留', async (t) => {
   const h = sandbox(t);
-  seedRun(h, 'review-a', { ...review, plan: 'plan-a' }, report('F1', 'F2'));
-  seedRun(h, 'review-b', { ...review, plan: 'plan-a' }, report('F3'));
+  seedRun(h, 'review-a', { ...review, plan: 'plan-a', seat: 1 }, report('F1', 'F2'));
+  seedRun(h, 'review-b', { ...review, plan: 'plan-a', seat: 2 }, report('F3'));
   seedRun(h, 'review-c', { ...review, plan: 'plan-c' }, report('F3'));
   for (const [same, message] of [
     ['F1=review-b', M.judgeBadSame('F1=review-b')],
@@ -69,9 +71,9 @@ test('judge --same 校验语法、自指、同伴、两端编号、目标存在�
 
 test('judge --same 合并同编号多条链接、去重、整体替换并保留其他编号的链接', async (t) => {
   const h = sandbox(t);
-  seedRun(h, 'a', { ...review, plan: 'plan-a', group: 'left' }, report('F1', 'F2'));
-  seedRun(h, 'b', { ...review, plan: 'plan-a', group: 'right' }, report('F3', 'F4'));
-  seedRun(h, 'c', { ...review, plan: 'plan-a' }, report('F5'));
+  seedRun(h, 'a', { ...review, plan: 'plan-a', seat: 1, group: 'left' }, report('F1', 'F2'));
+  seedRun(h, 'b', { ...review, plan: 'plan-a', seat: 2, group: 'right' }, report('F3', 'F4'));
+  seedRun(h, 'c', { ...review, plan: 'plan-a', seat: 3 }, report('F5'));
   const first = output(await h.bridge(['judge', '--run', 'a', '--accept', 'F1,F2', '--same', ' F1=b:F3,F1=c:F5,F1=b:F3,F2=b:F4, ']));
   assert.deepEqual(first.items.F1.same_as, ['b:F3', 'c:F5']);
   assert.deepEqual(Object.keys(first.items.F1), ['verdict', 'same_as', 'at']);
@@ -86,13 +88,26 @@ test('judge --same 合并同编号多条链接、去重、整体替换并保留�
 test('judge --same 拒绝运行中同伴且不写文件，运行中任务也不能 clear', async (t) => {
   const h = sandbox(t), peer = h.start('-e', ['setInterval(()=>{},1000)']);
   await once(peer.child, 'spawn');
-  const dir = seedRun(h, 'review-a', { ...review, plan: 'plan-a' }, report('F1'));
-  const other = seedRun(h, 'review-b', { ...review, plan: 'plan-a', status: 'running', pid: peer.child.pid,
+  const dir = seedRun(h, 'review-a', { ...review, plan: 'plan-a', seat: 1 }, report('F1'));
+  const other = seedRun(h, 'review-b', { ...review, plan: 'plan-a', seat: 2, status: 'running', pid: peer.child.pid,
     started_at: new Date().toISOString(), ended_at: undefined });
   const before = [fs.readdirSync(dir), fs.readdirSync(other)], same = 'F1=review-b:F99';
   failed(await h.bridge(['judge', '--run', 'review-a', '--accept', 'F1', '--same', same]), M.judgeSameRunning(same, 'review-b'));
   failed(await h.bridge(['judge', '--run', 'review-b', '--clear', 'F99']), M.judgeRunning('review-b'));
   assert.deepEqual([fs.readdirSync(dir), fs.readdirSync(other)], before);
+});
+
+for (const planned of [true, false]) test(`judge --same 拒绝${planned ? '同一计划同一席' : '无计划的同一续接链'}的另一轮`, async (t) => {
+  const h = sandbox(t), meta = { ...review, group: 'audit', ...(planned ? { plan: 'p', seat: 1 } : {}) };
+  seedRun(h, 'root', meta, report('F1'));
+  const left = seedRun(h, 'left', { ...meta, parent: 'root', mode: 'resume' }, report('F1'));
+  seedRun(h, 'middle', { ...meta, parent: 'root', mode: 'resume' }, report('F1'));
+  const right = seedRun(h, 'right', { ...meta, parent: planned ? null : 'middle', mode: 'resume' }, report('F1'));
+  for (const [run, other] of [['left', 'right'], ['right', 'left']]) {
+    const same = `F1=${other}:F1`;
+    failed(await h.bridge(['judge', '--run', run, '--accept', 'F1', '--same', same]), M.judgeSameSeat(same, other));
+  }
+  for (const dir of [left, right]) assert.deepEqual(fs.readdirSync(dir).filter((name) => name.startsWith('verdict.json')), []);
 });
 
 test('judge 只给 --clear 可删除报告外的误记和自身链接，保留其他条目及同伴链接', async (t) => {
@@ -120,7 +135,7 @@ test('judge --clear 删完移除 verdict，file 为 null 且 stats 不再计为�
   assert.deepEqual(r.items, {});
   assert.deepEqual(r.unjudged, ['F1', 'F2']);
   assert.equal(fs.existsSync(file), false);
-  assert.deepEqual(fs.readdirSync(dir).filter((name) => name.startsWith('verdict.json')), []);
+  released(dir, 1);
   const stats = output(await h.bridge(['stats']));
   assert.deepEqual([stats.totals.judged_runs, stats.rows[0].judged_runs, stats.rows[0].judged], [0, 0, 0]);
 });
@@ -144,16 +159,16 @@ test('judge --clear 拒绝未记过或格式错误的编号，报出已记列表
     ['F'.repeat(33), M.judgeBadId('F'.repeat(33))],
   ]) failed(await h.bridge(['judge', '--run', 'review-a', '--clear', ids]), message);
   assert.equal(fs.readFileSync(file, 'utf8'), before);
-  assert.deepEqual(fs.readdirSync(dir).filter((name) => name.startsWith('verdict.json.')), []);
+  released(dir, 1);
   const empty = seedRun(h, 'review-empty', review, report());
   failed(await h.bridge(['judge', '--run', 'review-empty', '--clear', 'F1']), M.judgeClearUnknown('F1', 'review-empty', M.judgeNoIds));
-  assert.deepEqual(fs.readdirSync(empty).filter((name) => name.startsWith('verdict.json')), []);
+  assert.equal(fs.existsSync(path.join(empty, 'verdict.json')), false); released(empty, 1);
 });
 
 test('judge --clear 与 accept partial reject 或 same 左侧冲突时锁外拒绝', async (t) => {
   const h = sandbox(t), dir = seedRun(h, 'review-a', review, report('F1'));
   const file = verdict(dir, { F1: { verdict: 'accept' } }), before = fs.readFileSync(file, 'utf8');
-  const lock = `${file}.lock`, owner = { pid: process.pid, at: new Date().toISOString() };
+  const lock = `${file}.lock.1`, owner = { pid: process.pid, at: new Date().toISOString() };
   write(lock, owner);
   for (const args of [['--accept', 'F1'], ['--partial', 'F1'], ['--reject', 'F1'], ['--same', 'F1=review-b:F2']]) {
     failed(await h.bridge(['judge', '--run', 'review-a', '--clear', 'F1', ...args]), M.judgeClearConflict('F1'));
@@ -164,25 +179,25 @@ test('judge --clear 与 accept partial reject 或 same 左侧冲突时锁外拒�
 
 test('judge --clear 等到锁后按最新 items 校验并删除', async (t) => {
   const h = sandbox(t), dir = seedRun(h, 'review-a', review, report('F1'));
-  const keep = { verdict: 'partial' }, file = verdict(dir, { F1: keep }), lock = `${file}.lock`;
+  const keep = { verdict: 'partial' }, file = verdict(dir, { F1: keep }), lock = `${file}.lock.1`;
   const attempted = path.join(h.cwd, 'attempted');
   write(lock, { pid: process.pid, at: new Date().toISOString() });
   const preload = h.write('judge-clear-gate.mjs', `
 import fs from 'node:fs';
-const write = fs.writeFileSync;
-fs.writeFileSync = function (name, ...args) {
+const read = fs.readFileSync, write = fs.writeFileSync;
+fs.readFileSync = function (name, ...args) {
   if (String(name) === ${JSON.stringify(lock)}) write(${JSON.stringify(attempted)}, '');
-  return write.call(this, name, ...args);
+  return read.call(this, name, ...args);
 };
 `);
   const pending = h.startBridge(['judge', '--run', 'review-a', '--clear', 'F99'], { env: { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` } });
   await poll(() => fs.existsSync(attempted) || pending.child.exitCode !== null, 'clear 尝试拿锁或退出');
   verdict(dir, { F1: keep, F99: { verdict: 'reject' } });
-  fs.rmSync(lock);
+  write(`${lock}.done`, '');
   const r = output(await pending.done);
   assert.deepEqual(r.cleared, ['F99']);
   assert.deepEqual(json(file).items, { F1: keep });
-  assert.deepEqual(fs.readdirSync(dir).filter((name) => name.startsWith('verdict.json.')), []);
+  released(dir, 2);
 });
 
 test('judge 支持讨论自由编号、旧续接的根模块和原生审查，旧 verdict 损坏时重新记', async (t) => {
@@ -279,14 +294,56 @@ test('stats 返工只算正常交回报告后的续接，图像沿根模块统�
   seedRun(h, 'image-resume', { mode: 'resume', parent: 'image-root' });
   const r = output(await h.bridge(['stats']));
   assert.deepEqual(r.rows.map((row) => [row.module, row.rework]), [
-    ['run', { seats: 6, reworked: 2, rate: 0.33 }], ['image', { seats: 1, reworked: 1, rate: 1 }],
+    ['run', { seats: 6, reworked: 1, rate: 0.17 }], ['image', { seats: 1, reworked: 1, rate: 1 }],
   ]);
+});
+
+test('stats 正常交回 partial 报告后的续接也算返工', async (t) => {
+  const h = sandbox(t);
+  seedRun(h, 'partial-1', {}, { status: 'done', report: { status: 'partial' } });
+  seedRun(h, 'partial-2', { mode: 'resume', parent: 'partial-1' });
+  const r = output(await h.bridge(['stats']));
+  assert.deepEqual(r.rows[0].rework, { seats: 1, reworked: 1, rate: 1 });
+});
+
+test('stats 按 run id 扣除时钟回拨后的累计用量', async (t) => {
+  const h = sandbox(t);
+  seedRun(h, 'a1', { model: 'alpha', session_id: null, started_at: '2026-10-21T12:00:00Z' },
+    { status: 'done', duration_s: 2, usage: usage(100, 20, 10), usage_scope: 'session_total' });
+  seedRun(h, 'a2', { model: 'beta', session_id: null, mode: 'resume', parent: 'a1', started_at: '2026-10-21T11:00:00Z' },
+    { status: 'done', duration_s: 3, usage: usage(150, 30, 20), usage_scope: 'session_total' });
+  const r = output(await h.bridge(['stats'])), rows = Object.fromEntries(r.rows.map((row) => [row.model, row]));
+  assert.deepEqual([r.totals.seats, r.totals.runs], [1, 2]);
+  assert.deepEqual(rows.alpha.tokens, { input: 100, cached_input: 20, output: 10, runs: 1, missing_runs: 0 });
+  assert.deepEqual(rows.beta.tokens, { input: 50, cached_input: 10, output: 10, runs: 1, missing_runs: 0 });
+});
+
+test('stats 同计划同席的无 parent 重启只算一席，重复观点沿用同一个根', async (t) => {
+  const h = sandbox(t), meta = { ...review, plan: 'p', seat: 1, model: 'alpha' };
+  const first = seedRun(h, 'a1', { ...meta, status: 'failed' }, { ...report('F1'), status: 'failed', duration_s: 2, usage: usage(10) });
+  const restart = seedRun(h, 'a2', { ...meta, claude_session: 'later-session' }, { ...report('F1'), duration_s: 3, usage: usage(20) });
+  const peer = seedRun(h, 'b1', { ...meta, seat: 2, model: 'beta' }, { ...report('F2'), duration_s: 4, usage: usage(30) });
+  for (const dir of [first, restart]) verdict(dir, { F1: { verdict: 'accept' } });
+  verdict(peer, { F2: { verdict: 'reject' } });
+  const r = output(await h.bridge(['stats'])), [alpha, beta] = r.rows;
+  assert.deepEqual([r.totals.seats, r.totals.runs, alpha.seats, alpha.runs, beta.seats], [2, 3, 1, 2, 1]);
+  assert.deepEqual(alpha.duration_s, { total: 5, median_per_seat: 5, missing_runs: 0 });
+  assert.deepEqual(alpha.tokens, { input: 30, cached_input: 0, output: 0, runs: 2, missing_runs: 0 });
+  assert.deepEqual([alpha.unique, alpha.unique_basis_runs, beta.unique], [1, 2, 0]);
+});
+
+test('stats 合并重启的席位时，各会话的累计用量分开扣减', async (t) => {
+  const h = sandbox(t), meta = { ...review, plan: 'p', seat: 1, model: 'alpha' };
+  seedRun(h, 'a1', { ...meta, status: 'failed', session_id: 's1' }, { ...report('F1'), status: 'failed', duration_s: 2, usage: usage(10), usage_scope: 'session_total' });
+  seedRun(h, 'a2', { ...meta, session_id: 's2' }, { ...report('F1'), duration_s: 3, usage: usage(20), usage_scope: 'session_total' });
+  const [alpha] = output(await h.bridge(['stats'])).rows;
+  assert.deepEqual([alpha.seats, alpha.tokens], [1, { input: 30, cached_input: 0, output: 0, runs: 2, missing_runs: 0 }]);
 });
 
 test('stats 同一计划的去留和 --same 无向传递链接按问题计 unique', async (t) => {
   const h = sandbox(t);
   for (const [id, model, ids] of [['a', 'alpha', ['F1', 'F2', 'F3', 'F4', 'F5']], ['b', 'beta', ['F1', 'F2']], ['c', 'alpha', ['F1', 'F2']]]) {
-    seedRun(h, id, { ...review, model, plan: 'plan-a' }, report(...ids));
+    seedRun(h, id, { ...review, model, plan: 'plan-a', seat: id }, report(...ids));
   }
   output(await h.bridge(['judge', '--run', 'a', '--accept', 'F1,F2,F3', '--partial', 'F4', '--reject', 'F5']));
   output(await h.bridge(['judge', '--run', 'b', '--accept', 'F1', '--partial', 'F2', '--same', 'F1=a:F1']));
@@ -367,7 +424,8 @@ test('runEnd 已处理分支排除 verdict、锁和各进程的临时文件', as
   const end = fs.statSync(events).mtimeMs;
   output(await h.bridge(['judge', '--run', 'dismissed', '--accept', 'F1']));
   write(path.join(dir, 'verdict.json.tmp'), '{}');
-  write(path.join(dir, 'verdict.json.lock'), '{}');
+  write(path.join(dir, 'verdict.json.lock.2'), '{}');
+  write(path.join(dir, 'verdict.json.lock.2.done'), '');
   write(path.join(dir, `verdict.json.${process.pid}.tmp`), '{}');
   const records = pathToFileURL(path.join(path.dirname(BRIDGE), 'records.mjs')).href;
   const script = h.write('run-end.mjs', `import { runEnd, readMeta } from ${JSON.stringify(records)};\nconst dir = ${JSON.stringify(dir)};\nprocess.stdout.write(JSON.stringify(runEnd(dir, readMeta(dir))));\n`);
@@ -426,9 +484,9 @@ test('judge 拒绝解析后为空的去留和 same，不写 verdict 或锁', asy
 });
 
 test('stats 同席多轮的同编号只计一条，same 指向续接时连接到同一根', async (t) => {
-  const h = sandbox(t), discuss = { module: 'discuss', kind: 'discuss', mode: 'discuss', plan: 'p', model: 'alpha' };
+  const h = sandbox(t), discuss = { module: 'discuss', kind: 'discuss', mode: 'discuss', plan: 'p', seat: 1, model: 'alpha' };
   const a = seedRun(h, 'a', discuss), a2 = seedRun(h, 'a2', { ...discuss, mode: 'resume', parent: 'a' });
-  const b = seedRun(h, 'b', { ...discuss, model: 'beta' });
+  const b = seedRun(h, 'b', { ...discuss, seat: 2, model: 'beta' });
   verdict(a, { P1: { verdict: 'accept' } });
   verdict(a2, { P1: { verdict: 'accept' } });
   verdict(b, { P2: { verdict: 'accept' } });
@@ -447,16 +505,13 @@ import fs from 'node:fs';
 const read = fs.readFileSync, write = fs.writeFileSync;
 const file = ${JSON.stringify(file)}, ready = ${JSON.stringify(ready)}, release = ${JSON.stringify(release)}, attempted = ${JSON.stringify(attempted)};
 fs.readFileSync = function (name, ...args) {
+  if (String(name) === file + '.lock.1' && process.env.JUDGE_ROLE === 'second') write(attempted, '');
   if (String(name) !== file || process.env.JUDGE_ROLE !== 'first') return read.call(this, name, ...args);
   try { return read.call(this, name, ...args); }
   finally {
     write(ready, '');
     while (!fs.existsSync(release)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
   }
-};
-fs.writeFileSync = function (name, ...args) {
-  if (String(name) === file + '.lock' && process.env.JUDGE_ROLE === 'second') write(attempted, '');
-  return write.call(this, name, ...args);
 };
 `);
   const env = { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` };
@@ -468,23 +523,93 @@ fs.writeFileSync = function (name, ...args) {
   for (const r of await Promise.all([first.done, second.done])) output(r);
   const saved = json(file);
   assert.deepEqual([saved.items.F1?.verdict, saved.items.F2?.verdict], ['accept', 'partial']);
-  assert.deepEqual(fs.readdirSync(dir).filter((name) => name.startsWith('verdict.json.')), []);
+  released(dir, 2);
 });
 
-test('judge 回收超过 30 秒的死进程锁，写完清理锁和临时文件', async (t) => {
+test('judge 两方同时回收死进程锁时不删新锁，并发写入不丢条目', async (t) => {
+  const h = sandbox(t), dir = seedRun(h, 'review-a', review, report('F1', 'F2', 'F3'));
+  const file = verdict(dir, { F3: { verdict: 'reject' } }), lock = `${file}.lock.1`, current = `${file}.lock.2`;
+  write(lock, { pid: 2147483647, at: new Date().toISOString() });
+  const markers = Object.fromEntries(['staleRead', 'resumeFirst', 'secondRead', 'resumeSecond', 'firstWaiting'].map((name) => [name, path.join(h.home, name)]));
+  const preload = h.write('judge-generation-gate.mjs', `import fs from 'node:fs';
+const read = fs.readFileSync, write = fs.writeFileSync, file = ${JSON.stringify(file)}, lock = file + '.lock.1';
+const markers = ${JSON.stringify(markers)}, role = process.env.JUDGE_ROLE;
+let captured = false;
+const wait = (file) => {
+  const deadline = Date.now() + 10000;
+  while (!fs.existsSync(file) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+  if (!fs.existsSync(file)) throw new Error('等待测试放行超时');
+};
+fs.readFileSync = function (name, ...args) {
+  const value = read.call(this, name, ...args);
+  if (String(name) === lock && role === 'first' && !captured) {
+    captured = true; write(markers.staleRead, ''); wait(markers.resumeFirst);
+  }
+  if (String(name) === file + '.lock.2' && role === 'first') write(markers.firstWaiting, '');
+  if (String(name) === file && role === 'second') { write(markers.secondRead, ''); wait(markers.resumeSecond); }
+  return value;
+};`);
+  const env = { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` };
+  const first = h.startBridge(['judge', '--run', 'review-a', '--accept', 'F1'], { env: { ...env, JUDGE_ROLE: 'first' } });
+  await poll(() => fs.existsSync(markers.staleRead), '第一进程读到残留锁');
+  const second = h.startBridge(['judge', '--run', 'review-a', '--partial', 'F2'], { env: { ...env, JUDGE_ROLE: 'second' } });
+  await poll(() => fs.existsSync(markers.secondRead), '第二进程回收并拿到新锁');
+  const owner = fs.readFileSync(current, 'utf8'); assert.equal(JSON.parse(owner).pid, second.child.pid);
+  write(markers.resumeFirst, '');
+  await poll(() => fs.existsSync(markers.firstWaiting) || first.child.exitCode !== null, '第一进程恢复后继续等待');
+  assert.equal(fs.existsSync(current), true); assert.equal(fs.readFileSync(current, 'utf8'), owner);
+  write(markers.resumeSecond, '');
+  for (const r of await Promise.all([first.done, second.done])) output(r);
+  const items = json(file).items;
+  assert.deepEqual([items.F1?.verdict, items.F2?.verdict, items.F3?.verdict], ['accept', 'partial', 'reject']);
+  released(dir, 3);
+});
+
+test('judge 回收超过 30 秒的死进程锁，写完清理旧代和临时文件', async (t) => {
   const h = sandbox(t), dir = seedRun(h, 'review-a', review, report('F1'));
-  const lock = path.join(dir, 'verdict.json.lock'), old = new Date(Date.now() - 31000);
+  const lock = path.join(dir, 'verdict.json.lock.1'), old = new Date(Date.now() - 31000);
   write(lock, { pid: 2147483647, at: old.toISOString() });
   fs.utimesSync(lock, old, old);
   assert.equal(output(await h.bridge(['judge', '--run', 'review-a', '--accept', 'F1'])).items.F1.verdict, 'accept');
-  assert.deepEqual(fs.readdirSync(dir).filter((name) => name.startsWith('verdict.json.')), []);
+  released(dir, 2);
 });
 
 test('judge 新锁等待 5 秒报 judgeBusy，保留别人的锁且不写去留', async (t) => {
   const h = sandbox(t), dir = seedRun(h, 'review-a', review, report('F1'));
-  const file = path.join(dir, 'verdict.json'), owner = { pid: process.pid, at: new Date().toISOString() };
-  write(`${file}.lock`, owner);
-  failed(await h.bridge(['judge', '--run', 'review-a', '--accept', 'F1']), M.judgeBusy(file));
-  assert.deepEqual(json(`${file}.lock`), owner);
+  const file = path.join(dir, 'verdict.json'), owner = { pid: process.pid, token: 'live', at: new Date().toISOString() };
+  write(`${file}.lock.1`, owner);
+  failed(await h.bridge(['judge', '--run', 'review-a', '--accept', 'F1']), M.judgeBusy(file, `${file}.lock.1`));
+  assert.deepEqual(json(`${file}.lock.1`), owner);
   assert.equal(fs.existsSync(file), false);
 });
+
+test('judge 不按文件年龄抢活进程锁，仍等待 5 秒报 judgeBusy', async (t) => {
+  const h = sandbox(t), dir = seedRun(h, 'review-a', review, report('F1'));
+  const file = path.join(dir, 'verdict.json'), old = new Date(Date.now() - 31000), owner = { pid: process.pid, token: 'live-old-file', at: new Date().toISOString() };
+  write(`${file}.lock.1`, owner); fs.utimesSync(`${file}.lock.1`, old, old);
+  failed(await h.bridge(['judge', '--run', 'review-a', '--accept', 'F1']), M.judgeBusy(file, `${file}.lock.1`));
+  assert.deepEqual(json(`${file}.lock.1`), owner); assert.equal(fs.existsSync(file), false);
+});
+
+test('judge 等旧版锁超时时提示旧路径，并释放自己的代号锁', async (t) => {
+  const h = sandbox(t), dir = seedRun(h, 'review-a', review, report('F1'));
+  const file = path.join(dir, 'verdict.json'), lock = `${file}.lock`, owner = { pid: process.pid, token: 'old-judge' };
+  write(lock, owner);
+  const preload = h.write('legacy-busy.mjs', `import fs from 'node:fs';
+const read = fs.readFileSync; let clock = 0; Date.now = () => clock;
+fs.readFileSync = (file, ...args) => { if (file === ${JSON.stringify(lock)}) clock = 5000; return read(file, ...args); };`);
+  failed(await h.bridge(['judge', '--run', 'review-a', '--accept', 'F1'], { env: { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` } }), M.judgeBusy(file, lock));
+  assert.deepEqual(json(lock), owner); assert.equal(fs.existsSync(file), false);
+  assert.deepEqual(fs.readdirSync(dir).filter((name) => name.startsWith('verdict.json.')),
+    ['verdict.json.lock', 'verdict.json.lock.1', 'verdict.json.lock.1.done']);
+});
+
+for (const [label, owner, age] of [['新死进程锁', { pid: 2147483647 }, 0], ['超过 30 秒的旧版残缺锁', '{', 31000]]) {
+  test(`judge 回收${label}并清理临时文件`, async (t) => {
+    const h = sandbox(t), dir = seedRun(h, 'review-a', review, report('F1')), legacy = typeof owner === 'string';
+    const lock = path.join(dir, legacy ? 'verdict.json.lock' : 'verdict.json.lock.1');
+    write(lock, owner); const old = new Date(Date.now() - age); fs.utimesSync(lock, old, old);
+    assert.equal(output(await h.bridge(['judge', '--run', 'review-a', '--accept', 'F1'])).items.F1.verdict, 'accept');
+    released(dir, legacy ? 1 : 2);
+  });
+}

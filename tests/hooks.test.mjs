@@ -133,9 +133,17 @@ test('会话提醒优先采用活进程号对应记录的中断结果，不回�
 for (const [label, command] of [
   ['codex exec', 'codex exec "synthetic"'], ['codex review', 'codex review --uncommitted'],
   ['node codex.js exec', 'node "C:/synthetic/bin/codex.js" exec -'], ['npx Codex', 'npx @openai/codex exec -'],
+  ['npx -y Codex', 'npx -y @openai/codex exec -'], ['npx -p Codex', 'npx -p @openai/codex codex exec -'],
   ['opencode run', 'opencode run "synthetic"'], ['opencode.exe run', 'opencode.exe run -m fake/model'],
   ['opencode.cmd run', 'opencode.cmd run -'], ['opencode.ps1 run', '& "C:/synthetic/opencode.ps1" run -'],
   ['npx opencode-ai', 'npx opencode-ai run -'], ['npx @opencode/cli', 'npx @opencode/cli run -'],
+  ['npx --yes opencode-ai', 'npx --yes opencode-ai run "synthetic"'],
+  ['npx --package 后带 --yes', 'npx --package=opencode-ai --yes opencode run task'],
+  ['npx -p 后带 -y', 'npx -p opencode-ai -y opencode run task'],
+  ['npx 带值的选项', 'npx --package=opencode-ai --cache C:/cache opencode run task'],
+  ['npx 写了几个 -p', 'npx -p opencode-ai -p other-package opencode run task'],
+  ['npx --registry 后的包名', 'npx --registry https://registry.example @openai/codex exec -'],
+  ['npx -c 整条命令', 'npx -c "codex exec -"'], ['npx --call= 整条命令', 'npx --call="opencode run task"'],
   ['opencode 全局选项', 'opencode --log-level debug run -'],
 ]) {
   test(`直接调用守卫拦截 ${label}`, async (t) => {
@@ -150,6 +158,7 @@ for (const [label, command] of [
 
 for (const [label, command] of [
   ['版本查询', 'codex --version'], ['登录状态', 'codex login status'],
+  ['npx Codex 帮助', 'npx -y @openai/codex --help'], ['npx -c 别的命令', 'npx -c "echo hi"'],
   ['普通文本提及', 'echo "codex exec"'], ['带分隔符的文字', 'node -e "console.log(\'codex exec; codex review\')"'],
   ['opencode 版本', 'opencode --version'], ['opencode 模型', 'opencode models'],
   ['opencode 会话', 'opencode session export run'], ['opencode 认证', 'opencode auth list'],

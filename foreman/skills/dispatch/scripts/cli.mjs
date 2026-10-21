@@ -43,7 +43,7 @@ const { cmdJudge, cmdStats } = await import('./stats.mjs');
 const load = (cwd) => loadConfig(cwd, adapters);
 const CONFIG = process.argv[2] === 'assets' ? null : load(null);
 if (CONFIG) records.initializeRecords(CONFIG);
-const { RUNS_ROOT, findRun, readMeta } = records; // 记录目录在 initializeRecords 之后才定下来
+const { RUNS_ROOT, findRun, readMeta, listRuns, isRunning } = records; // 记录目录在 initializeRecords 之后才定下来
 
 function parseArgs(argv) {
   const [cmd, ...rest] = argv;
@@ -114,12 +114,23 @@ async function cmdDiscuss(o) {
 
 async function cmdResume(o) {
   const parent = findRun(need(o, 'run'));
-  const image = parent.meta.module === 'image';
+  if (isRunning(parent.meta)) die(M.resumeParentRunning(parent.id));
+  const runs = listRuns().map((id) => ({ id, meta: readMeta(path.join(RUNS_ROOT, id)) }));
+  let latest = parent;
+  for (let next; (next = runs.find((run) => run.meta?.parent === latest.id));) latest = next;
+  if (latest.id !== parent.id) die(M.resumeNotLatest(parent.id, latest.id));
+  if (o.group != null && o.group !== (parent.meta.group ?? null)) die(M.resumeGroupFixed(parent.meta.group ?? null));
+  const addDirs = [...new Map([...(parent.meta.add_dir || []), ...o['add-dir'].map(resolveDir)].map((dir) => [pathKey(dir), dir])).values()];
+  // 旧续接没记模块，沿祖先辨认任务类型。
+  let origin = parent.meta;
+  while (!origin.module && !origin.kind && origin.mode === 'resume' && origin.parent) origin = findRun(origin.parent).meta;
+  const module = origin.module || ({ discuss: 'discuss', review: 'review', exec: 'run' }[origin.kind] || origin.mode);
+  const image = module === 'image';
   if (image && o.level != null) die(M.imageNoLevel);
   o.track = [...(parent.meta.track || []), ...o.track];
   o.group ??= parent.meta.group ?? null;
   if (!o.scope.length) o.scope = parent.meta.scope || [];
-  const kind = parent.meta.kind || (parent.meta.mode === 'review' ? 'review' : parent.meta.mode === 'discuss' ? 'discuss' : 'exec');
+  const kind = module === 'review' ? 'review' : module === 'discuss' ? 'discuss' : 'exec';
   if (kind === 'review') die(M.reviewNoResume);
   adapters[agentTypeOf(parent.meta)].validateResume?.(parent);
   const discuss = kind === 'discuss';
@@ -131,7 +142,7 @@ async function cmdResume(o) {
     // 沿续接链往回数已经完成的轮次；卡死或失败后的续接仍算同一轮。
     let done = 0;
     let rootId = parent.id;
-    for (let rid = parent.id, m = parent.meta; m; rid = m.parent, m = m.parent ? readMeta(path.join(RUNS_ROOT, m.parent)) : null) {
+    for (let rid = parent.id, m = parent.meta; m; rid = m.parent, m = m.parent ? findRun(m.parent).meta : null) {
       if (m.status === 'done') done++;
       rootId = rid;
     }
@@ -142,7 +153,7 @@ async function cmdResume(o) {
   const brief = readBrief(o);
   // 什么模型都没配置时沿用上一轮记录的模型，同一会话不中途换模型。
   const profile = resolveProfile(cfg, { module: image ? 'image' : discuss ? 'discuss' : 'run', cell: image ? parent.meta.cell : undefined, plan: parent.meta.plan, seat: parent.meta.seat, role: parent.meta.role }, o, adapters, parent.meta.model, parent.meta.agent || 'codex', parent.meta.cell ?? parent.meta.level);
-  return adapters[profile.agent.type].execute({ cfg, ...profile, mode: 'resume', kind, cwd: parent.meta.cwd, brief,
+  return adapters[profile.agent.type].execute({ cfg, ...profile, mode: 'resume', kind, cwd: parent.meta.cwd, brief, addDirs,
     ...(image ? { step: parent.meta.step, route: parent.meta.route } : {}),
     title: o.title || parent.meta.title, parent: parent.id, parentDir: parent.dir, sessionId: parent.meta.session_id,
     previousRunAccess: parent.meta.run_access, round, opts: o });
@@ -265,6 +276,6 @@ const { cmd, opts } = parseArgs(process.argv.slice(2));
 // 新建任务组时组名只用 ASCII：实时查看要把它写进终端命令，桌面版的终端面板只接受 ASCII 命令。
 if (['run', 'discuss', 'resume', 'review', 'image', 'plan'].includes(cmd) && opts.group != null && !/^[A-Za-z0-9._-]{1,64}$/.test(opts.group)) die(M.badGroupName(opts.group));
 const statsOf = (meta) => adapters[agentTypeOf(meta)]?.stats?.(meta.session_id, meta.started_at);
-const commands = { run: cmdRun, discuss: cmdDiscuss, resume: cmdResume, review: cmdReview, image: cmdImage, plan: (o) => cmdPlan(o, load, adapters), judge: cmdJudge, stats: (o) => cmdStats(o, statsOf), status: (o) => cmdStatus(o, statsOf), watch: (o) => cmdWatch(o, load), config: cmdConfig, check: cmdCheck, models: cmdModels, cancel: (o) => cmdCancel(o, statsOf), 'await-busy': (o) => cmdAwaitBusy(o, CONFIG), assets: cmdAssets };
+const commands = { run: cmdRun, discuss: cmdDiscuss, resume: cmdResume, review: cmdReview, image: cmdImage, plan: (o) => cmdPlan(o, load, adapters), judge: cmdJudge, stats: (o) => cmdStats(o, statsOf), status: (o) => cmdStatus(o, statsOf), watch: (o) => cmdWatch(o, load), config: cmdConfig, check: cmdCheck, models: cmdModels, cancel: (o) => cmdCancel(o, statsOf), 'await-busy': (o) => cmdAwaitBusy(o, CONFIG, load), assets: cmdAssets };
 if (!commands[cmd]) die(M.usage);
 await commands[cmd](opts);
