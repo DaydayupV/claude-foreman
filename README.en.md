@@ -353,7 +353,8 @@ Both take a change snapshot first, and Claude Code reviews the diff file by file
         { "agent": "kimi-k2.6" },
         { "agent": "mimo-v2.6-pro", "effort": "high" },
         { "agent": "glm-5.3" }
-      ]
+      ],
+      "seats": { "simple": 2, "normal": 4, "complex": 8 }
     },
     "run": {
       "simple":  "claude code",
@@ -363,7 +364,8 @@ Both take a change snapshot first, and Claude Code reviews the diff file by file
     "review": {
       "simple":  [{ "agent": "gpt-6-astra", "effort": "medium" }],
       "normal":  [{ "agent": "gpt-6-astra", "effort": "high" }, { "agent": "deepseek-flash", "effort": "high" }],
-      "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "deepseek-flash", "effort": "max" }, { "agent": "glm-5.3" }]
+      "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "deepseek-flash", "effort": "max" }, { "agent": "glm-5.3" }],
+      "seats":   { "simple": 1, "normal": 2, "complex": 2 }
     },
     "image": {
       "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }],
@@ -382,7 +384,7 @@ Both take a change snapshot first, and Claude Code reviews the diff file by file
 | `mimo-v2.6-pro` | pi | A candidate for complex discussions |
 | `kimi-k2.6` | API, with the key in the `KIMI_API_KEY` environment variable | A candidate for complex discussions |
 
-Claude Code does simple and normal hands-on work itself. Discussions and reviews get more candidates as the level rises: each time Claude Code picks a few seats from them (as many as `seats` says; this example leaves it out, so the defaults apply), and `gpt-6-astra` is required for complex discussions and reviews, so it always takes part.
+Claude Code does simple and normal hands-on work itself. Discussions and reviews get more candidates as the level rises: each time Claude Code picks a few seats from them (as many as `seats` says, with all three levels written in the config), and `gpt-6-astra` is required for complex discussions and reviews, so it always takes part.
 
 Fields this config doesn't use but that are often adjusted:
 

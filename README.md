@@ -353,7 +353,8 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
         { "agent": "kimi-k2.6" },
         { "agent": "mimo-v2.6-pro", "effort": "high" },
         { "agent": "glm-5.3" }
-      ]
+      ],
+      "seats": { "simple": 2, "normal": 4, "complex": 8 }
     },
     "run": {
       "simple":  "claude code",
@@ -363,7 +364,8 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
     "review": {
       "simple":  [{ "agent": "gpt-6-astra", "effort": "medium" }],
       "normal":  [{ "agent": "gpt-6-astra", "effort": "high" }, { "agent": "deepseek-flash", "effort": "high" }],
-      "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "deepseek-flash", "effort": "max" }, { "agent": "glm-5.3" }]
+      "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "deepseek-flash", "effort": "max" }, { "agent": "glm-5.3" }],
+      "seats":   { "simple": 1, "normal": 2, "complex": 2 }
     },
     "image": {
       "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }],
@@ -382,7 +384,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 | `mimo-v2.6-pro` | pi | 复杂讨论的候选 |
 | `kimi-k2.6` | API，key 在环境变量 `KIMI_API_KEY` 里 | 复杂讨论的候选 |
 
-简单和常规的执行由 Claude Code 自己做。讨论和审查的候选随等级增加：每次由 Claude Code 从候选里挑几席（个数由 `seats` 决定，这个例子没写，用默认值），`gpt-6-astra` 在复杂的讨论和审查里必选，一定参加。
+简单和常规的执行由 Claude Code 自己做。讨论和审查的候选随等级增加：每次由 Claude Code 从候选里挑几席（个数由 `seats` 决定，三级都写在配置里），`gpt-6-astra` 在复杂的讨论和审查里必选，一定参加。
 
 这份配置没用到、但常会调整的字段：
 

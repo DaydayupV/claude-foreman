@@ -186,7 +186,12 @@ await import(${JSON.stringify(pathToFileURL(BRIDGE).href)});`);
       assert.deepEqual(cfg.modules.discuss[lv], [item]);
     }
     assert.deepEqual(cfg.modules.image, { generate: [{ agent: 'gpt-6.1-sol', effort: 'medium' }], draw: [{ agent: 'gpt-6-astra', effort: 'max' }] });
-  } else assert.deepEqual(cfg.modules, self());
+  } else {
+    const expected = self();
+    for (const module of ['discuss', 'review']) expected[module].seats = DEFAULT_SEATS[module];
+    assert.deepEqual(cfg.modules, expected);
+  }
+  for (const module of ['discuss', 'review']) assert.deepEqual(cfg.modules[module].seats, DEFAULT_SEATS[module]);
   assert.equal(Object.hasOwn(cfg.dispatch, 'max_seats'), false);
   if (keys.length) assert.equal(cfg.agents['kimi-k2.6'].api_key_env, 'KIMI_API_KEY');
   let parts = available ? M.starterCodex('gpt-6.1-sol', 'gpt-6-astra') : M.starterNoCodex;

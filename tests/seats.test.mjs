@@ -2,34 +2,63 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { sandbox, baseConfig, output, failed, read, json, hostArgs, apiAgent, MESSAGES, DEFAULT_SEATS } from './helpers.mjs';
+import { pathToFileURL } from 'node:url';
+import { sandbox, baseConfig, output, failed, read, json, hostArgs, apiAgent, ROOT, CODEX, MESSAGES, DEFAULT_SEATS } from './helpers.mjs';
 import { discussion } from './fixtures/reports.mjs';
 const M = MESSAGES.zh;
 const planArgs = (h, module = 'discuss', seats = ['codex'], cell = 'complex') => ['plan', '--cwd', h.cwd, '--module', module,
   '--cell', cell, '--group', 'seats-group', ...seats.flatMap((seat) => ['--seat', seat])];
+const url = (file) => pathToFileURL(path.join(ROOT, 'foreman/skills/dispatch/scripts', file)).href;
 
-test('未写 seats 时只在内存补齐，并发读取不改写文件或创建备份', async (t) => {
+for (const codex of [false, true]) test(`${codex ? '有' : '没有'} Codex 的初始配置都写满三级 seats`, async (t) => {
+  const h = sandbox(t, { config: false }), s = h.scenario({ logged_in: true });
+  const script = h.write('starter-seats.mjs', `import { adapters } from ${JSON.stringify(url('adapters/index.mjs'))};
+import { loadConfig } from ${JSON.stringify(url('config.mjs'))};
+for (const type of ['codex cli', 'opencode cli', 'pi cli']) adapters[type].locate = () =>
+  type === 'codex cli' && ${codex} ? { file: process.execPath, pre: [${JSON.stringify(CODEX)}] }
+    : { file: ${JSON.stringify(path.join(h.home, 'missing-cli.exe'))}, pre: [] };
+console.log(JSON.stringify(loadConfig(null, adapters)));`);
+  const r = await h.start(script, [], { env: s.env }).done, cfg = output(r);
+  for (const module of ['discuss', 'review']) {
+    assert.deepEqual(json(h.userConfig).modules[module].seats, DEFAULT_SEATS[module]);
+    assert.deepEqual(cfg.modules[module].seats, DEFAULT_SEATS[module]);
+  }
+  assert.equal(Object.keys(cfg.agents).length, codex ? 2 : 0);
+  assert.ok(r.stderr.includes(M.starterCreated(h.userConfig, (codex ? M.starterCodex('gpt-6.1-sol', 'gpt-6-astra') : M.starterNoCodex) + M.starterNext)));
+  assert.equal(fs.existsSync(`${h.userConfig}.bak`), false);
+});
+
+test('未写 seats 时并发首次读取只补写和提示一次，保留原字段且只备份一次', async (t) => {
   const h = sandbox(t), c = baseConfig();
+  for (const module of ['discuss', 'review']) delete c.modules[module].seats;
+  c.dispatch.max_seats = 9; c.custom = { keep: true }; c.modules.discuss.simple = { agent: 'codex' };
   h.config(c);
   const before = read(h.userConfig);
-  const results = await Promise.all([h.bridge(['config']), h.bridge(['config'])]);
+  const results = await Promise.all(Array.from({ length: 4 }, () => h.bridge(['config'])));
   for (const r of results) {
     const cfg = output(r);
     for (const module of ['discuss', 'review']) {
       assert.deepEqual(cfg.effective.modules[module].seats, DEFAULT_SEATS[module]);
       assert.deepEqual(cfg.resolved_modules[module].seats, DEFAULT_SEATS[module]);
       assert.deepEqual(cfg.summary.modules[module].seats, DEFAULT_SEATS[module]);
-      assert.equal(Object.hasOwn(json(h.userConfig).modules[module], 'seats'), false);
+      assert.deepEqual(json(h.userConfig).modules[module], { ...c.modules[module], seats: DEFAULT_SEATS[module] });
     }
-    assert.equal(r.stderr, '');
+    assert.equal(cfg.effective.dispatch.max_seats, undefined);
+    assert.deepEqual(cfg.effective, output(results[0]).effective);
   }
-  assert.equal(read(h.userConfig), before);
-  assert.equal(fs.existsSync(`${h.userConfig}.bak`), false);
+  const message = M.configSeatsWritten(h.userConfig, `${h.userConfig}.bak`, '讨论 2/4/8、审查 1/2/2');
+  assert.equal(results.filter((r) => r.stderr === `foreman: ${message}\n`).length, 1);
+  assert.ok(results.every((r) => r.stderr === '' || r.stderr === `foreman: ${message}\n`));
+  assert.equal(json(h.userConfig).dispatch.max_seats, 9); assert.deepEqual(json(h.userConfig).custom, c.custom);
+  assert.equal(Object.hasOwn(json(h.userConfig), 'levels'), false);
+  assert.equal(read(`${h.userConfig}.bak`), before);
+  assert.deepEqual(fs.readdirSync(path.dirname(h.userConfig)).filter((name) => name.includes('.bak')), ['config.json.bak']);
+  assert.equal((await h.bridge(['config'])).stderr, '');
 });
 
-test('读配置时不补写 max_seats，也不写入模块 seats', async (t) => {
+test('seats 已写全时不补写 max_seats，也不改写文件或备份', async (t) => {
   const h = sandbox(t), c = baseConfig();
-  c.modules.review.seats = { normal: 1 };
+  c.modules.review.seats.normal = 1;
   h.config(c);
   const before = read(h.userConfig), r = await h.bridge(['config']);
   output(r);
@@ -38,29 +67,106 @@ test('读配置时不补写 max_seats，也不写入模块 seats', async (t) => 
   assert.equal(fs.existsSync(`${h.userConfig}.bak`), false);
 });
 
-test('部分 seats 在有效和解析配置中补齐，缺少整个模块时不写入文件', async (t) => {
+for (const missing of ['discuss', 'review']) test(`部分 seats 和缺少整个 ${missing} 模块时补写，不增加格子`, async (t) => {
+  const h = sandbox(t), c = baseConfig(), module = missing === 'discuss' ? 'review' : 'discuss'; delete c.modules[missing];
+  c.agents.second = { ...c.agents.codex };
+  c.modules[module].simple = [{ agent: 'codex', required: true }, { agent: 'second', required: true }];
+  c.modules[module].seats = { complex: 5 }; h.config(c);
+  const before = read(h.userConfig), cfg = output(await h.bridge(['config']));
+  const expected = { ...DEFAULT_SEATS[module], simple: 2, complex: 5 };
+  assert.deepEqual(cfg.effective.modules[missing].seats, DEFAULT_SEATS[missing]);
+  assert.deepEqual(cfg.effective.modules[module].seats, expected);
+  assert.deepEqual(cfg.resolved_modules[module].seats, expected);
+  assert.deepEqual(json(h.userConfig).modules[missing], { seats: DEFAULT_SEATS[missing] });
+  assert.deepEqual(json(h.userConfig).modules[module], { ...c.modules[module], seats: expected });
+  assert.equal(read(`${h.userConfig}.bak`), before);
+  assert.equal(Object.hasOwn(json(h.userConfig), 'levels'), false);
+});
+
+for (const module of ['discuss', 'review']) test(`${module} 补写的 seats 不少于必选数，只提示本次补写的模块`, async (t) => {
+  const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex };
+  c.agents.third = { ...c.agents.codex };
+  delete c.modules[module].seats;
+  c.modules[module].simple = ['codex', 'second', 'third'].map((agent) => ({ agent, required: true })); h.config(c);
+  const before = read(h.userConfig), r = await h.bridge(['config']), cfg = output(r);
+  assert.deepEqual(cfg.effective.modules[module].seats, { ...DEFAULT_SEATS[module], simple: 3 });
+  assert.deepEqual(cfg.resolved_modules[module].seats, { ...DEFAULT_SEATS[module], simple: 3 });
+  assert.deepEqual(json(h.userConfig).modules[module].seats, cfg.effective.modules[module].seats);
+  assert.equal(read(`${h.userConfig}.bak`), before);
+  assert.equal(r.stderr, `foreman: ${M.configSeatsWritten(h.userConfig, `${h.userConfig}.bak`, `${M.reportModuleNames[module]} ${Object.values(cfg.effective.modules[module].seats).join('/')}`)}\n`);
+});
+
+for (const [lang, note] of [['zh', '手写的说明'], ['en', '']]) test(`只补 seats 保留已有 levels 说明和备份，提示使用 ${lang}`, async (t) => {
+  const h = sandbox(t), c = baseConfig(); delete c.modules.review.seats; c.levels = note; h.config(c);
+  fs.writeFileSync(`${h.userConfig}.bak`, 'earlier backup');
+  const before = read(h.userConfig), r = await h.bridge(['config'], { env: { FOREMAN_LANG: lang } }); output(r);
+  const backups = fs.readdirSync(path.dirname(h.userConfig)).filter((name) => name.startsWith('config.json.bak-'));
+  assert.equal(backups.length, 1);
+  const bak = path.join(path.dirname(h.userConfig), backups[0]);
+  assert.equal(read(`${h.userConfig}.bak`), 'earlier backup'); assert.equal(read(bak), before);
+  assert.deepEqual(json(h.userConfig), { ...c, modules: { ...c.modules, review: { ...c.modules.review, seats: DEFAULT_SEATS.review } } });
+  assert.equal(r.stderr, `foreman: ${MESSAGES[lang].configSeatsWritten(h.userConfig, bak, `${MESSAGES[lang].reportModuleNames.review.toLowerCase()} 1/2/2`)}\n`);
+});
+
+test('seats 与旧结构和 levels 在同一次迁移写入，必选数按改名去重后的格子计算', async (t) => {
+  const h = sandbox(t), agent = { ...baseConfig().agents.codex, type: 'codex' };
+  h.config({ agents: { first: agent, second: agent }, levels: { review: { simple: [
+    { agent: 'first', required: true }, { agent: 'second', required: true },
+  ] } } });
+  const before = read(h.userConfig), r = await h.bridge(['config']), cfg = output(r);
+  for (const module of ['discuss', 'review']) assert.deepEqual(json(h.userConfig).modules[module].seats, DEFAULT_SEATS[module]);
+  assert.equal(cfg.effective.modules.review.simple.length, 1);
+  assert.equal(json(h.userConfig).levels, M.levelsNote); assert.equal(read(`${h.userConfig}.bak`), before);
+  assert.ok(r.stderr.includes(M.configModulesMigrated(h.userConfig, `${h.userConfig}.bak`)));
+  assert.ok(r.stderr.includes(M.configStructureMigrated(h.userConfig, `${h.userConfig}.bak`, 'first → fake-codex、second → fake-codex')));
+  assert.ok(r.stderr.includes(M.configSeatsWritten(h.userConfig, `${h.userConfig}.bak`, '讨论 2/4/8、审查 1/2/2')));
+  assert.deepEqual(fs.readdirSync(path.dirname(h.userConfig)).filter((name) => name.includes('.bak')), ['config.json.bak']);
+});
+
+test('用户配置替换被拒绝时提示失败，内存补齐并缓存结果，清理临时文件和锁', async (t) => {
   const h = sandbox(t), c = baseConfig(); delete c.modules.discuss;
   c.agents.second = { ...c.agents.codex };
   c.modules.review.simple = [{ agent: 'codex', required: true }, { agent: 'second', required: true }];
   c.modules.review.seats = { complex: 5 }; h.config(c);
-  const before = read(h.userConfig), cfg = output(await h.bridge(['config']));
-  assert.deepEqual(cfg.effective.modules.discuss.seats, DEFAULT_SEATS.discuss);
-  assert.deepEqual(cfg.effective.modules.review.seats, { ...DEFAULT_SEATS.review, simple: 2, complex: 5 });
-  assert.deepEqual(cfg.resolved_modules.review.seats, { ...DEFAULT_SEATS.review, simple: 2, complex: 5 });
-  assert.deepEqual(json(h.userConfig).modules.review.seats, { complex: 5 });
-  assert.equal(read(h.userConfig), before); assert.equal(fs.existsSync(`${h.userConfig}.bak`), false);
+  const before = read(h.userConfig), script = h.write('denied-seats.mjs', `import fs from 'node:fs';
+import { loadConfig } from ${JSON.stringify(url('config.mjs'))};
+import { adapters } from ${JSON.stringify(url('adapters/index.mjs'))};
+const rename = fs.renameSync;
+fs.renameSync = (from, to) => { if (to === ${JSON.stringify(h.userConfig)}) throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); return rename(from, to); };
+console.log(JSON.stringify([loadConfig(null, adapters), loadConfig(null, adapters)]));`);
+  const r = await h.start(script).done, [first, second] = output(r);
+  assert.deepEqual(first, second);
+  assert.deepEqual(first.modules.discuss.seats, DEFAULT_SEATS.discuss);
+  assert.deepEqual(first.modules.review.seats, { simple: 2, normal: DEFAULT_SEATS.review.normal, complex: 5 });
+  assert.equal(r.stderr, `foreman: ${M.configSeatsWriteFailed(h.userConfig, 'EACCES')}\n`);
+  assert.equal(read(h.userConfig), before); assert.equal(read(`${h.userConfig}.bak`), before);
+  assert.equal(fs.readdirSync(path.dirname(h.userConfig)).some((name) => name.endsWith('.tmp') || name.endsWith('.lock')), false);
 });
 
-for (const module of ['discuss', 'review']) test(`${module} 未写 seats 时默认值不少于必选数，文件不变`, async (t) => {
-  const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex };
-  c.agents.third = { ...c.agents.codex };
-  c.modules[module].simple = ['codex', 'second', 'third'].map((agent) => ({ agent, required: true })); h.config(c);
-  const before = read(h.userConfig), cfg = output(await h.bridge(['config']));
-  assert.deepEqual(cfg.effective.modules[module].seats, { ...DEFAULT_SEATS[module], simple: 3 });
-  assert.deepEqual(cfg.resolved_modules[module].seats, { ...DEFAULT_SEATS[module], simple: 3 });
-  assert.equal(read(h.userConfig), before);
-  assert.equal(Object.hasOwn(json(h.userConfig).modules[module], 'seats'), false);
-  assert.equal(fs.existsSync(`${h.userConfig}.bak`), false);
+test('改写锁：空的残留锁放久了会被清掉，活进程的锁等满 10 秒后放弃改写并退回内存', async (t) => {
+  const h = sandbox(t), c = baseConfig(); delete c.modules.discuss.seats; h.config(c);
+  const lock = `${h.userConfig}.structure.lock`, old = new Date(Date.now() - 60000);
+  fs.writeFileSync(lock, ''); fs.utimesSync(lock, old, old);
+  const cleared = await h.bridge(['config']);
+  assert.ok(cleared.stderr.includes(M.configSeatsWritten(h.userConfig, `${h.userConfig}.bak`, '讨论 2/4/8')));
+  assert.deepEqual(JSON.parse(read(h.userConfig)).modules.discuss.seats, DEFAULT_SEATS.discuss);
+  assert.equal(fs.existsSync(lock), false);
+  delete c.modules.discuss.seats; h.config(c);
+  fs.writeFileSync(lock, String(process.pid));
+  const before = read(h.userConfig), started = Date.now(), waited = await h.bridge(['config']);
+  assert.ok(Date.now() - started >= 10000);
+  assert.equal(output(waited).effective.modules.discuss.seats.complex, DEFAULT_SEATS.discuss.complex);
+  assert.ok(waited.stderr.includes(M.configSeatsWriteFailed(h.userConfig, M.configLockTimeout(lock))));
+  assert.equal(read(h.userConfig), before); assert.equal(fs.readFileSync(lock, 'utf8'), String(process.pid));
+  fs.rmSync(lock);
+});
+
+test('改写保留原配置文件的权限', { skip: process.platform === 'win32' }, async (t) => {
+  const h = sandbox(t), c = baseConfig(); delete c.modules.review.seats; h.config(c);
+  fs.chmodSync(h.userConfig, 0o600);
+  const r = await h.bridge(['config']);
+  assert.ok(r.stderr.includes(M.configSeatsWritten(h.userConfig, `${h.userConfig}.bak`, '审查 1/2/2')));
+  assert.equal(fs.statSync(h.userConfig).mode & 0o777, 0o600);
 });
 
 test('seats 拒绝错误格式、未知等级和非正整数，错误配置不改写', async (t) => {
@@ -68,8 +174,12 @@ test('seats 拒绝错误格式、未知等级和非正整数，错误配置不�
   for (const seats of [null, [], 2, { unknown: 1 }, { normal: 0 }, { normal: 1.5 }, { normal: '2' }]) {
     const c = baseConfig(); c.modules.discuss.seats = seats; h.config(c);
     const before = read(h.userConfig);
-    failed(await h.bridge(['config']), M.configInvalid('modules.discuss.seats', M.invalid.seats));
+    const r = await h.bridge(['config']);
+    failed(r, M.configInvalid('modules.discuss.seats', M.invalid.seats));
+    // 缺级的错误 seats 不会先报一条误导的“改写失败”。
+    assert.equal(r.stderr.includes(M.configMigrateFailed(h.userConfig, '<detail>').split('<detail>')[0]), false);
     assert.equal(read(h.userConfig), before);
+    assert.equal(fs.existsSync(`${h.userConfig}.bak`), false);
   }
 });
 
@@ -85,7 +195,9 @@ for (const module of ['discuss', 'review']) test(`${module} 显式填写的外�
   const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex };
   c.modules[module].normal = [{ agent: 'codex', required: true }, { agent: 'second', required: true }];
   c.modules[module].seats = { normal: 1 }; h.config(c);
+  const before = read(h.userConfig);
   failed(await h.bridge(['config']), M.seatsBelowRequired(`modules.${module}.seats.normal`, 1, 2));
+  assert.equal(read(h.userConfig), before); assert.equal(fs.existsSync(`${h.userConfig}.bak`), false);
 });
 
 test('项目 seats 只能调低，未写的等级继承用户配置且不改写项目文件', async (t) => {
@@ -107,6 +219,7 @@ test('项目 seats 只能调低，未写的等级继承用户配置且不改写�
 
 test('项目按补齐后的席位数收紧，低于必选数报错，整格关闭后免检', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex };
+  delete c.modules.review.seats;
   c.modules.review.simple = [{ agent: 'codex', required: true }, { agent: 'second', required: true }]; h.config(c);
   h.write('.claude/foreman.json', { modules: { review: { seats: { simple: 3 } } } });
   const raised = await h.bridge(['config', '--cwd', h.cwd]);

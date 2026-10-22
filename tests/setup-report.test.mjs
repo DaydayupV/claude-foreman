@@ -50,9 +50,9 @@ test('config/check md 固定四张格子表、六种派法、权限和合并提�
   has(config, ['| 候选 | simple | normal | complex |', '| 候选 | 出图 generate | 手画 draw |',
     '| Claude Code | 不找外部模型 | — | — |', '| Claude Code | 自己做 | — | — |', '| （关掉） | — | 关掉 |', '| a | max ★ | 默认 | 默认 |',
     '| 讨论 simple | — | — | — | 不找外部模型 |', '| 讨论 normal | 2 | 2 | 0 | 2 个候选全上 |',
-    '| 讨论 complex | 8（默认） | 2 | 0 | 候选不够 8 个，2 个全上 |',
-    '| 审查 simple | 1（默认） | 3 | 1 | 只派必选的 a，其余 2 个候选在这一级用不上 |',
-    '| 审查 normal | 2（默认） | 3 | 1 | b，再从其余 2 个里挑 1 个 |', '| 审查 complex | 2（默认） | 3 | 0 | 从 3 个候选里挑 2 个；剩下的候选可以做补漏席 |',
+    '| 讨论 complex | 8 | 2 | 0 | 候选不够 8 个，2 个全上 |',
+    '| 审查 simple | 1 | 3 | 1 | 只派必选的 a，其余 2 个候选在这一级用不上 |',
+    '| 审查 normal | 2 | 3 | 1 | b，再从其余 2 个里挑 1 个 |', '| 审查 complex | 2 | 3 | 0 | 从 3 个候选里挑 2 个；剩下的候选可以做补漏席 |',
     '| a | codex cli | fake-codex | 讨论 N/C、审查 S/N/C、出图 | 不需要开启 |',
     'edit（只改项目里的文件，不能运行命令）', 'shell（还能运行命令，没有系统沙箱）',
     '- ℹ 2 个协作方没有用在任何格子里：d、e。', '- ⚠ d、e 的 API key 明文写在配置文件里', '- ⚠ c 开了 shell']);
@@ -71,12 +71,12 @@ test('config/check md 固定四张格子表、六种派法、权限和合并提�
   assert.deepEqual(before, after);
 });
 
-test('项目关掉的格子、原文 seats 默认判断、补漏轮和未配置图像', async (t) => {
+test('项目关掉的格子、显式 seats 展示、补漏轮和未配置图像', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.codex.sandbox = { discuss: 'read-only', review: 'read-only' };
-  c.modules.discuss.seats = { simple: 2 }; c.modules.run.normal = entry('codex'); h.config(c);
+  c.modules.run.normal = entry('codex'); h.config(c);
   h.write('.claude/foreman.json', { modules: { discuss: { seats: { normal: 4 } }, run: { normal: 'claude code' }, image: { generate: null } } });
   const md = await markdown(h, ['config', '--cwd', h.cwd]);
-  has(md, ['| 讨论 simple | 2 |', '| 讨论 normal | 4 |', '| 讨论 complex | 8（默认） |', '自己做（项目关掉）', '关掉（项目关掉）',
+  has(md, ['| 讨论 simple | 2 |', '| 讨论 normal | 4 |', '| 讨论 complex | 8 |', '自己做（项目关掉）', '关掉（项目关掉）',
     '候选不够 2 个，1 个全上；补漏轮没有剩余模型，不做', '没有要处理的提醒。']);
   delete c.modules.image; h.config(c);
   const noImage = await markdown(h, ['config']); has(noImage, ['图像\n\n图像两格还没配置。']); assert.equal(noImage.includes('出图 generate |'), false);
@@ -89,7 +89,7 @@ test('格子单独指定的模型写在推理强度后面，3 级审查首轮没
   c.modules.run.complex = [{ agent: 'codex', effort: 'max', model: 'cell-only-model' }];
   c.modules.review.complex = [entry('codex', 'max', true), entry('other', null, true), entry('third')]; h.config(c);
   const md = await markdown(h, ['config']);
-  has(md, ['| codex | — | — | max · cell-only-model |', '| 审查 complex | 2（默认） | 3 | 2 | 只派必选的 codex、other，其余 1 个候选可以做补漏席 |']);
+  has(md, ['| codex | — | — | max · cell-only-model |', '| 审查 complex | 2 | 3 | 2 | 只派必选的 codex、other，其余 1 个候选可以做补漏席 |']);
   assert.equal(md.includes('| codex | max ★ · '), false);
 });
 

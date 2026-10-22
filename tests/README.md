@@ -148,6 +148,7 @@
 | 70 实时查看重构 | display.test.mjs、status-watch.test.mjs、submissions.test.mjs、image.test.mjs、image-smoke.test.mjs、cancel-and-plans.test.mjs、resume-chain.test.mjs、questions.test.mjs | 单任务顶部两行：模型行"模型 强度 · 接入方式"跟着状态上色、右边状态和时钟，任务行"模块 · 标题 · 等级"，执行和图像的续接按续接链写第几轮；组视图标题行写模块、模式（panel、roles、split）、标题和等级，右边是各状态的个数，计划只在有缺口时写一行（不写计划号）；Claude Code 席排在最前、和外部席一样写结论，单席查看照样显示报告；交回问题记作 ?，失败的命令和没搜到的搜索标在行尾 |
 | 71 setup 固定报告 | setup-report.test.mjs | config/check/models 的 Markdown、中英文字、格子与席位派法、项目关闭、协作方权限、检查和合并提醒；模型分组、档位、上下文、价格和非对话过滤；非法 --format、默认 JSON 和退出码 |
 | 72 旧配置提醒 | setup-report.test.mjs | 四类旧配置提醒的触发和不触发、结构化字段、只读和读取失败跳过；旧代号对照表不算残留；自定义配置文件名的备份；格子单独指定的模型和 3 级审查的补漏席写法 |
+| 73 显式外部席位数 | seats.test.mjs、config.test.mjs、generalization.test.mjs、modules.test.mjs、setup-report.test.mjs | 有无 Codex 的初始配置都写满讨论和审查三级 seats；用户缺 seats、缺等级或整个模块时补写，不增加格子，保留已写值并考虑必选数；并发首次读取只备份和提示一次，与旧结构迁移共用一次写入且按改名去重后的必选数补齐；备份已有时加后缀，中英文提示只列本次补写的模块；只补 seats 不加 levels 说明并保留已有说明、max_seats 和其他字段；错误 seats 和项目配置不改写，写入失败时用 seats 专门的提示并在内存兜底、缓存结果和清理锁及临时文件；只补 seats 时配置本身有错不提示改写失败；空的残留锁过 2 秒清掉，活进程的锁等满 10 秒放弃；改写保留原文件权限（非 Windows）；报告展示补写后的显式数值 |
 
 ## 说明
 

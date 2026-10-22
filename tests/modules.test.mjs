@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { sandbox, output, failed, baseConfig, read, json, write, opencodeAgent, apiAgent, CODEX, ROOT, MESSAGES } from './helpers.mjs';
+import { sandbox, output, failed, baseConfig, read, json, write, opencodeAgent, apiAgent, CODEX, ROOT, MESSAGES, DEFAULT_SEATS } from './helpers.mjs';
 const M = MESSAGES.zh;
 
 test('模块遍历顺序一致，单对象只在内存规范为列表', async (t) => {
@@ -47,7 +47,7 @@ test('levels 迁移一次备份，顺序强度不变且不补格子或 required'
   assert.equal(results.filter((r) => r.stderr.includes('有一处行为变化')).length, 1);
   assert.equal(read(bak), before);
   assert.deepEqual(json(h.userConfig), { agents: { ...c.agents, second: { ...c.agents.codex } }, levels: M.levelsNote, modules: {
-    discuss: levels.discuss, run: { complex: [levels.run.complex] }, review: { simple: [levels.review.simple] },
+    discuss: { ...levels.discuss, seats: DEFAULT_SEATS.discuss }, run: { complex: [levels.run.complex] }, review: { simple: [levels.review.simple], seats: DEFAULT_SEATS.review },
   } });
   // 说明留在 modules 前面，打开文件先看到它
   assert.deepEqual(Object.keys(json(h.userConfig)), ['agents', 'levels', 'modules']);
@@ -81,11 +81,12 @@ test('旧配置里的 dispatch.max_seats 不再使用：照常加载、不限制
   assert.equal(fs.existsSync(`${h.userConfig}.bak`), false);
 });
 
-test('读配置时：没有 modules 的配置不加 levels 说明，没有 dispatch 的配置和项目配置都不改', async (t) => {
+test('读配置时：缺少 modules 只补 seats，不加 levels 或 dispatch，项目配置不改', async (t) => {
   const h = sandbox(t), agents = baseConfig().agents;
+  const modules = Object.fromEntries(['discuss', 'review'].map((module) => [module, { seats: DEFAULT_SEATS[module] }]));
   h.config({ dispatch: { auto: false, runs_dir: null }, agents });
   output(await h.bridge(['config']));
-  assert.deepEqual(json(h.userConfig), { dispatch: { auto: false, runs_dir: null }, agents });
+  assert.deepEqual(json(h.userConfig), { dispatch: { auto: false, runs_dir: null }, agents, modules });
   const again = await h.bridge(['config']);
   assert.equal(again.stderr, '');
 
@@ -93,7 +94,8 @@ test('读配置时：没有 modules 的配置不加 levels 说明，没有 dispa
   bare.config({ agents });
   const plain = read(bare.userConfig);
   output(await bare.bridge(['config']));
-  assert.equal(read(bare.userConfig), plain);
+  assert.deepEqual(json(bare.userConfig), { agents, modules });
+  assert.equal(read(`${bare.userConfig}.bak`), plain);
 
   const p = sandbox(t);
   p.config();

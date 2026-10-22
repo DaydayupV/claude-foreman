@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
-import { HERE, M, notice, isObject, readJson, die, pidAlive, retryBusy, replaceFile, closestMatches } from './util.mjs';
+import { HERE, M, notice, isObject, readJson, die, pidAlive, pidExists, retryBusy, replaceFile, closestMatches } from './util.mjs';
 
 const ENTRY = path.join(HERE, 'cli.mjs');
 const SCHEMA = path.join(HERE, '..', 'schemas', 'report.schema.json');
@@ -89,7 +89,7 @@ function normalizeModules(cfg) {
   for (const module of ['discuss', 'review']) {
     const cells = modules[module];
     if (!isObject(cells) || Object.hasOwn(cells, 'seats') && !isObject(cells.seats)) continue;
-    // 只在内存里补默认值，避免旧版插件读到新增配置键后退出。
+    // 用户配置写入失败或合并项目配置时，仍在内存里补齐。
     const seats = Object.fromEntries(LEVELS.map((cell) => [cell, Math.max(DEFAULT_SEATS[module][cell], requiredCount(cells[cell]))]));
     modules[module] = { ...cells, seats: { ...seats, ...cells.seats } };
   }
@@ -228,7 +228,12 @@ function migrateConfig(config, file, base, project) {
   if (old && !project) result = mergeConfig(Object.hasOwn(config, 'modules') ? DEFAULT_CONFIG : LEGACY_DEFAULT_CONFIG, result);
   if (old && isObject(result.modules)) result.modules = mapCells(result.modules, (value) => value === 'claude' ? CLAUDE_CODE : isObject(value) ? [value] : value);
   if (project && (old || hasLevels)) notice(M.projectOldFormat(file));
-  return { config: result, old, modules: hasLevels, note };
+  const seats = project || result.modules !== undefined && !isObject(result.modules) ? [] : ['discuss', 'review'].filter((module) => {
+    const cells = result.modules?.[module];
+    return cells === undefined || isObject(cells) && (!Object.hasOwn(cells, 'seats')
+      || isObject(cells.seats) && LEVELS.some((cell) => !Object.hasOwn(cells.seats, cell)));
+  });
+  return { config: result, old, modules: hasLevels, seats, note };
 }
 
 function renameAgentsByModel(config, adapters) {
@@ -270,8 +275,8 @@ function migrateStructure(config, file, base, project, adapters) {
   if (!project && migratedConfigs.has(file)) return migratedConfigs.get(file);
   const converted = migrateConfig(config, file, base, project);
   if (project) return converted.config;
-  if (!converted.old && !converted.modules) return config;
-  let result = structuredClone(converted.config);
+  if (!converted.old && !converted.modules && !converted.seats.length) return config;
+  let result = structuredClone(converted.old || converted.modules ? converted.config : config);
   if (converted.old && isObject(config.agents) && !Object.hasOwn(config.agents, 'codex')
     && !eachEntry(result.modules).some(({ item }) => item?.agent === 'codex')) delete result.agents.codex;
   for (const agent of Object.values(result.agents || {})) if (Object.hasOwn(OLD_TYPES, agent?.type)) agent.type = OLD_TYPES[agent.type];
@@ -284,18 +289,27 @@ function migrateStructure(config, file, base, project, adapters) {
     catch (e) { if (e.code === 'ENOENT') return null; throw e; }
   };
   const mine = () => ownerOf() === process.pid;
-  const stale = () => { const pid = ownerOf(); return !!pid && !pidAlive(pid); };
-  let locked = false;
+  // 持有者用 pidExists 判断：没权限探测也算还活着。锁文件是空的或写坏了（建锁后、写进程号前崩溃）时，放了 2 秒以上就当残留。
+  const lockAge = () => { try { return Date.now() - fs.statSync(lock).mtimeMs; } catch { return 0; } };
+  const stale = () => { const pid = ownerOf(); return pid !== null && (Number.isInteger(pid) && pid > 0 ? !pidExists(pid) : lockAge() > 2000); };
+  // 只补 seats 时配置本身有错，就不改写也不提示改写失败：随后读配置时会报出真正的错误。旧写法的改写失败照旧提示。
+  let locked = false, invalid = false;
+  const deadline = Date.now() + 10000;
   try {
     if (converted.old) { renamed = renameAgentsByModel(result, adapters); result = renamed.config; }
-    validateConfig(normalizeModules(mergeConfig(DEFAULT_CONFIG, result)), adapters, (msg) => { throw new Error(msg); });
+    for (const module of converted.seats) {
+      const cells = result.modules?.[module] || {};
+      const seats = Object.fromEntries(LEVELS.map((cell) => [cell, Math.max(DEFAULT_SEATS[module][cell], requiredCount(cells[cell]))]));
+      result.modules = { ...result.modules, [module]: { ...cells, seats: { ...seats, ...cells.seats } } };
+    }
+    validateConfig(normalizeModules(mergeConfig(DEFAULT_CONFIG, result)), adapters, (msg) => { invalid = true; throw new Error(msg); });
     for (;;) {
       try { retryBusy(() => fs.writeFileSync(lock, String(process.pid), { flag: 'wx' })); locked = true; break; }
       catch (e) {
         if (e.code !== 'EEXIST') throw e;
-        const owner = ownerOf();
-        if (owner === null) continue;
-        if (owner && !pidAlive(owner)) retryBusy(() => fs.rmSync(lock, { force: true }), stale);
+        if (ownerOf() === null) continue;
+        if (stale()) retryBusy(() => fs.rmSync(lock, { force: true }), stale);
+        else if (Date.now() > deadline) throw new Error(M.configLockTimeout(lock));
         else Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
       }
     }
@@ -310,20 +324,28 @@ function migrateStructure(config, file, base, project, adapters) {
     fs.copyFileSync(file, bak, fs.constants.COPYFILE_EXCL);
     if (Object.keys(renamed.aliases).length) {
       const aliases = { ...readAgentAliases(), ...renamed.aliases };
+      fs.rmSync(aliasTmp, { force: true });
       fs.writeFileSync(aliasTmp, JSON.stringify(aliases, null, 2) + '\n', { flag: 'wx' });
       replaceFile(aliasTmp, aliasesFile);
     }
     // 旧版插件只认 levels 对象，缺了 levels 会悄悄把九格都当成 "claude code"。改写后的文件只写 modules，
-    // 所以每次改写都把 levels 留成一行说明，旧版读到字符串就报错退出；文件里原来有说明就沿用。
-    // 没有 modules 的文件不加说明：只有说明没有 modules，新版读到也会报错。
+    // 所以旧结构改写时把 levels 留成一行说明；只补 seats 时沿用原说明，没有就不加。
     const { modules, ...rest } = result;
-    result = modules === undefined ? rest : { ...rest, levels: converted.note || M.levelsNote, modules };
-    fs.writeFileSync(tmp, JSON.stringify(result, null, 2) + '\n', { flag: 'wx' });
+    const note = converted.old || converted.modules ? converted.note || M.levelsNote : converted.note;
+    result = modules === undefined ? rest : { ...rest, ...(note === null ? {} : { levels: note }), modules };
+    // 新文件沿用原文件的权限：umask 宽松时，不能让改写把只有自己能读的配置（可能有明文 key）变成别人也能读。
+    const mode = fs.statSync(file).mode & 0o777;
+    fs.rmSync(tmp, { force: true });
+    fs.writeFileSync(tmp, JSON.stringify(result, null, 2) + '\n', { flag: 'wx', mode });
+    fs.chmodSync(tmp, mode);
     replaceFile(tmp, file);
     if (converted.old) notice(M.configStructureMigrated(file, bak, M.list(Object.entries(renamed.aliases).map(([a, b]) => `${a} → ${b}`))));
     if (converted.modules) notice(M.configModulesMigrated(file, bak));
+    if (converted.seats.length) notice(M.configSeatsWritten(file, bak, M.list(converted.seats.map((module) =>
+      `${M.reportModuleNames[module].toLowerCase()} ${LEVELS.map((cell) => result.modules[module].seats[cell]).join('/')}`))));
   } catch (e) {
-    notice(M.configMigrateFailed(file, e.message));
+    if (converted.old || converted.modules) notice(M.configMigrateFailed(file, e.message));
+    else if (!invalid) notice(M.configSeatsWriteFailed(file, e.message));
   } finally {
     fs.rmSync(tmp, { force: true });
     fs.rmSync(aliasTmp, { force: true });
@@ -520,6 +542,8 @@ function buildStarterConfig(environment) {
     const api_key_env = keys.find((key) => environment.api_keys.includes(key));
     if (api_key_env) cfg.agents[model] = { type: 'api', base_url, model, api_key_env };
   }
+  for (const module of ['discuss', 'review']) cfg.modules[module].seats = Object.fromEntries(LEVELS.map((cell) =>
+    [cell, Math.max(DEFAULT_SEATS[module][cell], requiredCount(cfg.modules[module][cell]))]));
   return cfg;
 }
 
