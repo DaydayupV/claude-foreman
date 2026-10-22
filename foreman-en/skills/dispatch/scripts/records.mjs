@@ -207,6 +207,7 @@ function describeActivity(dir) {
       : last.type === 'api.usage' ? D.watchTokens(last.usage) : D.watchEnded('done');
   } else if (last?.type === 'pi.progress') step = last.phase === 'thinking' ? D.stepApiThinking(last.total_chars) : D.stepApiAnswering(last.total_chars);
   else if (last?.type === 'image.viewed') step = D.stepImageViewed(path.basename(last.path));
+  else if (last?.type === 'foreman.snapshot' && last.phase === 'start') step = D.stepSnapshot;
   else if (running.size) step = D.stepCommand(clip(oneLine(plainCommand([...running.values()].pop())), 160));
   else if (last?.item?.type === 'agent_message') step = D.stepSaid(clip(oneLine(last.item.text), 160));
   else if (last?.item?.type === 'file_change') step = D.stepFileChanged;

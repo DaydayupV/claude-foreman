@@ -212,6 +212,15 @@ function createTimeline(meta, rel, { stream = false, write = (l) => process.stdo
 
   const show = (ev) => {
     if (ev.type?.startsWith('api.')) { showApi(ev); return; }
+    // 开工前拍快照：大目录要几分钟，写出来免得画面一片空白
+    if (ev.type === 'foreman.snapshot') {
+      state.snapshotting = ev.phase === 'start';
+      const text = ev.phase === 'start' ? D.watchSnapshotStart : D.watchSnapshotDone(D.duration(ev.seconds ?? 0));
+      recent('other', text);
+      say(ev.ts, C.dim('⋯'), text, 2);
+      return;
+    }
+    state.snapshotting = false;
     const it = ev.item || {};
     // 只有完成事件的工具调用，也要补出命令行供时间线显示。
     if (ev.type === 'item.completed' && it.type === 'command_execution' && !actions.has(it.id)) show({ ...ev, type: 'item.started' });

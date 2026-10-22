@@ -38,6 +38,14 @@ function cmdStatus(o, sessionStats) {
     return { id, dir, meta: readMeta(dir) };
   });
   checkRunners(loaded.map((run) => run.meta));
+  // 执行和图像的续接不记轮次，按续接链往回数（和实时查看一致）
+  const metaOf = new Map(loaded.map((run) => [run.id, run.meta]));
+  const roundOf = (m) => {
+    if (m.round != null || !m.parent) return m.round;
+    let n = 1;
+    for (let id = m.parent; id && n < 100; n++) id = (metaOf.get(id) ?? readMeta(path.join(RUNS_ROOT, id)))?.parent;
+    return n;
+  };
   const records = loaded.flatMap((run) => {
     const { id: rid, dir } = run;
     // meta.json 读不出来时计入末尾提示。进程已退出、记录还是运行中的，交给 runOutcome 判断：
@@ -52,7 +60,7 @@ function cmdStatus(o, sessionStats) {
     const image = m.module === 'image', mode = image && m.mode === 'run' ? 'image' : m.mode;
     const cells = [rid, mode, color(`${mark} ${word}`), image ? m.cell : m.level || '-', C.bold(modelLabel(m)),
       C.dim(outcome.running ? clock(elapsed) : took(r?.duration_s ?? elapsed / 1000))];
-    const tail = `${m.group != null ? D.statusGroup(m.group) : ''}${m.round ? D.statusRound(m.round) : ''}${image ? D.statusRoute('①②③④'[m.route - 1]) : ''}${C.bold(m.title || '')}${r?.stale === true ? ` · ${D.watchStale}` : ''}  ${C.dim(`@ ${m.cwd}`)}`;
+    const tail = `${m.group != null ? D.statusGroup(m.group) : ''}${roundOf(m) ? D.statusRound(roundOf(m)) : ''}${image ? D.statusRoute('①②③④'[m.route - 1]) : ''}${C.bold(m.title || '')}${r?.stale === true ? ` · ${D.watchStale}` : ''}  ${C.dim(`@ ${m.cwd}`)}`;
     let detail = '';
     if (outcome.running) {
       const a = describeActivity(dir);

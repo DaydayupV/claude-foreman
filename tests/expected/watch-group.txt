@@ -22,4 +22,5 @@ run · split · 合成a / 合成b / 合成c / 合成d · complex                
   ✗ 合成失败原因
   0 files changed · tokens: in 120 (cached 25%) · out 40                                          d
 ───────────────────────────────────────────────────────────────────────────────────────────────────
-replay a seat: node <HOME>/r/watch.mjs --run <run_id>
+replay a seat:
+node <HOME>/r/watch.mjs --run <run_id>

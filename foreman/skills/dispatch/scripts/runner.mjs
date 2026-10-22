@@ -288,7 +288,12 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
       try {
         tracker = makeTracker(dir, cwd, track, { ignored: kind !== 'exec' });
         process.once('exit', cleanup);
+        // 大目录拍快照要几分钟：先在事件里记一笔，实时查看和 status 能写出正在拍快照，而不是一片空白
+        const event = eventWriter(dir);
+        const snapStart = Date.now();
+        event({ type: 'foreman.snapshot', phase: 'start' });
         before = tracker.snap('before');
+        event({ type: 'foreman.snapshot', phase: 'done', seconds: Math.round((Date.now() - snapStart) / 1000) });
       }
       catch (e) {
         if (audited) snapshotError = M.auditedSnapshotFailed(e.message);

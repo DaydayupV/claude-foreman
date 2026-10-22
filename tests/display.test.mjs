@@ -98,7 +98,8 @@ test('22 列也不越界：单任务的时间线、角色模式的长角色名�
   const r = sandbox(t);
   watchRecords(r);
   const out = await r.bridge(['watch', '--group', 'watch-group'], { env: { FOREMAN_TEST_SCREEN: '22x30' } });
-  for (const line of out.stdout.split('\n').filter((l) => !l.startsWith(D.watchReplayOne('').trimEnd()))) assert.ok(textWidth(line) <= 21, line);
+  // 回看命令单独一行、不截断（方便整行复制），只有它可以超宽
+  for (const line of out.stdout.split('\n').filter((l) => !l.startsWith('node '))) assert.ok(textWidth(line) <= 21, line);
 });
 
 test('角色模式的分工行只写角色；标题里带着角色的旧写法，标题行去掉角色，不当成拆分', async (t) => {
@@ -114,6 +115,21 @@ test('角色模式的分工行只写角色；标题里带着角色的旧写法�
   seats.forEach((s, i) => { const file = path.join(h.runs, s.id, 'meta.json'); write(file, { ...json(file), title: `登记锁重试［${roles[i]}］` }); });
   const again = (await frameOf(h, ['watch', '--group', group, '--no-intro'], { FOREMAN_TEST_SCREEN: '100x40' })).map(plain);
   assert.match(again[0], /^discuss · roles · 登记锁重试 · complex +●4$/);
+});
+
+test('组视图里结束了的席位在结论下面写用量和 run_id，和单任务结尾一致；拍快照时写出来，不留一片空白', async (t) => {
+  const h = sandbox(t);
+  const { group, seats } = liveGroup(h, process.pid);
+  const usage = { input_tokens: 1200, cached_input_tokens: 300, output_tokens: 40 };
+  seedRun(h, seats[0].id, { ...json(path.join(h.runs, seats[0].id, 'meta.json')), status: 'done', pid: 0 }, { status: 'done', duration_s: 3, usage, usage_scope: 'this_run', report: discussion });
+  fs.appendFileSync(path.join(h.runs, seats[1].id, 'events.jsonl'), `${JSON.stringify({ type: 'foreman.snapshot', phase: 'start', ts: new Date().toISOString() })}\n`);
+  const frame = (await frameOf(h, ['watch', '--group', group, '--no-intro'], { FOREMAN_TEST_SCREEN: '100x40' })).map(plain);
+  const start = frame.findIndex((l) => l.startsWith('1 ✔ '));
+  const block = frame.slice(start, frame.findIndex((l, i) => i > start && l.startsWith('─')));
+  assert.match(block.at(-1), new RegExp(`^ {4}tokens: in 1,200 .* +${seats[0].id}$`), block.join('\n'));
+  assert.ok(frame.some((l) => l.includes(D.watchSnapshotStart.slice(0, 30))), frame.join('\n'));
+  const single = (await frameOf(h, ['watch', '--run', seats[1].id, '--no-intro'], { FOREMAN_TEST_SCREEN: '160x16' })).map(plain);
+  assert.ok(single.at(-1).includes(D.watchSnapshotStart.slice(0, 30)), single.at(-1));
 });
 
 test('直接输出时，一条命令迟迟没有结束，也不压着后面说的话', async (t) => {
@@ -187,7 +203,7 @@ test('组视图窗口不够高时先把正文压到每席一行，还放不下�
   assert.match(plain(six.at(-1)), /^↓ \d+ more lines? below +1–6 open a seat · ↑↓ scroll · q quit$/);
 });
 
-test('组视图汇总最后写一行回看命令：记录目录带空格时给路径加引号，换上 run_id 就能运行', async (t) => {
+test('组视图汇总最后写回看命令：说明一行，命令单独一行，记录目录带空格时给路径加引号，换上 run_id 就能运行', async (t) => {
   const h = sandbox(t);
   h.runs = path.join(h.home, 'my runs');
   const c = baseConfig();
@@ -196,7 +212,7 @@ test('组视图汇总最后写一行回看命令：记录目录带空格时给�
   seedRun(h, '20000101-a', { group: 'spaced' }, { status: 'done', duration_s: 1 });
   const r = await h.bridge(['watch', '--group', 'spaced']);
   assert.equal(r.code, 0, r.stderr);
-  assert.ok(r.stdout.trimEnd().endsWith(D.watchReplayOne(`node "${path.join(h.runs, 'watch.mjs')}" --run <run_id>`)), r.stdout);
+  assert.ok(r.stdout.trimEnd().endsWith(`${D.watchReplayOne('').trimEnd()}\nnode "${path.join(h.runs, 'watch.mjs')}" --run <run_id>`), r.stdout);
   assert.ok(r.stdout.includes(' 20000101-a\n'), r.stdout);
 });
 

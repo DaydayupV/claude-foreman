@@ -182,7 +182,16 @@ function createSeat(run) {
   return feed;
 }
 
-// 一席的几行：身份行、分工行和正文
+// 结束了的一席在结论下面写一行用量：执行任务先写改动，再写 token 和费用，run_id 靠右；
+// Claude Code 席没有用量，写明是它提交的报告。运行中的不写
+function seatUsage(run, feed, inner) {
+  if (feed.state.running) return [];
+  const r = feed.outcome?.result;
+  const usage = isHost(run) ? D.watchHostNoUsage : D.dots([run.meta.kind === 'exec' && changedFor(r, run.meta), usageLine(r, run.meta)]);
+  return usageRows(usage, run.id, inner);
+}
+
+// 一席的几行：身份行、分工行、正文，结束了的再加用量。运行中还没有任何可写的（讨论席常常只在最后交回结果），写一行"进行中"
 function seatBlock(run, feed, rows, width, no, split) {
   const st = seatState(run, feed);
   const lead = no != null ? '    ' : '  ';
@@ -190,10 +199,11 @@ function seatBlock(run, feed, rows, width, no, split) {
   const out = [identityLine(run.meta, st.style, st.right, width, no)];
   const second = seatLine(run.meta, { title: split, width: inner });
   if (second) out.push(lead + second);
-  const body = feed.state.running ? liveLines(feed.tl.state, rows, inner) : feed.final(inner);
+  let body = feed.state.running ? liveLines(feed.tl.state, rows, inner) : feed.final(inner);
+  if (feed.state.running && !body.length && rows > 0 && !feed.tl.state.api.req) body = [C.dim(D.watchWorking)];
   const shown = body.slice(0, rows);
   if (body.length > rows && rows > 0) shown[rows - 1] = `${fitWidth(shown[rows - 1].replace(/\x1b\[[0-9;]*m/g, ''), inner - 1)}${C.dim('…')}`;
-  return { lines: [...out, ...shown.map((l) => lead + l)], state: st };
+  return { lines: [...out, ...[...shown, ...seatUsage(run, feed, inner)].map((l) => lead + l)], state: st };
 }
 
 async function watchGroup(group, o, loadCfg) {
@@ -206,18 +216,28 @@ async function watchGroup(group, o, loadCfg) {
     return runs;
   };
   let runs;
+  // 等待期间按 q 或 Ctrl+C 也要认：记下来，等完直接写汇总退出，不进画面
+  let early = null;
+  const earlyKeys = (d) => { for (const k of splitKeys(d.toString('utf8'))) if (k === 'q' || k === '\x03') early = k === '\x03' ? 130 : 0; };
+  const listenEarly = interactive();
+  if (listenEarly) { process.stdin.setRawMode(true); process.stdin.resume(); process.stdin.on('data', earlyKeys); }
   for (let waited = 0; ; waited += 500) {
     runs = recentRuns();
     // 找到的一批都已结束时多等几秒：可能是别的会话用过的同名组，新派出的任务还没登记
-    if (runs.some((run) => isRunning(run.meta)) || (runs.length && waited >= 5000)) break;
+    if (runs.some((run) => isRunning(run.meta)) || (runs.length && (waited >= 5000 || early != null))) break;
+    if (early != null) process.exit(early);
     if (waited >= 15000) die(M.groupNotFound(group));
     if (waited === 0 && !runs.length) process.stdout.write(`${D.watchWaiting}\n`);
     await sleep(500);
   }
+  if (listenEarly) {
+    process.stdin.off('data', earlyKeys);
+    if (early != null) { process.stdin.setRawMode(false); process.stdin.pause(); }
+  }
   // 启动动画：画出组里新派出的各位，播放中后登记的任务也会出场；结束后接着用备用屏幕画实时面板
   let introPlayed = false;
   let handOff = () => {};
-  if (introWanted(o, runs.map((run) => run.meta), loadCfg)) {
+  if (early == null && introWanted(o, runs.map((run) => run.meta), loadCfg)) {
     const fresh = (list) => list.filter((run) => !isHost(run) && !run.meta.parent).map((run) => introOf(run.meta));
     const first = runs.find((run) => !isHost(run) && !run.meta.parent).meta;
     const kind = runs.some((run) => kindOf(run.meta) === 'discuss') ? 'discuss' : kindOf(first);
@@ -288,7 +308,7 @@ async function watchGroup(group, o, loadCfg) {
     const want = all.map((run) => wantRows(run, feeds.get(run.id), inner));
     const rows = all.map((run, i) => (full ? want[i] : Math.min(want[i], feeds.get(run.id).state.running ? LIVE_MIN : DONE_MIN)));
     if (!full) {
-      const fixed = all.reduce((n, run, i) => n + 2 + (seatLine(run.meta, { title: split }) ? 1 : 0) + rows[i], 0);
+      const fixed = all.reduce((n, run, i) => n + 2 + (seatLine(run.meta, { title: split }) ? 1 : 0) + rows[i] + seatUsage(run, feeds.get(run.id), inner).length, 0);
       let spare = budget - fixed;
       // 窗口不够高时先把正文压到每席一行，还放不下再靠翻看
       while (spare < 0 && rows.some((n) => n > 1)) {
@@ -354,34 +374,39 @@ async function watchGroup(group, o, loadCfg) {
     let foot;
     if (confirmCancel && queued.length) foot = C.yellow(fitWidth(D.dashCancelConfirm(D.list(queued.map((run) => shortModel(modelOf(run.meta))))), width));
     else {
-      // 左边是翻看的位置或"全部结束"，右边是按键；放不下时只留左边并截短，没有左边就截短按键
+      // 左边是"全部结束"和翻看的位置，右边是按键。放不下时先截短左边，留给左边的不到 8 列才去掉按键
       const where = [above && D.dashAbove(above), below && D.dashBelow(below)].filter(Boolean).join(' · ');
-      const left = where ? { text: where, paint: C.yellow } : allDone ? { text: `✔ ${D.dashAllFinished}`, paint: (s) => C.green(s.slice(0, 1)) + C.dim(s.slice(1)) } : null;
+      const done = (s) => C.green(s.slice(0, 1)) + C.dim(s.slice(1));
+      const left = allDone && where ? { text: `✔ ${D.dots([D.dashAllFinishedShort, where])}`, paint: done }
+        : where ? { text: where, paint: C.yellow } : allDone ? { text: `✔ ${D.dashAllFinished}`, paint: done } : null;
       const keys = D.dashKeys(range, queued.length > 0);
-      const gap = width - (left ? textWidth(left.text) : 0) - textWidth(keys);
-      if (gap >= 2) foot = (left ? left.paint(left.text) : '') + ' '.repeat(gap) + (queued.length ? C.yellow : C.dim)(keys);
-      else foot = left ? left.paint(fitWidth(left.text, width)) : C.dim(fitWidth(keys, width));
+      const paintKeys = queued.length ? C.yellow : C.dim;
+      const space = width - textWidth(keys) - 2;
+      if (!left) foot = ' '.repeat(Math.max(0, width - textWidth(keys))) + paintKeys(fitWidth(keys, width));
+      else if (space < 8) foot = left.paint(fitWidth(left.text, width));
+      else {
+        const text = fitWidth(left.text, space);
+        foot = left.paint(text) + ' '.repeat(width - textWidth(text) - textWidth(keys)) + paintKeys(keys);
+      }
     }
     return [...top, ...shown, foot];
   };
 
-  // 汇总：写在普通屏幕里，排版和画面一致，结论写全；每席一行用量和 run_id，最后一行是回看某一席的命令
+  // 汇总：写在普通屏幕里，排版和画面一致，结论写全，每席的用量和 run_id 和画面里一样。
+  // 最后是回看某一席的命令：说明单独一行，命令另起一行、不截断，整行复制换上 run_id 就能运行
   const summary = () => {
     const all = update();
     const width = Math.max(20, termCols() - 1);
-    const built = blocks(all, width, 0, true, false).map((b, i) => {
-      const run = all[i];
-      const r = feeds.get(run.id).outcome?.result;
-      const usage = D.dots([run.meta.kind === 'exec' && changedFor(r, run.meta), usageLine(r, run.meta)]);
-      return [...b.lines, ...usageRows(usage, run.id, width - 2).map((l) => `  ${l}`)];
-    });
-    const out = ['', headLine(all, built.map((_, i) => seatState(all[i], feeds.get(all[i].id))), width), ...planNotes(width, true)];
-    for (const lines of built) out.push(C.dim('─'.repeat(width)), ...lines);
-    out.push(C.dim('─'.repeat(width)), C.dim(replayCommand(RUNS_ROOT)));
+    const built = blocks(all, width, 0, true, false);
+    const out = ['', headLine(all, built.map((b) => b.state), width), ...planNotes(width, true)];
+    for (const b of built) out.push(C.dim('─'.repeat(width)), ...b.lines);
+    const replay = replayCommand(RUNS_ROOT);
+    const label = D.watchReplayOne('').trimEnd();
+    out.push(C.dim('─'.repeat(width)), C.dim(label), C.dim(replay.slice(label.length).trim()));
     process.stdout.write(`${out.join('\n')}\n`);
   };
 
-  if (liveCapable() && (anyRunning() || interactive())) {
+  if (early == null && liveCapable() && (anyRunning() || interactive())) {
     // 实时面板：备用屏幕里整屏重画，窗口大小变化时按新尺寸重画。全部结束后有人能按键时停在画面里，按 q 离开；
     // 离开后在原来的屏幕输出汇总，留作记录。有模型在排队时按 x 终止：第一次按要求确认，第二次给排队中的都写终止标记
     const screen = liveScreen(render);
@@ -452,6 +477,7 @@ async function watchGroup(group, o, loadCfg) {
     }
   }
   summary();
+  if (early === 130) process.exitCode = 130;
 }
 
 export { watchGroup };

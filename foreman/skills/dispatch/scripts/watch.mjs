@@ -59,6 +59,8 @@ function verboseRenderer(meta, rel) {
       o('⚠', re ? D.watchReconnect(re[1], re[2]) : clip(oneLine(ev.message), 300));
     } else if (ev.type === 'turn.completed' && ev.usage) {
       o('Σ', D.watchTokens(ev.usage));
+    } else if (ev.type === 'foreman.snapshot') {
+      o('⋯', ev.phase === 'start' ? D.watchSnapshotStart : D.watchSnapshotDone(D.duration(ev.seconds ?? 0)));
     } else if (ev.type === 'image.generated') {
       o('▣', D.watchImage(ev.path));
     } else if (ev.type === 'image.viewed') {
@@ -134,11 +136,14 @@ function runIdentity(meta, ended, api, width) {
 }
 // 顶部两行加分隔线：身份行和任务行（整行加粗）
 const runHead = (meta, ended, api, W) => [runIdentity(meta, ended, api, W - 1), `  ${C.bold(fitWidth(taskLine(meta, { title: meta.title || meta.id }), W - 3))}`, C.dim('─'.repeat(W - 1))];
-// 底部一行：左边写提示，右边写按键，放不下时只留左边
+// 底部一行：左边写提示，右边写按键。放不下时先截短左边，留给左边的不到 8 列才去掉按键（没有左边就截短按键）
 function footLine(lead, left, keys, W) {
   const room = W - 1 - textWidth(lead.replace(/\x1b\[[0-9;]*m/g, ''));
-  if (!keys || textWidth(left.text) + textWidth(keys) + 2 > room) return lead + left.color(fitWidth(left.text, room));
-  return lead + left.color(left.text) + ' '.repeat(room - textWidth(left.text) - textWidth(keys)) + C.dim(keys);
+  const space = room - textWidth(keys) - 2;
+  if (!keys || (left.text && space < 8)) return lead + left.color(fitWidth(left.text, room));
+  if (space < 0) return lead + C.dim(fitWidth(keys, room));
+  const text = fitWidth(left.text, space);
+  return lead + left.color(text) + ' '.repeat(room - textWidth(text) - textWidth(keys)) + C.dim(keys);
 }
 
 // 单任务视图：顶部固定身份行和任务行，中间是时间线（方向键、翻页键、滚轮往回翻），底部一行是最近的思考和按键。
@@ -163,8 +168,8 @@ function singleView(meta, tl, dir) {
       const style = outcomeStyle(ended.o);
       return footLine(`${style.color(style.mark)} `, { text: D.watchFinishedNote, color: C.dim }, D.watchFinishedKeys, W);
     }
-    const { speech, thought } = tl.state;
-    const text = thought && (!speech || thought.seq > speech.seq) ? D.watchThinking(thought.text) : '';
+    const { speech, thought, snapshotting } = tl.state;
+    const text = snapshotting ? D.watchSnapshotStart : thought && (!speech || thought.seq > speech.seq) ? D.watchThinking(thought.text) : '';
     return footLine(lead, { text, color: C.dim }, api.queued ? D.watchKeysQueued : D.watchKeys, W);
   };
   const render = (W, H) => {
@@ -209,20 +214,22 @@ function singleView(meta, tl, dir) {
     }
     screen.draw();
   }
+  const start = () => {
+    screen.start();
+    if (!ended) ticker = setInterval(() => { tick++; screen.draw(); }, 250);
+    if (process.stdin.isTTY) { process.stdin.setRawMode(true); process.stdin.resume(); process.stdin.on('data', onKeys); }
+    process.on('SIGINT', () => quit(130));
+    process.on('exit', () => screen.stop());
+  };
   return {
-    start() {
-      screen.start();
-      ticker = setInterval(() => { tick++; screen.draw(); }, 250);
-      if (process.stdin.isTTY) { process.stdin.setRawMode(true); process.stdin.resume(); process.stdin.on('data', onKeys); }
-      process.on('SIGINT', () => quit(130));
-      process.on('exit', () => screen.stop());
-    },
-    // 任务结束：停在画面里等 q；没人能按键时直接离开
-    finished(r, m, o) {
+    start,
+    // 任务结束：停在画面里等 q；没人能按键时直接离开。打开时就已经结束的，到这里才进画面，第一帧就是结束的样子
+    finished(r, m, o, onStart) {
       ended = { o: o ?? { running: false, status: m?.status ?? 'interrupted', ok: false, blocked: false }, durationS: durationOf(r, m) };
       clearInterval(ticker);
       cancelSent = false;
       confirmCancel = false;
+      if (!screen.active) { start(); onStart?.(); }
       if (!interactive()) { leave(); return Promise.resolve(0); }
       screen.draw();
       return new Promise((resolve) => { onQuit = resolve; });
@@ -286,7 +293,7 @@ async function watchRun(o, loadCfg) {
   const read = eventReader(dir, show);
   read();
   goLive();
-  if (view) { view.start(); handOff?.(); } // 实时画面接手了备用屏幕，由它负责退出时恢复终端
+  if (view && running) { view.start(); handOff?.(); } // 实时画面接手了备用屏幕，由它负责退出时恢复终端
   let m = readMeta(dir);
   while (isRunning(m)) {
     await sleep(500);
@@ -297,7 +304,7 @@ async function watchRun(o, loadCfg) {
   const r = readResult(dir);
   const outcome = finish(r, m ?? meta);
   // 结束后按 Ctrl+C 离开的，退出码和中断一致
-  if (view && await view.finished(r, m ?? meta, outcome) === 130) process.exitCode = 130;
+  if (view && await view.finished(r, m ?? meta, outcome, () => handOff?.()) === 130) process.exitCode = 130;
 }
 
 async function cmdWatch(o, loadCfg) {
