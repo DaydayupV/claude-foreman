@@ -25,7 +25,7 @@ function wrapAtDots(text, width) {
     const last = lines.length - 1;
     if (last >= 0 && textWidth(`${lines[last]} · ${part}`) <= width) { lines[last] += ` · ${part}`; continue; }
     if (textWidth(part) <= width) { lines.push(part); continue; }
-    const pieces = wrapWidth(part, Math.max(4, width - 2));
+    const pieces = wrapWidth(part, Math.max(4, part.includes('/') ? width - 2 : width));
     for (let i = 0; i < pieces.length - 1; i++) {
       if (/\s*\/$/.test(pieces[i])) { pieces[i] = pieces[i].replace(/\s*\/$/, ''); pieces[i + 1] = `/ ${pieces[i + 1]}`; }
     }

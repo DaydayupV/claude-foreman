@@ -169,8 +169,12 @@ function singleView(meta, tl, dir) {
       return footLine(`${style.color(style.mark)} `, { text: D.watchFinishedNote, color: C.dim }, D.watchFinishedKeys, W);
     }
     const { speech, thought, snapshotting } = tl.state;
-    const text = snapshotting ? D.watchSnapshotStart : thought && (!speech || thought.seq > speech.seq) ? D.watchThinking(thought.text) : '';
-    return footLine(lead, { text, color: C.dim }, api.queued ? D.watchKeysQueued : D.watchKeys, W);
+    const keys = api.queued ? D.watchKeysQueued : D.watchKeys;
+    // 拍快照的提示放不下整句时换成短的说法，不在单词中间截断
+    const room = W - 1 - textWidth(lead.replace(/\x1b\[[0-9;]*m/g, '')) - textWidth(keys) - 2;
+    const snapshot = [D.watchSnapshotStart, D.watchSnapshotShort, D.watchSnapshotTiny].find((s) => textWidth(s) <= room) ?? D.watchSnapshotMini;
+    const text = snapshotting ? snapshot : thought && (!speech || thought.seq > speech.seq) ? D.watchThinking(thought.text) : '';
+    return footLine(lead, { text, color: C.dim }, keys, W);
   };
   const render = (W, H) => {
     const top = runHead(meta, ended, api, W);

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { sandbox, taskArgs, failed, seedRun, expected, normalize, json, write, poll, baseConfig, MESSAGES } from './helpers.mjs';
 import { command, discussion } from './fixtures/reports.mjs';
 import { liveGroup, frameOf, steadyClock } from './fixtures/watch-live.mjs';
+import { wrapAtDots } from '../foreman/skills/dispatch/scripts/watch-timeline.mjs';
 import { watchRecords } from './fixtures/watch.mjs';
 import { textWidth, wrapWidth } from '../foreman/skills/dispatch/scripts/util.mjs';
 const M = MESSAGES.zh;
@@ -135,6 +136,10 @@ test('组视图里结束了的席位在结论下面写用量和 run_id，和单�
   assert.ok(narrow.some((l) => l.trim() === D.watchSnapshotTiny), narrow.join('\n'));
   const single = (await frameOf(h, ['watch', '--run', seats[1].id, '--no-intro'], { FOREMAN_TEST_SCREEN: '160x16' })).map(plain);
   assert.ok(single.at(-1).includes(D.watchSnapshotStart.slice(0, 30)), single.at(-1));
+  // 40 列时底行放不下整句，换成短的说法，不在单词中间截断
+  const narrowSingle = (await frameOf(h, ['watch', '--run', seats[1].id, '--no-intro'], { FOREMAN_TEST_SCREEN: '40x16' })).map(plain);
+  assert.ok([D.watchSnapshotShort, D.watchSnapshotTiny, D.watchSnapshotMini].some((s) => narrowSingle.at(-1).includes(s)), narrowSingle.at(-1));
+  assert.ok(!/snapsh…|snapsho…/.test(narrowSingle.at(-1)), narrowSingle.at(-1));
   // 拍完以后正文里不再留着这句；没有别的内容的席位写"进行中"
   const file = path.join(h.runs, seats[1].id, 'events.jsonl');
   fs.writeFileSync(file, [{ type: 'foreman.snapshot', phase: 'start' }, { type: 'foreman.snapshot', phase: 'done', seconds: 76 }].map((e) => JSON.stringify({ ...e, ts: new Date().toISOString() })).join('\n') + '\n');
@@ -363,6 +368,9 @@ test('子命令认 --help 和 -h：只打印这一条的用法，退出码 0，�
 test('折行时英文单词放得下一整行就不拆开，比一整行还长的才截断', () => {
   assert.deepEqual(wrapWidth('answer submitted by Claude Code; no usage recorded', 15), ['answer', 'submitted by', 'Claude Code; no', 'usage recorded']);
   assert.deepEqual(wrapWidth('last request 23k', 13), ['last request', '23k']);
+  // 用量折行：没有 "/" 的段按整行宽度折，有 "/" 的才少两列、把 "/" 挪到下一行开头
+  assert.deepEqual(wrapAtDots('answer submitted by Claude Code; no usage recorded', 17), ['answer submitted', 'by Claude Code;', 'no usage recorded']);
+  assert.deepEqual(wrapAtDots('out 310 · last request 23k / window 486k', 21), ['out 310', 'last request 23k', '/ window 486k']);
   assert.deepEqual(wrapWidth('tokens: in 67k (cached 66%)', 13), ['tokens: in', '67k (cached', '66%)']);
   // 比一整行还长的单词才按字截断
   const long = wrapWidth('a supercalifragilisticexpialidocious word', 12);
