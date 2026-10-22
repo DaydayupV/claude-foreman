@@ -360,13 +360,13 @@ function wrapWidth(s, width) {
           if (WORD.test(chars[k] || '')) { // 带走的是英文单词的末尾时，整个单词一起带走
             let j = k;
             while (j > 0 && WORD.test(chars[j - 1])) j--;
-            if (j > 0 && k - j < Math.min(40, width / 2)) k = j;
+            if (j > 0 && k - j < width) k = j;
           }
         } else if (WORD.test(ch) && WORD.test(chars[k - 1] || '')) {
-          // 英文单词不拆开，整个带到下一行（超过半行的长单词照常截断）
+          // 英文单词不拆开，整个带到下一行；比一整行还长的单词才在下一行照常截断
           let j = k;
           while (j > 0 && WORD.test(chars[j - 1])) j--;
-          if (j > 0 && k - j < Math.min(40, width / 2)) k = j;
+          if (j > 0 && k - j < width) k = j;
         }
         while (k > 1 && NO_LINE_END.test(chars[k - 1])) k--; // 开引号、开括号不留在行尾
         const carry = chars.splice(k).join('');

@@ -6,7 +6,7 @@ import { sandbox, taskArgs, failed, seedRun, expected, normalize, json, write, p
 import { command, discussion } from './fixtures/reports.mjs';
 import { liveGroup, frameOf, steadyClock } from './fixtures/watch-live.mjs';
 import { watchRecords } from './fixtures/watch.mjs';
-import { textWidth } from '../foreman/skills/dispatch/scripts/util.mjs';
+import { textWidth, wrapWidth } from '../foreman/skills/dispatch/scripts/util.mjs';
 const M = MESSAGES.zh;
 const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
 const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
@@ -358,4 +358,14 @@ test('子命令认 --help 和 -h：只打印这一条的用法，退出码 0，�
     assert.equal(titled.code, 2, flag);
     assert.ok(titled.stderr.includes(M.missingLevel('simple / normal / complex')), titled.stderr);
   }
+});
+
+test('折行时英文单词放得下一整行就不拆开，比一整行还长的才截断', () => {
+  assert.deepEqual(wrapWidth('answer submitted by Claude Code; no usage recorded', 15), ['answer', 'submitted by', 'Claude Code; no', 'usage recorded']);
+  assert.deepEqual(wrapWidth('last request 23k', 13), ['last request', '23k']);
+  assert.deepEqual(wrapWidth('tokens: in 67k (cached 66%)', 13), ['tokens: in', '67k (cached', '66%)']);
+  // 比一整行还长的单词才按字截断
+  const long = wrapWidth('a supercalifragilisticexpialidocious word', 12);
+  assert.ok(long.every((l) => textWidth(l) <= 12), long.join('|'));
+  assert.equal(long.join('').replace(/\s/g, ''), 'asupercalifragilisticexpialidociousword');
 });
