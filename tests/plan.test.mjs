@@ -13,7 +13,9 @@ const launch = (plan, module = plan.module, seat = 1) => [module, '--plan', plan
 
 for (const module of ['discuss', 'run', 'review']) test(`单席 ${module} 必须选格子并遵守候选和必选`, async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex }; c.agents.third = { ...c.agents.codex };
-  c.modules[module].complex = [{ agent: 'codex', effort: 'medium', required: true }, { agent: 'second' }]; h.config(c);
+  c.modules[module].complex = [{ agent: 'codex', effort: 'medium', required: true }, { agent: 'second' }];
+  if (module !== 'run') c.modules[module].seats = { complex: 1 };
+  h.config(c);
   const scenario = h.scenario({ last_message: discussion }), opts = module === 'discuss' ? { env: scenario.env } : {};
   const args = taskArgs(h, module, module === 'run' ? ['--no-snapshot'] : []);
   for (const extra of [[], ['--effort', 'high'], ['--agent', 'codex', '--effort', 'high']]) failed(await h.bridge([module, '--cwd', h.cwd, '--brief', '-', ...extra], opts), module === 'run' ? M.missingLevel('simple / normal / complex') : M.discussReviewNeedsPlan(module));
@@ -25,14 +27,14 @@ for (const module of ['discuss', 'run', 'review']) test(`单席 ${module} 必须
   c.modules[module].complex[0].required = false; h.config(c);
   failed(await h.bridge(args, opts), module === 'run' ? M.agentRequired(`modules.${module}.complex`, 'codex、second') : M.discussReviewNeedsPlan(module));
   if (module !== 'run') {
-    c.modules[module].complex.forEach((entry) => { entry.required = true; }); h.config(c);
+    c.modules[module].complex.forEach((entry) => { entry.required = true; }); c.modules[module].seats.complex = 2; h.config(c);
     for (const extra of [[], ['--agent', 'codex'], ['--agent', 'second']]) failed(await h.bridge([...args, ...extra], opts), extra.length ? M.planMissingRequired(`modules.${module}.complex`, extra[1] === 'codex' ? 'second' : 'codex') : M.discussReviewNeedsPlan(module));
   }
 });
 
-test('计划先校验格子、候选、必选、席位上限和参数，失败不落盘', async (t) => {
+test('计划先校验格子、候选、必选和参数，失败不落盘', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex };
-  c.modules.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second' }]; c.dispatch.max_seats = 2; h.config(c);
+  c.modules.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second' }]; h.config(c);
   const base = planArgs(h);
   for (const [args, message] of [
     [planArgs(h, 'image'), M.planRouteRequired],
@@ -44,7 +46,6 @@ test('计划先校验格子、候选、必选、席位上限和参数，失败�
     [planArgs(h, 'discuss', ['codex=a=b']), M.badSeat('codex=a=b')],
     [planArgs(h, 'discuss', ['missing']), M.agentNotInLevel('missing', 'modules.discuss.complex', 'codex、second')],
     [planArgs(h, 'discuss', ['second']), M.planMissingRequired('modules.discuss.complex', 'codex')],
-    [planArgs(h, 'discuss', ['codex', 'codex', 'second']), M.planTooManySeatsWithHost(4, 2)],
     [planArgs(h, 'run').map((v) => v === 'complex' ? 'simple' : v), M.planCellClosed('modules.run.simple')],
     [base.map((v) => v === 'plan-group' ? 'bad group' : v), M.badGroupName('bad group')],
   ]) failed(await h.bridge(args), message);
@@ -223,7 +224,7 @@ test('必选计划的 pending complete incomplete 与最新续接的结果有效
 });
 
 test('无必选计划要每席结束且至少一席有效，review 允许非空正文', async (t) => {
-  const h = sandbox(t), p = output(await h.bridge(planArgs(h, 'review', ['codex', 'codex'])));
+  const h = sandbox(t), p = output(await h.bridge([...planArgs(h, 'review', ['codex', 'codex']), '--count-why', '同方两席分别验证完成状态']));
   output(await h.bridge(hostArgs(h, p)));
   const status = async () => output(await h.bridge(['status', '--plan', p.plan_id]));
   seedRun(h, '20000101-one', { plan: p.plan_id, seat: 1, kind: 'review', mode: 'review' }, { last_message: '有效审查正文' });
@@ -237,7 +238,7 @@ test('无必选计划要每席结束且至少一席有效，review 允许非空�
 test('status --plan 列出未启动的补漏和 gap 席，跑完后清空且不改变 state 算法', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex };
   c.modules.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second' }]; h.config(c);
-  const p = output(await h.bridge(planArgs(h, 'discuss', ['codex', 'second=补漏', 'second=gap', 'second=复核'])));
+  const p = output(await h.bridge([...planArgs(h, 'discuss', ['codex', 'second=补漏', 'second=gap', 'second=复核']), '--count-why', '四席分别验证主讨论与补漏状态']));
   output(await h.bridge(hostArgs(h, p)));
   const saved = json(p.file); saved.seats[1].role = ' 补漏 '; saved.seats[2].role = ' GaP '; write(p.file, saved);
   const meta = { plan: p.plan_id, kind: 'discuss', mode: 'discuss' };
@@ -262,7 +263,7 @@ test('status --plan 列出未启动的补漏和 gap 席，跑完后清空且不�
 test('status --group 计划行显示未启动及运行中的 gap seat not finished', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex };
   c.modules.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second' }]; h.config(c);
-  const p = output(await h.bridge(planArgs(h, 'discuss', ['codex', 'second=补漏', 'second=gap'])));
+  const p = output(await h.bridge([...planArgs(h, 'discuss', ['codex', 'second=补漏', 'second=gap']), '--count-why', '只留一席主讨论，其余两席验证补漏状态']));
   output(await h.bridge(hostArgs(h, p)));
   const meta = { plan: p.plan_id, group: 'plan-group', kind: 'discuss', mode: 'discuss' };
   seedRun(h, '20000101-main', { ...meta, seat: 1 }, { report: discussion });

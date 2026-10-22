@@ -9,7 +9,7 @@
 
 | 块 | 回答的问题 |
 |---|---|
-| `dispatch` | 插件怎么派活：是否主动派、席位上限、超时等 |
+| `dispatch` | 插件怎么派活：是否主动派、讨论轮数、超时等 |
 | `agents` | 有哪些协作方，怎么连接 |
 | `modules` | 每类任务的每一格有哪些候选、谁必选、用什么推理强度 |
 
@@ -29,7 +29,8 @@
     "discuss": {
       "simple":  "claude code",
       "normal":  [{ "agent": "gpt-6.1-sol", "effort": "high" }, { "agent": "glm-5.3" }],
-      "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "glm-5.3" }, { "agent": "deepseek-v4-pro", "effort": "max" }]
+      "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "glm-5.3" }, { "agent": "deepseek-v4-pro", "effort": "max" }],
+      "seats":   { "simple": 1, "normal": 2, "complex": 3 }
     },
     "run":    { "simple": "claude code", "normal": "claude code", "complex": [{ "agent": "gpt-6.1-sol", "effort": "max" }] },
     "review": { "simple": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "normal": [{ "agent": "gpt-6.1-sol", "effort": "high" }], "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }] },
@@ -45,7 +46,6 @@
 | `auto` | Claude 主动发起派活、讨论和审查前要不要先问用户：`true` 直接做并说一句，`false` 先问（见 skill 的"授权"） | `true` |
 | `watch` | `auto`：只要派给了其他模型（执行、续接、讨论、审查）就打开实时查看；`off`：不主动打开，想看时用 `/foreman:watch` | `auto` |
 | `intro` | 新派出的对话第一次打开实时查看时，先放一段启动动画：模型的像素头像、"正在启动"和几句玩笑，单个模型 5 秒、讨论 10 秒，按任意键跳过，任务提前结束会马上收尾。续接（讨论的下一轮、返工）不放。头像按模型名里的关键字认（gpt、deepseek、glm、kimi、qwen、mimo、minimax、gemini、claude 等），认不出的用 ??? 头像。`false` 关掉 | `true` |
-| `max_seats` | 一份派发计划最多几个席位；同一个协作方开两个会话算两席，讨论和审查计划自带的 Claude Code 席也算一席（见下文"候选和必选"）。用户配置的 `dispatch` 里缺这一项时，脚本会把默认值显式写进去（先备份、提示一句），项目配置不补 | `6` |
 | `discuss_max_rounds` | 一场讨论最多几轮（第 1 轮加上之后的续接），每个参与方各自计数；超出后脚本拒绝续接 | `2` |
 | `timeout_min` | 单次任务的总超时（分钟） | `480` |
 | `stall_min` | 多久没有动静判定为卡死（分钟，0 为关闭）。Codex：没有任何事件，也没有命令在执行；API：流式输出里没有任何数据；opencode：没有输出任何事件；pi：没有输出任何事件，也没有工具在运行 | `40` |
@@ -154,18 +154,19 @@
 - 候选列表：`[{ "agent": "<代号>", "effort": "<推理强度>", "required": true }, …]`。只有一项时也可以写成单个对象，效果一样。同一个协作方在一格里只能出现一次。
 - `null`（只限 image）：关掉这一格。generate 关掉就不出图；draw 关掉时，会弯的部件和纯矢量绘制由 Claude 自己画。Claude 不能出位图，所以 image 的格子不能写 `"claude code"`。
 
+`discuss` 和 `review` 另有一项 `seats`，写每一级找几个外部模型（见下文"候选和必选"）：`{ "simple": 1, "normal": 2, "complex": 3 }`，可以只写其中几级，没写的按这个默认值（但不少于这一格的必选数）。
+
 能放进哪一格，按能力表校验：discuss 的候选要能讨论，review 的要能审查；run 的要能执行，opencode 和 pi 还要写了 `run_access`；generate 的要能出图（适配器声明了 `images`，并且实现了出图检测：这一轮新出了哪些图、每次调用传了什么参数；目前只有 codex cli）；draw 的要求和 run 相同。
 
 图像任务的派法：每个新的图形交付物开工前，Claude 先弹窗让用户选路线（① 位图、② 位图 + 矢量混合、③ 纯矢量先出参考图、④ 纯矢量 / 代码），再用 `plan --module image --cell <generate|draw> --route <路线号>` 建计划、`image --plan … --seat …` 启动；路线决定用到哪几格，只建用到的格子的计划，所以没用到的格子里的必选不会触发（比如选了路线 ④，generate 的必选不用到场）。脚本会核对这个会话里最近一次路线弹窗的回答，见 `references/cli.md` 的"plan、image 和 status --plan"。
 
 ### 候选和必选
-- 一格有几个候选时，由 Claude 按 skill 的规则挑（排除做不了的、必选全部加入、讨论和审查按不同的基础模型补席位、执行每个工作包派一个执行方），每次派出时说一句选了谁、为什么。脚本只检查能机械判断的硬约束。
+- 一格有几个候选时，由 Claude 按 skill 的规则挑（排除做不了的、必选全部加入、讨论和审查按不同的基础模型补到配置的席位数、执行每个工作包派一个执行方），每次派出时说一句选了谁、为什么。脚本只检查能机械判断的硬约束。
+- `seats`（只限 `discuss` 和 `review`）：每一级的外部席位数，不含 Claude Code 席和 3 级审查的补漏席；默认 `{ "simple": 1, "normal": 2, "complex": 3 }`。必选算在这个数里，所以不能少于这一格的必选数，否则读配置时报错；可以多于候选数，表示候选全上。想让某一级固定用哪几家，就只放这几家、把席位数设成候选数，或者全部标必选。`plan` 建讨论或审查计划时检查外部席位数等于 `min(seats, 能用的候选数)`（`visual` 审查只算能看图的），不一致时要带 `--count-why "<理由>"`。能用的候选数按协作方代号算，同一个模型经两种方式接入算两个。没写的等级按默认值，但不少于这一格的必选数（照旧配置标了很多必选也能直接用）。脚本不会把 `seats` 自动写进配置文件，因为旧版插件读到它会报错；实际用的数看 `config` 输出的 `resolved_modules.<discuss|review>.seats`。
 - `required: true` 表示这一格被用到时，这个协作方必须在场；不写就是普通候选，由 Claude 决定加不加。同一个协作方可能在审查里必选、在讨论里只是候选，所以必选写在格子的条目上，不写在协作方定义上。
-- 一次派几个席位时，Claude 先建一份派发计划（`plan`），脚本检查必选是否都在、席位数是否超过 `dispatch.max_seats`，再逐席启动。执行单席派发时，这一格还有别的必选，脚本会拒绝。讨论和审查一律建计划：计划自带 Claude Code 席，它先用 `submit` 交答卷，外部席才能启动。
+- 一次派几个席位时，Claude 先建一份派发计划（`plan`），脚本检查必选是否都在、讨论和审查的外部席位数是否和 `seats` 一致，再逐席启动。执行单席派发时，这一格还有别的必选，脚本会拒绝。讨论和审查一律建计划：计划自带 Claude Code 席，它先用 `submit` 提交报告，外部席才能启动。
 - 必选方达到并发上限时，等它空闲再补发；必选方失败、额度用完或被取消时，这件事算不完整，不拿其他候选顶替。
 - `run`、`generate`、`draw` 一次只派一个执行方，所以这三类格子最多只能有一个必选条目。
-- 讨论和审查的格子里，必选条目不能多于 `dispatch.max_seats`：计划要给每个必选各留一席，席位数又不能超过上限，必选多了就建不出计划，所以读配置时直接报错。要么去掉一些 `required`，要么调高 `max_seats`。项目配置把 `max_seats` 调低到某一格的必选数以下时同样报错（项目整格关掉的格子不算）。
-- 讨论和审查的计划还要给 Claude Code 席留一席，并且至少有一个外部席，所以一格实际需要 `1 + max(1, 必选数)` 席。超过 `max_seats` 时配置照常加载（执行和图像不受影响），`config` 和 `check` 的 `summary.warnings` 里出现 `host_seat_infeasible`，列出是哪一格，这一格的讨论或审查计划建不出来。要么调高 `max_seats`，要么减少必选。
 
 ### 推理强度
 `effort` 可以不写，不写就用工具或模型自己的默认值。各类型的写法：
@@ -202,6 +203,7 @@
 
 ## 从旧配置升级
 - 从 codex-bridge 升级时，旧的 `~/.claude/codex-bridge.json` 会先复制到新位置。
+- `dispatch.max_seats` 已经不用了，每一级找几家由 `seats` 决定：用户配置里留着它不影响，读配置时忽略，也不显示在 `config` 的输出里，文件不改；项目配置里写了会提示已忽略。
 - 第一次读到 `levels` 写法时，脚本把它改写成 `modules`，原文件备份为 `config.json.bak`（已经有了就加时间戳）：
   - 只换结构，每一格的协作方、推理强度和顺序都不变；`run` 和 `review` 的单个对象改成只有一项的列表；
   - 不给任何条目加 `required`，也不加图像块（要用时运行 `/foreman:setup` 添加）；
@@ -218,8 +220,8 @@
 - 同一个文件里同时写了 `levels`（对象）和 `modules` 时直接报错，不猜以哪个为准；`levels` 是上面那行说明文字时不算。项目配置里的 `levels` 不改写文件，只在内存里按 `modules` 读，并提示改成新写法。旧版插件会忽略项目配置里的 `modules`，所以项目要同时约束还在用旧版插件的人时，项目配置可以继续用 `levels` 写法。
 
 ## 项目配置：只能收紧
-- 项目配置只认 `dispatch` 的 `timeout_min`、`stall_min`、`busy_ask_min`、`max_seats`，以及 `modules`（旧写法 `levels` 也认）；其他字段都会被忽略并提示，包括 `agents` 整块。
-- 时长和席位取更严的值：`timeout_min`、`max_seats` 取两边较小的；`stall_min`、`busy_ask_min` 的 0 表示不检测，是最宽松的，所以用户写了正数时项目写 0 不生效，两边都是正数时取较小的。
+- 项目配置只认 `dispatch` 的 `timeout_min`、`stall_min`、`busy_ask_min`，以及 `modules`（包括 `discuss`、`review` 的 `seats`；旧写法 `levels` 也认）；其他字段都会被忽略并提示，包括 `agents` 整块。
+- 时长和席位取更严的值：`timeout_min` 和每一级的 `seats` 取两边较小的（`seats` 调到少于这一格的必选数时报错）；`stall_min`、`busy_ask_min` 的 0 表示不检测，是最宽松的，所以用户写了正数时项目写 0 不生效，两边都是正数时取较小的。
 - `modules` 可以只写要改的那几格。每一格只能：
   - 整格关掉：discuss、run、review 写 `"claude code"`，image 写 `null`；
   - 从用户配置这一格已有的条目里删掉一部分可选条目（条目顺序沿用用户配置）；

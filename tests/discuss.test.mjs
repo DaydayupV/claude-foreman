@@ -11,6 +11,7 @@ const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文�
 function configure(h, agents) {
   const c = baseConfig(); c.agents.codex.sandbox = { discuss: 'read-only' }; Object.assign(c.agents, agents);
   c.modules.discuss.complex = Object.keys(c.agents).map((agent) => ({ agent, effort: 'high' }));
+  c.modules.discuss.seats = { complex: 1 };
   h.config(c);
 }
 const discussArgs = (h, agent, extra = []) => taskArgs(h, 'discuss', ['--agent', agent, ...extra]);

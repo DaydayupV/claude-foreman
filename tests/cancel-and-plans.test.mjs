@@ -364,7 +364,7 @@ test('计划状态里的审查：没审完或格式不合格的不算有效，Co
   ];
   for (const [name, result, state] of cases) {
     const p = output(await h.bridge(['plan', '--cwd', h.cwd, '--module', 'review', '--cell', 'complex', '--group', `review-${name}`,
-      '--seat', 'codex', '--target', 'files', '--file', 'source.txt']));
+      '--seat', 'codex', '--target', 'files', '--file', 'source.txt', '--count-why', '单席验证审查结果的完整性判定']));
     output(await h.bridge(hostArgs(h, p)));
     seedRun(h, `20000104-${name}`, { mode: 'review', kind: 'review', module: 'review', cell: 'complex', plan: p.plan_id, seat: 1, group: p.group },
       { status: 'done', ...result });

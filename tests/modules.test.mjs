@@ -30,6 +30,9 @@ console.log(JSON.stringify({ cells: eachCell(modules).map(({ module, cell, key }
   assert.deepEqual(cells.closed, [[], []]);
   assert.deepEqual(cells.cells.map(([module, cell]) => `${module}.${cell}`), ['discuss.simple', 'discuss.normal', 'discuss.complex', 'run.simple', 'run.normal', 'run.complex', 'review.simple', 'review.normal', 'review.complex', 'image.generate', 'image.draw']);
   assert.equal(cells.mapped.image.draw, 'modules.image.draw');
+  assert.deepEqual(cells.mapped.discuss.seats, out.effective.modules.discuss.seats);
+  assert.deepEqual(cells.mapped.review.seats, out.effective.modules.review.seats);
+  assert.ok(cells.entries.every((at) => !at.includes('.seats')));
   assert.ok(cells.entries.includes('modules.image.generate[0]'));
 });
 
@@ -65,28 +68,24 @@ for (const note of [MESSAGES.zh.levelsNote, MESSAGES.en.levelsNote, '手写的�
   assert.equal(fs.existsSync(`${h.userConfig}.bak`), false);
 });
 
-test('dispatch 缺 max_seats 时显式写进配置：放在 busy_ask_min 后面，只备份和提示一次，其余不变', async (t) => {
+test('旧配置里的 dispatch.max_seats 不再使用：照常加载、不限制必选数、不出现在 effective 里，文件不改也不备份', async (t) => {
   const h = sandbox(t), c = baseConfig();
-  delete c.dispatch.max_seats;
+  c.dispatch.max_seats = 1;
+  c.agents.second = { ...c.agents.codex };
+  c.modules.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second', required: true }];
   h.config({ ...c, levels: M.levelsNote });
-  const before = read(h.userConfig), bak = `${h.userConfig}.bak`;
-  const results = await Promise.all(Array.from({ length: 4 }, () => h.bridge(['config'])));
-  results.forEach((r) => output(r));
-  assert.equal(results.filter((r) => r.stderr.includes(M.configMaxSeatsAdded(h.userConfig, bak, 6))).length, 1);
-  assert.equal(read(bak), before);
-  const after = json(h.userConfig);
-  assert.deepEqual(Object.keys(after.dispatch), ['watch', 'timeout_min', 'stall_min', 'busy_ask_min', 'max_seats']);
-  assert.deepEqual(after, { ...c, dispatch: { ...c.dispatch, max_seats: 6 }, levels: M.levelsNote });
-  const again = await h.bridge(['config']);
-  assert.equal(again.stderr, '');
-  assert.deepEqual(fs.readdirSync(path.dirname(h.userConfig)).filter((name) => name.includes('.bak')), ['config.json.bak']);
+  const before = read(h.userConfig), r = await h.bridge(['config']);
+  assert.equal(r.stderr, '');
+  assert.equal(Object.hasOwn(output(r).effective.dispatch, 'max_seats'), false);
+  assert.equal(read(h.userConfig), before);
+  assert.equal(fs.existsSync(`${h.userConfig}.bak`), false);
 });
 
-test('补 max_seats 时：没有 modules 的配置不加 levels 说明，没有 dispatch 的配置和项目配置都不改', async (t) => {
+test('读配置时：没有 modules 的配置不加 levels 说明，没有 dispatch 的配置和项目配置都不改', async (t) => {
   const h = sandbox(t), agents = baseConfig().agents;
   h.config({ dispatch: { auto: false, runs_dir: null }, agents });
   output(await h.bridge(['config']));
-  assert.deepEqual(json(h.userConfig), { dispatch: { auto: false, max_seats: 6, runs_dir: null }, agents });
+  assert.deepEqual(json(h.userConfig), { dispatch: { auto: false, runs_dir: null }, agents });
   const again = await h.bridge(['config']);
   assert.equal(again.stderr, '');
 
@@ -206,12 +205,11 @@ for (const [module, cell, value, reason, at = ''] of [
   assert.equal(h.calls().length, 0);
 });
 
-test('modules 的对象校验和用户席位上限校验不绕过配置错误', async (t) => {
+test('agents 和 modules 的对象校验不绕过配置错误', async (t) => {
   const h = sandbox(t);
   for (const [config, key, reason] of [
     [{ agents: null, modules: { run: { complex: [{ agent: 'codex' }] } } }, 'agents', M.invalid.object],
     [{ modules: null }, 'modules', M.invalid.object],
-    [{ dispatch: { max_seats: 0 } }, 'dispatch.max_seats', M.invalid.positiveInt],
   ]) { h.config(config); failed(await h.bridge(['config']), M.configInvalid(key, reason)); }
 });
 
@@ -220,25 +218,6 @@ for (const [module, cell] of [['run', 'complex'], ['image', 'generate'], ['image
   c.agents.second = { ...c.agents.codex };
   c.modules[module][cell] = [{ agent: 'codex', required: true }, { agent: 'second', required: true }]; h.config(c);
   failed(await h.bridge(['config']), M.configInvalid(`modules.${module}.${cell}`, M.invalid.oneRequired));
-});
-
-for (const module of ['discuss', 'review']) test(`${module} 的必选数不能超过 max_seats，项目配置只按更严的值`, async (t) => {
-  const h = sandbox(t), c = baseConfig(), cwdArgs = ['config', '--cwd', h.cwd];
-  c.agents.second = { ...c.agents.codex }; c.agents.third = { ...c.agents.codex };
-  c.modules[module].complex = [{ agent: 'codex', required: true }, { agent: 'second', required: true }, { agent: 'third', required: true }];
-  c.dispatch.max_seats = 2; h.config(c);
-  failed(await h.bridge(['config']), M.configInvalid(`modules.${module}.complex`, M.requiredOverSeats(3, 2)));
-  // 项目配置调高席位不生效，照样报用户配置的错
-  h.write('.claude/foreman.json', { dispatch: { max_seats: 9 } });
-  failed(await h.bridge(cwdArgs), M.configInvalid(`modules.${module}.complex`, M.requiredOverSeats(3, 2)));
-  // 必选数等于上限可以；项目调低到必选数以下要报错
-  c.dispatch.max_seats = 3; h.config(c);
-  assert.equal(output(await h.bridge(cwdArgs)).effective.dispatch.max_seats, 3);
-  h.write('.claude/foreman.json', { dispatch: { max_seats: 2 } });
-  failed(await h.bridge(cwdArgs), M.projectSeatsBelowRequired(2, `modules.${module}.complex`, 3));
-  // 项目把这一格关掉后没有必选了，调低照常生效
-  h.write('.claude/foreman.json', { dispatch: { max_seats: 2 }, modules: { [module]: { complex: 'claude code' } } });
-  assert.equal(output(await h.bridge(cwdArgs)).effective.dispatch.max_seats, 2);
 });
 
 for (const [module, cell, reason] of [['unknown', 'simple', M.invalid.module], ['image', 'complex', M.invalid.imageCell], ['run', 'draw', M.invalid.level]]) test(`拒绝未知模块或格子 ${module}.${cell}`, async (t) => {

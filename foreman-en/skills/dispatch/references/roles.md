@@ -60,7 +60,7 @@ External participants can only come from this cell's candidates (`resolved_modul
 6. **Two seats for a core role at level 3**: on a level 3 topic, one core role can be played by two different base models, each in its own seat with the same role card. One model reached through api, pi and opencode counts as one base model (compared after dropping the `provider/` prefix).
 7. **Never merge core roles**: each core role has a seat of its own and never shares a role card with another role. When seats run short, drop minor roles first, or fold their checks into the overall reviewer; never drop a core role. In the user's multi-role trial, after one role was merged into another seat, 4 of the 5 issues that were missed belonged to it.
 8. **No free qualifying participant: give a strong model another session**: when a core role has no free participant that meets its suggested tier, have a strong model open another session for it first, as before. Each extra session takes one of that agent's concurrency slots (`max_parallel`; tasks from other groups and sessions count too; if it's full, start the extra one once earlier tasks finish), and it isn't independent evidence: several seats of one model agreeing count as one.
-9. **Seat count**: no more than `dispatch.max_seats` (6 by default) seats, however many candidates the cell has (with extra sessions of one model there can be more seats than candidates); required agents always take a seat, and the Claude Code seat and a review's gap seat count too.
+9. **Seat count**: as many external seats as `min(the level's configured seats, the number of different usable candidates in the cell)` (`seats` is in `resolved_modules.<discuss|review>.seats`), with every required agent taking one of them. When one model opens extra sessions to make up for too few candidates, or the user adds or removes roles in the pop-up, and the count no longer matches that number, create the plan with `--count-why "<reason>"`. The Claude Code seat and a review's gap seat don't count toward `seats`.
 10. **The Claude Code seat's role**: assigned by the same rules; it doesn't get a fixed role just because it decides in the end. It can be the overall reviewer, but that seat isn't reserved for it. When it authored the design under discussion or the changes under review, say so in the assignment table and leave the key outside angles to the external seats.
 
 Participants configured for the level but given no seat this time are shown in the pop-up as "not in this discussion", with the reason (such as no seats left, or the tools can't do it).
@@ -91,7 +91,7 @@ First list the full assignment in the message: seat number, model (tier), role, 
 
 ## Starting it
 - First create a plan with `plan --module discuss --cell <level> --group <name>`, one `--seat <agent>=<role>` per external seat (a model playing two roles is written twice), the Claude Code seat's role as `--host-role "<role>"`, and the reasons for the assignment in `--why`.
-- Next, Claude Code writes its answer around its own role card's checks and `submit`s it. The answer has the same format as in the normal mode (the schema allows no extra fields); the role card's text goes into the decision record.
+- Next, Claude Code writes its report around its own role card's checks and `submit`s it. The report has the same format as in the normal mode (the schema allows no extra fields); the role card's text goes into the decision record.
 - Then one `discuss --plan <plan_id> --seat <n>` per external seat, each with its own brief (shared body + its role card).
 - Set `--title` to the discussion's short title, the same for every seat, and leave the role out of it: the live view reads each seat's role from the plan and shows it under that seat's model line.
 - Don't pass `--title` when resuming for round 2: the resume keeps the previous title, and the live view adds "round 2" to the end of the heading itself.
@@ -100,7 +100,7 @@ First list the full assignment in the message: seat number, model (tier), role, 
 
 ## Round 2
 - When to hold it: the participants really disagree on the shared questions, or a role raised a risk that can be backed up and that nobody else addressed. Roles simply looking at different things isn't disagreement.
-- The Claude Code seat first submits this round's challenges as its answer, then the external seats are resumed. Resume only the seats that aren't breadth seats. Points a breadth seat raised in round 1 that Claude Code confirmed go to the others as part of an anonymous proposal.
+- The Claude Code seat first submits this round's challenges as its report, then the external seats are resumed. Resume only the seats that aren't breadth seats. Points a breadth seat raised in round 1 that Claude Code confirmed go to the others as part of an anonymous proposal.
 - Label the proposals anonymously as "Proposal A / B / …", removing both model and role names but keeping each proposal's goals, constraints and evidence.
 - The resume brief asks each participant to first find the most serious problem in the other proposals against the shared goal, then add what its own role sees; if another proposal has already dealt with its concern, it should say so plainly instead of digging in to stay in character.
 
@@ -108,7 +108,7 @@ First list the full assignment in the message: seat number, model (tier), role, 
 - Several roles agreeing doesn't add evidence, and roles played by the same model count for even less. Decide only by evidence, constraints and reversibility.
 - The decision record adds to the usual format:
   - Mode: role mode;
-  - The assignment table: seat, model, effort, role, run_id, marking core roles and breadth seats; list the Claude Code seat too, with its self-reported model and its answer's run_id, noting when it's the author;
+  - The assignment table: seat, model, effort, role, run_id, marking core roles and breadth seats; list the Claude Code seat too, with its self-reported model and its report's run_id, noting when it's the author;
   - Role cards: the role cards actually used, or where the briefs are;
   - Missing viewpoints: for seats that failed or were stopped, say which role's view is missing; Claude checks the key questions itself;
   - Which roles came from the same model.

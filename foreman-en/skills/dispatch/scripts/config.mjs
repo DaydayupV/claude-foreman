@@ -59,6 +59,7 @@ function projectFile(cwd, current, legacy) {
 
 const DEFAULT_AGENT_PARALLEL = 4;
 const LEVELS = ['simple', 'normal', 'complex'];
+const DEFAULT_SEATS = { simple: 1, normal: 2, complex: 3 };
 const MODES = ['run', 'review', 'discuss'];
 const CLAUDE_CODE = 'claude code';
 const MODULE_CELLS = { discuss: LEVELS, run: LEVELS, review: LEVELS, image: ['generate', 'draw'] };
@@ -80,10 +81,21 @@ function mapCells(modules, fn) {
   for (const { module, cell, key, value } of eachCell(modules)) out[module][cell] = fn(value, { module, cell, key });
   return out;
 }
-const normalizeModules = (cfg) => !isObject(cfg.modules) || !isObject(cfg.agents) ? cfg : ({ ...cfg, modules: mapCells(cfg.modules, (value) => !isObject(value) && !Array.isArray(value) ? value
-  : cellList(value).map((item) => isObject(item) ? { ...item, agent: resolveAgentAlias(item.agent, cfg) } : item)) });
+function normalizeModules(cfg) {
+  if (!isObject(cfg.modules) || !isObject(cfg.agents)) return cfg;
+  const modules = mapCells(cfg.modules, (value) => !isObject(value) && !Array.isArray(value) ? value
+    : cellList(value).map((item) => isObject(item) ? { ...item, agent: resolveAgentAlias(item.agent, cfg) } : item));
+  for (const module of ['discuss', 'review']) {
+    const cells = modules[module];
+    if (!isObject(cells) || Object.hasOwn(cells, 'seats') && !isObject(cells.seats)) continue;
+    // 只在内存里补默认值，避免旧版插件读到新增配置键后退出。
+    const seats = Object.fromEntries(LEVELS.map((cell) => [cell, Math.max(DEFAULT_SEATS[cell], requiredCount(cells[cell]))]));
+    modules[module] = { ...cells, seats: { ...seats, ...cells.seats } };
+  }
+  return { ...cfg, modules };
+}
 const DEFAULT_CONFIG = {
-  dispatch: { auto: true, watch: 'auto', intro: true, discuss_max_rounds: 2, timeout_min: 480, stall_min: 40, busy_ask_min: 2, max_seats: 6, runs_dir: null },
+  dispatch: { auto: true, watch: 'auto', intro: true, discuss_max_rounds: 2, timeout_min: 480, stall_min: 40, busy_ask_min: 2, runs_dir: null },
   agents: {},
   modules: { ...Object.fromEntries(MODES.map((mode) => [mode, Object.fromEntries(LEVELS.map((lv) => [lv, CLAUDE_CODE]))])), image: { generate: null, draw: null } },
 };
@@ -134,6 +146,12 @@ function mergeConfig(base, extra) {
     if (k === 'modules' && isObject(v)) {
       for (const { module, cell, value } of eachCell(base.modules)) {
         if (isObject(out.modules[module]) && !Object.hasOwn(out.modules[module], cell)) out.modules[module] = { ...out.modules[module], [cell]: value };
+      }
+      for (const module of ['discuss', 'review']) {
+        const cells = out.modules[module], seats = base.modules?.[module]?.seats;
+        if (!isObject(cells) || !seats) continue;
+        out.modules[module] = { ...cells, seats: !Object.hasOwn(cells, 'seats') ? { ...seats }
+          : isObject(cells.seats) ? { ...seats, ...cells.seats } : cells.seats };
       }
     }
     if (k === 'agents' && isObject(v)) {
@@ -232,25 +250,12 @@ function renameAgentsByModel(config, adapters) {
   return { config: { ...config, agents }, aliases: Object.fromEntries(Object.entries(aliases).filter(([a, b]) => a !== b)) };
 }
 
-// 把默认的 max_seats 插在 busy_ask_min 后面（没有就放在 runs_dir 前面，再没有就放最后），和新生成的配置顺序一致。
-function withMaxSeats(dispatch) {
-  const entries = Object.entries(dispatch);
-  let at = entries.findIndex(([key]) => key === 'busy_ask_min') + 1;
-  if (!at) at = entries.findIndex(([key]) => key === 'runs_dir');
-  if (at < 0) at = entries.length;
-  entries.splice(at, 0, ['max_seats', DEFAULT_CONFIG.dispatch.max_seats]);
-  return Object.fromEntries(entries);
-}
-
 function migrateStructure(config, file, base, project, adapters) {
   if (!project && migratedConfigs.has(file)) return migratedConfigs.get(file);
   const converted = migrateConfig(config, file, base, project);
   if (project) return converted.config;
-  // dispatch.max_seats 是 1.2.0 新加的，从旧版改写过来的配置里没有它；dispatch 里缺这一项时显式写进文件，打开配置就能看到上限。
-  const addSeats = isObject(config.dispatch) && !Object.hasOwn(config.dispatch, 'max_seats');
-  if (!converted.old && !converted.modules && !addSeats) return config;
+  if (!converted.old && !converted.modules) return config;
   let result = structuredClone(converted.config);
-  if (isObject(result.dispatch) && !Object.hasOwn(result.dispatch, 'max_seats')) result.dispatch = withMaxSeats(result.dispatch);
   if (converted.old && isObject(config.agents) && !Object.hasOwn(config.agents, 'codex')
     && !eachEntry(result.modules).some(({ item }) => item?.agent === 'codex')) delete result.agents.codex;
   for (const agent of Object.values(result.agents || {})) if (Object.hasOwn(OLD_TYPES, agent?.type)) agent.type = OLD_TYPES[agent.type];
@@ -294,14 +299,13 @@ function migrateStructure(config, file, base, project, adapters) {
     }
     // 旧版插件只认 levels 对象，缺了 levels 会悄悄把九格都当成 "claude code"。改写后的文件只写 modules，
     // 所以每次改写都把 levels 留成一行说明，旧版读到字符串就报错退出；文件里原来有说明就沿用。
-    // 没有 modules 的文件（只补 max_seats 时会遇到）不加说明：只有说明没有 modules，新版读到也会报错。
+    // 没有 modules 的文件不加说明：只有说明没有 modules，新版读到也会报错。
     const { modules, ...rest } = result;
     result = modules === undefined ? rest : { ...rest, levels: converted.note || M.levelsNote, modules };
     fs.writeFileSync(tmp, JSON.stringify(result, null, 2) + '\n', { flag: 'wx' });
     replaceFile(tmp, file);
     if (converted.old) notice(M.configStructureMigrated(file, bak, M.list(Object.entries(renamed.aliases).map(([a, b]) => `${a} → ${b}`))));
     if (converted.modules) notice(M.configModulesMigrated(file, bak));
-    if (addSeats) notice(M.configMaxSeatsAdded(file, bak, result.dispatch.max_seats));
   } catch (e) {
     notice(M.configMigrateFailed(file, e.message));
   } finally {
@@ -323,7 +327,6 @@ function validateConfig(cfg, adapters, fail = die) {
   check(['auto', 'off'].includes(cfg.dispatch.watch), 'dispatch.watch', why.watch);
   check(typeof cfg.dispatch.intro === 'boolean', 'dispatch.intro', why.boolean);
   check(Number.isInteger(cfg.dispatch.discuss_max_rounds) && cfg.dispatch.discuss_max_rounds >= 1, 'dispatch.discuss_max_rounds', why.positiveInt);
-  check(Number.isInteger(cfg.dispatch.max_seats) && cfg.dispatch.max_seats >= 1, 'dispatch.max_seats', why.positiveInt);
   for (const key of ['timeout_min', 'stall_min', 'busy_ask_min']) check(Number.isFinite(cfg.dispatch[key]) && (key === 'timeout_min' ? cfg.dispatch[key] > 0 : cfg.dispatch[key] >= 0), `dispatch.${key}`, why.minutes);
   check(cfg.dispatch.runs_dir === null || text(cfg.dispatch.runs_dir), 'dispatch.runs_dir', why.pathOrNull);
   for (const [name, agent] of Object.entries(cfg.agents)) {
@@ -359,8 +362,9 @@ function validateConfig(cfg, adapters, fail = die) {
     }
     const required = requiredCount(value);
     if (module === 'run' || module === 'image') check(required <= 1, key, why.oneRequired);
-    // 计划要给每个必选各留一席，又不能超过 max_seats，必选多于上限时建不出计划。
-    else check(required <= cfg.dispatch.max_seats, key, M.requiredOverSeats(required, cfg.dispatch.max_seats));
+    if (['discuss', 'review'].includes(module) && value !== CLAUDE_CODE && required > cfg.modules[module].seats[cell]) {
+      fail(M.seatsBelowRequired(`modules.${module}.seats.${cell}`, cfg.modules[module].seats[cell], required));
+    }
   }
 }
 
@@ -369,7 +373,12 @@ function validateModuleKeys(modules, check) {
   for (const [module, cells] of Object.entries(modules)) {
     check(Object.hasOwn(MODULE_CELLS, module), `modules.${module}`, M.invalid.module);
     check(isObject(cells), `modules.${module}`, M.invalid.object);
-    for (const cell of Object.keys(cells)) check(MODULE_CELLS[module].includes(cell), `modules.${module}.${cell}`, module === 'image' ? M.invalid.imageCell : M.invalid.level);
+    for (const cell of Object.keys(cells)) {
+      if (cell === 'seats') {
+        check(['discuss', 'review'].includes(module), `modules.${module}.seats`, M.seatsModuleOnly);
+        check(isObject(cells.seats) && Object.entries(cells.seats).every(([level, n]) => LEVELS.includes(level) && Number.isInteger(n) && n >= 1), `modules.${module}.seats`, M.invalid.seats);
+      } else check(MODULE_CELLS[module].includes(cell), `modules.${module}.${cell}`, module === 'image' ? M.invalid.imageCell : M.invalid.level);
+    }
   }
 }
 
@@ -385,9 +394,9 @@ function projectConfig(cfg, project, adapters) {
     if (key === 'dispatch' && isObject(value)) {
       allowed.dispatch = {};
       for (const [field, val] of Object.entries(value)) {
-        if (!['timeout_min', 'stall_min', 'busy_ask_min', 'max_seats'].includes(field)) { ignored.push(`dispatch.${field}`); continue; }
+        if (!['timeout_min', 'stall_min', 'busy_ask_min'].includes(field)) { ignored.push(`dispatch.${field}`); continue; }
         const at = `dispatch.${field}`, user = cfg.dispatch[field];
-        check(field === 'max_seats' ? Number.isInteger(val) && val >= 1 : Number.isFinite(val) && (field === 'timeout_min' ? val > 0 : val >= 0), at, field === 'max_seats' ? M.invalid.positiveInt : M.invalid.minutes);
+        check(Number.isFinite(val) && (field === 'timeout_min' ? val > 0 : val >= 0), at, M.invalid.minutes);
         const disabled = field === 'stall_min' || field === 'busy_ask_min';
         const looser = disabled ? user > 0 && (val === 0 || val > user) : val > user;
         if (looser) notice(M.projectLooser(at, val, user));
@@ -431,10 +440,18 @@ function projectConfig(cfg, project, adapters) {
     } else ignored.push(key);
   }
   if (ignored.length) notice(M.projectIgnored(M.list(ignored)));
-  const seats = allowed.dispatch?.max_seats;
-  if (seats < cfg.dispatch.max_seats) {
-    for (const { key, value } of eachCell(mergeConfig(cfg, allowed).modules)) {
-      if (requiredCount(value) > seats) die(M.projectSeatsBelowRequired(seats, key, requiredCount(value)));
+  for (const module of ['discuss', 'review']) {
+    const seats = allowed.modules?.[module]?.seats;
+    if (!seats) continue;
+    allowed.modules[module].seats = { ...seats };
+    for (const [cell, n] of Object.entries(seats)) {
+      const key = `modules.${module}.seats.${cell}`, user = cfg.modules[module].seats[cell];
+      if (n > user) notice(M.projectLooser(key, n, user));
+      const kept = Math.min(n, user);
+      allowed.modules[module].seats[cell] = kept;
+      if (cfg.closed_by_project.includes(`${module}.${cell}`)) continue;
+      const required = requiredCount(allowed.modules[module][cell] ?? cfg.modules[module][cell]);
+      if (kept < required) die(M.projectCellSeatsBelowRequired(key, kept, required));
     }
   }
   return allowed;
@@ -512,6 +529,11 @@ function loadConfig(cwd, adapters) {
     const migrated = migrateStructure(user, USER_CONFIG, LEGACY_DEFAULT_CONFIG, false, adapters);
     imageConfigured = isObject(migrated.modules?.image);
     cfg = mergeConfig(cfg, migrated); sources.push(USER_CONFIG);
+  }
+  // 旧版写进文件的 dispatch.max_seats 已经不用了：读进来时丢掉，不显示在 effective 里；文件不改，旧版读到时照常可用。
+  if (Object.hasOwn(cfg.dispatch, 'max_seats')) {
+    const { max_seats: _, ...dispatch } = cfg.dispatch;
+    cfg = { ...cfg, dispatch };
   }
   cfg = normalizeModules(cfg);
   validateConfig(cfg, adapters);
@@ -617,8 +639,6 @@ function validatePlan(cfg, plan, adapters) {
     const planned = new Set(plan.required.map((name) => resolveAgentAlias(name, cfg)));
     if (planned.size !== cell.required.length || cell.required.some((name) => !planned.has(name))) die(M.planRequiredChanged(plan.plan_id, cell.key));
   }
-  const n = plan.seats.length + (plan.host ? 1 : 0);
-  if (n > cfg.dispatch.max_seats) die(plan.host ? M.planTooManySeatsWithHost(n, cfg.dispatch.max_seats) : M.planTooManySeats(n, cfg.dispatch.max_seats));
   return { ...cell, ...(outside ? { outside_cell: true } : {}) };
 }
 

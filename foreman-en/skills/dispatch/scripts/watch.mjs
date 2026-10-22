@@ -122,7 +122,7 @@ function apiVerboseRenderer(meta, rel) {
   return { ...base, show };
 }
 
-// 单任务顶部的身份行：运行中按实时状态，结束后按结果，Claude Code 席写交卷时间
+// 单任务顶部的身份行：运行中按实时状态，结束后按结果，Claude Code 席写提交时间
 function runIdentity(meta, ended, api, width) {
   if (meta.participant === 'host') return identityLine(meta, { mark: '✔', color: C.green }, [D.statusName('submitted'), hhmm(meta.submitted_at)], width);
   if (ended) {

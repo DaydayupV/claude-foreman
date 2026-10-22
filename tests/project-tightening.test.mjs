@@ -25,9 +25,9 @@ test('项目保留用户顺序和必选，忽略模型及其他字段，解析�
 });
 
 for (const [field, user, project, expected] of [
-  ['timeout_min', 5, 9, 5], ['timeout_min', 5, 2, 2], ['max_seats', 6, 9, 6], ['max_seats', 6, 2, 2],
+  ['timeout_min', 5, 9, 5], ['timeout_min', 5, 2, 2],
   ...['stall_min', 'busy_ask_min'].flatMap((field) => [[field, 4, 0, 4], [field, 4, 8, 4], [field, 4, 2, 2], [field, 0, 2, 2], [field, 0, 0, 0]]),
-]) test(`项目时长和席位收紧 ${field} ${user} → ${project}`, async (t) => {
+]) test(`项目时长收紧 ${field} ${user} → ${project}`, async (t) => {
   const h = sandbox(t), c = baseConfig(); c.dispatch[field] = user; h.config(c);
   h.write('.claude/foreman.json', { dispatch: { [field]: project } });
   const r = await h.bridge(configArgs(h));
@@ -35,9 +35,16 @@ for (const [field, user, project, expected] of [
   assert.equal(r.stderr.includes(M.projectLooser(`dispatch.${field}`, project, user)), expected !== project);
 });
 
-for (const [field, value] of [['timeout_min', 0], ['stall_min', -1], ['busy_ask_min', '2'], ['max_seats', 1.5]]) test(`项目先校验 dispatch.${field}`, async (t) => {
+for (const [field, value] of [['timeout_min', 0], ['stall_min', -1], ['busy_ask_min', '2']]) test(`项目先校验 dispatch.${field}`, async (t) => {
   const h = sandbox(t); h.write('.claude/foreman.json', { dispatch: { [field]: value } });
-  failed(await h.bridge(configArgs(h)), M.configInvalid(`dispatch.${field}`, field === 'max_seats' ? M.invalid.positiveInt : M.invalid.minutes));
+  failed(await h.bridge(configArgs(h)), M.configInvalid(`dispatch.${field}`, M.invalid.minutes));
+});
+
+test('项目配置里的 dispatch.max_seats 不再生效，提示已忽略', async (t) => {
+  const h = sandbox(t); h.write('.claude/foreman.json', { dispatch: { max_seats: 1 } });
+  const r = await h.bridge(configArgs(h));
+  assert.equal(Object.hasOwn(output(r).effective.dispatch, 'max_seats'), false);
+  assert.ok(r.stderr.includes(M.projectIgnored('dispatch.max_seats')));
 });
 
 test('项目只降低有顺序的 Codex 和 pi 强度，未写强度时不能加', async (t) => {

@@ -1,4 +1,4 @@
-// Claude Code 的答卷是已完成的记录，和外部席共用登记锁以固定交卷顺序。
+// Claude Code 的报告是已完成的记录，和外部席共用登记锁以固定提交顺序。
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -30,7 +30,7 @@ export async function cmdSubmit(o, load) {
   const refuse = (message) => { fs.rmSync(dir, { recursive: true, force: true }); die(message); };
   let result;
   try {
-    // 和准入同样读：读不出的记录可能就是一份答卷，跳过它会把轮次算错，所以直接拒绝。
+    // 和准入同样读：读不出的记录可能就是一份报告，跳过它会把轮次算错，所以直接拒绝。
     const { runs: all, unreadable } = readRunsLocked(id);
     if (unreadable.length) refuse(M.admissionUnreadable(M.list(unreadable)));
     const runs = all.filter((run) => run.meta.plan === plan.plan_id).sort((a, b) => a.id.localeCompare(b.id));

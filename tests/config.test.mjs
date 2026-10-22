@@ -14,7 +14,12 @@ test('没有用户配置时生成初始配置并提示首次使用', async (t) =
   assert.equal(c.effective.modules.run.simple, 'claude code');
   assert.equal(c.effective.modules.run.normal, 'claude code');
   assert.deepEqual(c.effective.agents, {});
-  assert.deepEqual(json(h.userConfig), c.effective);
+  const stored = structuredClone(c.effective);
+  for (const module of ['discuss', 'review']) {
+    delete stored.modules[module].seats;
+    assert.equal(Object.hasOwn(json(h.userConfig).modules[module], 'seats'), false);
+  }
+  assert.deepEqual(json(h.userConfig), stored);
   assert.equal(r.stderr.split('\n')[0], `foreman: ${M.starterCreated(h.userConfig, M.starterNoCodex + M.starterNext)}`);
   assert.ok(!(await h.bridge(['config'])).stderr.includes('foreman:'));
   assert.equal(h.calls().length, 0);

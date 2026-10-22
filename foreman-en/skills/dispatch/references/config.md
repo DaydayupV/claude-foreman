@@ -9,7 +9,7 @@ It has three parts:
 
 | Part | What it answers |
 |---|---|
-| `dispatch` | How the plugin hands off work: whether to do it on its own, the seat limit, time limits and so on |
+| `dispatch` | How the plugin hands off work: whether to do it on its own, discussion rounds, time limits and so on |
 | `agents` | Which agents there are and how to reach them |
 | `modules` | Which candidates each cell of each task type has, who is required, and with what effort |
 
@@ -29,7 +29,8 @@ Example:
     "discuss": {
       "simple":  "claude code",
       "normal":  [{ "agent": "gpt-6.1-sol", "effort": "high" }, { "agent": "glm-5.3" }],
-      "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "glm-5.3" }, { "agent": "deepseek-v4-pro", "effort": "max" }]
+      "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "glm-5.3" }, { "agent": "deepseek-v4-pro", "effort": "max" }],
+      "seats":   { "simple": 1, "normal": 2, "complex": 3 }
     },
     "run":    { "simple": "claude code", "normal": "claude code", "complex": [{ "agent": "gpt-6.1-sol", "effort": "max" }] },
     "review": { "simple": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "normal": [{ "agent": "gpt-6.1-sol", "effort": "high" }], "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }] },
@@ -45,7 +46,6 @@ Example:
 | `auto` | Whether Claude asks before starting handoffs, discussions and reviews on its own: `true` goes ahead and says so, `false` asks first (see "Permission" in the skill) | `true` |
 | `watch` | `auto`: open the live view whenever work goes to another model (hands-on work, resumes, discussions, reviews); `off`: don't, and use `/foreman-en:watch` when you want to look | `auto` |
 | `intro` | The first time the live view opens for a newly dispatched conversation, play a short intro first: the model's pixel avatar, "Starting …" and a few jokes, 5 seconds for one model and 10 for a discussion. Any key skips it, and it wraps up at once if the run finishes early. Resumes (the next round of a discussion, a rework) don't get one. The avatar is picked by keywords in the model name (gpt, deepseek, glm, kimi, qwen, mimo, minimax, gemini, claude and so on), with a ??? avatar for anything else. `false` turns it off | `true` |
-| `max_seats` | The most seats one dispatch plan can have; one agent with two sessions counts as two seats, and the Claude Code seat that discussion and review plans come with counts as one (see "Candidates and required agents" below). When the `dispatch` block of the user config lacks it, the script writes the default in explicitly (after a backup, with a one-line notice); project configs are left alone | `6` |
 | `discuss_max_rounds` | The most rounds one discussion can have (round 1 plus later resumes), counted per participant; the script refuses resumes beyond it | `2` |
 | `timeout_min` | Total time limit for one run, in minutes | `480` |
 | `stall_min` | How long without activity counts as stuck, in minutes (0 turns it off). Codex: no events and no command running; API: no data at all in the stream; opencode: no events at all; pi: no events and no tool running | `40` |
@@ -154,18 +154,19 @@ There is also a level 0 (below the threshold, not worth an outside model), which
 - A list of candidates: `[{ "agent": "<ID>", "effort": "<effort>", "required": true }, …]`. A single object works the same as a one-item list. Each agent can appear only once per cell.
 - `null` (image only): the cell is closed. With generate closed, no images are generated; with draw closed, Claude draws bending pieces and pure vector work itself. Claude can't produce bitmaps, so image cells can't be `"claude code"`.
 
+`discuss` and `review` also take `seats`, how many external models each level uses (see "Candidates and required agents" below): `{ "simple": 1, "normal": 2, "complex": 3 }`; any of the three can be left out and then takes that default (but never less than the cell's required count).
+
 What can go in a cell is checked against the capability table: discuss candidates must be able to discuss, review candidates to review; run candidates must be able to do hands-on work, and opencode and pi also need `run_access`; generate candidates must be able to generate images (the adapter declares `images` and implements image detection: which images appeared in this round and what each call passed; only codex cli for now); draw takes the same as run.
 
 How image tasks go out: before work starts on each new graphic deliverable, Claude has the user choose the route in a pop-up (① bitmap, ② bitmap + vector mix, ③ pure vector with a reference image first, ④ pure vector / code), then creates a plan with `plan --module image --cell <generate|draw> --route <route number>` and starts it with `image --plan … --seat …`. The route decides which cells are used, and only those cells get plans, so required agents in an unused cell don't come into play (with route ④, for example, the generate cell's required agent isn't needed). The script checks the answer to the latest route pop-up in this session; see "plan, image and status --plan" in `references/cli.md`.
 
 ### Candidates and required agents
-- When a cell has several candidates, Claude picks by the skill's rules (drop those that can't do it, add every required agent, fill discussion and review seats with different base models, one executor per work package) and says in a sentence whom it picked and why. The script only checks the hard rules a machine can check.
+- When a cell has several candidates, Claude picks by the skill's rules (drop those that can't do it, add every required agent, fill discussion and review seats up to the configured number with different base models, one executor per work package) and says in a sentence whom it picked and why. The script only checks the hard rules a machine can check.
+- `seats` (`discuss` and `review` only): the number of external seats at each level, not counting the Claude Code seat or a level 3 review's gap seat; `{ "simple": 1, "normal": 2, "complex": 3 }` by default. Required agents count toward it, so it can't be lower than the cell's required count, or loading the config fails; it can be higher than the number of candidates, which means all of them take part. To always use a fixed set of agents at some level, list only those and set the seats to their number, or mark them all required. When `plan` creates a discussion or review plan, it checks that the external seats equal `min(seats, usable candidates)` (for a `visual` review only candidates that can read images count); otherwise it needs `--count-why "<reason>"`. Usable candidates are counted by agent ID, so one model reached two ways counts twice. A level left out takes the default, but never less than the cell's required count (so old configs with many required agents keep working). The script never writes `seats` into the config file on its own, because older plugin versions fail on it; the numbers in use are in `resolved_modules.<discuss|review>.seats` of the `config` output.
 - `required: true` means this agent must take part whenever the cell is used; without it the entry is an ordinary candidate that Claude may or may not add. One agent may be required in reviews and only a candidate in discussions, so `required` goes on the cell's entry, not on the agent definition.
-- To hand one task to several seats, Claude first creates a dispatch plan (`plan`); the script checks that every required agent has a seat and that the seats don't exceed `dispatch.max_seats`, and then each seat is started. A single-seat hands-on handoff is refused when the cell has another required agent. Discussions and reviews always use a plan: it comes with the Claude Code seat, which submits its answer with `submit` before the external seats can start.
+- To hand one task to several seats, Claude first creates a dispatch plan (`plan`); the script checks that every required agent has a seat and that a discussion or review has as many external seats as `seats` says, and then each seat is started. A single-seat hands-on handoff is refused when the cell has another required agent. Discussions and reviews always use a plan: it comes with the Claude Code seat, which submits its report with `submit` before the external seats can start.
 - When a required agent is at its parallel limit, its seat waits until a slot frees up. When a required agent fails, runs out of quota or is cancelled, the task counts as incomplete; another candidate doesn't stand in for it.
 - `run`, `generate` and `draw` hand work to one executor at a time, so each of these cells can have at most one required entry.
-- In discussion and review cells, required entries can't outnumber `dispatch.max_seats`: a plan needs a seat for every required agent and can't go over the limit, so with more required entries than that no plan can be created, and loading the config fails right away. Remove some `required` marks or raise `max_seats`. The same error comes up when a project config lowers `max_seats` below a cell's required count (cells the project closes don't count).
-- Discussion and review plans also need a seat for the Claude Code seat and at least one external seat, so a cell really needs `1 + max(1, required count)` seats. When that's more than `max_seats`, the config still loads (hands-on work and images aren't affected), and `summary.warnings` of `config` and `check` shows `host_seat_infeasible` with the cell; no discussion or review plan can be created for it. Raise `max_seats` or mark fewer agents as required.
 
 ### Effort
 `effort` can be left out, which means the tool's or model's own default. What it takes depends on the type:
@@ -202,6 +203,7 @@ Choices that cost money or affect safety (which opencode or pi model to use, let
 
 ## Upgrading an old config
 - When upgrading from codex-bridge, the old `~/.claude/codex-bridge.json` is copied to the new location first.
+- `dispatch.max_seats` is no longer used; `seats` decides how many agents each level uses. Leaving it in the user config does no harm: it is ignored when the config is read, doesn't show in the `config` output, and the file isn't changed. In a project config it is reported as ignored.
 - The first time the script reads a config written with `levels`, it rewrites it as `modules` and backs up the original as `config.json.bak` (with a timestamp added if that already exists):
   - only the structure changes: every cell keeps its agents, efforts and order; single `run` and `review` objects become one-item lists;
   - no entry gets `required`, and no image block is added (run `/foreman-en:setup` to add it when you need it);
@@ -218,8 +220,8 @@ Choices that cost money or affect safety (which opencode or pi model to use, let
 - A file with both `levels` (an object) and `modules` is an error; the script doesn't guess which one counts. The note above doesn't count. `levels` in a project config isn't rewritten on disk; it's read as `modules` in memory, with a notice suggesting the new format. An old version of the plugin ignores `modules` in a project config, so a project that must also constrain people still on the old plugin can keep the `levels` form in its project config.
 
 ## Project config: can only tighten
-- A project config only accepts `timeout_min`, `stall_min`, `busy_ask_min` and `max_seats` under `dispatch`, plus `modules` (the old `levels` form is accepted too). Anything else, including the whole `agents` block, is ignored with a notice.
-- Time and seat limits take the stricter value: `timeout_min` and `max_seats` take the smaller one; for `stall_min` and `busy_ask_min`, 0 means no check, which is the loosest, so a project 0 has no effect when the user set a positive number, and when both are positive the smaller one wins.
+- A project config only accepts `timeout_min`, `stall_min`, `busy_ask_min` under `dispatch`, plus `modules` (including `seats` under `discuss` and `review`; the old `levels` form is accepted too). Anything else, including the whole `agents` block, is ignored with a notice.
+- Time and seat limits take the stricter value: `timeout_min` and each level's `seats` take the smaller one (lowering `seats` below the cell's required count is an error); for `stall_min` and `busy_ask_min`, 0 means no check, which is the loosest, so a project 0 has no effect when the user set a positive number, and when both are positive the smaller one wins.
 - `modules` can contain just the cells to change. Each cell can only:
   - be closed as a whole: `"claude code"` for discuss, run and review, `null` for image;
   - drop some optional entries the user config already has in that cell (the user config's order is kept);

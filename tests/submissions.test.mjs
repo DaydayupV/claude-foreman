@@ -15,19 +15,18 @@ const submitArgs = (h, p, extra = []) => ['submit', '--plan', p.plan_id, '--repo
   write(path.join(h.home, `${p.module}-answer.json`), p.module === 'discuss' ? discussion : review), ...extra];
 const status = async (h, p) => output(await h.bridge(['status', '--plan', p.plan_id]));
 
-for (const module of ['discuss', 'review']) test(`${module} 计划把 Claude Code 放在顶层，先给 submit 命令并计入上限`, async (t) => {
-  const h = sandbox(t), c = baseConfig(); c.dispatch.max_seats = 2; h.config(c);
+for (const module of ['discuss', 'review']) test(`${module} 计划把 Claude Code 放在顶层，先给 submit 命令`, async (t) => {
+  const h = sandbox(t), c = baseConfig(); h.config(c);
   const p = output(await h.bridge(planArgs(h, module, ['codex=质疑'], ['--host-role', '方案'])));
   assert.deepEqual(p.host, { seat: 0, role: '方案' });
   assert.deepEqual(json(p.file).host, p.host); assert.equal(p.seats[0].seat, 1);
-  assert.equal(p.commands[0], `node "${BRIDGE}" submit --plan ${p.plan_id} --report "<答卷.json>"`);
+  assert.equal(p.commands[0], `node "${BRIDGE}" submit --plan ${p.plan_id} --report "<报告.json>"`);
   assert.ok(p.commands[1].includes(`${module} --plan ${p.plan_id} --seat 1`));
-  failed(await h.bridge(planArgs(h, module, ['codex', 'codex'])), M.planTooManySeatsWithHost(3, 2));
   const plain = output(await h.bridge(planArgs(h, module))); assert.equal(plain.host.role, null);
 });
 
 test('run 计划没有 host，旧计划只数外部席，其他模块不能带 host-role', async (t) => {
-  const h = sandbox(t), c = baseConfig(); c.dispatch.max_seats = 1; h.config(c);
+  const h = sandbox(t), c = baseConfig(); h.config(c);
   const p = output(await h.bridge(planArgs(h, 'run')));
   assert.equal(Object.hasOwn(p, 'host'), false); assert.equal(p.commands.length, 1);
   for (const module of ['run', 'image']) failed(await h.bridge(planArgs(h, module, ['codex'], ['--host-role', '方案'])), M.hostRoleOnly);
@@ -101,7 +100,7 @@ test('submit 保存原样快照和规定字段，不造用量、进程或事件�
   write(file, '{}'); assert.deepEqual(h.result(out.run_id).report, discussion);
 });
 
-test('讨论交卷在锁内按轮登记，parent 连上一份，执行轮数上限', async (t) => {
+test('讨论报告在锁内按轮登记，parent 连上一份，执行轮数上限', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.dispatch.discuss_max_rounds = 2; h.config(c);
   const p = output(await h.bridge(planArgs(h))), args = submitArgs(h, p);
   seedRun(h, '20000101-no-session', { module: 'discuss', kind: 'discuss', mode: 'discuss', plan: p.plan_id, seat: 1, status: 'failed', session_id: null });
@@ -115,7 +114,7 @@ test('讨论交卷在锁内按轮登记，parent 连上一份，执行轮数上�
   assert.equal(fs.existsSync(path.join(h.runs, '.start.lock')), false);
 });
 
-test('审查只能交一次，材料指纹变动拒绝，外部失败后重启沿用已交答卷', async (t) => {
+test('审查只能交一次，材料指纹变动拒绝，外部失败后重启沿用已提交报告', async (t) => {
   const h = sandbox(t); h.write('source.txt', 'before\n');
   const p = output(await h.bridge(planArgs(h, 'review', ['codex'], ['--target', 'files', '--file', 'source.txt']))), args = submitArgs(h, p);
   h.write('source.txt', 'changed\n'); failed(await h.bridge(args), M.planMaterialChanged(p.plan_id)); assert.equal(h.records().length, 0);
@@ -131,7 +130,7 @@ test('审查只能交一次，材料指纹变动拒绝，外部失败后重启�
   h.write('source.txt', 'changed again\n'); failed(await h.bridge(launch(p)), M.planMaterialChanged(p.plan_id));
 });
 
-for (const module of ['discuss', 'review']) test(`${module} 首轮准入拒绝未交卷的席位，交卷后启动`, async (t) => {
+for (const module of ['discuss', 'review']) test(`${module} 首轮准入拒绝未提交报告的计划，提交后启动`, async (t) => {
   const h = sandbox(t), p = output(await h.bridge(planArgs(h, module))), s = h.scenario({ last_message: module === 'discuss' ? discussion : review });
   failed(await h.bridge(launch(p), { env: s.env }), M.hostAnswerRequired(p.plan_id, 1));
   assert.equal(h.calls().length, 0); assert.equal(h.records().length, 0);
@@ -141,8 +140,8 @@ for (const module of ['discuss', 'review']) test(`${module} 首轮准入拒绝�
   assert.deepEqual(state.host.rounds.map((r) => r.run_id), [answer.run_id]);
 });
 
-test('讨论失败首轮可重启，第二轮须先交第二份答卷，submit 给各席最新续接命令', async (t) => {
-  const h = sandbox(t), p = output(await h.bridge(planArgs(h, 'discuss', ['codex', 'codex'])));
+test('讨论失败首轮可重启，第二轮须先交第二份报告，submit 给各席最新续接命令', async (t) => {
+  const h = sandbox(t), p = output(await h.bridge(planArgs(h, 'discuss', ['codex', 'codex'], ['--count-why', '同方两席验证轮次准入'])));
   output(await h.bridge(submitArgs(h, p)));
   seedRun(h, '20000101-failed-first', { module: 'discuss', kind: 'discuss', mode: 'discuss', plan: p.plan_id, seat: 1, status: 'failed', session_id: null }, null);
   const s = h.scenario({ last_message: discussion });
@@ -166,7 +165,7 @@ test('resume 和 cancel 明确拒绝 host，last 也拒绝；旧的无计划讨�
   assert.equal(r.plan, null); assert.equal(r.round, 2);
 });
 
-test('planStatus 缺答卷不能 complete，host 不进入 missing_required，早于外部启动分别为 null/false', async (t) => {
+test('planStatus 缺报告不能 complete，host 不进入 missing_required，早于外部启动分别为 null/false', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.modules.discuss.complex[0].required = true; h.config(c);
   const p = output(await h.bridge(planArgs(h)));
   let state = await status(h, p);
@@ -207,24 +206,6 @@ test('judge 双向连接 host 与外部，stats 单列 host、原样模型、按
   assert.ok(output(await h.bridge(['stats'])).rows.some((r) => r.participant === 'host' && r.model === 'Vendor/CLAUDE-X'));
 });
 
-test('host_seat_infeasible 非致命，config/check 都显示且使用项目收紧后的 max_seats', async (t) => {
-  const h = sandbox(t), c = baseConfig(); c.dispatch.max_seats = 2; c.agents.other = { ...c.agents.codex };
-  c.modules.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'other', required: true }]; h.config(c);
-  let cfg = output(await h.bridge(['config']));
-  const warn = cfg.summary.warnings.find((w) => w.kind === 'host_seat_infeasible');
-  assert.deepEqual(warn, { kind: 'host_seat_infeasible', key: 'modules.discuss.complex', required: 2, need: 3, max: 2,
-    message: M.hostSeatInfeasible('modules.discuss.complex', 2, 3, 2) });
-  assert.ok(output(await h.bridge(['check'])).summary.warnings.some((w) => w.kind === 'host_seat_infeasible'));
-  failed(await h.bridge(planArgs(h, 'discuss', ['codex', 'other'])), M.planTooManySeatsWithHost(3, 2));
-  c.modules.discuss.complex.forEach((s) => { s.required = false; }); h.config(c);
-  h.write('.claude/foreman.json', { dispatch: { max_seats: 1 } });
-  for (const cmd of ['config', 'check']) {
-    cfg = output(await h.bridge([cmd, '--cwd', h.cwd]));
-    assert.ok(cfg.summary.warnings.some((w) => w.kind === 'host_seat_infeasible' && w.required === 0 && w.need === 2 && w.max === 1));
-  }
-  output(await h.bridge(['run', '--cwd', h.cwd, '--level', 'complex', '--brief', '-', '--no-snapshot']));
-});
-
 test('组 tally/status/await-busy 和会话提醒不把 host 当成外部完成或未完成任务', async (t) => {
   const h = sandbox(t), p = output(await h.bridge(planArgs(h))), answer = output(await h.bridge(submitArgs(h, p)));
   const listing = await h.bridge(['status', '--group', p.group]);
@@ -242,7 +223,7 @@ console.log(JSON.stringify({ tally: groupTally(runs), running: isRunning(runs[0]
   assert.deepEqual(output(await h.start(script).done), { tally: { running: 0, ok: 0, blocked: 0, failed: 0, resumed: 0, submitted: 1 }, running: false, owner: null });
 });
 
-test('watch 组视图里 Claude Code 席排在最前、和外部席一样写身份行和结论，单席查看照样显示答卷，无 events 也不报错', async (t) => {
+test('watch 组视图里 Claude Code 席排在最前、和外部席一样写身份行和结论，单席查看照样显示报告，无 events 也不报错', async (t) => {
   const h = sandbox(t), p = output(await h.bridge(planArgs(h))), a = output(await h.bridge(submitArgs(h, p, ['--model', 'host-model'])));
   const gate = path.join(h.home, 'release'), s = h.scenario({ last_message: discussion, steps: [{ wait_for: gate }] });
   const task = h.startBridge(launch(p), { env: s.env }); await h.running();
@@ -265,7 +246,7 @@ test('watch 组视图里 Claude Code 席排在最前、和外部席一样写身�
   }
 });
 
-test('计划文件被删或损坏时准入照样检查答卷，同一轮多出来的答卷不能顶替下一轮', async (t) => {
+test('计划文件被删或损坏时准入照样检查报告，同一轮多出来的报告不能顶替下一轮', async (t) => {
   const h = sandbox(t), p = output(await h.bridge(planArgs(h))), s = h.scenario({ last_message: discussion });
   output(await h.bridge(submitArgs(h, p)));
   const a = output(await h.bridge(launch(p), { env: s.env }));

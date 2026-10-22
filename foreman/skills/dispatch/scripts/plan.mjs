@@ -60,6 +60,7 @@ function routeConfirmation(sessionId, route) {
 
 function cmdPlan(o, load, adapters) {
   if (o['host-role'] != null && !['discuss', 'review'].includes(o.module)) die(M.hostRoleOnly);
+  if (o['count-why'] != null && !['discuss', 'review'].includes(o.module)) die(M.countWhyOnly);
   if (o.module !== 'review' && (o.target != null || o.file.length || o.uncommitted || o.base != null || o.commit != null)) die(M.planReviewOnly);
   if (!Object.hasOwn(MODULE_CELLS, o.module)) die(M.planModuleChoices(M.list(Object.keys(MODULE_CELLS))));
   if (o.module === 'image') {
@@ -74,7 +75,8 @@ function cmdPlan(o, load, adapters) {
     if (!match || match[2] !== undefined && !match[2].trim()) die(M.badSeat(value));
     return { seat: i + 1, agent: resolveAgentAlias(match[1], cfg, true), role: match[2]?.trim() || null };
   });
-  const plan = { module: o.module, cell: o.cell, seats, ...(o.module === 'image' ? { route: Number(o.route) } : {}) };
+  const plan = { module: o.module, cell: o.cell, seats, seat_target: null, count_why: o['count-why'] ?? null,
+    ...(o.module === 'image' ? { route: Number(o.route) } : {}) };
   if (['discuss', 'review'].includes(o.module)) plan.host = { seat: 0, role: o['host-role'] ?? null };
   if (o.module === 'review') {
     const material = validateReviewMaterial({ ...o, cwd });
@@ -83,6 +85,16 @@ function cmdPlan(o, load, adapters) {
   }
   const cell = validatePlan(cfg, plan, adapters);
   if (cell.outside_cell) plan.outside_cell = true;
+  if (plan.host && !cell.outside_cell) {
+    const configured = cfg.modules[o.module].seats[o.cell];
+    const usable = new Set(cell.candidates.filter(({ agent }) => {
+      const capabilities = adapters[cfg.agents[agent].type].capabilities;
+      return capabilities.modes.includes(o.module) && (plan.review?.target !== 'visual' || capabilities.reads_images);
+    }).map(({ agent }) => agent)).size;
+    plan.seat_target = Math.min(configured, usable);
+    const n = seats.filter((seat) => !(o.module === 'review' && o.cell === 'complex' && ['补漏', 'gap'].includes(seat.role?.trim().toLowerCase()))).length;
+    if (n !== plan.seat_target && !plan.count_why?.trim()) die(M.planSeatCount(`modules.${o.module}.seats.${o.cell}`, configured, plan.seat_target, n));
+  }
   plan.seats = seats.map((seat) => {
     const profile = resolveProfile(cfg, { ...seat, module: o.module, cell: o.cell, ...(plan.outside_cell ? { plan: true, outside_cell: true } : {}) }, {}, adapters);
     return { ...seat, model: profile.model ?? null, effort: profile.effort, required: cell.required.includes(seat.agent) };
@@ -153,6 +165,7 @@ function planStatus(id, runs = null, plan = readPlan(id)) {
     }
   }
   return { plan_id: id, module: plan.module, cell: plan.cell, ...(plan.module === 'image' ? { route: plan.route } : {}), group: plan.group, created_at: plan.created_at, state, seats,
+    seat_target: plan.seat_target ?? null, count_why: plan.count_why ?? null,
     ...(host ? { host } : {}), missing,
     missing_required: required.filter((seat) => seat.ok !== true).map(({ seat, agent, status }) => ({ seat, agent, status })),
     gap_unfinished: gap.map(({ seat, agent, status }) => ({ seat, agent, status })) };

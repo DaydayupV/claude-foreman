@@ -29,7 +29,9 @@ test('多个 Codex、无 Codex 和三类能力表及省略强度的配置', asyn
   h.config({ agents: { api: c.agents.api }, modules: self() });
   assert.deepEqual(Object.keys(output(await h.bridge(['config'])).effective.agents), ['api']);
   h.config({ agents: {} });
-  assert.deepEqual(output(await h.bridge(['config'])).effective.modules, self());
+  const modules = self();
+  for (const mode of ['discuss', 'review']) modules[mode].seats = { simple: 1, normal: 2, complex: 3 };
+  assert.deepEqual(output(await h.bridge(['config'])).effective.modules, modules);
 });
 
 test('协作方代号允许点号，拒绝保留字和非法首字符', async (t) => {
@@ -185,7 +187,7 @@ await import(${JSON.stringify(pathToFileURL(BRIDGE).href)});`);
     }
     assert.deepEqual(cfg.modules.image, { generate: [{ agent: 'gpt-6.1-sol', effort: 'medium' }], draw: [{ agent: 'gpt-6-astra', effort: 'max' }] });
   } else assert.deepEqual(cfg.modules, self());
-  assert.equal(cfg.dispatch.max_seats, 6);
+  assert.equal(Object.hasOwn(cfg.dispatch, 'max_seats'), false);
   if (keys.length) assert.equal(cfg.agents['kimi-k2.6'].api_key_env, 'KIMI_API_KEY');
   let parts = available ? M.starterCodex('gpt-6.1-sol', 'gpt-6-astra') : M.starterNoCodex;
   if (oc && scenario !== 'empty-models') parts += M.starterOpencode(2);

@@ -265,7 +265,7 @@ async function watchGroup(group, o, loadCfg) {
   const hasHost = () => list().some(isHost);
   const numberOf = (i) => (hasHost() ? i : i + 1);
 
-  // 计划只在有缺口时写一行：缺了必选、补漏席没跑完、材料变了、Claude Code 席还没交卷
+  // 计划只在有缺口时写一行：缺了必选、补漏席没跑完、材料变了、Claude Code 席还没提交报告
   const planNotes = (width, wrap) => describePlans(list(), planRuns).filter((p) => p.details || p.state === 'incomplete').flatMap((p) => {
     const text = `${p.state === 'incomplete' ? '✗' : '⚠'} ${D.dots([D.planStates[p.state], p.details])}`;
     const color = p.state === 'incomplete' ? C.red : C.yellow;

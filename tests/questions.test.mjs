@@ -12,6 +12,7 @@ const message = (tool, text) => tool === 'codex' ? { type: 'item.completed', ite
 const configure = (h, extra = {}) => {
   const c = baseConfig(); c.agents.codex.sandbox = { discuss: 'read-only', review: 'read-only' }; Object.assign(c.agents, { oc: opencodeAgent(), ...extra });
   c.modules.discuss.complex = Object.keys(c.agents).map((agent) => ({ agent, effort: 'high' }));
+  c.modules.discuss.seats = { complex: 1 };
   h.config(c);
 };
 const discussArgs = (h, agent) => taskArgs(h, 'discuss', ['--agent', agent, '--no-snapshot']);

@@ -285,14 +285,14 @@ function checkAdmission(meta, cfg) {
   const { runs, unreadable } = readRunsLocked(meta.id);
   if (unreadable.length) return M.admissionUnreadable(M.list(unreadable));
   if (['discuss', 'review'].includes(meta.kind) && meta.plan && meta.participant !== 'host') {
-    // 不引入 plan.mjs，避免计划状态反过来引用记录时形成循环。计划文件被删了照样要查：这份计划交过答卷，就说明它有 Claude Code 席。
+    // 不引入 plan.mjs，避免计划状态反过来引用记录时形成循环。计划文件被删了照样要查：这份计划提交过报告，就说明它有 Claude Code 席。
     const file = path.join(RUNS_ROOT, 'plans', `${meta.plan}.json`);
     let plan = null;
     try { plan = JSON.parse(fs.readFileSync(file, 'utf8')); }
     catch (e) { if (e.code !== 'ENOENT') return M.planUnreadable(file); }
     const answers = runs.filter((run) => run.meta.plan === meta.plan && run.meta.participant === 'host');
     const round = meta.kind === 'review' ? 1 : meta.round ?? 1;
-    // 按轮次核对，不按份数：同一轮多出来的答卷不能顶替下一轮的。
+    // 按轮次核对，不按份数：同一轮多出来的报告不能顶替下一轮的。
     if ((plan?.host || answers.length) && !answers.some((run) => (run.meta.round ?? 0) >= round)) return M.hostAnswerRequired(meta.plan, round);
   }
   // 拿锁前还没有的任务是之后才登记的，都是刚启动的 runner，直接算在运行；拿锁前就有、当时没核对上的

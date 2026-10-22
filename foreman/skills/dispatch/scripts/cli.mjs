@@ -84,6 +84,7 @@ function dispatchProfile(o, module) {
   }
   const cwd = resolveDir(need(o, 'cwd'));
   const cfg = load(cwd);
+  // 席位数只在建计划时检查，配置调整后已有计划仍能启动。
   if (plan) validatePlan(cfg, plan, adapters);
   return { cwd, cfg, plan, profile: resolveProfile(cfg, seat, o, adapters) };
 }

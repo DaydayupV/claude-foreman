@@ -14,11 +14,8 @@ export function buildSummary(cfg, adapters, checks = null) {
   const effortProblem = (name, model, effort) => tried(name).find((v) => v.model === model && v.variant === effort && v.ok === false)?.error ?? null;
   // 推理强度只在基本检查通过后才核对，所以有档位不通过，就说明协作方本身能用，只是那几格的档位有问题。
   const usable = (name) => !!checks?.[name] && (checks[name].ok || tried(name).some((v) => v.ok === false));
-  const modules = mapCells(cfg.modules, (entry, { module, key }) => {
+  const modules = mapCells(cfg.modules, (entry, { key }) => {
     if (entry === CLAUDE_CODE || entry === null) return entry;
-    const required = cellList(entry).filter((item) => item.required).length, need = 1 + Math.max(1, required), max = cfg.dispatch.max_seats;
-    if (['discuss', 'review'].includes(module) && need > max) warnings.push({ kind: 'host_seat_infeasible', key, required, need, max,
-      message: M.hostSeatInfeasible(key, required, need, max) });
     return cellList(entry).map((item, i) => {
       const at = `${key}[${i}]`;
       const info = agents[item.agent], model = item.model || info.model, effort = item.effort ?? null;

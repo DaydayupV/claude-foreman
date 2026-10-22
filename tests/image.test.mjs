@@ -47,12 +47,11 @@ test('图像计划的路线、格子、角色及审查参数错误在确认前�
   noPlans(h);
 });
 
-test('图像计划重验候选、必选、上限、关格、模型和强度，并且路线 4 不看 generate 必选', async (t) => {
+test('图像计划重验候选、必选、关格、模型和强度，并且路线 4 不看 generate 必选', async (t) => {
   const h = sandbox(t), c = configure(h); c.agents.second = { ...c.agents.codex };
-  c.modules.image.generate.push({ agent: 'second' }); c.dispatch.max_seats = 1; h.config(c);
+  c.modules.image.generate.push({ agent: 'second' }); h.config(c);
   failed(await h.bridge(planArgs(h, 'generate', 2, ['second'])), M.planMissingRequired('modules.image.generate', 'codex'));
   failed(await h.bridge(planArgs(h, 'generate', 2, ['missing'])), M.agentNotInLevel('missing', 'modules.image.generate', 'codex、second'));
-  failed(await h.bridge(planArgs(h, 'generate', 2, ['codex', 'codex'])), M.planTooManySeats(2, 1));
   const entries = c.modules.image.generate; c.modules.image.generate = null; h.config(c);
   failed(await h.bridge(planArgs(h)), M.planCellClosed('modules.image.generate'));
   c.modules.image.generate = entries; h.config(c);

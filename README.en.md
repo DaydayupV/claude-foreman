@@ -127,7 +127,7 @@ When a topic has several goals pulling against each other (such as security and 
 
 - **Assigned by ability**: first whether the tools can do it (the fact checker has to run commands, so only Codex can take it), then strengths and the model tier: roles that need hard thinking go to strong models first, but the tier is only a guide, not a condition for taking part. Models are sorted into strong, mid and weak tiers from a third-party leaderboard; see [references/model-tiers.md](foreman-en/skills/dispatch/references/model-tiers.md).
 - **One model per role first**: when there aren't enough qualifying models, a strong model opens another session for another role; each extra session takes a parallel slot, and its agreeing conclusions still count as one piece of evidence. Mid and weak models can take "breadth seats" that only join round 1, with Claude checking each of their points.
-- **Core roles are never merged**: the angles a topic needs most get a seat each, and at level 3 one core role can be played by two different models. The seats never exceed `dispatch.max_seats`, and required models always get one.
+- **Core roles are never merged**: the angles a topic needs most get a seat each, and at level 3 one core role can be played by two different models. The number of seats follows the level's `seats`, and required models always get one.
 - **You always confirm first**: before it starts, a pop-up lists the "model → role" assignment, even with `dispatch.auto` on; you can start as suggested, adjust it, or use a normal discussion instead.
 - A role only sets what each model checks most closely, not its conclusion; decisions still go by evidence, and several roles agreeing doesn't count as more evidence.
 - Custom roles, using role mode by default for some kinds of topics, and a different view of a model's tier can all go in the preference files. The role table and assignment rules are in [references/roles.md](foreman-en/skills/dispatch/references/roles.md).
@@ -158,7 +158,7 @@ Prompt templates, command options and the checks are in [references/image-assets
 - Every run keeps two lines at the top: the model, written like "gpt-6.1-sol max · Codex CLI" (model and effort · how it's reached), colored by status, with the status and elapsed time on the right, such as "running 37:51"; and the task, written like "run · title · complex", starting with the module (run, discuss, review, image), with the round for a resume, and the cell and route instead of the level for image tasks.
 - Below that is a timeline: times down the left, with what the model says, commands, file reads and searches, file changes and images generated or opened in order. Only the first few actions between two messages are shown and the rest fold into one line such as "… +9 commands"; files changed one after another share one line; a failed command is marked "✗ exit 1" at the end of its line, and a search that found nothing says "no match". The bottom line shows the latest thinking summary and the keys.
 - The view re-flows when the window is resized. Scroll back with ↑↓, PgUp/PgDn or the mouse wheel and press End to jump to the latest; while the run is going, q stops watching and the run keeps going. When the run ends the view stays on screen and can still be scrolled, with the status, duration, changes, token use and conclusion at the end (and the cost for opencode and pi tasks); after q the full record stays in the terminal.
-- Discussions, reviews and split hands-on work are shown in one window, one block per seat. The heading reads "discuss · panel · title · normal": the module, the mode (panel for several plain seats, roles for role mode, split for parallel parts), the title, the level and the round, with the count of each status on the right, such as "●2 ✔1". Each block starts with the seat number and a line with the model and its status; role mode puts the role on the next line, and split work puts that part's title and level there. While a seat is working its body shows what it last said, its thinking summary and its latest actions; once it's done, its conclusion. The Claude Code seat comes first (seat 0) and shows its answer's conclusion like any other seat.
+- Discussions, reviews and split hands-on work are shown in one window, one block per seat. The heading reads "discuss · panel · title · normal": the module, the mode (panel for several plain seats, roles for role mode, split for parallel parts), the title, the level and the round, with the count of each status on the right, such as "●2 ✔1". Each block starts with the seat number and a line with the model and its status; role mode puts the role on the next line, and split work puts that part's title and level there. While a seat is working its body shows what it last said, its thinking summary and its latest actions; once it's done, its conclusion. The Claude Code seat comes first (seat 0) and shows its report's conclusion like any other seat.
 - Blocks get more lines when the window has room, and you scroll with the mouse wheel when they don't fit. Press a seat's number to open its full timeline and Esc to go back. When an API model is queued because its service is busy, press x to stop it. When the plan is missing a required seat, the gap seat hasn't finished, or the material under review changed during the review, one extra line under the heading says so. When everything has finished the view stays on screen; after q a summary is left behind, with each seat's conclusion, token use and run_id, and one last line with the command to replay a seat.
 - The fields the plugin writes itself in the live view, `status` and the start line (status words, durations, model labels, token use, labels and hints) are in English in both plugins, so they look the same; what the models and Claude Code write, task titles included, is shown as written.
 - Color only means status: cyan for running, green for done, yellow for questions returned, waiting for an answer or queued, red for anything else that didn't finish. Task lines and model lines are bold, and the model line takes the status color; roles and the titles of split parts are bold; paths, token use, hints and times are dim.
@@ -214,7 +214,7 @@ It has three parts:
 
 | Part | What it covers |
 |---|---|
-| `dispatch` | How the plugin hands off work: whether to do it on its own, the live view, the intro, the seat limit, discussion rounds, time limits, the run directory |
+| `dispatch` | How the plugin hands off work: whether to do it on its own, the live view, the intro, discussion rounds, time limits, the run directory |
 | `agents` | Which agents there are and how to reach them |
 | `modules` | Which candidates each cell of each task type has, who is required, and with what effort |
 
@@ -238,7 +238,7 @@ A minimal example: Codex does complex hands-on work and every review, complex di
 
 - Each key under `agents` is the agent's **ID**, which `modules` and `--agent` refer to. Naming it after its model works best; IDs may use letters, digits, `.`, `-` and `_`.
 - Each of the three task types (`discuss`, `run` for hands-on work, `review`) has three levels, plus a level 0 that isn't in the config (see "Task levels" below); images (`image`) have no levels, just two cells: `generate` for image generation and `draw` for hand-drawing.
-- Each cell lists candidates. When a cell has several, Claude Code picks by its rules each time: for discussions and reviews, by default 1 seat at level 1, 2 at level 2 and 3 at level 3, using different models where possible; for hands-on work, one agent per piece of work. An entry marked `"required": true` is required and always takes part when the cell is used.
+- Each cell lists candidates. When a cell has several, Claude Code picks by its rules each time: for discussions and reviews, `seats` sets how many per level (by default 1 at level 1, 2 at level 2 and 3 at level 3, not counting Claude Code itself), using different models where possible and all of them when there are fewer candidates; for hands-on work, one agent per piece of work. An entry marked `"required": true` is required and always takes part when the cell is used.
 - `"claude code"` means Claude Code does it itself; for reviews and discussions, that cell uses no outside model. `null` turns an image cell off.
 - `effort` is the reasoning effort; leave it out for the default. For Codex it's `low` to `ultra`; for opencode, the model's variant; for pi, its thinking level; for API models it's sent as `reasoning_effort` as is.
 - Image tasks start with a pop-up where you choose the route, and the route decides which cells are used: a pure vector route that only draws never touches the generate cell, so that cell's required agents don't take part.
@@ -271,7 +271,7 @@ Level 0 is always done by Claude Code and isn't in the config; which candidates 
 
 - To choose on the spot, tell Claude Code "run it with ultra" or "use such-and-such model"; Claude Code adds `--effort` (it only changes the effort) or `--model` (only another model from the same provider).
 - When a level is `"claude code"`, you can still explicitly ask for a task to be handed off, and Claude Code names an agent with `--agent`; but not for a cell the project config closed.
-- To hand one task to several seats (say, several models discussing one topic), Claude Code first creates a dispatch plan; the script checks that every required agent is in it and that the seats don't exceed `dispatch.max_seats` (6 by default), then each seat is started. If a required model fails or runs out of quota, the task counts as unfinished; another model doesn't stand in for it.
+- To hand one task to several seats (say, several models discussing one topic), Claude Code first creates a dispatch plan; the script checks that every required agent is in it and that a discussion or review has as many external seats as `seats` says, then each seat is started. If a required model fails or runs out of quota, the task counts as unfinished; another model doesn't stand in for it.
 - Level 0 is only for small changes done in one place. By default Claude Code also does `simple` itself; give `simple` to an agent and everything except level 0 changes gets handed off.
 
 ### Adding API models
@@ -323,7 +323,6 @@ Both take a change snapshot first, and Claude Code reviews the diff file by file
     "auto": true,
     "watch": "auto",
     "intro": true,
-    "max_seats": 6,
     "discuss_max_rounds": 2,
     "timeout_min": 240,
     "stall_min": 20,
@@ -354,7 +353,8 @@ Both take a change snapshot first, and Claude Code reviews the diff file by file
         { "agent": "kimi-k2.6" },
         { "agent": "mimo-v2.6-pro", "effort": "high" },
         { "agent": "glm-5.3" }
-      ]
+      ],
+      "seats": { "simple": 1, "normal": 2, "complex": 3 }
     },
     "run": {
       "simple":  "claude code",
@@ -364,7 +364,8 @@ Both take a change snapshot first, and Claude Code reviews the diff file by file
     "review": {
       "simple":  [{ "agent": "gpt-6-astra", "effort": "medium" }],
       "normal":  [{ "agent": "gpt-6-astra", "effort": "high" }, { "agent": "deepseek-flash", "effort": "high" }],
-      "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "deepseek-flash", "effort": "max" }, { "agent": "glm-5.3" }]
+      "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "deepseek-flash", "effort": "max" }, { "agent": "glm-5.3" }],
+      "seats":   { "simple": 1, "normal": 2, "complex": 3 }
     },
     "image": {
       "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }],
@@ -383,7 +384,7 @@ Both take a change snapshot first, and Claude Code reviews the diff file by file
 | `mimo-v2.6-pro` | pi | A candidate for complex discussions |
 | `kimi-k2.6` | API, with the key in the `KIMI_API_KEY` environment variable | A candidate for complex discussions |
 
-Claude Code does simple and normal hands-on work itself. Discussions and reviews get more candidates as the level rises: each time Claude Code picks a few seats from them (by default 1 at level 1, 2 at level 2 and 3 at level 3; evidence reviews and high-risk reviews use every different model), and `gpt-6-astra` is required for complex discussions and reviews, so it always takes part.
+Claude Code does simple and normal hands-on work itself. Discussions and reviews get more candidates as the level rises: each time Claude Code picks a few seats from them (as many as `seats` says: by default 1 at level 1, 2 at level 2 and 3 at level 3), and `gpt-6-astra` is required for complex discussions and reviews, so it always takes part.
 
 Fields this config doesn't use but that are often adjusted:
 
@@ -405,8 +406,8 @@ Fields this config doesn't use but that are often adjusted:
 
 A project config can only tighten, never loosen:
 
-- it only accepts `timeout_min`, `stall_min`, `busy_ask_min` and `max_seats` under `dispatch`, plus `modules` (the old `levels` form too);
-- time and seat limits take the stricter of the two values: the smaller time limit and seat count win; for stall detection and the queue check, 0 means "don't check", which is the loosest, so a project 0 has no effect when you set a positive number;
+- it only accepts `timeout_min`, `stall_min`, `busy_ask_min` under `dispatch`, plus `modules` (the old `levels` form too);
+- time and seat limits take the stricter of the two values: the smaller time limit and per-level seat count win; for stall detection and the queue check, 0 means "don't check", which is the loosest, so a project 0 has no effect when you set a positive number;
 - each cell can only be closed as a whole (`"claude code"` for a graded cell, `null` for an image cell), drop optional entries your user config has in that cell, or lower the effort (only for Codex and pi, whose efforts have a clear order);
 - it can't add agents, swap models or change who is required, and it can't drop only the required agents while keeping others handing work out (that's an error). Claude Code can't name an agent with `--agent` for a cell the project closed either.
 
@@ -419,7 +420,7 @@ Some habits don't fit in JSON, such as which code in your project counts as high
 - User level: `~/.claude/foreman/preferences.md`
 - Project level: `<project>/.claude/foreman.md`
 
-Preference files only adjust how things are done within the plugin's hard rules: the config files themselves, required agents, whether material may go to a given provider, read-only discussions and reviews, the things that need a confirmation pop-up, and the seat limit can't be changed by preference files. Within that, they win over the plugin's built-in rules. Project-level preferences come from the project repository (possibly someone else's) and can only make things stricter: if one asks to skip confirmations, review less or swap out the models you configured, Claude Code won't follow it and will tell you. For example:
+Preference files only adjust how things are done within the plugin's hard rules: the config files themselves, required agents, whether material may go to a given provider, read-only discussions and reviews, the things that need a confirmation pop-up, and each level's seat count can't be changed by preference files. Within that, they win over the plugin's built-in rules. Project-level preferences come from the project repository (possibly someone else's) and can only make things stricter: if one asks to skip confirmations, review less or swap out the models you configured, Claude Code won't follow it and will tell you. For example:
 
 ```markdown
 # foreman preferences

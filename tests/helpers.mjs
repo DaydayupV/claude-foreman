@@ -39,7 +39,7 @@ const git = (process.env.PATH || '').split(path.delimiter)
 assert.ok(git, '测试需要已有的 Git');
 
 export const baseConfig = () => ({
-  dispatch: { watch: 'off', timeout_min: 1, stall_min: 0, busy_ask_min: 0, max_seats: 6 },
+  dispatch: { watch: 'off', timeout_min: 1, stall_min: 0, busy_ask_min: 0 },
   agents: { codex: { type: 'codex cli', bin: CODEX, model: 'fake-codex', max_parallel: 4 } },
   modules: {
     run: { simple: 'claude code', normal: 'claude code', complex: [{ agent: 'codex', effort: 'max' }] },
@@ -164,7 +164,7 @@ export function sandbox(t, { config = true } = {}) {
   return h;
 }
 
-// 旧用例仍验证外部席的行为；只在这里补齐新协议要求的计划和答卷。
+// 旧用例仍验证外部席的行为；只在这里补齐新协议要求的计划和报告。
 export function plannedArgs(h, values) {
   const args = values.map(String), cmd = args[0];
   if (!['discuss', 'review', 'resume'].includes(cmd)) return args;
