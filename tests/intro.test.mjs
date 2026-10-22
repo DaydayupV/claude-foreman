@@ -17,6 +17,7 @@ test('头像按模型名里的关键字认：先看最后一段，取最先出�
     'kimi-k2.6': 'kimi', 'moonshotai-cn/kimi-k2.6': 'kimi', 'mimo-v2.6-pro': 'mimo', 'xiaomi/mimo-v2.6-pro': 'mimo',
     'opencode/glm-5.3-flash-free': 'glm', 'qwen3-coder-plus': 'qwen', 'minimax-m3': 'minimax', 'gemini-3-pro': 'gemini',
     'openrouter/anthropic/claude-opus-5': 'claude', 'Claude-Sonnet-5': 'claude', 'mistral-large-3': 'unknown',
+    'grok-4.7': 'grok', 'x-ai/grok-4.6': 'grok', 'xai/grok-code-fast': 'grok',
     // 服务商前缀里的关键字不抢最后一段的；同一段里几个都命中时看谁在前，不看规则的先后
     'openai-compatible/deepseek-v4': 'deepseek', 'qwen3-deepseek-distill': 'qwen',
   };

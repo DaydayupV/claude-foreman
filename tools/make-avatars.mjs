@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // 从参考图生成 watch 启动动画的头像数据（foreman/skills/dispatch/scripts/watch-avatars.mjs）。
 //
-//   node tools/make-avatars.mjs [参考图] [--cell 11.6] [--cols 5] [--names claude,chatgpt,...] [--preview 预览.png]
+//   node tools/make-avatars.mjs [参考图=名单 ...] [--cell 11.6] [--cols 5] [--preview 预览.png]
 //
-// 参考图是黑底的像素头像，按行排列，每行 --cols 个，顺序和 --names 一致，下面可以有名牌（会自动跳过）。
+// 参考图是黑底的像素头像，按行排列，每行 --cols 个，下面可以有名牌（会自动跳过）。
+// 名单按顺序给每个头像起名，逗号分隔，写 - 的跳过；几张参考图取出的头像合在一起输出。
+// 不给参考图时用默认的两张：source.webp 取前九个和 ???，source-grok.webp 只取第十个 Grok。
 // --cell 是原图里一个像素格的边长（px），自动估计容易被大一倍的周期带偏，所以要手动给。
 // 每个头像取两种尺寸：大 48×48（按半格取样）、中 36×36（按 2/3 格取样），都是正方形画布，
 // 水平居中、底边对齐，空处透明；每种尺寸压成不超过 32 色的调色板。
@@ -19,17 +21,24 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 const opt = (name, def) => { const i = args.indexOf(`--${name}`); return i >= 0 ? args[i + 1] : def; };
-const SOURCE = args[0] && !args[0].startsWith('--') ? path.resolve(args[0]) : path.join(ROOT, 'tools', 'avatars', 'source.webp');
+const AVATAR_DIR = path.join(ROOT, 'tools', 'avatars');
+const DEFAULT_SHEETS = [
+  `${path.join(AVATAR_DIR, 'source.webp')}=claude,chatgpt,gemini,deepseek,mimo,glm,kimi,qwen,minimax,unknown`,
+  `${path.join(AVATAR_DIR, 'source-grok.webp')}=-,-,-,-,-,-,-,-,-,grok`,
+];
+const sheetArgs = args.filter((a, i) => !a.startsWith('--') && !(i > 0 && args[i - 1].startsWith('--')));
+const SHEETS = (sheetArgs.length ? sheetArgs : DEFAULT_SHEETS).map((a) => {
+  const at = a.lastIndexOf('=');
+  return { file: path.resolve(a.slice(0, at)), names: a.slice(at + 1).split(',') };
+});
 const CELL = Number(opt('cell', '11.6'));
 const COLS = Number(opt('cols', '5'));
-const NAMES = opt('names', 'claude,chatgpt,gemini,deepseek,mimo,glm,kimi,qwen,minimax,unknown').split(',');
 const OUT = path.join(ROOT, 'foreman', 'skills', 'dispatch', 'scripts', 'watch-avatars.mjs');
 const SIZES = { L: { step: 2, n: 48 }, M: { step: 1.5, n: 36 } };
 const MAX_COLORS = 32;
 const ALPHABET = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'; // '.' 表示透明
 
 // ---- 解码成 BGRA ----
-const raw = path.join(os.tmpdir(), `foreman-avatars-${process.pid}.bgra`);
 const ps = `Add-Type -AssemblyName PresentationCore
 $fs = [System.IO.File]::OpenRead($env:AVATAR_SRC)
 $dec = [System.Windows.Media.Imaging.BitmapDecoder]::Create($fs, 'PreservePixelFormat', 'OnLoad')
@@ -39,45 +48,51 @@ $bmp.CopyPixels($buf, $bmp.PixelWidth * 4, 0)
 [System.IO.File]::WriteAllBytes($env:AVATAR_RAW, $buf)
 $fs.Close()
 "$($bmp.PixelWidth) $($bmp.PixelHeight)"`;
-const dec = spawnSync('powershell', ['-NoProfile', '-Command', ps], { encoding: 'utf8', env: { ...process.env, AVATAR_SRC: SOURCE, AVATAR_RAW: raw } });
-if (dec.status !== 0) { console.error(dec.stderr || dec.stdout); process.exit(1); }
-const [W, H] = dec.stdout.trim().split(/\s+/).map(Number);
-const buf = fs.readFileSync(raw);
-fs.rmSync(raw, { force: true });
+let W, H, buf;
+function decode(source) {
+  const raw = path.join(os.tmpdir(), `foreman-avatars-${process.pid}.bgra`);
+  const dec = spawnSync('powershell', ['-NoProfile', '-Command', ps], { encoding: 'utf8', env: { ...process.env, AVATAR_SRC: source, AVATAR_RAW: raw } });
+  if (dec.status !== 0) { console.error(dec.stderr || dec.stdout); process.exit(1); }
+  [W, H] = dec.stdout.trim().split(/\s+/).map(Number);
+  buf = fs.readFileSync(raw);
+  fs.rmSync(raw, { force: true });
+}
 const px = (x, y) => { const i = (y * W + x) * 4; return [buf[i + 2], buf[i + 1], buf[i]]; };
 const lit = (x, y) => Math.max(...px(x, y)) > 30;
 const isBg = (p) => Math.max(...p) < 22;
 
 // ---- 找头像：先按行分带（矮的是名牌，跳过），每带按列数在最空的列切开 ----
-const rowN = Array.from({ length: H }, (_, y) => { let n = 0; for (let x = 0; x < W; x++) if (lit(x, y)) n++; return n; });
-const bands = [];
-for (let y = 0, s = -1; y <= H; y++) {
-  const on = y < H && rowN[y] > 3;
-  if (on && s < 0) s = y;
-  if (!on && s >= 0) { bands.push([s, y - 1]); s = -1; }
-}
-const tallest = Math.max(...bands.map(([a, b]) => b - a));
-const boxes = [];
-for (const [y0, y1] of bands.filter(([a, b]) => b - a > tallest * 0.5)) {
-  const colN = Array.from({ length: W }, (_, x) => { let n = 0; for (let y = y0; y <= y1; y++) if (lit(x, y)) n++; return n; });
-  let left = 0; while (!colN[left]) left++;
-  let right = W - 1; while (!colN[right]) right--;
-  const cuts = [left];
-  for (let k = 1; k < COLS; k++) {
-    const e = Math.round(left + (k * (right - left)) / COLS);
-    let best = e;
-    for (let x = e - Math.round(CELL * 4); x <= e + Math.round(CELL * 4); x++) if (colN[x] < colN[best]) best = x;
-    cuts.push(best);
+function findBoxes() {
+  const rowN = Array.from({ length: H }, (_, y) => { let n = 0; for (let x = 0; x < W; x++) if (lit(x, y)) n++; return n; });
+  const bands = [];
+  for (let y = 0, s = -1; y <= H; y++) {
+    const on = y < H && rowN[y] > 3;
+    if (on && s < 0) s = y;
+    if (!on && s >= 0) { bands.push([s, y - 1]); s = -1; }
   }
-  cuts.push(right + 1);
-  for (let k = 0; k < COLS; k++) {
-    let x0 = cuts[k], x1 = cuts[k + 1] - 1;
-    while (!colN[x0]) x0++;
-    while (!colN[x1]) x1--;
-    boxes.push({ x0, x1, y0, y1 });
+  const tallest = Math.max(...bands.map(([a, b]) => b - a));
+  const boxes = [];
+  for (const [y0, y1] of bands.filter(([a, b]) => b - a > tallest * 0.5)) {
+    const colN = Array.from({ length: W }, (_, x) => { let n = 0; for (let y = y0; y <= y1; y++) if (lit(x, y)) n++; return n; });
+    let left = 0; while (!colN[left]) left++;
+    let right = W - 1; while (!colN[right]) right--;
+    const cuts = [left];
+    for (let k = 1; k < COLS; k++) {
+      const e = Math.round(left + (k * (right - left)) / COLS);
+      let best = e;
+      for (let x = e - Math.round(CELL * 4); x <= e + Math.round(CELL * 4); x++) if (colN[x] < colN[best]) best = x;
+      cuts.push(best);
+    }
+    cuts.push(right + 1);
+    for (let k = 0; k < COLS; k++) {
+      let x0 = cuts[k], x1 = cuts[k + 1] - 1;
+      while (!colN[x0]) x0++;
+      while (!colN[x1]) x1--;
+      boxes.push({ x0, x1, y0, y1 });
+    }
   }
+  return boxes;
 }
-if (boxes.length < NAMES.length) { console.error(`只找到 ${boxes.length} 个头像，--names 有 ${NAMES.length} 个`); process.exit(1); }
 
 // ---- 格子的相位：在 CELL 附近找让格子边界落在颜色突变处最多的周期和起点 ----
 function edgeScore(b, axis, p, ph) {
@@ -146,19 +161,25 @@ function quantize(grid) {
 
 const data = {};
 const previews = [];
-NAMES.forEach((name, i) => {
-  const b = boxes[i], fx = fit(b, 'x'), fy = fit(b, 'y');
-  data[name] = {};
-  for (const [size, { step, n }] of Object.entries(SIZES)) {
-    const q = quantize(sample(b, fx, fy, step, n));
-    data[name][size] = { palette: q.palette, rows: q.rows };
-    if (size === 'L') previews.push(q.preview);
-  }
-  console.log(`${name}: 格子 ${fx.p.toFixed(2)}×${fy.p.toFixed(2)} px，大 ${data[name].L.palette.length} 色，中 ${data[name].M.palette.length} 色`);
-});
+for (const { file, names } of SHEETS) {
+  decode(file);
+  const boxes = findBoxes();
+  if (boxes.length < names.length) { console.error(`${path.basename(file)} 只找到 ${boxes.length} 个头像，名单有 ${names.length} 个`); process.exit(1); }
+  names.forEach((name, i) => {
+    if (name === '-') return;
+    const b = boxes[i], fx = fit(b, 'x'), fy = fit(b, 'y');
+    data[name] = {};
+    for (const [size, { step, n }] of Object.entries(SIZES)) {
+      const q = quantize(sample(b, fx, fy, step, n));
+      data[name][size] = { palette: q.palette, rows: q.rows };
+      if (size === 'L') previews.push(q.preview);
+    }
+    console.log(`${name}: 格子 ${fx.p.toFixed(2)}×${fy.p.toFixed(2)} px，大 ${data[name].L.palette.length} 色，中 ${data[name].M.palette.length} 色`);
+  });
+}
 
 const body = Object.entries(data).map(([name, sizes]) => `  ${name}: {\n${Object.entries(sizes).map(([size, { palette, rows }]) => `    ${size}: {\n      palette: ${JSON.stringify(palette)},\n      rows: [\n${rows.map((r) => `        '${r}',`).join('\n')}\n      ],\n    },`).join('\n')}\n  },`).join('\n');
-fs.writeFileSync(OUT, `// 自动生成，不要手改：node tools/make-avatars.mjs（参考图 tools/avatars/source.webp）
+fs.writeFileSync(OUT, `// 自动生成，不要手改：node tools/make-avatars.mjs（参考图在 tools/avatars/）
 // watch 启动动画的像素头像。每个头像有大（48×48）、中（36×36）两种尺寸，
 // rows 里每个字符是 palette 的下标（${ALPHABET.slice(0, 10)}…），'.' 是透明。
 export const AVATAR_ALPHABET = '${ALPHABET}';

@@ -15,6 +15,7 @@ const AVATAR_RULES = [
   ['kimi', /kimi|moonshot/],
   ['qwen', /qwen|qwq|qvq/],
   ['minimax', /minimax|abab/],
+  ['grok', /grok|x-?ai/],
 ];
 function avatarFor(modelName, agentType) {
   const name = String(modelName || '').toLowerCase();
@@ -41,6 +42,7 @@ const LOOKS = {
   kimi: { name: 'Kimi', color: [110, 170, 250] },
   qwen: { name: 'Qwen', color: [140, 116, 246] },
   minimax: { name: 'MiniMax', color: [240, 84, 84] },
+  grok: { name: 'Grok', color: [236, 208, 140] },
   unknown: { name: '???', color: [150, 150, 150] },
 };
 const decoded = new Map();
