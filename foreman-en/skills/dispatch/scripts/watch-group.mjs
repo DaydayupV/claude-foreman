@@ -229,6 +229,8 @@ async function watchGroup(group, o, loadCfg) {
     if (early != null) process.exit(early);
     if (waited >= 15000) die(M.groupNotFound(group));
     if (waited === 0 && !runs.length) process.stdout.write(`${D.watchWaiting}\n`);
+    // 找到的都已结束、还要多等几秒时，有人在看就说一声，免得以为卡住了
+    if (waited === 0 && runs.length && listenEarly) process.stdout.write(`${C.dim(D.watchGroupSettling)}\n`);
     await sleep(500);
   }
   if (listenEarly) {

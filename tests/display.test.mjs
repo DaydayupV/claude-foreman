@@ -151,6 +151,34 @@ test('真实派活时快照的两条事件留在 events.jsonl 开头，协作方
   assert.ok(watched.stdout.includes(D.watchSnapshotStart.slice(0, 30)) && watched.stdout.includes(D.watchSnapshotDone('0s')), watched.stdout);
 });
 
+test('窄窗口里折叠行也不越界、单复数正确；拍快照的提示不折叠', async (t) => {
+  const h = sandbox(t);
+  const ts = new Date().toISOString();
+  const long = Array.from({ length: 30 }, (_, i) => `第 ${i + 1} 段说明`).join('\n');
+  seedRun(h, '20000101-long', { status: 'running', pid: process.pid, ended_at: undefined }, null, [
+    { type: 'foreman.snapshot', phase: 'start', ts }, { type: 'foreman.snapshot', phase: 'done', seconds: 68, ts },
+    { type: 'item.completed', ts, item: { type: 'agent_message', text: long } },
+  ]);
+  const frame = (await frameOf(h, ['watch', '--run', '20000101-long', '--no-intro'], { FOREMAN_TEST_SCREEN: '40x60' })).map(plain);
+  for (const line of frame) assert.ok(textWidth(line) <= 39, line);
+  assert.ok(frame.some((l) => l.includes(`(${10} more lines;`.slice(0, 6))), frame.join('\n'));
+  // 快照的提示折了好几行也写全，下一行接着写完成
+  const text = frame.join('\n');
+  assert.ok(!/Taking a snapshot[\s\S]*more line[\s\S]*Snapshot taken/.test(text), text);
+  assert.ok(text.includes('minutes'), text);
+  assert.equal(MESSAGES.en.watchMoreLines(1), '(1 more line; add --verbose to see everything)');
+});
+
+test('Claude Code 席的单席查看：没有事件时不画孤零零的竖线', async (t) => {
+  const h = sandbox(t);
+  seedRun(h, '20000101-host', { participant: 'host', mode: 'submit', kind: 'discuss', module: 'discuss', agent: 'claude-code', agent_type: 'host', model: 'host-model', submitted_at: new Date().toISOString(), round: 1 }, { status: 'done', report: discussion });
+  const r = await h.bridge(['watch', '--run', '20000101-host']);
+  assert.equal(r.code, 0, r.stderr);
+  const lines = r.stdout.split('\n');
+  const end = lines.findIndex((l) => l.includes('└'));
+  assert.ok(end > 0 && !/^ +│\s*$/.test(lines[end - 1]), r.stdout);
+});
+
 test('直接输出时，一条命令迟迟没有结束，也不压着后面说的话', async (t) => {
   const h = sandbox(t);
   const ts = new Date().toISOString();

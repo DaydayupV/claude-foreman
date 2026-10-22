@@ -172,11 +172,14 @@ function introFrame(state, t, W, H) {
 
   // 先排文字区：启动信息、笑话、进度条按宽度折行，行数固定下来，画面不会上下跳
   const tw = Wd - 2, spin = SPIN[Math.floor(t / 80) % SPIN.length];
-  const models = scene.participants.map((p) => p.model);
+  // 同一个模型占了几席时只列一次，写成"模型 ×2"
+  const counts = new Map();
+  for (const p of scene.participants) counts.set(p.model, (counts.get(p.model) || 0) + 1);
+  const models = [...counts].map(([m, n]) => (n > 1 ? `${m} ×${n}` : m));
   const many = scene.kind === 'discuss' ? M.introGathering : M.introDispatching;
-  const what = scene.group ? many(models.length, models) : M.introStarting(main.who);
+  const what = scene.group ? many(scene.participants.length, models) : M.introStarting(main.who);
   let status = wrapWidth(`${spin} ${what}`, tw);
-  if (status.length > 3) status = wrapWidth(`${spin} ${many(models.length, null)}`, tw);
+  if (status.length > 3) status = wrapWidth(`${spin} ${many(scene.participants.length, null)}`, tw);
   const jokeRows = Math.max(...[...scene.jokes, M.introDone].map((j) => wrapWidth(j, tw).length));
   const longest = `  ${M.introCountdown(10)}`, barOne = Wd >= 12 + textWidth(longest);
   const tail = state.finished ? M.introEnded : M.introCountdown(Math.max(0, Math.ceil((D - t) / 1000)));

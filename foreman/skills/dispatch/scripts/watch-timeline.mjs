@@ -106,7 +106,7 @@ function createTimeline(meta, rel, { stream = false, write = (l) => process.stdo
     return add((W) => {
       const lines = wrapWidth(String(text).trim(), inner(W));
       const out = lines.slice(0, maxLines).map((l, i) => (i === 0 ? node(t, mark) : rail()) + l);
-      if (lines.length > maxLines) out.push(rail() + C.dim(D.watchMoreLines(lines.length - maxLines)));
+      if (lines.length > maxLines) out.push(rail() + C.dim(fitWidth(D.watchMoreLines(lines.length - maxLines), inner(W))));
       return out;
     });
   };
@@ -226,7 +226,7 @@ function createTimeline(meta, rel, { stream = false, write = (l) => process.stdo
         state.kinds.other--;
         snapshotNote = null;
       }
-      say(ev.ts, C.dim('⋯'), text, 2);
+      say(ev.ts, C.dim('⋯'), text);
       return;
     }
     state.snapshotting = false;
@@ -333,7 +333,7 @@ function createTimeline(meta, rel, { stream = false, write = (l) => process.stdo
       });
       return lines.map((l, i) => (i ? ' '.repeat(TIME_W + 2) + C.dim(l) : node(t, C.dim('└')) + C.bold(color(first)) + C.dim(l.slice(first.length))));
     });
-    line(rail().trimEnd());
+    if (entries.length) line(rail().trimEnd());
     if (!r) {
       ending(m?.ended_at, '✗', C.red, m?.status === 'running' ? D.watchInterrupted : D.watchEnded(m?.status));
       return null;
