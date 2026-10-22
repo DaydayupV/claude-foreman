@@ -2,6 +2,7 @@
 // 头像用半块字符 ▀▄ 画，一格上下两个像素，整屏铺深色底，深浅主题看起来一样。
 import { AVATARS, AVATAR_ALPHABET } from './watch-avatars.mjs';
 import { M, textWidth, wrapWidth } from './util.mjs';
+import { TEST_SCREEN } from './format.mjs';
 
 // ---- 头像怎么认：在模型名里找关键字，不区分大小写；先看最后一段（opencode/glm-5.3 看 glm-5.3），
 // 找不到再看整串（moonshotai-cn/…）；同时命中几个时取最先出现的（deepseek-r1-distill-qwen 认成 DeepSeek）。
@@ -313,7 +314,8 @@ function playIntro(scene, { out = process.stdout, input = process.stdin, isOver 
       process.off('SIGTERM', quit);
     }
     const tick = () => {
-      const t = Date.now() - start, W = out.columns || 100, H = out.rows || 30;
+      // 测试用 FOREMAN_TEST_SCREEN 指定终端大小，和实时画面一致
+      const t = Date.now() - start, W = TEST_SCREEN ? Number(TEST_SCREEN[1]) : out.columns || 100, H = TEST_SCREEN ? Number(TEST_SCREEN[2]) : out.rows || 30;
       if (frame % 6 === 0) {
         if (!state.finished && isOver()) { state.finished = true; state.end = Math.min(state.end, t + 400); }
         // 组里后登记的任务也出场；同名组换了一批人时（人数可能一样）按名单内容换

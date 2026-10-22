@@ -17,6 +17,17 @@ const SEARCH_COMMAND = /^\s*(rg|grep|egrep|fgrep|findstr|git\s+grep|Select-Strin
 const MAX_ACTIONS = 3; // 两句话之间的动作只显示前几条，其余折叠成一行
 const FILE_MARKS = { update: '✎', add: '+', delete: '−' };
 
+// 用量这类" · "分开的一串：在分隔符处折行，单段太长时再按宽度折，和组视图的用量行一致
+function wrapAtDots(text, width) {
+  const lines = [];
+  for (const part of text.split(' · ')) {
+    const last = lines.length - 1;
+    if (last >= 0 && textWidth(`${lines[last]} · ${part}`) <= width) lines[last] += ` · ${part}`;
+    else lines.push(...wrapWidth(part, width));
+  }
+  return lines;
+}
+
 // 成功的任务不再列出临时的重连提示；旧记录把它记成了错误
 const realErrors = (r, ok) => (r?.errors || []).filter((e) => !(ok && isReconnect(e)));
 // 结果里没有用时的旧记录，按元数据的开始和结束时间算
@@ -106,7 +117,9 @@ function createTimeline(meta, rel, { stream = false, write = (l) => process.stdo
     return add((W) => {
       const lines = wrapWidth(String(text).trim(), inner(W));
       const out = lines.slice(0, maxLines).map((l, i) => (i === 0 ? node(t, mark) : rail()) + l);
-      if (lines.length > maxLines) out.push(rail() + C.dim(fitWidth(D.watchMoreLines(lines.length - maxLines), inner(W))));
+      // 窄窗口里放不下整句时只写还有几行，不在单词中间截断
+      const more = D.watchMoreLines(lines.length - maxLines), short = D.watchMoreLinesShort(lines.length - maxLines);
+      if (lines.length > maxLines) out.push(rail() + C.dim(fitWidth(textWidth(more) <= inner(W) ? more : short, inner(W))));
       return out;
     });
   };
@@ -220,7 +233,7 @@ function createTimeline(meta, rel, { stream = false, write = (l) => process.stdo
     if (ev.type === 'foreman.snapshot') {
       state.snapshotting = ev.phase === 'start';
       const text = ev.phase === 'start' ? D.watchSnapshotStart : D.watchSnapshotDone(D.duration(ev.seconds ?? 0));
-      if (ev.phase === 'start') snapshotNote = recent('other', text);
+      if (ev.phase === 'start') snapshotNote = recent('other', D.watchSnapshotShort);
       else if (snapshotNote) {
         state.recent.splice(state.recent.indexOf(snapshotNote) >>> 0, 1);
         state.kinds.other--;
@@ -346,7 +359,7 @@ function createTimeline(meta, rel, { stream = false, write = (l) => process.stdo
       ending(m?.ended_at, mark, color, word, [Number.isFinite(sec) ? clock(sec * 1000) : '', changedFor(r, m), r.stale === true && D.watchStale].filter(Boolean));
     }
     const usage = usageLine(r, m);
-    if (usage) add((W) => wrapWidth(usage, Math.max(8, W - 1 - TIME_W - 2)).map((l) => ' '.repeat(TIME_W + 2) + C.dim(l)));
+    if (usage) add((W) => wrapAtDots(usage, Math.max(8, W - 1 - TIME_W - 2)).map((l) => ' '.repeat(TIME_W + 2) + C.dim(l)));
     const conclusion = reviewConclusion(r.report);
     if (conclusion) {
       line(''); para(conclusion, '  ');

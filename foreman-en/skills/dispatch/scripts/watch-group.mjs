@@ -221,6 +221,7 @@ async function watchGroup(group, o, loadCfg) {
   let early = null;
   const earlyKeys = (d) => { for (const k of splitKeys(d.toString('utf8'))) if (k === 'q' || k === '\x03') early = k === '\x03' ? 130 : 0; };
   const listenEarly = interactive();
+  let settlingShown = false;
   if (listenEarly) { process.stdin.setRawMode(true); process.stdin.resume(); process.stdin.on('data', earlyKeys); }
   for (let waited = 0; ; waited += 500) {
     runs = recentRuns();
@@ -230,9 +231,14 @@ async function watchGroup(group, o, loadCfg) {
     if (waited >= 15000) die(M.groupNotFound(group));
     if (waited === 0 && !runs.length) process.stdout.write(`${D.watchWaiting}\n`);
     // 找到的都已结束、还要多等几秒时，有人在看就说一声，免得以为卡住了
-    if (waited === 0 && runs.length && listenEarly) process.stdout.write(`${C.dim(D.watchGroupSettling)}\n`);
+    if (waited === 0 && runs.length && listenEarly) {
+      process.stdout.write(`${C.dim(fitWidth(D.watchGroupSettling, termCols() - 1))}\n`);
+      settlingShown = true;
+    }
     await sleep(500);
   }
+  // 等完了就把那句提示擦掉（上移一行再清掉），不留在后面的汇总上方
+  if (settlingShown) process.stdout.write('\x1b[1A\x1b[2K');
   if (listenEarly) {
     process.stdin.off('data', earlyKeys);
     if (early != null) { process.stdin.setRawMode(false); process.stdin.pause(); }

@@ -127,7 +127,7 @@ test('组视图里结束了的席位在结论下面写用量和 run_id，和单�
   const start = frame.findIndex((l) => l.startsWith('1 ✔ '));
   const block = frame.slice(start, frame.findIndex((l, i) => i > start && l.startsWith('─')));
   assert.match(block.at(-1), new RegExp(`^ {4}tokens: in 1,200 .* +${seats[0].id}$`), block.join('\n'));
-  assert.ok(frame.some((l) => l.includes(D.watchSnapshotStart.slice(0, 30))), frame.join('\n'));
+  assert.ok(frame.some((l) => l.includes(D.watchSnapshotShort)), frame.join('\n'));
   const single = (await frameOf(h, ['watch', '--run', seats[1].id, '--no-intro'], { FOREMAN_TEST_SCREEN: '160x16' })).map(plain);
   assert.ok(single.at(-1).includes(D.watchSnapshotStart.slice(0, 30)), single.at(-1));
   // 拍完以后正文里不再留着这句；没有别的内容的席位写"进行中"
@@ -135,7 +135,7 @@ test('组视图里结束了的席位在结论下面写用量和 run_id，和单�
   fs.writeFileSync(file, [{ type: 'foreman.snapshot', phase: 'start' }, { type: 'foreman.snapshot', phase: 'done', seconds: 76 }].map((e) => JSON.stringify({ ...e, ts: new Date().toISOString() })).join('\n') + '\n');
   const after = (await frameOf(h, ['watch', '--group', group, '--no-intro'], { FOREMAN_TEST_SCREEN: '100x40' })).map(plain);
   const seat2 = after.slice(after.findIndex((l) => l.startsWith('2 ● ')), after.findIndex((l) => l.startsWith('3 ● ')));
-  assert.ok(!seat2.some((l) => l.includes(D.watchSnapshotStart.slice(0, 30))), seat2.join('\n'));
+  assert.ok(!seat2.some((l) => l.includes(D.watchSnapshotShort)), seat2.join('\n'));
   assert.ok(seat2.includes(`    ${D.watchWorking}`), seat2.join('\n'));
 });
 
@@ -167,6 +167,14 @@ test('窄窗口里折叠行也不越界、单复数正确；拍快照的提示�
   assert.ok(!/Taking a snapshot[\s\S]*more line[\s\S]*Snapshot taken/.test(text), text);
   assert.ok(text.includes('minutes'), text);
   assert.equal(MESSAGES.en.watchMoreLines(1), '(1 more line; add --verbose to see everything)');
+  // 30 列放不下整句时只写还有几行，不在单词中间截断
+  const tiny = (await frameOf(h, ['watch', '--run', '20000101-long', '--no-intro'], { FOREMAN_TEST_SCREEN: '30x60' })).map(plain);
+  assert.ok(tiny.some((l) => l.trim().endsWith(D.watchMoreLinesShort(10))) && !tiny.some((l) => l.includes('add --')), tiny.join('\n'));
+  // 单任务结尾的用量行在" · "处折行，行尾不挂分隔符
+  const r = sandbox(t);
+  watchRecords(r);
+  const usage = (await r.bridge(['watch', '--run', 'a'], { env: { FOREMAN_TEST_SCREEN: '30x30' } })).stdout.split('\n').filter((l) => /^ {8}\S/.test(l));
+  assert.ok(usage.length > 1 && usage.every((l) => !/[·/]$/.test(l.trim())), usage.join('\n'));
 });
 
 test('Claude Code 席的单席查看：没有事件时不画孤零零的竖线', async (t) => {
