@@ -98,8 +98,10 @@ test('22 列也不越界：单任务的时间线、角色模式的长角色名�
   const r = sandbox(t);
   watchRecords(r);
   const out = await r.bridge(['watch', '--group', 'watch-group'], { env: { FOREMAN_TEST_SCREEN: '22x30' } });
-  // 回看命令单独一行、不截断（方便整行复制），只有它可以超宽
-  for (const line of out.stdout.split('\n').filter((l) => !l.startsWith('node '))) assert.ok(textWidth(line) <= 21, line);
+  // 回看命令和 run_id 不截断（要能照着复制），只有它们可以超宽
+  const ids = ['a', 'b', 'c', 'd'];
+  for (const line of out.stdout.split('\n').filter((l) => !l.startsWith('node ') && !ids.includes(l.trim()))) assert.ok(textWidth(line) <= 21, line);
+  for (const id of ids) assert.ok(out.stdout.split('\n').some((l) => l.trim() === id || l.endsWith(` ${id}`)), id);
 });
 
 test('角色模式的分工行只写角色；标题里带着角色的旧写法，标题行去掉角色，不当成拆分', async (t) => {
@@ -128,6 +130,9 @@ test('组视图里结束了的席位在结论下面写用量和 run_id，和单�
   const block = frame.slice(start, frame.findIndex((l, i) => i > start && l.startsWith('─')));
   assert.match(block.at(-1), new RegExp(`^ {4}tokens: in 1,200 .* +${seats[0].id}$`), block.join('\n'));
   assert.ok(frame.some((l) => l.includes(D.watchSnapshotShort)), frame.join('\n'));
+  // 窄窗口放不下这句时换成更短的说法，不在单词中间截断
+  const narrow = (await frameOf(h, ['watch', '--group', group, '--no-intro'], { FOREMAN_TEST_SCREEN: '40x40' })).map(plain);
+  assert.ok(narrow.some((l) => l.trim() === D.watchSnapshotTiny), narrow.join('\n'));
   const single = (await frameOf(h, ['watch', '--run', seats[1].id, '--no-intro'], { FOREMAN_TEST_SCREEN: '160x16' })).map(plain);
   assert.ok(single.at(-1).includes(D.watchSnapshotStart.slice(0, 30)), single.at(-1));
   // 拍完以后正文里不再留着这句；没有别的内容的席位写"进行中"

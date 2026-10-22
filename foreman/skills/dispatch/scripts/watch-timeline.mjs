@@ -18,12 +18,18 @@ const MAX_ACTIONS = 3; // 两句话之间的动作只显示前几条，其余折
 const FILE_MARKS = { update: '✎', add: '+', delete: '−' };
 
 // 用量这类" · "分开的一串：在分隔符处折行，单段太长时再按宽度折，和组视图的用量行一致
+// 单段折行时 "/" 不留在行尾，挪到下一行开头（为此按少两列折）
 function wrapAtDots(text, width) {
   const lines = [];
   for (const part of text.split(' · ')) {
     const last = lines.length - 1;
-    if (last >= 0 && textWidth(`${lines[last]} · ${part}`) <= width) lines[last] += ` · ${part}`;
-    else lines.push(...wrapWidth(part, width));
+    if (last >= 0 && textWidth(`${lines[last]} · ${part}`) <= width) { lines[last] += ` · ${part}`; continue; }
+    if (textWidth(part) <= width) { lines.push(part); continue; }
+    const pieces = wrapWidth(part, Math.max(4, width - 2));
+    for (let i = 0; i < pieces.length - 1; i++) {
+      if (/\s*\/$/.test(pieces[i])) { pieces[i] = pieces[i].replace(/\s*\/$/, ''); pieces[i + 1] = `/ ${pieces[i + 1]}`; }
+    }
+    lines.push(...pieces);
   }
   return lines;
 }
@@ -233,7 +239,7 @@ function createTimeline(meta, rel, { stream = false, write = (l) => process.stdo
     if (ev.type === 'foreman.snapshot') {
       state.snapshotting = ev.phase === 'start';
       const text = ev.phase === 'start' ? D.watchSnapshotStart : D.watchSnapshotDone(D.duration(ev.seconds ?? 0));
-      if (ev.phase === 'start') snapshotNote = recent('other', D.watchSnapshotShort);
+      if (ev.phase === 'start') snapshotNote = recent('other', D.watchSnapshotShort, { alt: D.watchSnapshotTiny });
       else if (snapshotNote) {
         state.recent.splice(state.recent.indexOf(snapshotNote) >>> 0, 1);
         state.kinds.other--;
@@ -413,4 +419,4 @@ function resultOutcome(r) {
   return { running: false, status: r.status, result: r, blocked, valid, ok: !blocked && valid && r.status === 'done' && (!r.report?.status || r.report.status === 'completed') };
 }
 
-export { createTimeline, reviewConclusion, resultOutcome, realErrors, durationOf, finishedParts, liveStatus, eventReader, hhmm };
+export { createTimeline, reviewConclusion, resultOutcome, realErrors, durationOf, finishedParts, liveStatus, eventReader, wrapAtDots, hhmm };

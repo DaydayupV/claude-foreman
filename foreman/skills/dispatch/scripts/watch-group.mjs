@@ -8,7 +8,7 @@ import { M, die, sleep, oneLine, needsDecision, modelOf, textWidth, fitWidth, wr
 import { D, C, termCols, termRows, visibleWidth, shortModel, modelLabel, moduleOf, taskLine, seatLine, identityLine, clock, outcomeStyle,
   changedFor, usageLine, foldText, paintPlanWord, replayCommand } from './format.mjs';
 import { liveCapable, interactive, liveScreen, splitKeys, scroller, LEAVE_SCREEN, kindOf, introWanted, introOf } from './watch-screen.mjs';
-import { createTimeline, reviewConclusion, realErrors, durationOf, liveStatus, eventReader, hhmm } from './watch-timeline.mjs';
+import { createTimeline, reviewConclusion, realErrors, durationOf, liveStatus, eventReader, wrapAtDots, hhmm } from './watch-timeline.mjs';
 import { introScene, playIntro } from './watch-intro.mjs';
 
 const GAP_ROLE = /^(补漏|gap)$/i;
@@ -76,7 +76,9 @@ function liveLines(state, rows, inner) {
   const line = (a, width = inner) => {
     const tag = a.tag ? `  ${a.tag}` : '';
     const head = a.mark ? `${a.mark[1](a.mark[0])} ` : '';
-    const text = fitWidth(a.text, Math.max(4, width - visibleWidth(head) - visibleWidth(tag)));
+    // 放不下时有更短的说法就用短的（比如拍快照的提示），免得在单词中间截断
+    const room = Math.max(4, width - visibleWidth(head) - visibleWidth(tag));
+    const text = fitWidth(a.alt && textWidth(a.text) > room ? a.alt : a.text, room);
     return head + (a.color || C.dim)(text) + (tag ? ' '.repeat(Math.max(0, width - visibleWidth(head) - textWidth(text) - visibleWidth(tag))) + tag : '');
   };
   const total = Object.values(state.kinds).reduce((n, k) => n + k, 0);
@@ -121,17 +123,13 @@ function current(runs, all = runs.all ?? runs) {
 // Claude Code 席排在最前，其余按开始先后
 const ordered = (runs) => [...runs].sort((a, b) => Number(isHost(b)) - Number(isHost(a)));
 
-// 汇总里每席的用量：改动、用量和费用按" · "折行，run_id 靠右写在最后一行，放不下就另起一行
-function usageRows(text, id, width) {
-  const lines = [];
-  for (const part of text ? text.split(' · ') : []) {
-    const last = lines.length - 1;
-    if (last >= 0 && textWidth(`${lines[last]} · ${part}`) <= width) lines[last] += ` · ${part}`;
-    else lines.push(...wrapWidth(part, width));
-  }
+// 每席的用量：改动、用量和费用按" · "折行，run_id 靠右写在最后一行，放不下就另起一行。
+// 汇总里（keepId）run_id 不截短，要能照着补全回看命令；实时画面里按宽度截
+function usageRows(text, id, width, keepId = false) {
+  const lines = text ? wrapAtDots(text, width) : [];
   const tail = lines.pop() ?? '';
   const rows = lines.map((l) => C.dim(l));
-  const shownId = fitWidth(id, width);
+  const shownId = keepId ? id : fitWidth(id, width);
   if (textWidth(tail) + 2 + textWidth(shownId) <= width) rows.push(C.dim(tail) + ' '.repeat(width - textWidth(tail) - textWidth(shownId)) + C.dim(shownId));
   else rows.push(...(tail ? [C.dim(tail)] : []), ' '.repeat(Math.max(0, width - textWidth(shownId))) + C.dim(shownId));
   return rows;
@@ -185,11 +183,11 @@ function createSeat(run) {
 
 // 结束了的一席在结论下面写一行用量：执行任务先写改动，再写 token 和费用，run_id 靠右；
 // Claude Code 席没有用量，写明是它提交的报告。运行中的不写
-function seatUsage(run, feed, inner) {
+function seatUsage(run, feed, inner, keepId = false) {
   if (feed.state.running) return [];
   const r = feed.outcome?.result;
   const usage = isHost(run) ? D.watchHostNoUsage : D.dots([run.meta.kind === 'exec' && changedFor(r, run.meta), usageLine(r, run.meta)]);
-  return usageRows(usage, run.id, inner);
+  return usageRows(usage, run.id, inner, keepId);
 }
 
 // 一席的几行：身份行、分工行、正文，结束了的再加用量。运行中还没有任何可写的（讨论席常常只在最后交回结果），写一行"进行中"
@@ -204,7 +202,7 @@ function seatBlock(run, feed, rows, width, no, split) {
   if (feed.state.running && !body.length && rows > 0 && !feed.tl.state.api.req) body = [C.dim(D.watchWorking)];
   const shown = body.slice(0, rows);
   if (body.length > rows && rows > 0) shown[rows - 1] = `${fitWidth(shown[rows - 1].replace(/\x1b\[[0-9;]*m/g, ''), inner - 1)}${C.dim('…')}`;
-  return { lines: [...out, ...[...shown, ...seatUsage(run, feed, inner)].map((l) => lead + l)], state: st };
+  return { lines: [...out, ...[...shown, ...seatUsage(run, feed, inner, no == null)].map((l) => lead + l)], state: st };
 }
 
 async function watchGroup(group, o, loadCfg) {
@@ -232,7 +230,9 @@ async function watchGroup(group, o, loadCfg) {
     if (waited === 0 && !runs.length) process.stdout.write(`${D.watchWaiting}\n`);
     // 找到的都已结束、还要多等几秒时，有人在看就说一声，免得以为卡住了
     if (waited === 0 && runs.length && listenEarly) {
-      process.stdout.write(`${C.dim(fitWidth(D.watchGroupSettling, termCols() - 1))}\n`);
+      // 窗口窄时截前面的说明，"(q to skip)" 留着
+      const key = ` ${D.watchGroupSettlingKey}`, room = termCols() - 1 - textWidth(key);
+      process.stdout.write(`${C.dim(room >= 8 ? fitWidth(D.watchGroupSettling, room) + key : fitWidth(D.watchGroupSettlingKey, termCols() - 1))}\n`);
       settlingShown = true;
     }
     await sleep(500);
