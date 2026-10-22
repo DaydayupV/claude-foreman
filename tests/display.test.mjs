@@ -130,6 +130,13 @@ test('组视图里结束了的席位在结论下面写用量和 run_id，和单�
   assert.ok(frame.some((l) => l.includes(D.watchSnapshotStart.slice(0, 30))), frame.join('\n'));
   const single = (await frameOf(h, ['watch', '--run', seats[1].id, '--no-intro'], { FOREMAN_TEST_SCREEN: '160x16' })).map(plain);
   assert.ok(single.at(-1).includes(D.watchSnapshotStart.slice(0, 30)), single.at(-1));
+  // 拍完以后正文里不再留着这句；没有别的内容的席位写"进行中"
+  const file = path.join(h.runs, seats[1].id, 'events.jsonl');
+  fs.writeFileSync(file, [{ type: 'foreman.snapshot', phase: 'start' }, { type: 'foreman.snapshot', phase: 'done', seconds: 76 }].map((e) => JSON.stringify({ ...e, ts: new Date().toISOString() })).join('\n') + '\n');
+  const after = (await frameOf(h, ['watch', '--group', group, '--no-intro'], { FOREMAN_TEST_SCREEN: '100x40' })).map(plain);
+  const seat2 = after.slice(after.findIndex((l) => l.startsWith('2 ● ')), after.findIndex((l) => l.startsWith('3 ● ')));
+  assert.ok(!seat2.some((l) => l.includes(D.watchSnapshotStart.slice(0, 30))), seat2.join('\n'));
+  assert.ok(seat2.includes(`    ${D.watchWorking}`), seat2.join('\n'));
 });
 
 test('直接输出时，一条命令迟迟没有结束，也不压着后面说的话', async (t) => {

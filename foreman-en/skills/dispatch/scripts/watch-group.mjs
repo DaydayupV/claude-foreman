@@ -94,7 +94,8 @@ function liveLines(state, rows, inner) {
 function wantRows(run, feed, inner) {
   if (feed.state.running) {
     const s = feed.tl.state;
-    return Math.min(MAX_ROWS, (s.speech ? Math.min(3, wrapWidth(s.speech.text, inner - 2).length) : 0) + (s.thought ? 1 : 0) + Math.min(s.recent.length, 8));
+    // 还没有内容的也留一行写"进行中"（API 协作方的状态已经写在身份行右边，不留）
+    return Math.max(s.api.req ? 0 : 1, Math.min(MAX_ROWS, (s.speech ? Math.min(3, wrapWidth(s.speech.text, inner - 2).length) : 0) + (s.thought ? 1 : 0) + Math.min(s.recent.length, 8)));
   }
   return feed.final(inner).length;
 }

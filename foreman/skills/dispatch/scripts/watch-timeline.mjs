@@ -171,6 +171,7 @@ function createTimeline(meta, rel, { stream = false, write = (l) => process.stdo
   const api = { req: null, begin: null, chars: 0, answerChars: 0, answering: false, queued: false };
   const state = { speech: null, thought: null, recent: [], kinds: {}, api };
   let seq = 0;
+  let snapshotNote = null; // 组视图正文里那句"正在拍快照"，拍完时拿掉
   const recent = (kind, text, extra = {}) => {
     const a = { kind, text, ...extra };
     state.recent.push(a);
@@ -213,10 +214,16 @@ function createTimeline(meta, rel, { stream = false, write = (l) => process.stdo
   const show = (ev) => {
     if (ev.type?.startsWith('api.')) { showApi(ev); return; }
     // 开工前拍快照：大目录要几分钟，写出来免得画面一片空白
+    // 组视图的正文只在拍的时候写这句，拍完就去掉，之后没有别的内容时写"进行中"；时间线里两句都留着
     if (ev.type === 'foreman.snapshot') {
       state.snapshotting = ev.phase === 'start';
       const text = ev.phase === 'start' ? D.watchSnapshotStart : D.watchSnapshotDone(D.duration(ev.seconds ?? 0));
-      recent('other', text);
+      if (ev.phase === 'start') snapshotNote = recent('other', text);
+      else if (snapshotNote) {
+        state.recent.splice(state.recent.indexOf(snapshotNote) >>> 0, 1);
+        state.kinds.other--;
+        snapshotNote = null;
+      }
       say(ev.ts, C.dim('⋯'), text, 2);
       return;
     }
