@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 从参考图生成 watch 启动动画的头像数据（foreman/skills/dispatch/scripts/watch-avatars.mjs）。
 //
-//   node tools/make-avatars.mjs [参考图=名单 ...] [--cell 11.6] [--cols 5] [--preview 预览.png]
+//   node tools/make-avatars.mjs [参考图=名单 ...] [--cell 11.6] [--cols 5] [--preview 预览.png] [--cards tools/avatars/cards]
 //
 // 参考图是黑底的像素头像，按行排列，每行 --cols 个，下面可以有名牌（会自动跳过）。
 // 名单按顺序给每个头像起名，逗号分隔，写 - 的跳过；几张参考图取出的头像合在一起输出。
@@ -9,6 +9,8 @@
 // --cell 是原图里一个像素格的边长（px），自动估计容易被大一倍的周期带偏，所以要手动给。
 // 每个头像取两种尺寸：大 48×48（按半格取样）、中 36×36（按 2/3 格取样），都是正方形画布，
 // 水平居中、底边对齐，空处透明；每种尺寸压成不超过 32 色的调色板。
+// --cards 把每个角色留档成三张图：<名字>.png 是参考图上的原始卡片（带名牌），<名字>-48.png、<名字>-36.png
+// 是实际用的两种尺寸放大 8 倍。角色说明见 tools/avatars/README.md。
 // 解码图片用 Windows 自带的 WIC（通过 PowerShell），所以只能在 Windows 上运行。
 
 import { spawnSync } from 'node:child_process';
@@ -84,11 +86,14 @@ function findBoxes() {
       cuts.push(best);
     }
     cuts.push(right + 1);
+    // 整张卡片（头像加下面的名牌）留档用：横向到相邻的切口，纵向到紧跟着的矮带的底边
+    const label = bands.find(([a, b]) => a > y1 && b - a <= tallest * 0.5);
     for (let k = 0; k < COLS; k++) {
       let x0 = cuts[k], x1 = cuts[k + 1] - 1;
+      const card = { x0, x1, y0, y1: label ? label[1] : y1 };
       while (!colN[x0]) x0++;
       while (!colN[x1]) x1--;
-      boxes.push({ x0, x1, y0, y1 });
+      boxes.push({ x0, x1, y0, y1, card });
     }
   }
   return boxes;
@@ -161,6 +166,13 @@ function quantize(grid) {
 
 const data = {};
 const previews = [];
+const cards = [];
+const cardsDir = opt('cards');
+const crop = ({ x0, x1, y0, y1 }) => {
+  const w = x1 - x0 + 1, h = y1 - y0 + 1, out = Buffer.alloc(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) out.set([...px(x0 + x, y0 + y), 255], (y * w + x) * 4);
+  return { w, h, rgba: out };
+};
 for (const { file, names } of SHEETS) {
   decode(file);
   const boxes = findBoxes();
@@ -169,11 +181,15 @@ for (const { file, names } of SHEETS) {
     if (name === '-') return;
     const b = boxes[i], fx = fit(b, 'x'), fy = fit(b, 'y');
     data[name] = {};
+    const card = { name, sheet: path.basename(file), slot: i + 1, grids: {} };
     for (const [size, { step, n }] of Object.entries(SIZES)) {
       const q = quantize(sample(b, fx, fy, step, n));
       data[name][size] = { palette: q.palette, rows: q.rows };
+      card.grids[n] = q.preview;
       if (size === 'L') previews.push(q.preview);
     }
+    if (cardsDir) card.original = crop(b.card);
+    cards.push(card);
     console.log(`${name}: 格子 ${fx.p.toFixed(2)}×${fy.p.toFixed(2)} px，大 ${data[name].L.palette.length} 色，中 ${data[name].M.palette.length} 色`);
   });
 }
@@ -189,19 +205,49 @@ ${body}
 `);
 console.log(`已写入 ${path.relative(ROOT, OUT)}`);
 
+// ---- PNG：RGBA，8 位 ----
+const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+const crc = (b) => { let c = 0xffffffff; for (const x of b) c = crcTable[(c ^ x) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+const chunk = (type, d) => { const l = Buffer.alloc(4); l.writeUInt32BE(d.length); const td = Buffer.concat([Buffer.from(type), d]); const c = Buffer.alloc(4); c.writeUInt32BE(crc(td)); return Buffer.concat([l, td, c]); };
+function writePng(file, w, h, rgba) {
+  const rawRows = Buffer.alloc((w * 4 + 1) * h);
+  for (let y = 0; y < h; y++) rgba.copy(rawRows, y * (w * 4 + 1) + 1, y * w * 4, (y + 1) * w * 4);
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 6;
+  fs.writeFileSync(file, Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(rawRows)), chunk('IEND', Buffer.alloc(0))]));
+}
+// 像素网格放大 S 倍画到画布的 (ox, oy)，透明处留给画布的底色
+function paint(img, PW, grid, ox, oy, S) {
+  grid.forEach((row, j) => row.forEach((p, i) => {
+    if (!p) return;
+    for (let dy = 0; dy < S; dy++) for (let dx = 0; dx < S; dx++) img.set([...p, 255], (((oy + j) * S + dy) * PW + (ox + i) * S + dx) * 4);
+  }));
+}
+
 // ---- 可选：把大尺寸拼成一张放大 4 倍的 PNG，方便肉眼核对 ----
 const previewFile = opt('preview');
 if (previewFile) {
-  const S = 4, cw = 50, PW = cw * COLS * S, PH = cw * Math.ceil(previews.length / COLS) * S, img = Buffer.alloc(PW * PH * 3, 24);
-  previews.forEach((g, c) => g.forEach((row, j) => row.forEach((p, i) => {
-    for (let dy = 0; dy < S; dy++) for (let dx = 0; dx < S; dx++) img.set(p || [0, 0, 0], ((((Math.floor(c / COLS) * cw) + j) * S + dy) * PW + ((c % COLS) * cw + i) * S + dx) * 3);
-  })));
-  const rawRows = Buffer.alloc((PW * 3 + 1) * PH);
-  for (let y = 0; y < PH; y++) img.copy(rawRows, y * (PW * 3 + 1) + 1, y * PW * 3, (y + 1) * PW * 3);
-  const table = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
-  const crc = (b) => { let c = 0xffffffff; for (const x of b) c = table[(c ^ x) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
-  const chunk = (type, d) => { const l = Buffer.alloc(4); l.writeUInt32BE(d.length); const td = Buffer.concat([Buffer.from(type), d]); const c = Buffer.alloc(4); c.writeUInt32BE(crc(td)); return Buffer.concat([l, td, c]); };
-  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(PW, 0); ihdr.writeUInt32BE(PH, 4); ihdr[8] = 8; ihdr[9] = 2;
-  fs.writeFileSync(previewFile, Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(rawRows)), chunk('IEND', Buffer.alloc(0))]));
+  const S = 4, cw = 50, PW = cw * COLS * S, PH = cw * Math.ceil(previews.length / COLS) * S, img = Buffer.alloc(PW * PH * 4);
+  for (let k = 0; k < PW * PH; k++) img.set([24, 24, 24, 255], k * 4);
+  previews.forEach((g, c) => {
+    for (let j = 0; j < 48; j++) for (let i = 0; i < 48; i++) for (let dy = 0; dy < S; dy++) for (let dx = 0; dx < S; dx++) img.set([0, 0, 0, 255], ((((Math.floor(c / COLS) * cw) + j) * S + dy) * PW + ((c % COLS) * cw + i) * S + dx) * 4);
+    paint(img, PW, g, (c % COLS) * cw, Math.floor(c / COLS) * cw, S);
+  });
+  writePng(previewFile, PW, PH, img);
   console.log(`预览：${previewFile}`);
+}
+
+// ---- 可选：留档每个角色的卡片：参考图上的原始卡片，和放大 8 倍的大、中两种头像（铺启动动画的深色底） ----
+if (cardsDir) {
+  fs.mkdirSync(cardsDir, { recursive: true });
+  const S = 8;
+  for (const { name, original, grids } of cards) {
+    writePng(path.join(cardsDir, `${name}.png`), original.w, original.h, original.rgba);
+    for (const [n, grid] of Object.entries(grids)) {
+      const PW = n * S, img = Buffer.alloc(PW * PW * 4);
+      for (let k = 0; k < PW * PW; k++) img.set([16, 16, 22, 255], k * 4);
+      paint(img, PW, grid, 0, 0, S);
+      writePng(path.join(cardsDir, `${name}-${n}.png`), PW, PW, img);
+    }
+  }
+  console.log(`卡片：${cardsDir}（${cards.map((c) => `${c.name}=${c.sheet}#${c.slot}`).join('，')}）`);
 }
