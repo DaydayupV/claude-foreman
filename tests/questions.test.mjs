@@ -208,8 +208,8 @@ test('watch 分类显示六种问题，status 与组计数将 needs_input 计入
   assert.ok(status.stdout.includes(`? ${D.statusName('blocked')}`));
   assert.ok(status.stdout.endsWith(`${D.groupSummary(2, 0, 0, 0, 2)}\n`));
   const group = await h.bridge(['watch', '--group', 'questions']);
-  assert.ok(group.stdout.includes(D.groupCount.blocked(2)), group.stdout);
-  assert.ok(!group.stdout.includes(D.groupCount.failed(2)));
+  // 组视图标题行右边的计数：交回问题和等人回答都记作 ?
+  assert.match(group.stdout.split('\n')[1], / \?2$/, group.stdout);
   assert.ok(!group.stdout.includes('✗'));
   const english = output(await h.start(path.join(ROOT, 'foreman-en/hooks/session-reminder.mjs'), [], { input: JSON.stringify({ cwd: h.cwd }) }).done);
   assert.ok(english.hookSpecificOutput.additionalContext.includes('waiting for an answer, stopped'));

@@ -182,9 +182,12 @@ await import(${JSON.stringify(pathToFileURL(BRIDGE).href)});`);
   assert.equal(status.code, 0, status.stderr); assert.equal(json(count), 1);
   const watched = await h.bridge(['watch', '--group', group]);
   for (const r of [status, watched]) {
-    assert.equal(r.code, 0, r.stderr); assert.ok(r.stdout.includes(`Plan ${id}: complete`), r.stdout);
+    assert.equal(r.code, 0, r.stderr);
     assert.ok(r.stdout.includes('20000101-000002-aaaa')); assert.ok(!r.stdout.includes('20000101-000001-aaaa'));
   }
+  assert.ok(status.stdout.includes(`Plan ${id}: complete`), status.stdout);
+  // 组视图只在计划有缺口时写计划行；完整的不写
+  assert.ok(!watched.stdout.includes(MESSAGES.en.planStates.incomplete) && !watched.stdout.includes(id), watched.stdout);
 });
 
 test('另一个会话重启同席并续接任务链，watch 显示最新轮次且 status 将旧轮算已续接', async (t) => {
@@ -524,7 +527,7 @@ test('watch 组视图同计划同席只显示 run id 最大的重启轮次，计
   assert.equal(watched.code, 0, watched.stderr);
   assert.ok(watched.stdout.includes(latest)); assert.ok(watched.stdout.includes(other));
   assert.ok(!watched.stdout.includes(old)); assert.ok(!watched.stdout.includes('旧的失败轮次'));
-  assert.ok(watched.stdout.includes(`Group ${group} · 2 runs`), watched.stdout);
+  assert.equal(watched.stdout.match(/^✔ /gm)?.length, 2, watched.stdout);
   const status = output(await h.bridge(['status', '--plan', plan]));
   assert.equal(status.state, 'complete'); assert.deepEqual(status.seats[0].runs, [old, latest]);
 });

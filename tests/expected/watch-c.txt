@@ -1,17 +1,14 @@
 
-<TIME> ┌ model · opencode CLI · effort high
-      │ discuss · 合成c · level complex
-      │ Model fake/model
-      │ Working dir <CWD>
-      │ Run dir <HOME>/r/c
-      │
+✔ model high · opencode CLI                                                               done 0:03
+  discuss · 合成c · complex
+───────────────────────────────────────────────────────────────────────────────────────────────────
       │   read source.txt
       │   search TODO src
       │
-<TIME> └ ✔ done · took 3s
+<TIME> └ ✔ done 0:03
         tokens: in 120 (cached 25%) · out 40
 
   先建立回归测试，再拆模块
 
-Open issues
+  Open issues
   · 模块边界待确认

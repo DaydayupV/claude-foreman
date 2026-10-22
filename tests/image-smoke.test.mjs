@@ -30,7 +30,9 @@ test('stale 在席位、计划行、status 和 watch 结束行显示，完整性
   const detail = D.watchPlanStale(D.watchPlanSeat('codex', 1, null));
   for (const args of [['status'], ['status', '--group', p.group], ['watch', '--run', r.run_id], ['watch', '--run', r.run_id, '--verbose'], ['watch', '--group', p.group]]) {
     const display = await h.bridge(args); assert.equal(display.code, 0); assert.ok(display.stdout.includes(D.watchStale), display.stdout);
-    if (args.includes('--group')) assert.ok(display.stdout.includes(D.watchPlanState(p.plan_id, 'complete', detail)), display.stdout);
+    // status 写完整的计划行；组视图只在计划有缺口时写一行，不写计划号
+    if (args[0] === 'status' && args.includes('--group')) assert.ok(display.stdout.includes(D.watchPlanState(p.plan_id, 'complete', detail)), display.stdout);
+    if (args[0] === 'watch' && args.includes('--group')) assert.ok(display.stdout.includes(`⚠ ${D.dots([D.planStates.complete, detail])}`), display.stdout);
     if (args[0] === 'status') assert.ok(display.stdout.includes(`材料审查 · ${D.watchStale}`));
   }
   // 必选以计划的 required 名单为准
@@ -141,7 +143,8 @@ test('opencode 费用在 status、watch 两种结束用量和组汇总显示，�
   assert.equal(r.cost_usd, 0.00138);
   for (const args of [['status'], ['watch', '--run', r.run_id], ['watch', '--run', r.run_id, '--verbose'], ['watch', '--group', 'cost-group']]) {
     const display = await h.bridge(args); assert.equal(display.code, 0);
-    assert.ok(display.stdout.split('\n').some((s) => s.includes('token') && s.endsWith(` · ${D.costUsd('0.0014')}`)), display.stdout);
+    // 组汇总的用量行右边还有 run_id
+    assert.ok(display.stdout.split('\n').some((s) => s.includes('token') && s.replace(/ {2,}\S+$/, '').endsWith(` · ${D.costUsd('0.0014')}`)), display.stdout);
   }
   seedRun(h, 'cost-only', { group: 'cost-only' }, { status: 'done', duration_s: 1, usage: null, cost_usd: 0, errors: [] });
   for (const args of [['status', '--group', 'cost-only'], ['watch', '--run', 'cost-only'], ['watch', '--run', 'cost-only', '--verbose'], ['watch', '--group', 'cost-only']]) {

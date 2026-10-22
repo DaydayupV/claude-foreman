@@ -177,8 +177,8 @@ function describePlans(runs, all = runs.all ?? runs) {
     };
     const details = [missing.some((s) => s.status === 'not_submitted') ? D.hostNotSubmitted : '', detail, stale.length ? D.watchPlanStale(seats(stale, () => null)) : '',
       gap.length ? D.watchPlanGap(seats(gap, gapLabel)) : ''].filter(Boolean).join('; ');
-    return [{ id, state, text: D.watchPlanState(id, state, details) }];
+    return [{ id, state, details, text: D.watchPlanState(id, state, details) }];
   });
 }
 
-export { cmdPlan, readPlan, startCommands, planStatus, describePlans, routeConfirmation };
+export { cmdPlan, readPlan, loadPlan, startCommands, planStatus, describePlans, routeConfirmation };

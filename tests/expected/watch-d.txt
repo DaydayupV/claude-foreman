@@ -1,11 +1,9 @@
 
-<TIME> ┌ fake-codex · Codex CLI · effort high
-      │ run · 合成d · level complex
-      │ Working dir <CWD>
-      │ Run dir <HOME>/r/d
-      │
+✗ fake-codex high · Codex CLI                                                           failed 0:03
+  run · 合成d · complex
+───────────────────────────────────────────────────────────────────────────────────────────────────
 <TIME> ✗ 合成失败原因
       │
-<TIME> └ ✗ failed · took 3s · 0 files changed
+<TIME> └ ✗ failed 0:03 · 0 files changed
         tokens: in 120 (cached 25%) · out 40
-✗ 合成失败原因
+  ✗ 合成失败原因

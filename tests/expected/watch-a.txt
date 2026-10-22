@@ -1,14 +1,12 @@
 
-<TIME> ┌ fake-codex · Codex CLI · effort high
-      │ run · 合成a · level complex
-      │ Working dir <CWD>
-      │ Run dir <HOME>/r/a
-      │
+✔ fake-codex high · Codex CLI                                                             done 0:03
+  run · 合成a · complex
+───────────────────────────────────────────────────────────────────────────────────────────────────
       │   $ node -e "0"
-      │   ✎ changed source.txt
+      │   ✎ source.txt
 <TIME> ◆ 完成合成修改
       │
-<TIME> └ ✔ done · took 3s · 1 file changed, plus 1 of unknown origin, 1 from other runs in the group
+<TIME> └ ✔ done 0:03 · 1 file changed, plus 1 of unknown origin, 1 from other runs in the group
         tokens: in 120 (cached 25%) · out 40
 
   合成任务已完成

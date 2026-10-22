@@ -100,9 +100,11 @@ test('组视图和 status --group 写出计划完不完整、缺了哪个必选'
   const incomplete = await makePlan(h, 'plan-incomplete');
   seat(h, '20000101-a', incomplete, 1, 'codex', 'cancelled', { status: 'cancelled', errors: [M.runCancelled('fake-codex', 'command')] });
   seat(h, '20000101-b', incomplete, 2, 'oc', 'done', { status: 'done', report: discussion });
-  const line = D.watchPlanState(incomplete.plan_id, 'incomplete', D.watchPlanMissing(D.watchPlanSeat('codex', 1, D.statusName('cancelled'))));
+  const missing = D.watchPlanMissing(D.watchPlanSeat('codex', 1, D.statusName('cancelled')));
+  const line = D.watchPlanState(incomplete.plan_id, 'incomplete', missing);
+  // 组视图标题下写一行缺口，不写计划号；status 写完整的计划行
   const watched = await h.bridge(['watch', '--group', 'plan-incomplete']);
-  assert.equal(watched.code, 0); assert.ok(watched.stdout.includes(line), watched.stdout);
+  assert.equal(watched.code, 0); assert.ok(watched.stdout.includes(`✗ ${D.dots([D.planStates.incomplete, missing])}`), watched.stdout);
   const status = await h.bridge(['status', '--group', 'plan-incomplete']);
   assert.ok(status.stdout.includes(line), status.stdout);
 

@@ -1,18 +1,18 @@
-Group live-group · 合成讨论：登记锁原地重试 · 4 runs  running 4
-Plan 20000101-000000-plan: in progress
+discuss · panel · 合成讨论：登记锁原地重试 · complex         ●4
 ───────────────────────────────────────────────────────────────
-● gpt-6-astra · Code…                 running <CLOCK> · commands 6
-  ◆ 先看一下登记锁现在怎么加锁、怎么回收残留锁，再对照 Windows…
+1 ● gpt-6-astra max · Codex CLI                    running <CLOCK>
+    ◆ 先看一下登记锁现在怎么加锁、怎么回收残留锁，再对照 Windo…
+    … +5 commands · $ rg -n retryBusy foreman/skills/dispatch/…
 ───────────────────────────────────────────────────────────────
-● deepseek-v4.1-flas…       running <CLOCK> · reads 3 · searches 2
-  … 2 more reads, 2 more searches · read tests/admission.test.…
+2 ● deepseek-v4.1-flash max · opencode CLI         running <CLOCK>
+    … +2 reads, +1 search
+    search **/*.lock
+    read tests/admission.test.mjs
 ───────────────────────────────────────────────────────────────
-● mimo-v2.6-pro · pi…       running <CLOCK> · reads 1 · searches 1
-  ◆ 我先读登记锁的代码，再看测试。
+3 ● mimo-v2.6-pro high · pi CLI                    running <CLOCK>
+    ◆ 我先读登记锁的代码，再看测试。
+    thinking: 删除挂起时 openSync 会报 EPERM，要确认重试的上限…
+    … +1 read · search ls tests
 ───────────────────────────────────────────────────────────────
-● kimi-k2.6 · API · …   thinking <CLOCK> · 3,200 characters so far
-  Request sent: model kimi-k2.6, effort default
-
-
-
-Press Ctrl+C to stop watching; the runs keep going
+4 ● kimi-k2.6 · API                               thinking <CLOCK>
+                           1–4 open a seat · ↑↓ scroll · q quit

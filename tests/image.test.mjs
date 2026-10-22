@@ -227,14 +227,15 @@ test('image 只从计划启动并要求 scope，generate 的元数据、执行�
   }
   assert.equal(r.generated_images.length, 1); assert.equal(path.basename(r.generated_images[0]), 'picture.png');
   assert.ok(!r.warnings.includes(M.imageOutsideModule)); assert.equal(r.changes.available, true);
-  assert.ok(execution.stderr.includes(`foreman: image started · fake-codex · Codex CLI · effort medium · generate · route ① · run dir ${r.run_dir}`), execution.stderr);
+  assert.ok(execution.stderr.includes(`foreman: image started · fake-codex medium · Codex CLI · generate · route ① · run dir ${r.run_dir}`), execution.stderr);
   assert.ok(!execution.stderr.includes('直接指定推理强度'));
   const list = await h.bridge(['status']);
   assert.match(list.stdout, /\simage\s+✔ done\s+generate\s/); assert.ok(list.stdout.includes(`${D.statusRoute('①')}合成画面`));
-  for (const flags of [[], ['--verbose']]) {
-    const watched = await h.bridge(['watch', '--run', r.run_id, ...flags]);
-    assert.ok(watched.stdout.includes(D.watchImageHead('image', '合成画面', 'generate', '①')), watched.stdout);
-  }
+  // 时间线的任务行用格子和路线代替等级；详细模式开头照旧
+  const watched = await h.bridge(['watch', '--run', r.run_id]);
+  assert.ok(watched.stdout.includes(`  ${D.dots(['image', '合成画面', 'generate', 'route ①'])}\n`), watched.stdout);
+  const verbose = await h.bridge(['watch', '--run', r.run_id, '--verbose']);
+  assert.ok(verbose.stdout.includes(D.watchImageHead('image', '合成画面', 'generate', '①')), verbose.stdout);
   const state = output(await h.bridge(['status', '--plan', p.plan_id]));
   assert.equal(state.state, 'complete'); assert.equal(state.route, 1); assert.equal(state.seats[0].stale, null);
 });
@@ -252,7 +253,8 @@ test('图像续接沿用格子、路线、计划及席位，不读 run 等级且
   assert.deepEqual(second.generated_images.map((p) => path.basename(p)), ['new.png']); assert.equal(second.parent, first.run_id);
   assert.ok((await h.bridge(['status'])).stdout.includes('resume'));
   const watched = await h.bridge(['watch', '--run', second.run_id]);
-  assert.ok(watched.stdout.includes(D.watchImageHead('resume', second.run_id, 'generate', '②')));
+  // 续接没有记轮次，按续接链数出第 2 轮
+  assert.ok(watched.stdout.includes(`  ${D.dots(['image', second.run_id, 'generate', 'route ②', D.watchRound(2)])}\n`), watched.stdout);
   c.agents.second = { ...c.agents.codex }; c.modules.image.generate = [{ agent: 'second' }]; h.config(c);
   failed(await h.bridge(['resume', '--run', second.run_id, '--brief', '-']), M.resumeAgentNotInCell('codex', 'modules.image.generate', 'second'));
   c.modules.image.generate = null; h.config(c);

@@ -273,7 +273,7 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
   const run = startRun({ ...ctx, isolation }, { started, track, sandbox, modelShown, modelName });
   const { meta, writeMeta } = run;
   fs.writeFileSync(path.join(dir, 'brief.md'), prompt);
-  process.stderr.write(`foreman: ${ctx.module === 'image' ? D.startedImage(mode === 'resume' ? 'resume' : 'image', modelLabel(meta), ctx.cell, '①②③④'[ctx.route - 1], dir) : D.started(mode, modelLabel(meta), level, dir)}\n`);
+  process.stderr.write(`foreman: ${ctx.module === 'image' ? D.startedImage(mode === 'resume' ? 'resume' : 'image', modelLabel(meta, { source: true }), ctx.cell, '①②③④'[ctx.route - 1], dir) : D.started(mode, modelLabel(meta, { source: true }), level, dir)}\n`);
   if (snapshotRequired) notice(M.unsandboxedRun(agent.run_access));
 
   const warnings = [];

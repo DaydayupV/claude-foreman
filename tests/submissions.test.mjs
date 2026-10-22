@@ -242,20 +242,26 @@ console.log(JSON.stringify({ tally: groupTally(runs), running: isRunning(runs[0]
   assert.deepEqual(output(await h.start(script).done), { tally: { running: 0, ok: 0, blocked: 0, failed: 0, resumed: 0, submitted: 1 }, running: false, owner: null });
 });
 
-test('watch 组实时面板和单席 verbose 只显示交卷行，无 events 也不报错', async (t) => {
+test('watch 组视图里 Claude Code 席排在最前、和外部席一样写身份行和结论，单席查看照样显示答卷，无 events 也不报错', async (t) => {
   const h = sandbox(t), p = output(await h.bridge(planArgs(h))), a = output(await h.bridge(submitArgs(h, p, ['--model', 'host-model'])));
   const gate = path.join(h.home, 'release'), s = h.scenario({ last_message: discussion, steps: [{ wait_for: gate }] });
   const task = h.startBridge(launch(p), { env: s.env }); await h.running();
   const watch = h.startBridge(['watch', '--group', p.group], { env: { FOREMAN_TEST_SCREEN: '160x30' } });
-  await poll(() => watch.stdout.includes(` (round 1) · host-model`), 'host 实时交卷行');
+  const submitted = `${MESSAGES.en.statusName('submitted')} ${a.submitted_at.slice(11, 16)}`;
+  await poll(() => watch.stdout.includes('0 ✔ host-model · Claude Code') && watch.stdout.includes(submitted), 'Claude Code 席的实时身份行');
   write(gate, 'go'); output(await task.done);
   const out = await watch.done; assert.equal(out.code, 0, out.stderr);
-  assert.ok(out.stdout.includes('submitted 1')); assert.ok(!fs.existsSync(path.join(a.run_dir, 'cancel')));
-  assert.ok(!out.stdout.includes(`--run ${a.run_id}`)); assert.equal(fs.existsSync(path.join(a.run_dir, 'events.jsonl')), false);
+  const summary = out.stdout.slice(out.stdout.lastIndexOf('\x1b[?1049l')); // 离开实时画面之后写的汇总
+  assert.ok(summary.includes(`✔ host-model · Claude Code`) && summary.includes(discussion.position), summary);
+  assert.ok(summary.indexOf('Claude Code') < summary.indexOf('fake-codex'), summary);
+  assert.ok(!fs.existsSync(path.join(a.run_dir, 'cancel')), 'cancel'); assert.equal(fs.existsSync(path.join(a.run_dir, 'events.jsonl')), false);
   for (const lang of ['zh', 'en']) {
-    const single = await h.bridge(['watch', '--run', a.run_id, '--verbose'], { env: { FOREMAN_LANG: lang } });
-    assert.equal(single.code, 0); assert.ok(single.stdout.startsWith(MESSAGES.en.hostSubmitted(a.submitted_at.slice(11, 16), 1)));
-    assert.ok(!single.stdout.includes('timeline')); assert.ok(!single.stdout.includes('Codex CLI'));
+    for (const flags of [[], ['--verbose']]) {
+      const single = await h.bridge(['watch', '--run', a.run_id, ...flags], { env: { FOREMAN_LANG: lang } });
+      assert.equal(single.code, 0, single.stderr); assert.match(single.stdout, new RegExp(`✔ host-model · Claude Code +${submitted}\\n`));
+      assert.ok(single.stdout.includes(MESSAGES.en.watchAnswerSubmitted(1)) && single.stdout.includes(discussion.position), single.stdout);
+      assert.ok(!single.stdout.includes('Codex CLI'), single.stdout);
+    }
   }
 });
 

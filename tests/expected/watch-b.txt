@@ -1,18 +1,16 @@
 
-<TIME> ┌ fake-api · API · effort high
-      │ discuss · 合成b · level complex
-      │ Working dir <CWD>
-      │ Run dir <HOME>/r/b
-      │
+✔ fake-api high · API                                                                     done 0:03
+  discuss · 合成b · complex
+───────────────────────────────────────────────────────────────────────────────────────────────────
 <TIME> ◆ Request sent: model fake-api, effort high
 <TIME> ⋯ Service busy; the request is queued and hasn't started
 <TIME> ◆ Started after 1s in the queue
 <TIME> ◆ Thought for 1s (4 characters), now writing the answer
       │
-<TIME> └ ✔ done · took 3s
+<TIME> └ ✔ done 0:03
         tokens: in 120 (cached 25%) · out 40
 
   先建立回归测试，再拆模块
 
-Open issues
+  Open issues
   · 模块边界待确认

@@ -22,13 +22,35 @@ const visibleWidth = (s) => textWidth(s.replace(/\x1b\[[0-9;]*m/g, ''));
 // 按显示宽度补空格（中日韩字符占两格，颜色代码不占），用来对齐 status 的各列
 const padWidth = (s, width) => s + ' '.repeat(Math.max(0, width - visibleWidth(s)));
 
-// 模型名去掉"提供方/"前缀；带前缀的完整写法放进时间线开头的详细信息行。
+// 模型名去掉"提供方/"前缀；带前缀的完整写法放进详细模式开头的信息行。
 const shortModel = (model) => String(model).slice(String(model).lastIndexOf('/') + 1) || String(model);
 const fullModel = (m) => (modelOf(m).includes('/') ? modelOf(m) : null);
-// 模型标签：<模型> · <接入方式> · 推理强度 <强度>。旧记录没有 agent_type 和 model_name，都是 Codex CLI。
+// 模型标签：<模型> <强度> · <接入方式>，没有推理强度时只写模型。旧记录没有 agent_type 和 model_name，都是 Codex CLI。
+// Claude Code 席写 <自报的模型> · Claude Code。开工那一行（source）另外注明模型来自 Codex 配置。
 const CHANNEL_KEY = { api: 'api', 'opencode cli': 'opencode', 'pi cli': 'pi' };
-const modelLabel = (m) => m?.participant === 'host' ? `Claude Code${m.model ? ` · ${m.model}` : ''}` : D.modelLabel(shortModel(modelOf(m)), D.channel[CHANNEL_KEY[agentTypeOf(m)] || 'codex'], m?.effort,
-  !m?.model && !!m?.model_name && agentTypeOf(m) === 'codex cli');
+const modelLabel = (m, { source = false } = {}) => (m?.participant === 'host' ? D.dots([m.model, 'Claude Code'])
+  : D.modelLabel(shortModel(modelOf(m)), D.channel[CHANNEL_KEY[agentTypeOf(m)] || 'codex'], m?.effort,
+    source && !m?.model && !!m?.model_name && agentTypeOf(m) === 'codex cli'));
+
+// 任务属于哪个模块；旧记录没有 module，按 kind 和模式推断
+const moduleOf = (m) => m?.module ?? (m?.kind === 'exec' ? 'run' : m?.kind ?? m?.mode);
+// 任务行：<模块> · [<模式> · ]<标题> · <等级>[ · round N]；图像任务用格子和路线代替等级
+const taskLine = (m, { mode = null, title = m?.title, round = m?.round } = {}) => D.dots([moduleOf(m), mode, title && oneLine(title),
+  ...(moduleOf(m) === 'image' ? [m?.cell, m?.route && `route ${'①②③④'[m.route - 1]}`] : [m?.level]), round > 1 && D.watchRound(round)]);
+// 身份行下面的分工行：角色、并发拆分这一份的标题（都加粗）和等级、图像的格子；Claude Code 席审自己写的东西时加暗色的 author。
+// 放不下 width 时先截标题和角色，再整行截短
+function seatLine(m, { title = false, width = Infinity } = {}) {
+  const parts = [[m.role, C.bold], [title && m.title, C.bold], [title && m.level, plain], [moduleOf(m) === 'image' && m.cell, plain], [m.author && 'author', C.dim]]
+    .filter(([text]) => text).map(([text, style]) => ({ text: oneLine(String(text)), style }));
+  if (!parts.length) return null;
+  const total = () => textWidth(parts.map((p) => p.text).join(' · '));
+  for (const p of [...parts].filter((x) => x.style === C.bold).sort((a, b) => textWidth(b.text) - textWidth(a.text))) {
+    if (total() <= width) break;
+    p.text = fitWidth(p.text, Math.max(4, textWidth(p.text) - (total() - width)));
+  }
+  if (total() > width) return C.dim(fitWidth(parts.map((p) => p.text).join(' · '), Math.max(1, width)));
+  return parts.map((p) => p.style(p.text)).join(C.dim(' · '));
+}
 
 // 运行中的计时写成 12:03，结束后写"用时 19 分 18 秒"
 const clock = (ms) => {
@@ -43,6 +65,25 @@ const shownStatus = (status, r) => (status === 'done' ? r?.needs_decision ? 'blo
 function outcomeStyle(o) {
   const style = o.running ? { mark: '●', color: C.cyan } : o.ok ? { mark: '✔', color: C.green } : o.blocked ? { mark: '?', color: C.yellow } : { mark: '✗', color: C.red };
   return { ...style, word: D.statusName(o.running ? 'running' : o.status === 'done' && !o.blocked && o.valid === false ? 'no_result' : shownStatus(o.status, o.result)) };
+}
+
+// 身份行：[暗色席位号] 记号 <模型标签>，整行按状态上色加粗，右边是状态：状态词上色，时钟和补充暗色。
+// right 是 [状态词, 时钟, 补充]；窗口窄时先截模型标签，再去掉补充和时钟，最后才截状态词
+function identityLine(m, style, right, width, no = null) {
+  const lead = no != null ? `${C.dim(String(no))} ` : '';
+  const leadW = no != null ? String(no).length + 3 : 2;
+  const [word = '', ...rest] = right.filter(Boolean);
+  const textOf = (list) => [word, list.join(' · ')].filter(Boolean).join(' ');
+  let extra = rest;
+  while (extra.length && leadW + 4 + textWidth(textOf(extra)) > width) extra = extra.slice(0, -1); // 模型标签至少留 4 列
+  let text = textOf(extra);
+  if (leadW + textWidth(text) > width - 1) text = fitWidth(text, Math.max(1, width - 1 - leadW));
+  const head = text.startsWith(word) ? word : text;
+  const painted = text ? style.color(head) + C.dim(text.slice(head.length)) : '';
+  const room = width - leadW - textWidth(text) - (text ? 2 : 0);
+  const label = room >= 1 ? fitWidth(modelLabel(m), room) : '';
+  const gap = ' '.repeat(Math.max(text && label ? 2 : 0, width - leadW - textWidth(label) - textWidth(text)));
+  return `${lead}${style.color(style.mark)} ${label ? C.bold(style.color(label)) : ''}${text ? gap + painted : ''}`;
 }
 
 // 改动数包括有证据的和协作方自报的；改名前的记录里叫 codex_total。落在同组其他任务写入范围里的（group_run）不算归属未知。
@@ -84,8 +125,8 @@ function commandAction(it) {
   }
   return { kind: 'command', text: `$ ${oneLine(plainCommand(it.command))}` };
 }
-// 折叠起来的动作按种类计数，比如"… 另有 12 条命令、3 次读文件"
-const foldText = (counts, hint = true) => D.watchFolded(D.list(Object.entries(counts).filter(([, n]) => n > 0).map(([kind, n]) => D.foldKinds[kind](n))), hint);
+// 折叠起来的动作按种类计数，比如"… +12 commands, +3 reads"
+const foldText = (counts) => D.watchFolded(D.list(Object.entries(counts).filter(([, n]) => n > 0).map(([kind, n]) => D.foldKinds[kind](n))));
 
 // 思考摘要只取第一行，去掉 Markdown 的加粗
 const thoughtLine = (text) => oneLine(String(text ?? '').trim().split('\n').find((l) => l.trim()) || '').replace(/\*\*/g, '');
@@ -94,9 +135,9 @@ const thoughtLine = (text) => oneLine(String(text ?? '').trim().split('\n').find
 const PLAN_COLOR = { complete: C.green, incomplete: C.red, pending: C.cyan };
 const paintPlanWord = (line, state) => line.replace(D.planStates[state], (word) => (PLAN_COLOR[state] || plain)(word));
 
-// 组视图结束后的汇总里，每一席下面写一行回看命令；路径里有空格或 shell 特殊字符时加双引号，整行复制就能运行
+// 组视图结束后的汇总最后写一行回看某一席的命令；路径里有空格或 shell 特殊字符时加双引号，换上 run_id 就能运行
 const shellPath = (p) => (/[\s"'`$&|;<>()]/.test(p) ? `"${p}"` : p);
-const replayCommand = (runsRoot, id) => D.watchReplay(`node ${shellPath(path.join(runsRoot, 'watch.mjs'))} --run ${id}`);
+const replayCommand = (runsRoot) => D.watchReplayOne(`node ${shellPath(path.join(runsRoot, 'watch.mjs'))} --run <run_id>`);
 
-export { D, TEST_SCREEN, termCols, termRows, useColor, C, plain, visibleWidth, padWidth, shortModel, fullModel, modelLabel, clock, took,
+export { D, TEST_SCREEN, termCols, termRows, useColor, C, plain, visibleWidth, padWidth, shortModel, fullModel, modelLabel, moduleOf, taskLine, seatLine, identityLine, clock, took,
   shownStatus, outcomeStyle, agentTotal, changedText, changedFor, formatUsd, usageLine, toolLabel, commandAction, foldText, thoughtLine, paintPlanWord, replayCommand };

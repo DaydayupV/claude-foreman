@@ -1,30 +1,30 @@
-Group live-group · 合成讨论：登记锁原地重试 · 4 runs                                      running 4
-Plan 20000101-000000-plan: in progress
+discuss · panel · 合成讨论：登记锁原地重试 · complex                                             ●4
 ───────────────────────────────────────────────────────────────────────────────────────────────────
-● gpt-6-astra · Codex CLI · effort max                                    running <CLOCK> · commands 6
-  ◆ 先看一下登记锁现在怎么加锁、怎么回收残留锁，再对照 Windows 上删除挂起时报 EPERM 的时机，判断重
-    试应该放在哪一层。
-  … 5 more commands
-  $ rg -n retryBusy foreman/skills/dispatch/scripts
+1 ● gpt-6-astra max · Codex CLI                                                        running <CLOCK>
+    ◆ 先看一下登记锁现在怎么加锁、怎么回收残留锁，再对照 Windows 上删除挂起时报 EPERM 的时机，判断
+      重试应该放在哪一层。
+    $ rg -n "start.lock" foreman/skills/dispatch/scripts
+    $ git log --oneline -5
+    $ sed -n 50,110p foreman/skills/dispatch/scripts/records.mjs
+    $ node --test tests/admission.test.mjs                                                 ✗ exit 1
+    $ git diff --stat
+    $ rg -n retryBusy foreman/skills/dispatch/scripts
 ───────────────────────────────────────────────────────────────────────────────────────────────────
-● deepseek-v4.1-flash · opencode CLI · effort max               running <CLOCK> · reads 3 · searches 2
-  … 1 more read, 1 more search
-  read foreman/skills/dispatch/scripts/util.mjs
-  search **/*.lock
-  read tests/admission.test.mjs
+2 ● deepseek-v4.1-flash max · opencode CLI                                             running <CLOCK>
+    read foreman/skills/dispatch/scripts/records.mjs
+    search retryBusy foreman
+    read foreman/skills/dispatch/scripts/util.mjs
+    search **/*.lock
+    read tests/admission.test.mjs
 ───────────────────────────────────────────────────────────────────────────────────────────────────
-● mimo-v2.6-pro · pi CLI · effort high                          running <CLOCK> · reads 1 · searches 1
-  ◆ 我先读登记锁的代码，再看测试。
-  thinking: 删除挂起时 openSync 会报 EPERM，要确认重试的上限是多少。
-  read foreman/skills/dispatch/scripts/records.mjs
-  search ls tests
+3 ● mimo-v2.6-pro high · pi CLI                                                        running <CLOCK>
+    ◆ 我先读登记锁的代码，再看测试。
+    thinking: 删除挂起时 openSync 会报 EPERM，要确认重试的上限是多少。
+    read foreman/skills/dispatch/scripts/records.mjs
+    search ls tests
 ───────────────────────────────────────────────────────────────────────────────────────────────────
-● kimi-k2.6 · API · effort default                          thinking <CLOCK> · 3,200 characters so far
-  Request sent: model kimi-k2.6, effort default
+4 ● kimi-k2.6 · API                                                                   thinking <CLOCK>
 
 
 
-
-
-
-Press Ctrl+C to stop watching; the runs keep going
+                                                               1–4 open a seat · ↑↓ scroll · q quit
