@@ -103,7 +103,7 @@ flowchart TD
 | `/foreman-en:discuss <topic>` | Several models each propose an approach to a complex design and critique each other's; Claude Code rules on each point and writes up a decision record; topics with competing goals can use role mode, see below |
 | `/foreman-en:watch` | Shows what each model is doing, live, in a terminal; see below |
 | `/foreman-en:status` | Lists recent runs, or shows the details of one, including token use and Codex quota |
-| `/foreman-en:setup` | Setup guide: detects this machine's tools, lists the models available, gives one complete recommendation, and changes the config the way you choose |
+| `/foreman-en:setup` | Setup guide: detects this machine's tools, lists the models available, shows the current config and suggested changes, and changes the config the way you choose |
 | `/foreman-en:config` | Shows or changes the config |
 
 You can also just ask Claude Code to "check the environment" (`check`: whether each agent works, whether its model supports the configured efforts, and whether Codex's sandbox can start) or to "list the available models" (`models`).
@@ -187,7 +187,7 @@ In Claude Code, run:
 /plugin install foreman-en@claude-foreman
 ```
 
-Then run `/foreman-en:setup`. It detects which tools this machine has, lists the models available and the efforts each supports, and gives one complete recommendation for your situation; after you adjust it item by item, it changes the config and shows an overview: who gets each level of each task type, which agents aren't used, and anything to watch out for. Run it again after installing a new tool or to change models.
+Then run `/foreman-en:setup`. Its output always has the same structure: which tools this machine has, every model available and the efforts each supports, then the current config (who gets each level of each task type, how many outside models each level uses, who is required, which agents aren't used, and anything to watch out for), then suggested changes (including leftovers from older versions that can be removed). After reading it all you confirm or adjust the suggestions in a pop-up at the end, and it changes the config and reports what changed. Run it again after installing a new tool or to change models.
 
 Upgrading from codex-bridge? See [below](#upgrading-from-codex-bridge).
 
@@ -238,7 +238,7 @@ A minimal example: Codex does complex hands-on work and every review, complex di
 
 - Each key under `agents` is the agent's **ID**, which `modules` and `--agent` refer to. Naming it after its model works best; IDs may use letters, digits, `.`, `-` and `_`.
 - Each of the three task types (`discuss`, `run` for hands-on work, `review`) has three levels, plus a level 0 that isn't in the config (see "Task levels" below); images (`image`) have no levels, just two cells: `generate` for image generation and `draw` for hand-drawing.
-- Each cell lists candidates. When a cell has several, Claude Code picks by its rules each time: for discussions and reviews, `seats` sets how many per level (by default 1 at level 1, 2 at level 2 and 3 at level 3, not counting Claude Code itself), using different models where possible and all of them when there are fewer candidates; for hands-on work, one agent per piece of work. An entry marked `"required": true` is required and always takes part when the cell is used.
+- Each cell lists candidates. When a cell has several, Claude Code picks by its rules each time: for discussions and reviews, `seats` sets how many per level (defaults in ["Candidates and required agents" in `config.md`](foreman-en/skills/dispatch/references/config.md), not counting Claude Code itself), using different models where possible and all of them when there are fewer candidates; for hands-on work, one agent per piece of work. An entry marked `"required": true` is required and always takes part when the cell is used.
 - `"claude code"` means Claude Code does it itself; for reviews and discussions, that cell uses no outside model. `null` turns an image cell off.
 - `effort` is the reasoning effort; leave it out for the default. For Codex it's `low` to `ultra`; for opencode, the model's variant; for pi, its thinking level; for API models it's sent as `reasoning_effort` as is.
 - Image tasks start with a pop-up where you choose the route, and the route decides which cells are used: a pure vector route that only draws never touches the generate cell, so that cell's required agents don't take part.
@@ -353,8 +353,7 @@ Both take a change snapshot first, and Claude Code reviews the diff file by file
         { "agent": "kimi-k2.6" },
         { "agent": "mimo-v2.6-pro", "effort": "high" },
         { "agent": "glm-5.3" }
-      ],
-      "seats": { "simple": 1, "normal": 2, "complex": 3 }
+      ]
     },
     "run": {
       "simple":  "claude code",
@@ -364,8 +363,7 @@ Both take a change snapshot first, and Claude Code reviews the diff file by file
     "review": {
       "simple":  [{ "agent": "gpt-6-astra", "effort": "medium" }],
       "normal":  [{ "agent": "gpt-6-astra", "effort": "high" }, { "agent": "deepseek-flash", "effort": "high" }],
-      "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "deepseek-flash", "effort": "max" }, { "agent": "glm-5.3" }],
-      "seats":   { "simple": 1, "normal": 2, "complex": 3 }
+      "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "deepseek-flash", "effort": "max" }, { "agent": "glm-5.3" }]
     },
     "image": {
       "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }],
@@ -384,7 +382,7 @@ Both take a change snapshot first, and Claude Code reviews the diff file by file
 | `mimo-v2.6-pro` | pi | A candidate for complex discussions |
 | `kimi-k2.6` | API, with the key in the `KIMI_API_KEY` environment variable | A candidate for complex discussions |
 
-Claude Code does simple and normal hands-on work itself. Discussions and reviews get more candidates as the level rises: each time Claude Code picks a few seats from them (as many as `seats` says: by default 1 at level 1, 2 at level 2 and 3 at level 3), and `gpt-6-astra` is required for complex discussions and reviews, so it always takes part.
+Claude Code does simple and normal hands-on work itself. Discussions and reviews get more candidates as the level rises: each time Claude Code picks a few seats from them (as many as `seats` says; this example leaves it out, so the defaults apply), and `gpt-6-astra` is required for complex discussions and reviews, so it always takes part.
 
 Fields this config doesn't use but that are often adjusted:
 

@@ -30,6 +30,7 @@ if (HELP) { process.stdout.write(`${HELP}\n`); process.exit(0); }
 const { USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, DEFAULT_AGENT_PARALLEL, CLAUDE_CODE, cellList, eachEntry, mapCells, resolveAgentAlias, detectEnvironment, projectFile, loadConfig, resolveProfile, validatePlan, unknownAgentError } = await import('./config.mjs');
 const { cmdPlan, readPlan } = await import('./plan.mjs');
 const { buildSummary } = await import('./summary.mjs');
+const { configReport, environmentReport, modelsReport } = await import('./report.mjs');
 const records = await import('./records.mjs');
 const { adapters } = await import('./adapters/index.mjs');
 const { validateReviewMaterial } = await import('./review-scope.mjs');
@@ -177,7 +178,8 @@ async function cmdReview(o) {
 }
 
 function cmdConfig(o) {
-  const { sources, closed_by_project, image_configured, ...effective } = load(o.cwd ? resolveDir(o.cwd) : null);
+  const cfg = load(o.cwd ? resolveDir(o.cwd) : null);
+  const { sources, closed_by_project, image_configured, ...effective } = cfg;
   const agents_status = Object.fromEntries(Object.entries(effective.agents).map(([name, agent]) => [name, {
     type: agent.type, capabilities: adapters[agent.type].capabilities, model: agent.model || null, max_parallel: agent.max_parallel ?? DEFAULT_AGENT_PARALLEL,
     ...adapters[agent.type].status(agent),
@@ -187,7 +189,7 @@ function cmdConfig(o) {
   // 配置里写的 key 不打印出来。
   const shown = structuredClone(effective);
   for (const agent of Object.values(shown.agents)) if (agent.api_key) agent.api_key = M.keyHidden;
-  process.stdout.write(JSON.stringify({
+  const result = {
     user_config: USER_CONFIG,
     loaded_from: sources,
     effective: shown,
@@ -202,7 +204,8 @@ function cmdConfig(o) {
       .map((file) => ({ file, exists: fs.existsSync(file) })),
     environment: detectEnvironment(adapters, effective.agents),
     summary: buildSummary(effective, adapters),
-  }, null, 2) + '\n');
+  };
+  process.stdout.write(o.format === 'md' ? configReport(cfg, result.summary) : JSON.stringify(result, null, 2) + '\n');
 }
 
 // 所有协作方都报告，仅被等级引用的协作方影响总体结果。
@@ -243,7 +246,9 @@ async function cmdCheck(o) {
   const referenced = new Set(eachEntry(cfg.modules).map(({ item }) => item.agent));
   result.ok = nodeOk && Object.entries(result.agents).every(([name, agent]) => !referenced.has(name) || agent.ok);
   result.summary = buildSummary(cfg, adapters, result.agents);
-  process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+  process.stdout.write(o.format === 'md'
+    ? environmentReport(result, detectEnvironment(adapters, cfg.agents), cfg.agents) + '\n' + configReport(cfg, result.summary, result.agents)
+    : JSON.stringify(result, null, 2) + '\n');
   process.exitCode = result.ok ? 0 : 1;
 }
 
@@ -258,7 +263,7 @@ function catalogReader() {
 }
 
 // 本机能用的模型和推理强度清单：Codex、opencode 和 pi 读本机清单，API 读厂商的 /models（不含推理强度）。
-async function cmdModels() {
+async function cmdModels(o) {
   const cfg = load(null);
   const out = { tools: {}, api: {}, agents: {} };
   const readCatalog = catalogReader();
@@ -274,10 +279,11 @@ async function cmdModels() {
     out.agents[name] = { type: agent.type, model, listed: cat.ok && model ? !!found : null, efforts: found?.efforts ?? null,
       closest: cat.ok && model && !found ? closestMatches(model, cat.models.map((m) => m.id)) : [] };
   }
-  process.stdout.write(JSON.stringify(out, null, 2) + '\n');
+  process.stdout.write(o.format === 'md' ? modelsReport(out) : JSON.stringify(out, null, 2) + '\n');
 }
 
 const { cmd, opts } = parseArgs(process.argv.slice(2));
+if (['config', 'check', 'models'].includes(cmd) && opts.format !== undefined && !['json', 'md'].includes(opts.format)) die(M.reportFormatInvalid);
 // 新建任务组时组名只用 ASCII：实时查看要把它写进终端命令，桌面版的终端面板只接受 ASCII 命令。
 if (['run', 'discuss', 'resume', 'review', 'image', 'plan'].includes(cmd) && opts.group != null && !/^[A-Za-z0-9._-]{1,64}$/.test(opts.group)) die(M.badGroupName(opts.group));
 const statsOf = (meta) => adapters[agentTypeOf(meta)]?.stats?.(meta.session_id, meta.started_at);

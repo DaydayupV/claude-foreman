@@ -103,7 +103,7 @@ flowchart TD
 | `/foreman:discuss <议题>` | 几个模型就复杂方案各出方案、互相挑错，Claude Code 逐条裁决，给出决策记录；目标互相拉扯的议题可以用多角色模式，见下文 |
 | `/foreman:watch` | 在终端里实时查看各个模型正在做什么，见下文 |
 | `/foreman:status` | 查看最近的任务或某次任务的详细结果，包括 token 消耗和 Codex 额度 |
-| `/foreman:setup` | 设置引导：检测本机的工具，列出能用的模型，给出一份完整推荐，按你的选择改好配置 |
+| `/foreman:setup` | 设置引导：检测本机的工具，列出能用的模型，给出当前配置的总表和修改建议，按你的选择改好配置 |
 | `/foreman:config` | 查看或修改配置 |
 
 也可以直接对 Claude Code 说"检查一下环境"（`check`：每个协作方能不能用、配置的推理强度模型支不支持、Codex 的沙箱能不能启动），或者"列出能用的模型"（`models`）。
@@ -187,7 +187,7 @@ flowchart TD
 /plugin install foreman@claude-foreman
 ```
 
-装好后运行 `/foreman:setup`。它检测本机有哪些工具，列出能用的模型和每个模型支持的推理强度，按你的情况给出一份完整推荐；你逐项调整后它改好配置，最后给出总配置情况：每类任务的每一级交给谁、哪些协作方没用上、有什么要注意的。装了新工具、想换模型时可以再跑。
+装好后运行 `/foreman:setup`。它的输出结构是固定的：先列出本机有哪些工具、能用的全部模型和每个模型支持的推理强度，再给出当前配置的总表（每类任务的每一级交给谁、每一级派几家、谁必选、哪些协作方没用上、有什么要注意的），然后是修改建议（包括旧版本留下、可以删掉的配置）。你看完再在最后的弹窗里确认或逐项调整，它改好配置，报告改了什么。装了新工具、想换模型时可以再跑。
 
 从 codex-bridge 升级的，见[后面的说明](#从-codex-bridge-升级)。
 
@@ -238,7 +238,7 @@ flowchart TD
 
 - `agents` 的键是协作方的**代号**，`modules` 和 `--agent` 用它引用。建议直接用模型名，可以用字母、数字、`.`、`-`、`_`。
 - 三种任务（`discuss` 讨论、`run` 执行、`review` 审查）各分三级，另有一个不进配置的 0 级（见下文"任务等级"）；图像（`image`）不分等级，分出图（`generate`）和手画（`draw`）两格。
-- 每一格写一组候选。一格有几个候选时，Claude Code 每次按规则挑：讨论和审查每一级挑几个由 `seats` 决定（默认 1 级 1 席、2 级 2 席、3 级 3 席，不含 Claude Code 自己），尽量用不同的模型，候选少于这个数时全上；执行每份工作派一个。标了 `"required": true` 的是必选，这一格用到时一定参加。
+- 每一格写一组候选。一格有几个候选时，Claude Code 每次按规则挑：讨论和审查每一级挑几个由 `seats` 决定（默认值见 [`config.md` 的"候选和必选"](foreman/skills/dispatch/references/config.md)，不含 Claude Code 自己），尽量用不同的模型，候选少于这个数时全上；执行每份工作派一个。标了 `"required": true` 的是必选，这一格用到时一定参加。
 - 写成 `"claude code"` 表示 Claude Code 自己做；对审查和讨论来说，就是这一格不找外部模型。图像的格子写 `null` 表示关掉。
 - `effort` 是推理强度，不写就用默认值。Codex 是 `low` 到 `ultra`；opencode 是模型的 variant；pi 是 thinking 档位；API 原样作为 `reasoning_effort` 发出。
 - 图像任务开工前先弹窗让你选路线，路线决定用到哪几格：只用到手画的纯矢量路线不碰出图那一格，那一格里的必选也不会参加。
@@ -353,8 +353,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
         { "agent": "kimi-k2.6" },
         { "agent": "mimo-v2.6-pro", "effort": "high" },
         { "agent": "glm-5.3" }
-      ],
-      "seats": { "simple": 1, "normal": 2, "complex": 3 }
+      ]
     },
     "run": {
       "simple":  "claude code",
@@ -364,8 +363,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
     "review": {
       "simple":  [{ "agent": "gpt-6-astra", "effort": "medium" }],
       "normal":  [{ "agent": "gpt-6-astra", "effort": "high" }, { "agent": "deepseek-flash", "effort": "high" }],
-      "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "deepseek-flash", "effort": "max" }, { "agent": "glm-5.3" }],
-      "seats":   { "simple": 1, "normal": 2, "complex": 3 }
+      "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "deepseek-flash", "effort": "max" }, { "agent": "glm-5.3" }]
     },
     "image": {
       "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }],
@@ -384,7 +382,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 | `mimo-v2.6-pro` | pi | 复杂讨论的候选 |
 | `kimi-k2.6` | API，key 在环境变量 `KIMI_API_KEY` 里 | 复杂讨论的候选 |
 
-简单和常规的执行由 Claude Code 自己做。讨论和审查的候选随等级增加：每次由 Claude Code 从候选里挑几席（个数由 `seats` 决定，默认 1 级 1 席、2 级 2 席、3 级 3 席），`gpt-6-astra` 在复杂的讨论和审查里必选，一定参加。
+简单和常规的执行由 Claude Code 自己做。讨论和审查的候选随等级增加：每次由 Claude Code 从候选里挑几席（个数由 `seats` 决定，这个例子没写，用默认值），`gpt-6-astra` 在复杂的讨论和审查里必选，一定参加。
 
 这份配置没用到、但常会调整的字段：
 

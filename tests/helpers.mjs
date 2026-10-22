@@ -49,6 +49,9 @@ export const baseConfig = () => ({
   },
 });
 
+// 讨论和审查每一级默认的外部席位数（产品默认值见 references/config.md），测试里只在这里写。
+export const DEFAULT_SEATS = { discuss: { simple: 2, normal: 4, complex: 8 }, review: { simple: 1, normal: 2, complex: 2 } };
+
 export const apiAgent = (url) => ({
   type: 'api', base_url: url, api_key: 'synthetic-test-key', model: 'fake-api',
 });

@@ -30,7 +30,7 @@
       "simple":  "claude code",
       "normal":  [{ "agent": "gpt-6.1-sol", "effort": "high" }, { "agent": "glm-5.3" }],
       "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "glm-5.3" }, { "agent": "deepseek-v4-pro", "effort": "max" }],
-      "seats":   { "simple": 1, "normal": 2, "complex": 3 }
+      "seats":   { "complex": 3 }
     },
     "run":    { "simple": "claude code", "normal": "claude code", "complex": [{ "agent": "gpt-6.1-sol", "effort": "max" }] },
     "review": { "simple": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "normal": [{ "agent": "gpt-6.1-sol", "effort": "high" }], "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }] },
@@ -154,7 +154,7 @@
 - 候选列表：`[{ "agent": "<代号>", "effort": "<推理强度>", "required": true }, …]`。只有一项时也可以写成单个对象，效果一样。同一个协作方在一格里只能出现一次。
 - `null`（只限 image）：关掉这一格。generate 关掉就不出图；draw 关掉时，会弯的部件和纯矢量绘制由 Claude 自己画。Claude 不能出位图，所以 image 的格子不能写 `"claude code"`。
 
-`discuss` 和 `review` 另有一项 `seats`，写每一级找几个外部模型（见下文"候选和必选"）：`{ "simple": 1, "normal": 2, "complex": 3 }`，可以只写其中几级，没写的按这个默认值（但不少于这一格的必选数）。
+`discuss` 和 `review` 另有一项 `seats`，写每一级找几个外部模型，比如 `{ "complex": 3 }`；可以只写其中几级，没写的用默认值。默认值和规则见下文"候选和必选"。
 
 能放进哪一格，按能力表校验：discuss 的候选要能讨论，review 的要能审查；run 的要能执行，opencode 和 pi 还要写了 `run_access`；generate 的要能出图（适配器声明了 `images`，并且实现了出图检测：这一轮新出了哪些图、每次调用传了什么参数；目前只有 codex cli）；draw 的要求和 run 相同。
 
@@ -162,7 +162,14 @@
 
 ### 候选和必选
 - 一格有几个候选时，由 Claude 按 skill 的规则挑（排除做不了的、必选全部加入、讨论和审查按不同的基础模型补到配置的席位数、执行每个工作包派一个执行方），每次派出时说一句选了谁、为什么。脚本只检查能机械判断的硬约束。
-- `seats`（只限 `discuss` 和 `review`）：每一级的外部席位数，不含 Claude Code 席和 3 级审查的补漏席；默认 `{ "simple": 1, "normal": 2, "complex": 3 }`。必选算在这个数里，所以不能少于这一格的必选数，否则读配置时报错；可以多于候选数，表示候选全上。想让某一级固定用哪几家，就只放这几家、把席位数设成候选数，或者全部标必选。`plan` 建讨论或审查计划时检查外部席位数等于 `min(seats, 能用的候选数)`（`visual` 审查只算能看图的），不一致时要带 `--count-why "<理由>"`。能用的候选数按协作方代号算，同一个模型经两种方式接入算两个。没写的等级按默认值，但不少于这一格的必选数（照旧配置标了很多必选也能直接用）。脚本不会把 `seats` 自动写进配置文件，因为旧版插件读到它会报错；实际用的数看 `config` 输出的 `resolved_modules.<discuss|review>.seats`。
+- `seats`（只限 `discuss` 和 `review`）：每一级的外部席位数，不含 Claude Code 席和 3 级审查的补漏席。默认值如下（插件里写明默认数字的只有这一处，其他文档都引用这里）：
+
+  | | simple | normal | complex |
+  |---|---|---|---|
+  | `discuss` | 2 | 4 | 8 |
+  | `review` | 1 | 2 | 2 |
+
+  必选算在这个数里，所以不能少于这一格的必选数，否则读配置时报错；可以多于候选数，表示候选全上。想让某一级固定用哪几家，就只放这几家、把席位数设成候选数，或者全部标必选。`plan` 建讨论或审查计划时检查外部席位数等于 `min(seats, 能用的候选数)`（`visual` 审查只算能看图的），不一致时要带 `--count-why "<理由>"`。能用的候选数按协作方代号算，同一个模型经两种方式接入算两个。没写的等级按默认值，但不少于这一格的必选数（照旧配置标了很多必选也能直接用）。脚本不会把 `seats` 自动写进配置文件，因为旧版插件读到它会报错；实际用的数看 `config` 输出的 `resolved_modules.<discuss|review>.seats`。
 - `required: true` 表示这一格被用到时，这个协作方必须在场；不写就是普通候选，由 Claude 决定加不加。同一个协作方可能在审查里必选、在讨论里只是候选，所以必选写在格子的条目上，不写在协作方定义上。
 - 一次派几个席位时，Claude 先建一份派发计划（`plan`），脚本检查必选是否都在、讨论和审查的外部席位数是否和 `seats` 一致，再逐席启动。执行单席派发时，这一格还有别的必选，脚本会拒绝。讨论和审查一律建计划：计划自带 Claude Code 席，它先用 `submit` 提交报告，外部席才能启动。
 - 必选方达到并发上限时，等它空闲再补发；必选方失败、额度用完或被取消时，这件事算不完整，不拿其他候选顶替。

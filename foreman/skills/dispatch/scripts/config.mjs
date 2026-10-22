@@ -59,7 +59,8 @@ function projectFile(cwd, current, legacy) {
 
 const DEFAULT_AGENT_PARALLEL = 4;
 const LEVELS = ['simple', 'normal', 'complex'];
-const DEFAULT_SEATS = { simple: 1, normal: 2, complex: 3 };
+// 讨论和审查每一级默认的外部席位数（不含 Claude Code 席和补漏席）。默认值只在这里写，文档里只在 references/config.md 写一次。
+const DEFAULT_SEATS = { discuss: { simple: 2, normal: 4, complex: 8 }, review: { simple: 1, normal: 2, complex: 2 } };
 const MODES = ['run', 'review', 'discuss'];
 const CLAUDE_CODE = 'claude code';
 const MODULE_CELLS = { discuss: LEVELS, run: LEVELS, review: LEVELS, image: ['generate', 'draw'] };
@@ -89,7 +90,7 @@ function normalizeModules(cfg) {
     const cells = modules[module];
     if (!isObject(cells) || Object.hasOwn(cells, 'seats') && !isObject(cells.seats)) continue;
     // 只在内存里补默认值，避免旧版插件读到新增配置键后退出。
-    const seats = Object.fromEntries(LEVELS.map((cell) => [cell, Math.max(DEFAULT_SEATS[cell], requiredCount(cells[cell]))]));
+    const seats = Object.fromEntries(LEVELS.map((cell) => [cell, Math.max(DEFAULT_SEATS[module][cell], requiredCount(cells[cell]))]));
     modules[module] = { ...cells, seats: { ...seats, ...cells.seats } };
   }
   return { ...cfg, modules };
@@ -114,6 +115,21 @@ let memoryAliases = {};
 const aliasesFile = path.join(path.dirname(USER_CONFIG), 'agent-aliases.json');
 const readAgentAliases = () => ({ ...(readJson(aliasesFile) || {}), ...memoryAliases });
 
+// 报告只读原文；旧文件读不了时跳过检测，不影响正常配置加载。
+const readRawConfig = (file = USER_CONFIG) => {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); } catch { return null; }
+};
+const readOldBackups = () => {
+  const dir = path.dirname(USER_CONFIG);
+  try {
+    const files = fs.readdirSync(dir, { withFileTypes: true }).filter((f) => f.isFile() && f.name.startsWith(`${path.basename(USER_CONFIG)}.`)
+      && (f.name.endsWith('.bak') || f.name.includes('.bak-')))
+      .map((f) => ({ name: f.name, time: fs.statSync(path.join(dir, f.name)).mtimeMs }))
+      .sort((a, b) => a.time - b.time || a.name.localeCompare(b.name)).map((f) => f.name);
+    const contain_keys = files.map((f) => fs.readFileSync(path.join(dir, f), 'utf8').includes('"api_key"')).some(Boolean);
+    return { files, contain_keys };
+  } catch { return null; }
+};
 function resolveAgentAlias(name, cfg, announce = false) {
   const aliases = readAgentAliases(), seen = new Set();
   let resolved = name;
@@ -708,6 +724,6 @@ function resolveProfile(cfg, seat, o, adapters, fallbackModel = null, parentAgen
     ...(outside ? { outside_cell: true } : {}), ...(o.model && model !== base ? { model_overridden: true } : {}) };
 }
 
-export { ENTRY, SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA, USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, DEFAULT_AGENT_PARALLEL, DEFAULT_CONFIG, CLAUDE_CODE, LEVELS,
+export { ENTRY, SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA, USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, DEFAULT_AGENT_PARALLEL, DEFAULT_CONFIG, DEFAULT_SEATS, CLAUDE_CODE, LEVELS,
   MODULE_CELLS, ROUTE_CELLS, canGenerate, cellList, eachCell, eachEntry, mapCells, resolveCell, validatePlan, resolveProfile, projectFile, loadConfig, defaultRunsRoot, runsMovedNow,
-  readAgentAliases, resolveAgentAlias, migrateStructure, renameAgentsByModel, detectEnvironment, buildStarterConfig, staleAliases, unknownAgentError };
+  readAgentAliases, readRawConfig, readOldBackups, resolveAgentAlias, migrateStructure, renameAgentsByModel, detectEnvironment, buildStarterConfig, staleAliases, unknownAgentError };

@@ -1,5 +1,6 @@
 // 总配置情况：按模块、按协作方整理一遍，再列出值得注意的地方。config 和 check 共用；check 时带上检查结果。
-import { CLAUDE_CODE, cellList, mapCells, staleAliases } from './config.mjs';
+import path from 'node:path';
+import { USER_CONFIG, CLAUDE_CODE, cellList, mapCells, staleAliases, readRawConfig, readOldBackups } from './config.mjs';
 import { M } from './util.mjs';
 
 // checks 是 check 输出里的 agents；没有时（config）各项的 ok 为 null。
@@ -37,5 +38,13 @@ export function buildSummary(cfg, adapters, checks = null) {
   for (const { old, target, closest } of staleAliases(cfg)) {
     warnings.push({ kind: 'stale_alias', agent: old, message: M.warnStaleAlias(old, target, closest.length ? M.list(closest) : '') });
   }
+  const raw = readRawConfig();
+  if (raw?.dispatch && Object.hasOwn(raw.dispatch, 'max_seats')) warnings.push({ kind: 'obsolete_max_seats', value: raw.dispatch.max_seats, message: M.reportObsoleteMaxSeats });
+  for (const [agent, info] of Object.entries(cfg.agents)) if (info.type === 'api' && info.api_key && info.api_key_env) {
+    warnings.push({ kind: 'obsolete_key_env', agent, api_key_env: info.api_key_env, env_set: !!process.env[info.api_key_env], message: M.reportObsoleteKeyEnv(agent, info.api_key_env) });
+  }
+  const backups = readOldBackups();
+  if (backups?.files.length) warnings.push({ kind: 'old_backups', ...backups, message: M.reportOldBackups(path.dirname(USER_CONFIG), backups.files.length, backups.contain_keys) });
+  if (typeof raw?.levels === 'string') warnings.push({ kind: 'legacy_levels_note', message: M.reportLegacyLevelsNote });
   return { modules, agents, warnings };
 }

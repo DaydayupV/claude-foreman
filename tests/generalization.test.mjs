@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { plannedSandbox as sandbox, output, failed, json, write, baseConfig, apiAgent, opencodeAgent, CODEX, OPENCODE, PI, ROOT, BRIDGE, MESSAGES } from './helpers.mjs';
+import { plannedSandbox as sandbox, output, failed, json, write, baseConfig, apiAgent, opencodeAgent, CODEX, OPENCODE, PI, ROOT, BRIDGE, MESSAGES, DEFAULT_SEATS } from './helpers.mjs';
 import { apiServer } from './fake/api-server.mjs';
 import { discussion } from './fixtures/reports.mjs';
 const M = MESSAGES.zh;
@@ -30,7 +30,7 @@ test('多个 Codex、无 Codex 和三类能力表及省略强度的配置', asyn
   assert.deepEqual(Object.keys(output(await h.bridge(['config'])).effective.agents), ['api']);
   h.config({ agents: {} });
   const modules = self();
-  for (const mode of ['discuss', 'review']) modules[mode].seats = { simple: 1, normal: 2, complex: 3 };
+  for (const mode of ['discuss', 'review']) modules[mode].seats = DEFAULT_SEATS[mode];
   assert.deepEqual(output(await h.bridge(['config'])).effective.modules, modules);
 });
 

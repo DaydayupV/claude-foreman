@@ -50,7 +50,7 @@ description: 按配置把执行类编码工作派给 Codex、opencode、pi 等�
 一格里可以有几个候选，有的标了必选（`required`）。这一格要用到时，由 Claude 按下面的顺序挑：
 1. 先排除做不了的：能力不够（出图、看图、执行权限）、材料不允许发给这一家（偏好文件或项目的要求）、额度已经用完。
 2. 必选全部加入。
-3. 讨论和审查按配置的席位数补外部席位：每一级找几个外部模型看 `resolved_modules.<discuss|review>.seats.<等级>`（默认 1 级 1 席、2 级 2 席、3 级 3 席，不含 Claude Code 席和补漏席），这一格能用的候选少于这个数时全上。必选算在这个数里，其余由 Claude 按"不同的基础模型"从候选里挑；同一个模型经 api、pi、opencode 接入只算一个基础模型（去掉 `提供方/` 前缀后比较，规则同 `references/model-tiers.md`）。外部席位数和配置不一致时 `plan` 会拒绝；确实要多给或少给时（用户在角色弹窗里调整了分配、某一家的材料不能外发、某一家额度用完），加 `--count-why "<理由>"` 写明原因。Claude Code 席（见下面的"Claude Code 席"）和补漏席不算在这个数里。中档、弱档也可以占席，作广度席：只参加第 1 轮，由 Claude 逐条核实。普通模式下，中档、弱档的参与方就是广度席；角色模式下看它达没达到角色的建议档位（见 `references/roles.md`）。3 级审查的补漏席在配置的席位数之外另加（见"五、审查"里的"补漏轮"）。
+3. 讨论和审查按配置的席位数补外部席位：每一级找几个外部模型看 `resolved_modules.<discuss|review>.seats.<等级>`（默认值见 `references/config.md` 的"候选和必选"；不含 Claude Code 席和补漏席），这一格能用的候选少于这个数时全上。必选算在这个数里，其余由 Claude 按"不同的基础模型"从候选里挑；同一个模型经 api、pi、opencode 接入只算一个基础模型（去掉 `提供方/` 前缀后比较，规则同 `references/model-tiers.md`）。外部席位数和配置不一致时 `plan` 会拒绝；确实要多给或少给时（用户在角色弹窗里调整了分配、某一家的材料不能外发、某一家额度用完），加 `--count-why "<理由>"` 写明原因。Claude Code 席（见下面的"Claude Code 席"）和补漏席不算在这个数里。中档、弱档也可以占席，作广度席：只参加第 1 轮，由 Claude 逐条核实。普通模式下，中档、弱档的参与方就是广度席；角色模式下看它达没达到角色的建议档位（见 `references/roles.md`）。3 级审查的补漏席在配置的席位数之外另加（见"五、审查"里的"补漏轮"）。
 4. 执行每个工作包派一个执行方：复杂任务优先选强档、能跑命令、有沙箱的；机械任务可以用便宜的；并发拆分时，不同的份可以交给同一格里不同的协作方，各占各的并发名额。
 5. 审查方尽量和执行方用不同的模型；只有同一个模型可选时照常审，汇报时注明。
 6. 依据：`references/model-tiers.md` 作为先验；偏好文件可以改，也可以引用本地实测（`stats`，见"附：调用方式"）覆盖档位。脚本只汇总，不自动排名。
@@ -449,9 +449,9 @@ node "<脚本路径>" plan   --cwd "<项目目录>" --module image --cell <gener
 node "<脚本路径>" image  --plan <plan_id> --seat <序号> --brief "<任务说明.md>" --title "<短标题>" --scope "<输出目录>" [--scope …] [--track "<路径>"] [--effort <强度>]
 node "<脚本路径>" status [--run <run_id|last> | --group <组名> | --plan <plan_id>] [--limit n]
 node "<脚本路径>" watch  [--run <run_id|last> | --group <组名>]
-node "<脚本路径>" config [--cwd "<项目目录>"]
-node "<脚本路径>" check  [--agent <协作方>]
-node "<脚本路径>" models
+node "<脚本路径>" config [--cwd "<项目目录>"] [--format json|md]
+node "<脚本路径>" check  [--agent <协作方>] [--format json|md]
+node "<脚本路径>" models [--format json|md]
 node "<脚本路径>" await-busy (--group <组名> | --run <run_id>) [--after 分钟]
 node "<脚本路径>" cancel --run <run_id>
 node "<脚本路径>" judge  --run <run_id> [--accept "<编号,…>"] [--partial "<编号,…>"] [--reject "<编号,…>"] [--same "<编号>=<run_id>:<编号>,…"] [--clear "<编号,…>"]

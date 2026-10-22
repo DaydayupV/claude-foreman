@@ -2,10 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { sandbox, baseConfig, output, failed, read, json, hostArgs, apiAgent, MESSAGES } from './helpers.mjs';
+import { sandbox, baseConfig, output, failed, read, json, hostArgs, apiAgent, MESSAGES, DEFAULT_SEATS } from './helpers.mjs';
 import { discussion } from './fixtures/reports.mjs';
 const M = MESSAGES.zh;
-const defaults = { simple: 1, normal: 2, complex: 3 };
 const planArgs = (h, module = 'discuss', seats = ['codex'], cell = 'complex') => ['plan', '--cwd', h.cwd, '--module', module,
   '--cell', cell, '--group', 'seats-group', ...seats.flatMap((seat) => ['--seat', seat])];
 
@@ -17,9 +16,9 @@ test('未写 seats 时只在内存补齐，并发读取不改写文件或创建�
   for (const r of results) {
     const cfg = output(r);
     for (const module of ['discuss', 'review']) {
-      assert.deepEqual(cfg.effective.modules[module].seats, defaults);
-      assert.deepEqual(cfg.resolved_modules[module].seats, defaults);
-      assert.deepEqual(cfg.summary.modules[module].seats, defaults);
+      assert.deepEqual(cfg.effective.modules[module].seats, DEFAULT_SEATS[module]);
+      assert.deepEqual(cfg.resolved_modules[module].seats, DEFAULT_SEATS[module]);
+      assert.deepEqual(cfg.summary.modules[module].seats, DEFAULT_SEATS[module]);
       assert.equal(Object.hasOwn(json(h.userConfig).modules[module], 'seats'), false);
     }
     assert.equal(r.stderr, '');
@@ -45,19 +44,20 @@ test('部分 seats 在有效和解析配置中补齐，缺少整个模块时不�
   c.modules.review.simple = [{ agent: 'codex', required: true }, { agent: 'second', required: true }];
   c.modules.review.seats = { complex: 5 }; h.config(c);
   const before = read(h.userConfig), cfg = output(await h.bridge(['config']));
-  assert.deepEqual(cfg.effective.modules.discuss.seats, defaults);
-  assert.deepEqual(cfg.effective.modules.review.seats, { ...defaults, simple: 2, complex: 5 });
-  assert.deepEqual(cfg.resolved_modules.review.seats, { ...defaults, simple: 2, complex: 5 });
+  assert.deepEqual(cfg.effective.modules.discuss.seats, DEFAULT_SEATS.discuss);
+  assert.deepEqual(cfg.effective.modules.review.seats, { ...DEFAULT_SEATS.review, simple: 2, complex: 5 });
+  assert.deepEqual(cfg.resolved_modules.review.seats, { ...DEFAULT_SEATS.review, simple: 2, complex: 5 });
   assert.deepEqual(json(h.userConfig).modules.review.seats, { complex: 5 });
   assert.equal(read(h.userConfig), before); assert.equal(fs.existsSync(`${h.userConfig}.bak`), false);
 });
 
 for (const module of ['discuss', 'review']) test(`${module} 未写 seats 时默认值不少于必选数，文件不变`, async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex };
-  c.modules[module].simple = [{ agent: 'codex', required: true }, { agent: 'second', required: true }]; h.config(c);
+  c.agents.third = { ...c.agents.codex };
+  c.modules[module].simple = ['codex', 'second', 'third'].map((agent) => ({ agent, required: true })); h.config(c);
   const before = read(h.userConfig), cfg = output(await h.bridge(['config']));
-  assert.deepEqual(cfg.effective.modules[module].seats, { ...defaults, simple: 2 });
-  assert.deepEqual(cfg.resolved_modules[module].seats, { ...defaults, simple: 2 });
+  assert.deepEqual(cfg.effective.modules[module].seats, { ...DEFAULT_SEATS[module], simple: 3 });
+  assert.deepEqual(cfg.resolved_modules[module].seats, { ...DEFAULT_SEATS[module], simple: 3 });
   assert.equal(read(h.userConfig), before);
   assert.equal(Object.hasOwn(json(h.userConfig).modules[module], 'seats'), false);
   assert.equal(fs.existsSync(`${h.userConfig}.bak`), false);
@@ -155,7 +155,7 @@ test('讨论里的补漏席照常计入外部席位数', async (t) => {
   c.modules.discuss.complex = [{ agent: 'codex' }, { agent: 'second' }]; h.config(c);
   const p = output(await h.bridge(planArgs(h, 'discuss', ['codex=补漏', 'second=GaP'])));
   assert.equal(p.seat_target, 2); assert.equal(p.count_why, null);
-  failed(await h.bridge(planArgs(h, 'discuss', ['codex', 'second=补漏', 'second=gap'])), M.planSeatCount('modules.discuss.seats.complex', 3, 2, 3));
+  failed(await h.bridge(planArgs(h, 'discuss', ['codex', 'second=补漏', 'second=gap'])), M.planSeatCount('modules.discuss.seats.complex', DEFAULT_SEATS.discuss.complex, 2, 3));
 });
 
 test('一级和二级审查的补漏席照常计数', async (t) => {
@@ -176,7 +176,7 @@ test('visual 只把能看图的不同候选计入 usable，同一 agent 的多�
   const extra = ['--target', 'visual', '--file', 'shot.png'];
   const p = output(await h.bridge([...planArgs(h, 'review'), ...extra]));
   assert.equal(p.seat_target, 1); assert.equal(p.count_why, null);
-  failed(await h.bridge([...planArgs(h, 'review', ['codex=视觉', 'codex=内容']), ...extra]), M.planSeatCount('modules.review.seats.complex', 3, 1, 2));
+  failed(await h.bridge([...planArgs(h, 'review', ['codex=视觉', 'codex=内容']), ...extra]), M.planSeatCount('modules.review.seats.complex', DEFAULT_SEATS.review.complex, 1, 2));
 });
 
 test('outside_cell 计划不检查数量，seat_target 为 null', async (t) => {

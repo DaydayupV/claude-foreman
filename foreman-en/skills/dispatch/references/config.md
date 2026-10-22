@@ -30,7 +30,7 @@ Example:
       "simple":  "claude code",
       "normal":  [{ "agent": "gpt-6.1-sol", "effort": "high" }, { "agent": "glm-5.3" }],
       "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "glm-5.3" }, { "agent": "deepseek-v4-pro", "effort": "max" }],
-      "seats":   { "simple": 1, "normal": 2, "complex": 3 }
+      "seats":   { "complex": 3 }
     },
     "run":    { "simple": "claude code", "normal": "claude code", "complex": [{ "agent": "gpt-6.1-sol", "effort": "max" }] },
     "review": { "simple": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "normal": [{ "agent": "gpt-6.1-sol", "effort": "high" }], "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }] },
@@ -154,7 +154,7 @@ There is also a level 0 (below the threshold, not worth an outside model), which
 - A list of candidates: `[{ "agent": "<ID>", "effort": "<effort>", "required": true }, …]`. A single object works the same as a one-item list. Each agent can appear only once per cell.
 - `null` (image only): the cell is closed. With generate closed, no images are generated; with draw closed, Claude draws bending pieces and pure vector work itself. Claude can't produce bitmaps, so image cells can't be `"claude code"`.
 
-`discuss` and `review` also take `seats`, how many external models each level uses (see "Candidates and required agents" below): `{ "simple": 1, "normal": 2, "complex": 3 }`; any of the three can be left out and then takes that default (but never less than the cell's required count).
+`discuss` and `review` also take `seats`, how many external models each level uses, for example `{ "complex": 3 }`; any of the three can be left out and then takes the default. The defaults and rules are under "Candidates and required agents" below.
 
 What can go in a cell is checked against the capability table: discuss candidates must be able to discuss, review candidates to review; run candidates must be able to do hands-on work, and opencode and pi also need `run_access`; generate candidates must be able to generate images (the adapter declares `images` and implements image detection: which images appeared in this round and what each call passed; only codex cli for now); draw takes the same as run.
 
@@ -162,7 +162,14 @@ How image tasks go out: before work starts on each new graphic deliverable, Clau
 
 ### Candidates and required agents
 - When a cell has several candidates, Claude picks by the skill's rules (drop those that can't do it, add every required agent, fill discussion and review seats up to the configured number with different base models, one executor per work package) and says in a sentence whom it picked and why. The script only checks the hard rules a machine can check.
-- `seats` (`discuss` and `review` only): the number of external seats at each level, not counting the Claude Code seat or a level 3 review's gap seat; `{ "simple": 1, "normal": 2, "complex": 3 }` by default. Required agents count toward it, so it can't be lower than the cell's required count, or loading the config fails; it can be higher than the number of candidates, which means all of them take part. To always use a fixed set of agents at some level, list only those and set the seats to their number, or mark them all required. When `plan` creates a discussion or review plan, it checks that the external seats equal `min(seats, usable candidates)` (for a `visual` review only candidates that can read images count); otherwise it needs `--count-why "<reason>"`. Usable candidates are counted by agent ID, so one model reached two ways counts twice. A level left out takes the default, but never less than the cell's required count (so old configs with many required agents keep working). The script never writes `seats` into the config file on its own, because older plugin versions fail on it; the numbers in use are in `resolved_modules.<discuss|review>.seats` of the `config` output.
+- `seats` (`discuss` and `review` only): the number of external seats at each level, not counting the Claude Code seat or a level 3 review's gap seat. The defaults (the only place in the plugin that states the numbers; other documents point here):
+
+  | | simple | normal | complex |
+  |---|---|---|---|
+  | `discuss` | 2 | 4 | 8 |
+  | `review` | 1 | 2 | 2 |
+
+  Required agents count toward it, so it can't be lower than the cell's required count, or loading the config fails; it can be higher than the number of candidates, which means all of them take part. To always use a fixed set of agents at some level, list only those and set the seats to their number, or mark them all required. When `plan` creates a discussion or review plan, it checks that the external seats equal `min(seats, usable candidates)` (for a `visual` review only candidates that can read images count); otherwise it needs `--count-why "<reason>"`. Usable candidates are counted by agent ID, so one model reached two ways counts twice. A level left out takes the default, but never less than the cell's required count (so old configs with many required agents keep working). The script never writes `seats` into the config file on its own, because older plugin versions fail on it; the numbers in use are in `resolved_modules.<discuss|review>.seats` of the `config` output.
 - `required: true` means this agent must take part whenever the cell is used; without it the entry is an ordinary candidate that Claude may or may not add. One agent may be required in reviews and only a candidate in discussions, so `required` goes on the cell's entry, not on the agent definition.
 - To hand one task to several seats, Claude first creates a dispatch plan (`plan`); the script checks that every required agent has a seat and that a discussion or review has as many external seats as `seats` says, and then each seat is started. A single-seat hands-on handoff is refused when the cell has another required agent. Discussions and reviews always use a plan: it comes with the Claude Code seat, which submits its report with `submit` before the external seats can start.
 - When a required agent is at its parallel limit, its seat waits until a slot frees up. When a required agent fails, runs out of quota or is cancelled, the task counts as incomplete; another candidate doesn't stand in for it.
