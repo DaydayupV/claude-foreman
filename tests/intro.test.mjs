@@ -61,6 +61,7 @@ test('每一帧都不超出终端：行数等于高度，每行最多占宽度�
     introScene({ mode: 'run', kind: 'exec', participants: [one('chatgpt', 'gpt-6-astra')], random: fixed }),
     introScene({ mode: 'review', kind: 'review', participants: [one('unknown', 'some-very-long-model-name-without-any-keyword')], random: fixed }),
     introScene({ mode: 'discuss', kind: 'discuss', participants: ['chatgpt', 'deepseek', 'glm', 'kimi', 'minimax'].map((k) => one(k, `${k}-v4-pro`)), group: true, random: fixed }),
+    introScene({ mode: 'review', kind: 'review', participants: ['m3', 'm3-pro', 'm3-max'].map((s) => one('minimax', `minimax-${s}`)), group: true, random: fixed }),
   ];
   for (const scene of scenes) for (const [W, H] of [[140, 40], [120, 30], [70, 50], [40, 30], [28, 24], [20, 12], [12, 6], [8, 4]]) for (const t of [100, 900, 2600, 4800]) {
     const lines = introFrame(introState(scene, fixed), t, W, H);
@@ -77,6 +78,37 @@ test('每一帧都不超出终端：行数等于高度，每行最多占宽度�
   // 40 列时名单折成几行，一个模型名都不截断
   const wider = introFrame(introState(scenes[2], fixed), 2600, 40, 30).map(visible);
   for (const model of scenes[2].participants.map((p) => p.model)) assert.ok(wider.some((l) => l.includes(model)), model);
+});
+
+test('同一个头像出场两次以上时，后来的是分身：镜像画、名牌带"分身"、第一句笑话讲分身；??? 不算', () => {
+  const clones = (name) => M.introCloneJokes.map((j) => j.replaceAll('{n}', name));
+  const frame = (scene, W = 160, H = 40) => introFrame(introState(scene, fixed), 4800, W, H).map(visible).join('\n');
+  // 组里两个同系列的模型
+  const pair = introScene({ mode: 'discuss', kind: 'discuss', participants: [one('chatgpt', 'gpt-6.1-sol'), one('chatgpt', 'gpt-6-astra')], group: true, random: fixed });
+  assert.ok(clones('GPT').includes(pair.jokes[0]), pair.jokes[0]);
+  assert.equal(pair.jokes.length, 6);
+  assert.ok(frame(pair).includes(M.introClone('ChatGPT', 1)));
+  // 分身的头像是本体左右翻过来：两个 48 宽的头像居中排开，中间隔 3 列；星星可能落在空白处，先抹掉
+  const x0 = (159 - (48 * 2 + 3)) >> 1, rows = introFrame(introState(pair, fixed), 4800, 160, 40).map((l) => [...visible(l).replace(/[·✧✦]/g, ' ')]);
+  const art = rows.filter((l) => l.some((c) => c === '▀' || c === '▄'));
+  assert.ok(art.length >= 20, `${art.length}`);
+  for (const l of art) assert.deepEqual(l.slice(x0 + 51, x0 + 99), l.slice(x0, x0 + 48).reverse());
+  // 三个同系列：第二个分身带编号
+  const three = introScene({ mode: 'discuss', kind: 'discuss', participants: ['a', 'b', 'c'].map((s) => one('deepseek', `deepseek-${s}`)), group: true, random: fixed });
+  assert.ok(frame(three).includes(M.introClone('DeepSeek', 2)));
+  // 单个任务派给 Claude 系列的模型：和左边派活的 Claude 撞脸
+  const self = introScene({ mode: 'run', kind: 'exec', participants: [one('claude', 'claude-sonnet-5')], random: fixed });
+  assert.ok(clones('Claude').includes(self.jokes[0]), self.jokes[0]);
+  assert.ok(frame(self).includes(M.introClone('Claude', 1)));
+  // 轮流登场和文字徽章里也标出分身
+  const many = introScene({ mode: 'discuss', kind: 'discuss', participants: ['chatgpt', 'deepseek', 'glm', 'kimi', 'chatgpt'].map((k) => one(k)), group: true, random: fixed });
+  assert.equal(introLayout(many, 119, 30, 6).flip, true);
+  assert.ok(introFrame(introState(many, fixed), 9300, 120, 30).map(visible).join('\n').includes(`${M.introClone('ChatGPT', 1)}  5/5`));
+  assert.ok(introFrame(introState(many, fixed), 2600, 30, 40).map(visible).join('\n').includes(M.introClone('ChatGPT', 1)));
+  // 认不出的模型彼此不一定同系列：不算分身
+  const strangers = introScene({ mode: 'discuss', kind: 'discuss', participants: [one('unknown', 'foo-1'), one('unknown', 'bar-2')], group: true, random: fixed });
+  assert.ok(!strangers.jokes.some((j) => M.introCloneJokes.some((c) => j === c.replaceAll('{n}', 'foo-1') || j === c.replaceAll('{n}', 'bar-2'))));
+  assert.ok(!frame(strangers).includes(M.introClone('???', 1)));
 });
 
 test('macOS 自带终端没声明支持 24 位色时改用 256 色，其他终端用 24 位色', () => {

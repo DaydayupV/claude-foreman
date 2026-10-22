@@ -61,15 +61,21 @@ const INTRO_MS = { single: 5000, discuss: 10000 };
 const shuffle = (a, random) => { a = [...a]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 // participants：[{ key, model, who }]，who 是"模型（接入方式，effort …）"。
 // 单个任务时 Claude 作为派活的人站在左边；组（讨论、并行的任务组）只画参与方，人数可能在播放中变多。
+// 同一个头像出场两次以上（组里两个同系列的模型，或者 Claude Code 派活给 Claude 系列的模型）时，后来的是分身：
+// 画成镜像，名牌带"分身"，第一句笑话讲分身。???（认不出的模型）彼此不一定同系列，不算分身。
 function introScene({ mode, kind, participants, group = false, random = Math.random }) {
   const pool = M.introJokes[kind === 'discuss' ? 'discuss' : mode === 'review' ? 'review' : 'run'];
-  const fill = (s) => {
-    const p = participants[Math.floor(random() * participants.length)];
-    return s.replaceAll('{n}', p.key === 'unknown' ? p.model : LOOKS[p.key].short || LOOKS[p.key].name).replaceAll('{m}', p.model);
-  };
-  const jokes = shuffle([...pool, ...participants.flatMap((p) => M.introModelJokes[p.key] || [])], random).slice(0, 6).map(fill);
+  const shortName = (p) => (p.key === 'unknown' ? p.model : LOOKS[p.key].short || LOOKS[p.key].name);
+  const fill = (s, p = participants[Math.floor(random() * participants.length)]) => s.replaceAll('{n}', shortName(p)).replaceAll('{m}', p.model);
+  const lineup = [...(group ? [] : [{ key: 'claude', model: 'claude' }]), ...participants];
+  const twin = lineup.find((p, i) => p.key !== 'unknown' && lineup.findIndex((q) => q.key === p.key) < i);
+  const jokes = shuffle([...pool, ...participants.flatMap((p) => M.introModelJokes[p.key] || [])], random).slice(0, twin ? 5 : 6).map((s) => fill(s));
+  if (twin) jokes.unshift(fill(M.introCloneJokes[Math.floor(random() * M.introCloneJokes.length)], twin));
   return { kind, mode, participants, group, host: !group, jokes, duration: kind === 'discuss' ? INTRO_MS.discuss : INTRO_MS.single };
 }
+// 每个出场位置是第几个分身：本体是 0
+const cloneIndex = (keys) => keys.map((k, i) => (k === 'unknown' ? 0 : keys.slice(0, i).filter((x) => x === k).length));
+const tagOf = (k, nth) => (nth ? M.introClone(LOOKS[k].name, nth) : LOOKS[k].name);
 
 // ---- 屏幕缓冲：每格 { ch, fg, bold }，底色统一 ----
 const BG = [16, 16, 22], GRAY = [200, 200, 200], DIM = [110, 110, 110], TRACK = [60, 60, 60];
@@ -136,15 +142,15 @@ function introLayout(scene, Wd, H, below) {
   return { size: 'T', host: scene.host, flip: false };
 }
 // 文字模式的徽章：一行放不下就换行
-function badgeRows(keys, Wd) {
+function badgeRows(keys, nths, Wd) {
   const rows = [];
   let row = [], rw = 0;
-  for (const k of keys) {
-    const w = Math.min(textWidth(LOOKS[k].name) + 8, Wd);
+  keys.forEach((k, i) => {
+    const name = tagOf(k, nths[i]), w = Math.min(textWidth(name) + 8, Wd);
     if (row.length && rw + 2 + w > Wd) { rows.push(row); row = []; rw = 0; }
     rw += (row.length ? 2 : 0) + w;
-    row.push({ k, w });
-  }
+    row.push({ k, w, name });
+  });
   if (row.length) rows.push(row);
   return rows;
 }
@@ -175,14 +181,17 @@ function introFrame(state, t, W, H) {
   const L = introLayout(scene, Wd, H, 2 + textH);
   const slot = (D - 900) / scene.participants.length;
   const cur = L.flip ? Math.min(scene.participants.length - 1, Math.floor(Math.max(0, t - 300) / slot)) : 0;
-  const keys = [...(L.host ? ['claude'] : []), ...(L.flip ? [scene.participants[cur]] : scene.participants).map((p) => p.key)];
+  // 分身按整个出场名单数（轮流登场时也一样），再挑出这一帧画的几位
+  const allKeys = [...(L.host ? ['claude'] : []), ...scene.participants.map((p) => p.key)], allNths = cloneIndex(allKeys);
+  const shown = L.flip ? [...(L.host ? [0] : []), (L.host ? 1 : 0) + cur] : allKeys.map((_, i) => i);
+  const keys = shown.map((i) => allKeys[i]), nths = shown.map((i) => allNths[i]);
   let textY;
   if (L.size === 'T') {
-    const rows = badgeRows(keys, Wd), top = Math.max(0, (H - (rows.length * 3 + 1 + textH)) >> 1);
+    const rows = badgeRows(keys, nths, Wd), top = Math.max(0, (H - (rows.length * 3 + 1 + textH)) >> 1);
     rows.forEach((row, r) => {
       let x = Math.max(0, (Wd - row.reduce((a, b) => a + b.w, 0) - 2 * (row.length - 1)) >> 1);
       for (const b of row) {
-        const c = dim(LOOKS[b.k].color, fade * Math.min(1, t / 400)), y = top + r * 3, name = LOOKS[b.k].name;
+        const c = dim(LOOKS[b.k].color, fade * Math.min(1, t / 400)), y = top + r * 3, name = b.name;
         put(buf, x, y, `╭${'─'.repeat(b.w - 2)}╮`, c);
         put(buf, x, y + 1, '│', c);
         put(buf, x + b.w - 1, y + 1, '│', c);
@@ -193,7 +202,7 @@ function introFrame(state, t, W, H) {
     });
     textY = top + rows.length * 3 + 1;
   } else {
-    const gs = keys.map((k) => pixels(k, L.size)), avH = Math.max(...gs.map(rowsOf)), items = [];
+    const gs = keys.map((k, i) => (nths[i] ? pixels(k, L.size).map((r) => [...r].reverse()) : pixels(k, L.size))), avH = Math.max(...gs.map(rowsOf)), items = [];
     const total = gs.reduce((a, g) => a + g[0].length, 0) + (L.host ? 14 : 0) + 3 * Math.max(0, keys.length - 1 - (L.host ? 1 : 0));
     const top = Math.max(0, (H - (avH + 2 + textH)) >> 1);
     let x = Math.max(0, (Wd - total) >> 1);
@@ -203,7 +212,7 @@ function introFrame(state, t, W, H) {
       const reveal = Math.max(0, (t - born) / 650) * g.length;
       const bob = reveal > g.length && Math.floor((t - born) / 700) % 2 === 1 ? 1 : 0; // 扫完后每 0.7 秒上下浮动一次
       drawAvatar(buf, x, top + avH - rowsOf(g), g, { reveal, bob, fade });
-      items.push({ k, x, w: g[0].length, born, isHost });
+      items.push({ k, x, w: g[0].length, born, isHost, tag: tagOf(k, nths[i]) });
       x += g[0].length + (isHost ? 14 : 3);
     });
     // Claude 和目标之间：一串光点从 Claude 飞向目标
@@ -228,7 +237,7 @@ function introFrame(state, t, W, H) {
     }
     // 名牌：头像扫出来以后逐字打出来
     for (const it of items) {
-      const text = `${LOOKS[it.k].name}${L.flip && !it.isHost ? `  ${cur + 1}/${scene.participants.length}` : ''}`;
+      const text = `${it.tag}${L.flip && !it.isHost ? `  ${cur + 1}/${scene.participants.length}` : ''}`;
       const n = Math.max(0, Math.floor((t - it.born - 650) / 60));
       put(buf, it.x + Math.max(0, (it.w - textWidth(text)) >> 1), top + avH, [...text].slice(0, n).join(''), dim(LOOKS[it.k].color, fade), true);
     }
