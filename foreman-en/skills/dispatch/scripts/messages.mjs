@@ -419,6 +419,7 @@ ${schema}`,
 ## 固定约束（调度方自动附加）
 - 工作目录：${cwd}${addDirs.length ? `；另可改动：${addDirs.join('、')}` : ''}。只改任务说明列出的文件和范围。任务说明"允许的适配"一节写明的事可以直接做，在报告里说明做了什么、为什么等效；没写明的越界都不要做。
 - 开始前先花很少的成本做预检：解释器和依赖能用、测试能被发现、任务需要的输入存在。只做检查，不要因此跑耗时的完整验收。
+- 验证只跑任务说明"完成标准"里分给你的定向测试和检查；改了代码之后，重跑受改动影响的那些。不要跑全量测试，任务说明明确要求的除外：全量由调度方在最终版本上统一跑一次。在报告的 verification 里写明跑了哪些命令、结果如何。
 - 运行期间没有人能回答你：不要在中途提问后等答复，问题只在最终报告里提。
 - 遇到下面的情况，这一项不要自己做主：需要突破上面的范围或授权；需要改变研究口径、样本外纪律或验收标准；要做不可逆的操作；问题的答案不同会让后面耗时的工作作废。这一项先不做，或者用最保守、能撤回的做法；不受它影响的部分照常做完。最后把问题写进报告的 decision_requests，status 填 blocked；recommendation 里写明你推荐哪个选项，以及你已经按哪个做了、还是这一项还没做。
 - 其他拿不准的地方，选保守、可逆的做法继续，并在报告里写明；不要每个小疑问都停下。
@@ -443,6 +444,7 @@ ${schema}`,
   reviewFooter: `---
 ## 审查要求（调度方自动附加）
 - 只审查，不要修改、创建或删除任何文件，不要执行会改动文件的命令。
+- 审查说明里写明已经通过的测试，不要重跑。只为核实某个具体疑点跑定向的只读命令；复现需要写文件时不要跑，把复现步骤写进 unverified。
 - 材料可能没有问题，只报能定位到证据的问题。
 - 只报告真实存在的问题：正确性 bug、逻辑漏洞、边界条件、并发与数据一致性、安全问题、明显的性能问题。不报告纯风格偏好。
 - 每个问题写清：位置（文件:行号，或材料里的位置）、问题、触发场景（什么输入或状态会出错）、证据和修复建议，按严重程度从高到低排列，编号 F1、F2……
@@ -1004,6 +1006,7 @@ ${schema}`,
 ## Standing rules (added by the dispatcher)
 - Working directory: ${cwd}${addDirs.length ? `; you may also change: ${addDirs.join(', ')}` : ''}. Only change the files and scope listed in the brief. Things written in the brief's "Allowed adaptations" section may be done directly; say in the report what you did and why it is equivalent. Don't go beyond the scope in any other way.
 - Before starting, do a cheap preflight: the interpreter and dependencies work, tests can be discovered, and the inputs the task needs exist. Only check; don't run a long full verification for this.
+- For verification, run only the targeted tests and checks the brief's "Done when" section gives to you; after changing code, rerun the ones the change affects. Don't run the full test suite unless the brief explicitly asks for it: the dispatcher runs it once on the final version. In the report's verification, say which commands you ran and what came out.
 - Nobody can answer you while you run: don't ask a question mid-run and wait for a reply. Questions go only in the final report.
 - In these cases, don't decide the item yourself: you would need to go beyond the scope or authorization above; the research definitions, out-of-sample discipline or acceptance criteria would change; an irreversible operation is needed; or different answers would make later time-consuming work wasted. Leave that item undone, or take the most conservative, reversible option; finish everything it doesn't affect as usual. At the end, put the question in the report's decision_requests and set status to blocked. In recommendation, say which option you recommend and which one you've already gone with, or that the item is still undone.
 - For anything else you are unsure about, take the conservative, reversible option, keep going and note it in the report; don't stop for every small doubt.
@@ -1028,6 +1031,7 @@ ${schema}`,
   reviewFooter: `---
 ## Review rules (added by the dispatcher)
 - Review only. Don't change, create or delete any files, and don't run commands that change files.
+- Don't rerun tests the review brief says have already passed. Run targeted read-only commands only to check a specific suspicion; if reproducing it would need to write files, don't run it: put the reproduction steps in unverified.
 - The material may well have no problems; report only issues you can point to evidence for.
 - Report only real problems: correctness bugs, logic errors, edge cases, concurrency and data consistency, security issues, clear performance problems. Not style preferences.
 - For each problem give: the location (file:line, or where in the material), the problem, when it goes wrong (what input or state triggers it), the evidence and a suggested fix. Order by severity, most severe first, numbered F1, F2, …

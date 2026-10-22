@@ -6,7 +6,7 @@
     "status": {
       "type": "string",
       "enum": ["completed", "partial", "blocked", "failed"],
-      "description": "completed = all done and verified; partial = partly done; blocked = questions in decision_requests need the dispatcher's decision before work can go on; failed = not done"
+      "description": "completed = the deliverable is done and the verification assigned to you has been done; partial = partly done; blocked = questions in decision_requests need the dispatcher's decision before work can go on; failed = not done"
     },
     "summary": { "type": "string", "description": "What was done and the key implementation decisions, briefly" },
     "files_changed": {

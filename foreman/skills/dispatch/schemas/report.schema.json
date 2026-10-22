@@ -6,7 +6,7 @@
     "status": {
       "type": "string",
       "enum": ["completed", "partial", "blocked", "failed"],
-      "description": "completed=全部完成并验证；partial=部分完成；blocked=有 decision_requests 里的问题需要调度方决定，无法继续；failed=没做成"
+      "description": "completed=交付内容已完成，分配给你的验证也已做完；partial=部分完成；blocked=有 decision_requests 里的问题需要调度方决定，无法继续；failed=没做成"
     },
     "summary": { "type": "string", "description": "做了什么、关键实现决策，简明扼要" },
     "files_changed": {
