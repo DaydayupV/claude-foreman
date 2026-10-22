@@ -133,6 +133,29 @@ test('文案：中英文都有三类任务和每个头像的笑话，占位符�
     const scene = introScene({ mode: 'run', kind: 'exec', participants: [one(key, 'mystery-1')] });
     assert.ok(scene.jokes.length && scene.jokes.every((j) => !/\{[nm]\}/.test(j)), key);
   }
+  // 派活的一方叫 Claude Code：任务笑话里不再单独写 "Claude"
+  for (const lang of ['zh', 'en']) for (const kind of ['run', 'review', 'discuss']) {
+    for (const j of MESSAGES[lang].introJokes[kind]) assert.ok(!/Claude(?! Code)/.test(j), `${lang} ${kind}: ${j}`);
+  }
+  // 同一个模型来了两席，它的笑话只放一次；写代码的笑话只在执行任务里出现
+  const all = (kind) => { const r = () => 0; return introScene({ mode: kind === 'exec' ? 'run' : 'discuss', kind, participants: [one('chatgpt'), one('chatgpt')], group: true, random: r }).jokes; };
+  const discuss = all('discuss');
+  assert.equal(new Set(discuss).size, discuss.length, discuss.join(' / '));
+  for (const j of M.introModelRunJokes.chatgpt) assert.ok(!discuss.includes(j), j);
+  const runScenes = Array.from({ length: 40 }, (_, i) => introScene({ mode: 'run', kind: 'exec', participants: [one('chatgpt')], random: () => (i * 0.37) % 1 }).jokes).flat();
+  assert.ok(runScenes.some((j) => M.introModelRunJokes.chatgpt.includes(j)), '执行任务里能抽到写代码的笑话');
+});
+
+test('名牌：左边派活的是 Claude Code，参加任务的 Claude 系列模型还是 Claude', () => {
+  const scene = introScene({ mode: 'run', kind: 'exec', participants: [one('chatgpt')], random: fixed });
+  const wide = introFrame(introState(scene, fixed), 3000, 120, 30).map(visible).join('\n');
+  assert.ok(wide.includes('Claude Code'), wide);
+  const self = introScene({ mode: 'run', kind: 'exec', participants: [one('claude', 'claude-sonnet-5')], random: fixed });
+  const text = introFrame(introState(self, fixed), 3000, 120, 30).map(visible).join('\n');
+  assert.ok(text.includes('Claude Code') && text.includes(M.introClone('Claude', 1)), text);
+  // 窄窗口用文字徽章时也一样
+  const narrow = introFrame(introState(scene, fixed), 3000, 30, 40).map(visible).join('\n');
+  assert.ok(narrow.includes('Claude Code') || !narrow.includes('Claude'), narrow);
 });
 
 test('播放：任务提前结束就马上收尾；之后不用备用屏幕时退出，接着用时留着，等接手后再摘掉退出时恢复终端的钩子', async () => {

@@ -139,6 +139,18 @@ test('组视图里结束了的席位在结论下面写用量和 run_id，和单�
   assert.ok(seat2.includes(`    ${D.watchWorking}`), seat2.join('\n'));
 });
 
+test('真实派活时快照的两条事件留在 events.jsonl 开头，协作方的事件接在后面，时间线里两句都在', async (t) => {
+  const h = sandbox(t);
+  const r = await h.bridge(taskArgs(h));
+  assert.equal(r.code, 0, r.stderr);
+  const run = JSON.parse(r.stdout);
+  const events = fs.readFileSync(path.join(run.run_dir, 'events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(events.slice(0, 2).map((e) => [e.type, e.phase]), [['foreman.snapshot', 'start'], ['foreman.snapshot', 'done']]);
+  assert.ok(events.length > 2 && events.slice(2).every((e) => e.type !== 'foreman.snapshot'), JSON.stringify(events.map((e) => e.type)));
+  const watched = await h.bridge(['watch', '--run', run.run_id]);
+  assert.ok(watched.stdout.includes(D.watchSnapshotStart.slice(0, 30)) && watched.stdout.includes(D.watchSnapshotDone('0s')), watched.stdout);
+});
+
 test('直接输出时，一条命令迟迟没有结束，也不压着后面说的话', async (t) => {
   const h = sandbox(t);
   const ts = new Date().toISOString();

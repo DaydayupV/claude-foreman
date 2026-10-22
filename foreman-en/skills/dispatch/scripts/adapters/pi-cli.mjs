@@ -211,7 +211,9 @@ async function piSession(run, schema, access) {
   const { dir, agentName, agent, model, effort, cwd, prompt } = ctx;
   const { deadline, stallMin } = runLimits(ctx, started);
   const event = eventWriter(dir);
-  for (const file of ['events.jsonl', 'pi.jsonl', 'stderr.log']) fs.writeFileSync(path.join(dir, file), '');
+  // events.jsonl 只追加：开工前 runner 已经记下了拍快照的事件，不能清掉
+  fs.appendFileSync(path.join(dir, 'events.jsonl'), '');
+  for (const file of ['pi.jsonl', 'stderr.log']) fs.writeFileSync(path.join(dir, file), '');
   const errors = [], warnings = [], notes = [];
   const observed = { messages: [], questions: [] };
   const usage = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 };

@@ -613,11 +613,11 @@ ${schema}`,
   introJokes: {
     run: ['Claude Code 正在鞭打 {n}……', 'Claude Code 正在把需求切成 {n} 一口能吃下的小块……', '正在提醒 {n}：这次不许写 300 个测试……', '{n} 正在签署《不越界承诺书》……', '{n} 正在翻仓库的族谱（git log）……', 'Claude Code 正在给 {n} 划重点……', '正在给 {n} 泡一杯赛博咖啡……'],
     review: ['{n} 正在戴上老花镜……', '正在给 {n} 的红笔灌墨水……', '{n} 正在 diff 里找茬……', 'Claude Code 正在假装一点也不紧张……'],
-    discuss: ['Claude Code 正在给各位分发辩论稿……', '正在把会议室的椅子摆成一圈……', '正在没收手机，防止偷看别人的方案……', 'Claude 宣布规则：对事不对模型……', '{n} 正在清嗓子……', 'Claude Code 正在给每位倒一杯水……'],
+    discuss: ['Claude Code 正在给各位分发辩论稿……', '正在把会议室的椅子摆成一圈……', '正在没收手机，防止偷看别人的方案……', 'Claude Code 宣布规则：对事不对模型……', '{n} 正在清嗓子……', 'Claude Code 正在给每位倒一杯水……'],
   },
   introModelJokes: {
-    claude: ['Claude Code 正在照镜子……'],
-    chatgpt: ['GPT 正在把 effort 拧到最大……', 'GPT 正在活动手指，准备敲代码……'],
+    claude: ['Claude 正在照镜子……'],
+    chatgpt: ['GPT 正在把 effort 拧到最大……'],
     gemini: ['双子座的两位正在猜拳决定谁来上班……', 'Gemini 比了个耶，表示收到……'],
     deepseek: ['DeepSeek 正在深度思考要不要深度思考……', '小鲸鱼正在下潜到代码最底层……'],
     mimo: ['MiMo 正在握拳给自己打气……', 'MiMo 正在把 M 字发卡别正……'],
@@ -628,6 +628,8 @@ ${schema}`,
     grok: ['Grok 正在扶正头顶的小王冠……', 'Grok 正在系紧双马尾上的黑蝴蝶结……'],
     unknown: ['一位神秘嘉宾正在入场……', '正在核对神秘嘉宾的入场券……', '正在给 {m} 办临时工牌……'],
   },
+  // 只在执行任务里用的模型笑话（讨论和审查不写代码）
+  introModelRunJokes: { chatgpt: ['GPT 正在活动手指，准备敲代码……'] },
 };
 
 const en = {
@@ -1380,11 +1382,11 @@ ${schema}`,
   introJokes: {
     run: ['Claude Code is cracking the whip over {n}…', 'Claude Code is cutting the spec into bite-size pieces for {n}…', 'Reminding {n}: no 300-test suites this time…', '{n} is signing a pledge to stay in scope…', '{n} is reading the family tree (git log)…', 'Claude Code is highlighting the key points for {n}…', 'Brewing a cup of coffee for {n}…'],
     review: ['{n} is putting on reading glasses…', "Refilling {n}'s red pen…", '{n} is picking nits in the diff…', 'Claude Code is pretending not to be nervous…'],
-    discuss: ['Claude Code is handing out the debate notes…', 'Arranging the meeting-room chairs in a circle…', "Collecting phones so nobody peeks at anyone else's proposal…", 'Claude announces the rules: attack the idea, not the model…', '{n} is clearing its throat…', 'Claude Code is pouring everyone a glass of water…'],
+    discuss: ['Claude Code is handing out the debate notes…', 'Arranging the meeting-room chairs in a circle…', "Collecting phones so nobody peeks at anyone else's proposal…", 'Claude Code announces the rules: attack the idea, not the model…', '{n} is clearing its throat…', 'Claude Code is pouring everyone a glass of water…'],
   },
   introModelJokes: {
-    claude: ['Claude Code is checking itself in the mirror…'],
-    chatgpt: ['GPT is cranking the effort all the way up…', 'GPT is cracking its knuckles…'],
+    claude: ['Claude is checking itself in the mirror…'],
+    chatgpt: ['GPT is cranking the effort all the way up…'],
     gemini: ["The Gemini twins are playing rock-paper-scissors for today's shift…", 'Gemini flashes a peace sign: got it…'],
     deepseek: ['DeepSeek is thinking deeply about whether to think deeply…', 'The little whale is diving into the depths of the code…'],
     mimo: ['MiMo is pumping both fists…', 'MiMo is straightening the M hair clip…'],
@@ -1395,6 +1397,8 @@ ${schema}`,
     grok: ['Grok is straightening the little crown…', 'Grok is tying the black bows on both pigtails…'],
     unknown: ['A mystery guest is arriving…', "Checking the mystery guest's ticket…", 'Printing a temporary badge for {m}…'],
   },
+  // Model jokes used only for hands-on runs (discussions and reviews don't write code)
+  introModelRunJokes: { chatgpt: ['GPT is cracking its knuckles to start coding…'] },
 };
 
 export const MESSAGES = { zh, en };

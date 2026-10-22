@@ -147,7 +147,8 @@ const images = {
 function runCodex({ agent, args, cwd, prompt, runDir, timeoutMin, stallMin, sessionId, onSession }) {
   return new Promise((resolve) => {
     const { file, pre } = codexCommand(agent);
-    const events = fs.createWriteStream(path.join(runDir, 'events.jsonl'));
+    // 追加写：开工前 runner 已经记下了拍快照的事件，不能清掉
+    const events = fs.createWriteStream(path.join(runDir, 'events.jsonl'), { flags: 'a' });
     const errLog = fs.createWriteStream(path.join(runDir, 'stderr.log'));
     const event = eventWriter(runDir, events);
     const out = { code: null, sessionId: null, usage: null, errors: [], warnings: [], notes: [], sandboxError: null, fileChanges: new Set(), images: [], imageCalls: [], viewedImages: [], quotaExhausted: false, timedOut: false, stalled: false, cancelled: false, commands: 0, messages: [], questions: [] };

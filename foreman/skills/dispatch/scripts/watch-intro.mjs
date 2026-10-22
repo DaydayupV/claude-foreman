@@ -69,13 +69,17 @@ function introScene({ mode, kind, participants, group = false, random = Math.ran
   const fill = (s, p = participants[Math.floor(random() * participants.length)]) => s.replaceAll('{n}', shortName(p)).replaceAll('{m}', p.model);
   const lineup = [...(group ? [] : [{ key: 'claude', model: 'claude' }]), ...participants];
   const twin = lineup.find((p, i) => p.key !== 'unknown' && lineup.findIndex((q) => q.key === p.key) < i);
-  const jokes = shuffle([...pool, ...participants.flatMap((p) => M.introModelJokes[p.key] || [])], random).slice(0, twin ? 5 : 6).map((s) => fill(s));
+  // 同一个模型来了几席，它的笑话只放一次；写代码的笑话只在执行任务里用
+  const keys = [...new Set(participants.map((p) => p.key))];
+  const modelJokes = keys.flatMap((k) => [...(M.introModelJokes[k] || []), ...(kind === 'exec' ? M.introModelRunJokes?.[k] || [] : [])]);
+  const jokes = shuffle([...pool, ...modelJokes], random).slice(0, twin ? 5 : 6).map((s) => fill(s));
   if (twin) jokes.unshift(fill(M.introCloneJokes[Math.floor(random() * M.introCloneJokes.length)], twin));
   return { kind, mode, participants, group, host: !group, jokes, duration: kind === 'discuss' ? INTRO_MS.discuss : INTRO_MS.single };
 }
 // 每个出场位置是第几个分身：本体是 0
 const cloneIndex = (keys) => keys.map((k, i) => (k === 'unknown' ? 0 : keys.slice(0, i).filter((x) => x === k).length));
-const tagOf = (k, nth) => (nth ? M.introClone(LOOKS[k].name, nth) : LOOKS[k].name);
+// 名牌：左边派活的写 Claude Code；参加任务的 Claude 系列模型照常写 Claude
+const tagOf = (k, nth, host = false) => (host ? 'Claude Code' : nth ? M.introClone(LOOKS[k].name, nth) : LOOKS[k].name);
 
 // ---- 屏幕缓冲：每格 { ch, fg, bold }，底色统一 ----
 const BG = [16, 16, 22], GRAY = [200, 200, 200], DIM = [110, 110, 110], TRACK = [60, 60, 60];
@@ -142,11 +146,11 @@ function introLayout(scene, Wd, H, below) {
   return { size: 'T', host: scene.host, flip: false };
 }
 // 文字模式的徽章：一行放不下就换行
-function badgeRows(keys, nths, Wd) {
+function badgeRows(keys, nths, Wd, host = false) {
   const rows = [];
   let row = [], rw = 0;
   keys.forEach((k, i) => {
-    const name = tagOf(k, nths[i]), w = Math.min(textWidth(name) + 8, Wd);
+    const name = tagOf(k, nths[i], host && i === 0), w = Math.min(textWidth(name) + 8, Wd);
     if (row.length && rw + 2 + w > Wd) { rows.push(row); row = []; rw = 0; }
     rw += (row.length ? 2 : 0) + w;
     row.push({ k, w, name });
@@ -187,7 +191,7 @@ function introFrame(state, t, W, H) {
   const keys = shown.map((i) => allKeys[i]), nths = shown.map((i) => allNths[i]);
   let textY;
   if (L.size === 'T') {
-    const rows = badgeRows(keys, nths, Wd), top = Math.max(0, (H - (rows.length * 3 + 1 + textH)) >> 1);
+    const rows = badgeRows(keys, nths, Wd, L.host), top = Math.max(0, (H - (rows.length * 3 + 1 + textH)) >> 1);
     rows.forEach((row, r) => {
       let x = Math.max(0, (Wd - row.reduce((a, b) => a + b.w, 0) - 2 * (row.length - 1)) >> 1);
       for (const b of row) {
@@ -212,7 +216,7 @@ function introFrame(state, t, W, H) {
       const reveal = Math.max(0, (t - born) / 650) * g.length;
       const bob = reveal > g.length && Math.floor((t - born) / 700) % 2 === 1 ? 1 : 0; // 扫完后每 0.7 秒上下浮动一次
       drawAvatar(buf, x, top + avH - rowsOf(g), g, { reveal, bob, fade });
-      items.push({ k, x, w: g[0].length, born, isHost, tag: tagOf(k, nths[i]) });
+      items.push({ k, x, w: g[0].length, born, isHost, tag: tagOf(k, nths[i], isHost) });
       x += g[0].length + (isHost ? 14 : 3);
     });
     // Claude 和目标之间：一串光点从 Claude 飞向目标

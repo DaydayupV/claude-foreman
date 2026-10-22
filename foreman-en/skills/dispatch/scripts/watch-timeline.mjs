@@ -56,6 +56,8 @@ function eventReader(dir, onEvent) {
   return () => {
     let size;
     try { size = fs.statSync(file).size; } catch { return; }
+    // 文件变短了（被重写过）：从头重读，半行的缓冲也丢掉
+    if (size < offset) { offset = 0; buf = ''; decoder.decode(); }
     if (size <= offset) return;
     const chunk = Buffer.alloc(size - offset);
     const fd = fs.openSync(file, 'r');

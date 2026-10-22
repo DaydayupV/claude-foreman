@@ -197,7 +197,9 @@ async function opencodeSession(run, schema, agentId) {
   const limits = runLimits(ctx, started), { deadline } = limits;
   const stallMin = exec && agent.run_access === 'shell' && !capabilities.command_start_events ? 0 : limits.stallMin;
   const event = eventWriter(dir);
-  for (const file of ['events.jsonl', 'opencode.jsonl', 'stderr.log']) fs.writeFileSync(path.join(dir, file), '');
+  // events.jsonl 只追加：开工前 runner 已经记下了拍快照的事件，不能清掉
+  fs.appendFileSync(path.join(dir, 'events.jsonl'), '');
+  for (const file of ['opencode.jsonl', 'stderr.log']) fs.writeFileSync(path.join(dir, file), '');
   const errors = [], warnings = [], notes = [];
   const recovered = new Set();
   const observed = { messages: [], questions: [] };
