@@ -93,8 +93,8 @@ First list the full assignment in the message: seat number, model (tier), role, 
 - First create a plan with `plan --module discuss --cell <level> --group <name>`, one `--seat <agent>=<role>` per external seat (a model playing two roles is written twice), the Claude Code seat's role as `--host-role "<role>"`, and the reasons for the assignment in `--why`.
 - Next, Claude Code writes its answer around its own role card's checks and `submit`s it. The answer has the same format as in the normal mode (the schema allows no extra fields); the role card's text goes into the decision record.
 - Then one `discuss --plan <plan_id> --seat <n>` per external seat, each with its own brief (shared body + its role card).
-- Always set `--title` to "Role mode [<role name>]", such as "Role mode [Edge-case lister]". Each panel in the live view shows the model on its first line and this title on its second.
-- Don't pass `--title` when resuming for round 2: the resume keeps the previous title, and the live view adds "· round 2" to the second line itself.
+- Set `--title` to the discussion's short title, the same for every seat, and leave the role out of it: the live view reads each seat's role from the plan and shows it under that seat's model line.
+- Don't pass `--title` when resuming for round 2: the resume keeps the previous title, and the live view adds "round 2" to the end of the heading itself.
 - When one model takes several roles, each role is a new `discuss`; don't `resume` the first role into the second.
 - Tell the user each seat's model, effort and role.
 

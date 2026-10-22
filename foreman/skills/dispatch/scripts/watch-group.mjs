@@ -137,7 +137,13 @@ function usageRows(text, id, width) {
 }
 
 // 标题行：<模块> · <模式> · <标题> · <等级>[ · round N]。Claude Code 席的记录没有标题，不参与；
-// 拆开的几份标题不同，写成"甲 / 乙 / 丙"，等级各写在自己的分工行里
+// 拆开的执行任务标题不同，写成"甲 / 乙 / 丙"，各份的标题和等级写在自己的分工行里。
+// 讨论和审查的分工行只写角色：标题里带着自己角色的（旧的写法"多角色模式［角色］"），去掉角色再合并
+// 只剩"多角色模式"的，和标题行里的模式词重复，不写
+const withoutRole = (title, role) => {
+  const rest = role ? title.replace(new RegExp(`\\s*[［\\[（(【]\\s*${role.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*[］\\]）)】]\\s*`), '').trim() : title;
+  return /^(多角色模式|role mode)$/i.test(rest) ? '' : rest;
+};
 function groupTask(all) {
   const seats = all.filter((run) => !isHost(run)).map((run) => run.meta);
   const metas = seats.length ? seats : all.map((run) => run.meta);
@@ -146,9 +152,9 @@ function groupTask(all) {
   const mode = module === 'run' ? (metas.length > 1 ? D.groupModes.split : null)
     : module === 'discuss' || module === 'review' ? D.groupModes[roles ? 'roles' : 'panel'] : null;
   const same = (key) => (new Set(metas.map((m) => m[key] ?? null)).size === 1 ? metas[0][key] : null);
-  const titles = [...new Set(metas.map((m) => oneLine(m.title || '')).filter(Boolean))];
+  const titles = [...new Set(metas.map((m) => withoutRole(oneLine(m.title || ''), m.role)).filter(Boolean))];
   const round = same('round');
-  return { split: titles.length > 1, text: taskLine({ ...metas[0], level: same('level'), cell: same('cell') }, { mode, title: titles.join(' / '), round }) };
+  return { split: module === 'run' && titles.length > 1, text: taskLine({ ...metas[0], level: same('level'), cell: same('cell') }, { mode, title: titles.join(' / '), round }) };
 }
 
 // 每席的信息流：一份时间线（打开这一席时显示，也给正文提供最近说的话和动作），结束时补上结尾。

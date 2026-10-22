@@ -101,6 +101,21 @@ test('22 列也不越界：单任务的时间线、角色模式的长角色名�
   for (const line of out.stdout.split('\n').filter((l) => !l.startsWith(D.watchReplayOne('').trimEnd()))) assert.ok(textWidth(line) <= 21, line);
 });
 
+test('角色模式的分工行只写角色；标题里带着角色的旧写法，标题行去掉角色，不当成拆分', async (t) => {
+  const h = sandbox(t);
+  const { group, seats } = liveGroup(h, process.pid);
+  const roles = ['架构师', '安全与可靠性红队', '极简派', '边界清单员'];
+  seats.forEach((s, i) => { const file = path.join(h.runs, s.id, 'meta.json'); write(file, { ...json(file), role: roles[i], title: `多角色模式［${roles[i]}］` }); });
+  const frame = (await frameOf(h, ['watch', '--group', group, '--no-intro'], { FOREMAN_TEST_SCREEN: '100x40' })).map(plain);
+  assert.match(frame[0], /^discuss · roles · complex +●4$/);
+  for (const role of roles) assert.ok(frame.includes(`    ${role}`), frame.join('\n'));
+  assert.ok(!frame.some((l) => l.includes('多角色模式')), frame.join('\n'));
+  // 同一个标题加上不同角色时，标题行只写一次标题
+  seats.forEach((s, i) => { const file = path.join(h.runs, s.id, 'meta.json'); write(file, { ...json(file), title: `登记锁重试［${roles[i]}］` }); });
+  const again = (await frameOf(h, ['watch', '--group', group, '--no-intro'], { FOREMAN_TEST_SCREEN: '100x40' })).map(plain);
+  assert.match(again[0], /^discuss · roles · 登记锁重试 · complex +●4$/);
+});
+
 test('直接输出时，一条命令迟迟没有结束，也不压着后面说的话', async (t) => {
   const h = sandbox(t);
   const ts = new Date().toISOString();
@@ -159,12 +174,12 @@ test('实时面板只给状态上色：任务行和模型行加粗，模型行�
 test('组视图窗口不够高时先把正文压到每席一行，还放不下就翻看，底部写下面还有多少行', async (t) => {
   const h = sandbox(t);
   const { group, seats } = liveGroup(h, process.pid);
-  // 标题各不相同时，标题行写"甲 / 乙"，每席的分工行写自己的标题
+  // 讨论各席标题不同时，标题行写"甲 / 乙"；只有拆开的执行任务才在每席的分工行写自己的标题
   seats.forEach((s, i) => { const file = path.join(h.runs, s.id, 'meta.json'); write(file, { ...json(file), title: `合成任务 ${i + 1}` }); });
   const four = await frameOf(h, ['watch', '--group', group, '--no-intro'], { FOREMAN_TEST_SCREEN: '64x18' });
   assert.ok(plain(four[0]).startsWith('discuss · panel · 合成任务 1 / 合成任务 2'), four[0]);
   for (const line of four) assert.ok(textWidth(line) < 64, line);
-  for (const n of [1, 2, 3]) assert.ok(four.map(plain).some((line) => line.startsWith(`    合成任务 ${n}`)), four.join('\n'));
+  assert.ok(!four.map(plain).some((line) => line.startsWith('    合成任务')), four.join('\n'));
   for (const n of [5, 6]) seedRun(h, `20000101-00000${n}-eeee`, { mode: 'discuss', kind: 'discuss', title: `合成任务 ${n}`, status: 'running', pid: process.pid, group, ended_at: undefined });
   const six = await frameOf(h, ['watch', '--group', group, '--no-intro'], { FOREMAN_TEST_SCREEN: '64x16' });
   assert.equal(six.length, 16);
