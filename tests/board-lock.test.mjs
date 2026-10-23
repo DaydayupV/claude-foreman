@@ -45,6 +45,10 @@ test('buildId 按固定文件内容计算，跳过缺失文件且不受插件语
   write(path.join(dir, 'server.mjs'), 'server');
   assert.equal(buildId(dir), createHash('sha256').update('pageserver').digest('hex').slice(0, 16));
   assert.notEqual(buildId(dir), before);
+  const withServer = buildId(dir);
+  write(path.join(dir, '../prices.json'), 'rates');
+  assert.equal(buildId(dir), createHash('sha256').update('pageserverrates').digest('hex').slice(0, 16));
+  assert.notEqual(buildId(dir), withServer);
 });
 
 test('交错回收误取新锁时放回，放回时已有更新锁也不覆盖', (t) => {
@@ -148,7 +152,7 @@ test('畸形请求返回 400 且服务仍可响应 health', (t) => withBoard(t, 
 test('build 不同的旧服务被结束并替换，链接随之改变', (t) => withBoard(t, async (h, children, lockFile) => {
   const oldDir = path.join(h.home, 'old-board');
   fs.mkdirSync(oldDir);
-  for (const file of ['server.mjs', 'feed.mjs', 'claude-feed.mjs', 'universe.mjs', 'prices.mjs', 'prices.json', 'build-id.mjs', 'lock.mjs']) fs.copyFileSync(path.join(boardDir, file), path.join(oldDir, file));
+  for (const file of ['server.mjs', 'feed.mjs', 'claude-feed.mjs', 'universe.mjs', '../prices.mjs', '../prices.json', 'build-id.mjs', 'lock.mjs']) fs.copyFileSync(path.join(boardDir, file), path.join(oldDir, file));
   write(path.join(oldDir, 'index.html'), '<html lang="zh-CN">old</html>');
   const old = startServer(h, children, {}, path.join(oldDir, 'server.mjs'));
   await ready(old);

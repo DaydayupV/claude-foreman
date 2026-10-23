@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { parseTranscriptLines } from '../foreman/skills/dispatch/scripts/board/claude-feed.mjs';
-import { createFeed, buildReplay, snapshotAt, laneOf } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
-import { loadPrices, priceFor } from '../foreman/skills/dispatch/scripts/board/prices.mjs';
+import { createFeed, buildReplay, snapshotAt, laneOf, hostCost } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
+import { loadPrices, priceFor } from '../foreman/skills/dispatch/scripts/prices.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url)), root = path.join(here, 'fixtures/board/runs');
 const transcript = path.join(here, 'fixtures/board/transcript-sample.jsonl'), prices = loadPrices(path.join(here, 'fixtures/board/prices-test.json'));
@@ -78,14 +78,16 @@ test('linking respects agent preference, mode, inclusive windows, plan seats, an
   assert.deepEqual(parseTranscriptLines(bg, context).events[1].target, ['preferred']);
 });
 
-test('prices match the first entry after provider stripping, fall back rates, and preserve three cost sources', () => {
+test('prices strip providers, prefer specific models, fall back rates, and preserve cost sources', () => {
   assert.equal(priceFor('provider/CLAUDE-OPUS-5-5', { input: 100, cached: 200, cache_write: 30, output: 40 }, prices), 0.00236);
   assert.equal(priceFor('provider/gpt-6-demo', { input: 1, cached: 2, cache_write: 3, output: 4 }, prices), 0.000044);
   assert.equal(loadPrices(path.join(here, 'fixtures/board/no-such-prices.json')), null);
   assert.equal(priceFor('unpriced', { input: 1 }, prices), null);
   assert.equal(priceFor('claude-opus-5', { input: 1 }, null), null);
+  assert.equal(hostCost([{ t: 'anthropic/claude-fable-5-1', u: { in: 100, cached: 200, cache_write: 30, out: 40 } }], loadPrices()), 0.003425);
   const data = createFeed(root, { prices }).read({ replay: 'skills-roles-1018' }, start), gpt = data.runs.find((r) => r.agent === 'gpt-6-astra-codex-cli');
-  assert.equal(gpt.cost_source, 'api_equiv'); assert.equal(data.runs.find((r) => r.agent === 'gemini-4-argon-contributor').cost_source, 'reported');
+  assert.equal(gpt.cost_source, 'api_price'); assert.equal(data.runs.find((r) => r.agent === 'gemini-4-argon-contributor').cost_source, 'unknown');
+  assert.equal(Object.hasOwn(gpt, 'cost_paid_usd'), false); assert.equal(Object.hasOwn(gpt, 'cost_subscription_usd'), false);
   assert.equal(createFeed(root).read({ run: gpt.id }, start).runs[0].cost_source, 'unknown');
   assert.deepEqual(gpt.usage, { input: 202237, cached: 509568, cache_write: null, output: 10477 });
   assert.equal(gpt.report_head, JSON.parse(fs.readFileSync(path.join(root, gpt.id, 'result.json'))).report.position.slice(0, 160)); assert.deepEqual(gpt.changed, []);
@@ -95,11 +97,13 @@ test('Claude and seats share maxgap mapping and replay totals never include futu
   const feed = createFeed(root, { transcript, prices }), data = feed.read({ replay: 'skills-roles-1018' }, start);
   const replay = buildReplay(data, { maxgap: 1 }, start), cc = data.runs.find((r) => r.id === 'cc');
   assert.equal(replay.hello.v, 3); assert.equal(cc.usage.input, 2100);
+  assert.equal(cc.cost_source, 'api_price'); assert.equal(Object.hasOwn(cc, 'cost_paid_usd'), false); assert.equal(Object.hasOwn(cc, 'cost_subscription_usd'), false);
   const mapped = new Map(replay.timeline.filter((m) => m.event === 'ev').map((m) => [`${m.data.run}:${m.data.k}:${m.data.t}`, m.data.ts]));
   assert.equal(mapped.get(`cc:dispatch:${data.events.find((e) => e.k === 'dispatch').t}`), replay.timeline.find((m) => m.data.k === 'dispatch').time);
   assert.ok(replay.timeline.every((m, i) => !i || m.time - replay.timeline[i - 1].time <= 1000));
   const firstUsage = replay.timeline.find((m) => m.event === 'run' && m.data.id === 'cc' && m.data.usage);
   assert.deepEqual(firstUsage.data.usage, { input: 100, cached: 200, cache_write: 30, output: 40 });
+  assert.equal(firstUsage.data.cost_source, 'api_price'); assert.equal(firstUsage.data.cost_usd, 0.00236);
   const final = snapshotAt(replay).runs.find((r) => r.id === 'cc');
   assert.equal(final.status, 'idle'); assert.equal(final.ended_at, null); assert.deepEqual(final.usage, cc.usage);
   assert.equal(final.started_at, replay.timeline.find((m) => m.data.id === 'cc').time);
@@ -121,7 +125,7 @@ test('shared tailing keeps partial UTF-8 and lines; discovery, windows and host 
   fs.appendFileSync(file, '\n'); let data = feed.read({ group: 'demo' }, start);
   assert.equal(data.events.find((e) => e.run === 'cc').t, '中文'); assert.equal(data.runs.find((r) => r.id === id).lane, 'cc');
   const answer = data.runs.find((r) => r.id === id);
-  assert.equal(answer.kind, 'answer'); assert.equal(answer.cost_usd, 0); assert.equal(answer.cost_source, 'reported'); assert.equal(answer.report_head, 'pass · 1 findings'); assert.equal(answer.changed.length, 40);
+  assert.equal(answer.kind, 'answer'); assert.equal(answer.cost_usd, null); assert.equal(answer.cost_source, 'unknown'); assert.equal(answer.report_head, 'pass · 1 findings'); assert.equal(answer.changed.length, 40);
   assert.ok(buildReplay(data, {}, start).timeline.filter((m) => m.event === 'run' && m.data.id === id).every((m) => m.data.status !== 'running'));
   fs.appendFileSync(file, [row('user', 'too early', -600001), row('user', 'too late', 301001)].map((r) => JSON.stringify(r)).join('\n') + '\n');
   assert.deepEqual(feed.read({ group: 'demo' }, start).events.filter((e) => e.run === 'cc').map((e) => e.t), ['中文']);

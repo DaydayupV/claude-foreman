@@ -67,7 +67,8 @@ for (const access of ['edit', 'shell']) test(`opencode ${access} 执行：权限
   assert.equal(r.status, 'done');
   assert.deepEqual(r.report, changed);
   assert.equal(r.isolation, 'tools'); assert.equal(r.run_access, access); assert.equal(r.sandbox, null);
-  assert.equal(r.cost_usd, 0.125); assert.equal(r.usage_scope, 'this_run');
+  assert.equal(r.cost_usd, null); assert.equal(r.cost_source, 'unknown'); assert.equal(r.reported_cost_usd, 0.125); assert.equal(r.usage_scope, 'this_run');
+  assert.equal(Object.hasOwn(r.usage, 'cache_write_input_tokens'), false);
   assert.equal(r.commands_executed, access === 'shell' ? 2 : 0);
   assert.equal(r.session_id, 'synthetic-opencode-session');
   assert.deepEqual(json(path.join(r.run_dir, 'result.json')), r);
@@ -98,6 +99,27 @@ for (const access of ['edit', 'shell']) test(`opencode ${access} 执行：权限
     assert.ok(!watch.stdout.includes('$ read') && !watch.stdout.includes('$ grep'));
     if (access === 'shell') assert.ok(watch.stdout.includes('node --version'));
   }
+});
+
+test('opencode 输出包含推理，压缩请求用量计入本轮并按主模型计价', async (t) => {
+  const h = sandbox(t), c = configure(h); c.agents.oc.model = 'provider/gpt-6.1-sol'; h.config(c); h.initGit();
+  // opencode 2.1.1 的压缩消息直接带 tokens，失败请求的用量也已消耗。
+  const compaction = { type: 'compaction', status: 'completed', reason: 'auto', summary: '合成摘要',
+    model: { providerID: 'anthropic', modelID: 'claude-haiku-5-5' }, tokens: { input: 100, output: 20, reasoning: 7, cache: { read: 30, write: 40 } }, cost: 0.25 };
+  const s = h.scenario({ last_message: JSON.stringify(report), export_messages: [
+    { type: 'assistant', tokens: { input: 10, output: 5, reasoning: 2, cache: { read: 3, write: 4 } }, cost: 0.125 },
+    compaction,
+    { type: 'compaction', status: 'failed', reason: 'auto', error: { type: 'compaction.failed', message: '合成失败' },
+      tokens: { input: 50, output: 4, reasoning: 1, cache: { read: 5, write: 6 } }, cost: 0.5 },
+    { ...compaction, created: 'old' }, { type: 'assistant', created: 'old', tokens: { input: 9000, output: 9000 }, cost: 99 },
+    { type: 'compaction', status: 'running', reason: 'auto', summary: '', cost: 99 },
+    { type: 'user', tokens: { input: 9000 }, cost: 99 },
+  ] });
+  const r = output(await h.bridge(taskArgs(h), { env: s.env }));
+  assert.deepEqual(r.usage, { input_tokens: 248, cached_input_tokens: 38, cache_write_input_tokens: 50, output_tokens: 39, reasoning_output_tokens: 10 });
+  assert.equal(r.usage_scope, 'this_run'); assert.equal(r.model, 'provider/gpt-6.1-sol');
+  assert.equal(r.cost_source, 'api_price'); assert.equal(r.cost_usd, 0.0008388); assert.equal(r.reported_cost_usd, 0.875);
+  assert.deepEqual(json(path.join(r.run_dir, 'result.json')), r);
 });
 
 for (const access of ['edit', 'shell']) test(`opencode ${access} 报告只修复一次，同会话 foreman-repair 无任何工具`, async (t) => {

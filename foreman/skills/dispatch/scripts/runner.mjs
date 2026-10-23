@@ -7,6 +7,7 @@ import { makeTracker } from './tracker.mjs';
 import { computeReviewMaterial } from './review-scope.mjs';
 import { M, die, notice, relativePath, pathKey, modelOf, replaceFile, killTree, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision } from './util.mjs';
 import { D, modelLabel } from './format.mjs';
+import { costOf, loadPrices } from './prices.mjs';
 
 const INPUT_WAIT_MIN = 3;
 
@@ -146,6 +147,7 @@ function finishRun(run, result, code = result.exit_code, observed = {}) {
     if (!spent) Object.assign(result, { usage: null, usage_scope: null });
     result.notes.push(spent ? M.cancelledUsagePartial : M.cancelledUsageMissing);
   }
+  Object.assign(result, costOf({ ...run.meta, ...result }, loadPrices()));
   result.questions = collectQuestions({ ...result, ...observed, last: observed.last ?? result.last_message ?? '' });
   const decisions = result.questions.filter(needsDecision).length;
   result.needs_decision = decisions > 0;
@@ -168,7 +170,7 @@ function finishDiscussion(run, { usage, cost, commands = 0, errors, notes, warni
     run_id: id, mode, kind: ctx.kind, status: meta.status, title: meta.title, cwd, track: [], group: meta.group, round: meta.round, scope: meta.scope,
     agent: agentName, agent_type: agent.type, model, model_shown: meta.model_shown, level, effort, sandbox: null, parent: meta.parent, session_id: meta.session_id,
     exit_code: meta.status === 'done' ? 0 : 1, duration_s: Math.round((Date.now() - started) / 1000), usage: usage ?? null, usage_scope: usage == null ? null : 'this_run',
-    ...(cost !== undefined ? { cost_usd: cost } : {}),
+    ...(cost !== undefined ? { reported_cost_usd: cost } : {}),
     last_request: null, rate_limit: null, quota_resets_at: null, commands_executed: commands, errors, notes, warnings, report,
     last_message: report ? undefined : last, changes: { available: false, note: changesNote },
     files: files.map(({ path, range, chars }) => ({ path, range, chars })), run_dir: dir,
@@ -409,7 +411,8 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
     const stats = sessionStats(meta.session_id, meta.started_at);
     const total = stats?.total_token_usage || r.usage;
     const usage = total && (baseline ? Object.fromEntries(
-      ['input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens']
+      ['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'output_tokens', 'reasoning_output_tokens']
+        .filter((key) => key !== 'cache_write_input_tokens' || total[key] != null)
         .map((key) => [key, (total[key] || 0) - (baseline[key] || 0)]),
     ) : total);
     const resetsAt = stats?.rate_limit?.resets_at;
@@ -424,7 +427,7 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
     const result = {
       agent: agentName, agent_type: agent.type,
       ...(snapshotRequired ? { isolation, run_access: agent.run_access } : {}),
-      ...(r.cost !== undefined ? { cost_usd: r.cost } : {}),
+      ...(r.cost !== undefined ? { reported_cost_usd: r.cost } : {}),
       run_id: id,
       mode,
       kind,

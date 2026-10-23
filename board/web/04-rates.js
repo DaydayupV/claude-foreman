@@ -1,12 +1,13 @@
 'use strict';
 // token 速度和用量。各家记录用量的粒度都很粗，速度一律是估算（页面上写成 ≈）：
 // - 有分段用量的（Claude Code 每条消息、Codex 每轮）：这段输出摊到上一段用量到这一段之间，最长算 90 秒；
-// - 只有流式字数的（pi、API）：字数增量 ÷ 4 当作 token；
+// - 流式字数（pi、API）：最后一份用量之后的字数增量 ÷ 4 当作 token；
 // - 回放时还知道每个任务最后的总用量：没被上面两种算到的部分，摊到这个任务各个事件之间的空档上（"回放估算"）。
 
 const WINDOW = 10000, SEG_MAX = 90000, CHARS_PER_TOKEN = 4;
 const FINAL = new Map(); // run id → 回放结束时的 run 消息（总用量）
 const FINAL_EV = new Map(); // 车道 id → 回放的全部事件（估算速度用，不随回放进度变化）
+const SEG_RUN = new WeakMap(); // 分段归属仅供直播采样，不增加对外字段
 
 // 回放：取一次结束时的快照，拿到每个任务最后的用量
 function loadFinals() {
@@ -32,23 +33,51 @@ function usageOf(r) {
   return { input: Math.max(0, (u.input || 0) - (u.cached || 0)), cached: u.cached || 0, cache_write: 0, output: u.output || 0 };
 }
 
+// 事件未保留命令 ID，按任务计数，所有并行命令结束才恢复生成。
+function commandSpans(events) {
+  const spans = new Map(), counts = new Map();
+  for (const ev of events) {
+    const count = counts.get(ev.run) || 0;
+    if (ev.k === 'cmd') {
+      if (!count) {
+        if (!spans.has(ev.run)) spans.set(ev.run, []);
+        spans.get(ev.run).push({ a: ev.ts, b: Infinity });
+      }
+      counts.set(ev.run, count + 1);
+    } else if (ev.k === 'cmd_done' && count > 0) {
+      counts.set(ev.run, count - 1);
+      if (count === 1) spans.get(ev.run).at(-1).b = ev.ts;
+    }
+  }
+  return spans;
+}
+
 // 一条车道的输出分段：[{ a, b, tokens }]，a/b 是记录时间（毫秒）
 function segments(lane) {
   const events = FINAL_EV.get(lane.id) || lane.events;
-  if (lane.segs && lane.segsAt === events.length) return lane.segs;
+  // 分段还依赖车道上的任务（续接的任务会陆续出现），任务数变了也要重算
+  const ver = `${FINAL_EV.has(lane.id) ? events.length : (lane.ver || 0)}|${lane.runs.length}`;
+  if (lane.segs && lane.segsAt === ver) return lane.segs;
   const segs = [];
   const lastUsage = new Map(), lastChars = {};
+  const usageEnds = new Map(events.filter((e) => e.k === 'usage' && e.u?.out != null).map((e) => [e.run, e.ts]));
+  const commands = commandSpans(events);
   const counted = new Map(); // run id → 已经由分段用量或字数算到的 token
   const starts = new Map(lane.runs.map((r) => [r.id, r.started_at]));
-  // 一段时间里的 token 按其中事件的空档摊开：模型在两次动作之间生成，单个空档最多算 60 秒（跑命令的长空档不会吃掉全部）
+  // 按任务内事件的空档摊开，去掉命令时间后，单个空档最多算 60 秒。
   const spread = (run, a, b, tokens, est) => {
     if (!(tokens > 0) || !(b > a)) return;
     counted.set(run, (counted.get(run) || 0) + tokens);
     const times = [a, ...events.filter((e) => e.run === run && e.k !== 'usage' && e.ts > a && e.ts < b).map((e) => e.ts), b];
     const gaps = [];
     for (let i = 1; i < times.length; i++) if (times[i] > times[i - 1]) gaps.push({ b: times[i], w: Math.min(times[i] - times[i - 1], 60000) });
-    const total = gaps.reduce((s, g) => s + g.w, 0);
-    for (const g of gaps) segs.push({ a: g.b - g.w, b: g.b, tokens: (tokens * g.w) / total, est });
+    let active = gaps.filter((g) => !(commands.get(run) || []).some((c) => c.a < g.b && c.b > g.b - g.w));
+    if (!active.length) active = gaps; // 全被命令覆盖时仍保留原来的 token 摊分。
+    const total = active.reduce((s, g) => s + g.w, 0);
+    for (const g of active) {
+      const s = { a: g.b - g.w, b: g.b, tokens: (tokens * g.w) / total, est };
+      SEG_RUN.set(s, run); segs.push(s);
+    }
   };
   for (const ev of events) {
     if (ev.k === 'usage' && ev.u && ev.u.out != null) {
@@ -58,7 +87,8 @@ function segments(lane) {
       lastUsage.set(ev.run, ev.ts);
     } else if ((ev.k === 'think' || ev.k === 'answer') && ev.n != null) {
       const key = `${ev.run}:${ev.k}`, prev = lastChars[key];
-      if (prev && ev.n > prev.n) spread(ev.run, prev.ts, ev.ts, (ev.n - prev.n) / CHARS_PER_TOKEN, false);
+      // 用量覆盖此前的字数估算，跨过用量边界的字数也不带到下一段。
+      if (prev && prev.ts >= (usageEnds.get(ev.run) ?? -Infinity) && ev.n > prev.n) spread(ev.run, prev.ts, ev.ts, (ev.n - prev.n) / CHARS_PER_TOKEN, false);
       lastChars[key] = { ts: ev.ts, n: ev.n };
     }
   }
@@ -72,8 +102,48 @@ function segments(lane) {
   }
   segs.sort((x, y) => x.a - y.a);
   lane.segs = segs;
-  lane.segsAt = events.length;
+  lane.segsAt = ver;
   return segs;
+}
+
+function rateSample(lane, runs, t) {
+  const ids = new Set(runs.map((r) => r.id));
+  let tokens = 0, ms = 0;
+  for (const s of segments(lane)) {
+    if (s.est || s.b > t || !ids.has(SEG_RUN.get(s))) continue;
+    tokens += s.tokens; ms += s.b - s.a;
+  }
+  return { tokens, ms };
+}
+
+// 直播未报用量的当前轮只补速度，不回填分段、总量或平均速度。
+function liveRate(lane, t, win = WINDOW) {
+  if (B.clock.mode !== 'live' || B.clock.frozenAt != null) return 0;
+  const commands = commandSpans(lane.events);
+  let rate = 0;
+  for (const r of lane.runs) {
+    if (r.status !== 'running' || r.started_at > t || (r.ended_at != null && r.ended_at <= t)) continue;
+    const events = lane.events.filter((e) => e.run === r.id);
+    const turn = events.findLast((e) => e.k === 'turn'), usage = events.findLast((e) => e.k === 'usage' && e.u?.out != null);
+    if (!turn || turn.ts > t || turn.ts <= (usage?.ts ?? -Infinity)) continue;
+    if (events.some((e) => e.ts >= turn.ts && (e.k === 'think' || e.k === 'answer') && e.n != null)) continue;
+    const busy = commands.get(r.id) || [];
+    if (busy.some((c) => c.a <= t && c.b > t)) continue;
+    const sample = rateSample(lane, lane.runs.filter((x) => x.model === r.model && x.started_at <= t), t);
+    if (!sample.ms && r.model) {
+      for (const other of B.lanes) {
+        if (other === lane) continue;
+        const peer = rateSample(other, other.runs.filter((x) => x.model === r.model && x.started_at <= t), t);
+        sample.tokens += peer.tokens; sample.ms += peer.ms;
+      }
+    }
+    if (!sample.ms) continue;
+    const a = Math.max(turn.ts, t - win);
+    let active = t - a;
+    for (const c of busy) active -= Math.max(0, Math.min(c.b, t) - Math.max(c.a, a));
+    rate += (sample.tokens / (sample.ms / 1000)) * active / win;
+  }
+  return rate;
 }
 
 // 时刻 t 前 WINDOW 内的平均输出速度（token/秒）
@@ -84,7 +154,7 @@ function rateAt(lane, t, win = WINDOW) {
     const lo = Math.max(s.a, t - win), hi = Math.min(s.b, t);
     if (hi > lo) tokens += (s.tokens * (hi - lo)) / (s.b - s.a);
   }
-  return tokens / (win / 1000);
+  return tokens / (win / 1000) + liveRate(lane, t, win);
 }
 
 // 最近 span 毫秒的速度曲线，n 个点
@@ -97,7 +167,7 @@ function sparkline(lane, t, span = 120000, n = 40) {
 // 一条车道到时刻 t 的统计：已结束的任务用最终用量，进行中的按分段估到 t
 function laneStats(lane, t) {
   const sum = { input: 0, cached: 0, cache_write: 0, output: 0 };
-  let cost = 0, costKnown = false, costEquiv = false, est = false;
+  let cost = 0, costKnown = false, costPartial = false, est = false;
   let gen = 0, first = null, last = null, running = false;
   for (const r of lane.runs) {
     if (r.started_at > t) continue;
@@ -110,7 +180,11 @@ function laneStats(lane, t) {
     const u = ended || live ? usageOf(r) || (ended ? usageOf(FINAL.get(r.id)) : null) : null;
     if (u) for (const k in sum) sum[k] += u[k];
     const c = ended ? (r.cost_usd ?? FINAL.get(r.id)?.cost_usd) : live ? r.cost_usd : null;
-    if (c != null) { cost += c; costKnown = true; if ((r.cost_source || FINAL.get(r.id)?.cost_source) === 'api_equiv') costEquiv = true; }
+    // 算不出来：结束了却没有费用的任务，或者 Claude Code 车道有用量却没有费用（模型不在价格表里；它一直在进行中）。
+    // Claude Code 席自己提交的报告按规则不计费，不算
+    if (c == null && r.kind !== 'answer' && (ended || (live && Object.values(r.usage || {}).some((v) => v)))) costPartial = true;
+    // 费用一律按官方 API 价格（服务端算好），这里只是加起来
+    if (c != null) { costKnown = true; cost += c; }
   }
   // 进行中的输出：分段里 t 之前的部分
   let liveOut = 0;
@@ -124,8 +198,9 @@ function laneStats(lane, t) {
   for (const s of segments(lane)) { if (s.a >= t) break; gen += Math.min(s.b, t) - s.a; if (s.est) est = true; }
   const hostLive = lane.runs.some((r) => r.kind === 'host');
   const out = sum.output + (running && !hostLive ? liveOut : 0);
+  if (liveRate(lane, t) > 0) est = true;
   return {
-    ...sum, output: out, cost: costKnown ? cost : null, costEquiv, est, running,
+    ...sum, output: out, cost: costKnown ? cost : null, costPartial, est, running,
     rate: rateAt(lane, t), avg: gen > 0 ? out / (gen / 1000) : null,
     elapsed: first != null ? (last - first) / 1000 : 0,
   };

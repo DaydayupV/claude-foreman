@@ -136,17 +136,18 @@ test('运行中增量采集 view_image，事件、活动步骤、时间线和续
   assert.deepEqual(h.events(next.run_id).filter((e) => e.type === 'image.viewed').map((e) => e.path), [nextPicture]);
 });
 
-test('opencode 费用在 status、watch 两种结束用量和组汇总显示，费用单独存在也显示', async (t) => {
-  const h = sandbox(t), c = baseConfig(); c.agents.oc = opencodeAgent(); c.modules.discuss.complex = [{ agent: 'oc' }]; h.config(c);
-  const s = h.scenario({ last_message: discussion, export_messages: [{ type: 'assistant', tokens: { input: 10, output: 5 }, cost: 0.00138 }] });
+test('opencode API 费用在 status、watch 和组汇总显示，已计价费用单独存在也显示', async (t) => {
+  const h = sandbox(t), c = baseConfig(); c.agents.oc = { ...opencodeAgent(), model: 'provider/gpt-6.1-sol' }; c.modules.discuss.complex = [{ agent: 'oc' }]; h.config(c);
+  const s = h.scenario({ last_message: discussion, export_messages: [{ type: 'assistant', tokens: { input: 200, output: 100 }, cost: 0.125 }] });
   const r = output(await h.bridge(['discuss', '--cwd', h.cwd, '--level', 'complex', '--brief', '-', '--group', 'cost-group'], { env: s.env }));
-  assert.equal(r.cost_usd, 0.00138);
+  assert.equal(r.cost_usd, 0.0014); assert.equal(r.cost_source, 'api_price'); assert.equal(r.reported_cost_usd, 0.125);
   for (const args of [['status'], ['watch', '--run', r.run_id], ['watch', '--run', r.run_id, '--verbose'], ['watch', '--group', 'cost-group']]) {
     const display = await h.bridge(args); assert.equal(display.code, 0);
     // 组汇总的用量行右边还有 run_id
     assert.ok(display.stdout.split('\n').some((s) => s.includes('token') && s.replace(/ {2,}\S+$/, '').endsWith(` · ${D.costUsd('0.0014')}`)), display.stdout);
+    assert.ok(!display.stdout.includes(D.costUsd('0.125')), display.stdout);
   }
-  seedRun(h, 'cost-only', { group: 'cost-only' }, { status: 'done', duration_s: 1, usage: null, cost_usd: 0, errors: [] });
+  seedRun(h, 'cost-only', { group: 'cost-only' }, { status: 'done', duration_s: 1, usage: null, cost_usd: 0, cost_source: 'api_price', errors: [] });
   for (const args of [['status', '--group', 'cost-only'], ['watch', '--run', 'cost-only'], ['watch', '--run', 'cost-only', '--verbose'], ['watch', '--group', 'cost-only']]) {
     const display = await h.bridge(args); assert.ok(display.stdout.includes(D.costUsd('0')), display.stdout); assert.ok(!display.stdout.includes('token'));
   }

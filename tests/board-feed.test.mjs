@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { normalize, laneOf, selectScope, buildReplay, snapshotAt, createFeed } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
+import { normalize, laneOf, selectScope, buildReplay, snapshotAt, createFeed, runMessage } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
 
 const start = Date.parse('2026-10-18T13:40:00Z');
 const run = { id: 'one', lane: 'root', meta: { cwd: 'C:\\work' } };
@@ -40,6 +40,25 @@ test('messages, reports, PowerShell, tools, edits and the remaining protocol eve
   const long = take(raw('error', { message: `${'x'.repeat(170)}\nsecond` }))[0];
   assert.equal(long.t.length, 160); assert.ok(!long.t.includes('\n'));
   assert.equal(long.run, 'one'); assert.equal(long.lane, 'root');
+});
+
+test('结果和用量事件分开显示普通输入、缓存命中及写入，合计等于原始输入', () => {
+  const usage = { input_tokens: 100, cached_input_tokens: 20, cache_write_input_tokens: 30, output_tokens: 40 };
+  const prices = { models: [{ match: ['model'], input: 2, cached: 0.1, cache_write: 2.5, output: 10 }] };
+  const message = runMessage({ ...run, meta: { ...run.meta, agent_type: 'api', model: 'provider/model' },
+    result: { usage, usage_scope: 'this_run' }, tail: { state: {} } }, run.id, prices);
+  assert.deepEqual(message.usage, { input: 50, cached: 20, cache_write: 30, output: 40 });
+  assert.equal(message.usage.input + message.usage.cached + message.usage.cache_write, usage.input_tokens);
+  assert.equal(message.cost_usd, 0.000577); assert.equal(message.cost_source, 'api_price');
+  for (const type of ['api.usage', 'turn.completed']) {
+    const event = normalize(raw(type, { usage }), run, {})[0];
+    assert.deepEqual(event.u, { in: 50, cached: 20, cache_write: 30, out: 40 });
+    assert.equal(event.u.in + event.u.cached + event.u.cache_write, usage.input_tokens);
+    assert.equal(event.n, 140); assert.equal(event.t, '100/40');
+    const excess = { input_tokens: 10, cached_input_tokens: 20, cache_write_input_tokens: 30 };
+    assert.equal(normalize(raw(type, { usage: excess }), run, {})[0].u.in, 0);
+    assert.equal(runMessage({ ...run, result: { usage: excess }, tail: { state: {} } }, run.id).usage.input, 0);
+  }
 });
 
 test('streaming sources keep the latest count in each 400 ms window', () => {

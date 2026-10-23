@@ -1,12 +1,11 @@
 'use strict';
-// 宇宙层的两块侧栏（只在宇宙层显示）：
-//  左边对话列表：按 等你确认 › 派发中 › 思考中 › 空闲 排，同一档里最近活动的在前；点一下飞进去。
-//  右上名额带：每个协作方一行，几个并发名额几格；被哪个对话占着就亮成那个对话的标记色，排队等服务的格子闪烁。
-// 每个对话有一个按 id 定的标记色，列表、名额格、用量表里同一个对话颜色一样；鼠标移上去时星图里那个星系高亮。
+// 宇宙层右上的名额带（只在宇宙层显示）：每个协作方一行，几个并发名额几格；被哪个对话占着就亮成那个对话的标记色，排队等服务的格子闪烁。
+// 每个对话有一个按 id 定的标记色，名额格、用量表里同一个对话颜色一样；鼠标移上去时星图里那个星系高亮。
+// 对话按 等你确认 › 派发中 › 思考中 › 空闲 排，同一档里最近活动的在前（底部用量表的顺序，07-uni-table.js）。
 
 const STATE_ORDER = { waiting: 0, dispatching: 1, thinking: 2, idle: 3 };
 const STATE_WORD = TEXT.states;
-const SIDE = { rows: new Map(), slots: new Map(), sigSlots: '' };
+const SIDE = { slots: new Map(), sigSlots: '' };
 // 标记色按对话出现的先后分配：相邻两个隔一个黄金角（约 137.5°），颜色总是拉得开；分到以后这个页面里不再变
 const MARKS = new Map();
 function markOf(id, a = 1) {
@@ -23,37 +22,6 @@ const runningOf = (s) => s.counts?.running ?? s.runs.filter((r) => r.status === 
 // 协作方代号去掉接入方式的后缀，名额带上更短
 const agentName = (id) => id.replace(/-(codex|opencode|pi)-cli$|-api$|-contributor$/, '');
 const agentVia = (id) => (/-(codex|opencode|pi)-cli$/.exec(id) || /-(api)$/.exec(id) || [])[1] || '';
-
-function renderList() {
-  const el = $('ulist');
-  if (!el.firstChild) {
-    el.innerHTML = `<header><b>${TEXT.listTitle}</b><span class="n"></span><button type="button" class="fold" title="${TEXT.fold}">‹</button></header><ol></ol><p class="empty"></p>`;
-    el.querySelector('.fold').addEventListener('click', () => { el.classList.toggle('folded'); UV.auto && uniFit(); wake(); });
-  }
-  const list = [...U.sessions.values()].sort(byState), ol = el.querySelector('ol'), seen = new Set();
-  setText(el.querySelector('.n'), String(list.length));
-  setText(el.querySelector('.empty'), list.length ? '' : TEXT.emptyList(U.hello?.window_h ?? 24));
-  list.forEach((s, i) => {
-    let li = SIDE.rows.get(s.id);
-    if (!li) {
-      li = document.createElement('li');
-      li.dataset.id = s.id;
-      li.innerHTML = '<i class="mk"></i><span class="t"></span><span class="run"></span><span class="st"></span><span class="p"></span>';
-      SIDE.rows.set(s.id, li);
-    }
-    li.style.setProperty('--mark', markOf(s.id));
-    const cls = `s-${s.state}${s.alert ? ' alert' : ''}`;
-    if (li.className !== cls) li.className = cls;
-    setText(li.querySelector('.t'), s.title || s.id.slice(0, 8));
-    setText(li.querySelector('.st'), s.state === 'waiting' && s.waiting?.header ? TEXT.asking(s.waiting.header) : s.alert ? `${STATE_WORD[s.state]} · ${s.alert.kind}` : STATE_WORD[s.state]);
-    setText(li.querySelector('.p'), U.projects.get(s.project)?.name || s.project);
-    const n = runningOf(s);
-    setText(li.querySelector('.run'), n ? `● ${n}` : '');
-    seen.add(s.id);
-    if (ol.children[i] !== li) ol.insertBefore(li, ol.children[i] || null);
-  });
-  for (const [id, li] of SIDE.rows) if (!seen.has(id)) { li.remove(); SIDE.rows.delete(id); }
-}
 
 function renderSlots() {
   const el = $('uslots');
@@ -86,10 +54,10 @@ function renderSlots() {
   setText(el.querySelector('.n'), `${used}/${total}`);
 }
 
-// 列表和名额格：点击飞进去，悬停高亮星系
-const pickOf = (e) => e.target.closest('#ulist li')?.dataset.id || e.target.closest('#uslots [data-session]')?.dataset.session || null;
-for (const id of ['ulist', 'uslots']) {
-  const el = $(id);
+// 名额格：点击飞进去，悬停高亮星系
+const pickOf = (e) => e.target.closest('#uslots [data-session]')?.dataset.session || null;
+{
+  const el = $('uslots');
   el.addEventListener('pointerover', (e) => { UV.pick = pickOf(e); wake(); });
   el.addEventListener('pointerleave', () => { UV.pick = null; wake(); });
   el.addEventListener('click', (e) => { const sid = pickOf(e); if (sid && inUniverse()) flyIn(sid); });

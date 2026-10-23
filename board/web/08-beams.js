@@ -7,7 +7,7 @@
 function drawBundle(c, lane, p, I, live) {
   const rand = rng(hash(`bundle|${lane.id}`)), k = (p.visible === false ? 0.45 : 1) * (0.45 + 0.55 * live);
   const side = p.tok[0] < c.cx ? 1 : -1; // 卡片在左边时，线从卡片右侧进来
-  const color = tintOf(lane.id), speed = 10 + 70 * I, sec = performance.now() / 1000;
+  const color = tintOf(lane.id), flow = flowPhase(`bundle|${lane.id}`, 10 + 70 * I);
   ctx.save();
   for (let i = 0; i < 10; i++) {
     const a0 = rand() * Math.PI * 2, r0 = c.R * (0.15 + rand() * 0.3);
@@ -23,7 +23,7 @@ function drawBundle(c, lane, p, I, live) {
       // 流动的光点随活跃程度淡入淡出
       const d = ctx.createLinearGradient(sx, sy, ex, ey);
       d.addColorStop(0, HI(0)); d.addColorStop(0.35, HI((0.15 + 0.3 * I) * live)); d.addColorStop(1, HI((0.35 + 0.6 * I) * live));
-      ctx.lineDashOffset = -(sec * speed + i * 7 + (lane.seed % 50));
+      ctx.lineDashOffset = -(flow + i * 7 + (lane.seed % 50));
       if (LOOK.dots) {
         // 圆形光点：长度几乎为零的虚线段配圆头，外面再叠一圈同色柔光
         ctx.lineCap = 'round'; ctx.setLineDash([0.01, 22 * FX.lw]);
@@ -56,12 +56,12 @@ function drawCone(paths, color, I, live, seed, pulseAges) {
   for (const q of paths) { ctx.moveTo(...q[0]); ctx.bezierCurveTo(...q[1], ...q[2], ...q[3]); }
   ctx.stroke();
   // 流动的光段：只在对话活跃时流，越活跃越亮越快
-  const speed = 14 + 80 * I;
+  const flow = flowPhase(`cone|${seed}`, 14 + 80 * I);
   ctx.lineWidth = 1.9 * FX.lw;
   for (let i = 0; i < paths.length && live; i++) {
     const len = 8 + rand() * 20, gap = 50 + rand() * 90, ph = rand() * 200;
     ctx.setLineDash([len * FX.lw, gap * FX.lw]);
-    ctx.lineDashOffset = -(sec * speed * (0.7 + rand() * 0.6) + ph);
+    ctx.lineDashOffset = -(flow * (0.7 + rand() * 0.6) + ph);
     ctx.strokeStyle = i % 3 ? color(0.3 + 0.6 * act) : HI(0.35 + 0.6 * act);
     strokeCubic(paths[i]); ctx.stroke();
   }

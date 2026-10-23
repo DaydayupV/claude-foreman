@@ -167,7 +167,7 @@ function fillSeat(el, lane, t, no) {
     const v = verdictCounts(lane.id, t);
     const u = r.usage || {}, inAll = (u.input || 0) + (u.cached || 0) + (u.cache_write || 0);
     setText(use.firstChild, [inAll ? `${fmtTok(inAll)} in` : null, u.output ? `${fmtTok(u.output)} out` : null,
-      r.cost_usd != null ? `${r.cost_source === 'api_equiv' ? '≈ ' : ''}${r.cost_usd.toFixed(2)}` : null, v ? `✓${v.a} ◐${v.p} ✗${v.r}` : null].filter(Boolean).join(' · '));
+      r.cost_usd != null ? `$${fmtUsd(r.cost_usd)}` : null, v ? `✓${v.a} ◐${v.p} ✗${v.r}` : null].filter(Boolean).join(' · '));
     setText(use.lastChild, r.id);
   }
 }

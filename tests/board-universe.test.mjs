@@ -9,7 +9,7 @@ import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { createUniverse, universeAt, universeChanges } from '../foreman/skills/dispatch/scripts/board/universe.mjs';
 import { createFeed, selectScope, buildReplay } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
-import { loadPrices } from '../foreman/skills/dispatch/scripts/board/prices.mjs';
+import { loadPrices } from '../foreman/skills/dispatch/scripts/prices.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url)), base = Date.parse('2026-10-22T09:00:00Z'), now = base + 210000;
 const prices = loadPrices(path.join(here, 'fixtures/board/prices-test.json')), sentinel = 'UNIVERSE_PRIVATE_SENTINEL_8D4A';
@@ -30,10 +30,10 @@ function temp(t) {
     write(file, rows.map((r) => JSON.stringify(r)).join('\n') + '\n'); fs.utimesSync(file, new Date(mtime), new Date(mtime)); return file;
   };
   const run = (id, fields = {}, cost = 1, events = []) => {
-    const dir = path.join(options.runs, id), meta = { id, claude_session: 's', agent: 'configured', kind: 'exec', model: 'claude-opus-5-5',
+    const dir = path.join(options.runs, id), meta = { id, claude_session: 's', agent: 'configured', agent_type: 'opencode cli', kind: 'exec', model: 'claude-opus-5-5',
       status: 'done', started_at: now - 10000, ended_at: now - 5000, ...fields };
     write(path.join(dir, 'meta.json'), meta);
-    if (meta.status !== 'running') write(path.join(dir, 'result.json'), { status: meta.status, cost_usd: cost });
+    if (meta.status !== 'running') write(path.join(dir, 'result.json'), { status: meta.status, cost_usd: cost, cost_source: cost == null ? 'unknown' : 'api_price' });
     write(path.join(dir, 'events.jsonl'), events.map((e) => JSON.stringify(e)).join('\n') + '\n'); return meta;
   };
   return { root, options, write, session, run };
@@ -135,6 +135,7 @@ test('run summaries cap at 16 / ten minutes, omit host, count the window, dedupl
   assert.deepEqual(s.counts, { running: 0, done: 18, failed: 2 });
   assert.deepEqual(s.usage, { input: 100, cached: 200, cache_write: 30, output: 40 });
   assert.equal(s.cost_usd, 20.00236); assert.equal(s.alert.kind, 'quota_exhausted');
+  assert.equal(Object.hasOwn(s, 'cost_paid_usd'), false); assert.equal(Object.hasOwn(s, 'cost_subscription_usd'), false);
   assert.equal(universe.read(now + 1799000).sessions[0].alert.kind, 'quota_exhausted');
   assert.equal(universe.read(now + 1799001).sessions[0].alert, null);
   fs.appendFileSync(file, JSON.stringify(answer(now - 28000, { id: 'same' })) + '\n');
@@ -143,7 +144,27 @@ test('run summaries cap at 16 / ten minutes, omit host, count the window, dedupl
   assert.equal(universe.read().sessions[0].alert, null);
   fs.appendFileSync(file, JSON.stringify(answer(now - 400, { model: 'unpriced', usage: { input_tokens: 1 } })) + '\n');
   s = universe.read().sessions[0]; assert.equal(s.cost_usd, 20); assert.equal(s.cost_partial, true);
+  assert.equal(Object.hasOwn(s, 'cost_paid_usd'), false); assert.equal(Object.hasOwn(s, 'cost_subscription_usd'), false);
   assert.equal(s.runs.some((r) => Object.hasOwn(r, 'report_head')), false);
+});
+
+test('费用摘要只汇总 API 价格，旧来源重新计价，累计用量留为未知', (t) => {
+  const f = temp(t);
+  f.session('s', [answer(now - 30000, { usage: { input_tokens: 100, cache_read_input_tokens: 200, cache_creation_input_tokens: 30, output_tokens: 40 } })]);
+  f.run('reported', {}, 2);
+  f.write(path.join(f.options.runs, 'reported/result.json'), { status: 'done', cost_usd: 2, cost_source: 'reported', usage: { input_tokens: 100, cached_input_tokens: 20, output_tokens: 40 } });
+  f.run('api', { agent_type: 'api', model: 'gpt-6-demo' }, null);
+  f.write(path.join(f.options.runs, 'api/result.json'), { status: 'done', usage: { input_tokens: 100, cached_input_tokens: 20, output_tokens: 40 }, usage_scope: 'this_run' });
+  f.run('subscription', { agent_type: 'codex cli' }, 5);
+  f.write(path.join(f.options.runs, 'subscription/result.json'), { status: 'done', cost_usd: 5, cost_source: 'subscription', usage: { input_tokens: 100, cached_input_tokens: 20, output_tokens: 40 } });
+  f.run('cumulative', { agent_type: 'codex cli', model: 'gpt-6-demo' }, null);
+  f.write(path.join(f.options.runs, 'cumulative/result.json'), { status: 'done', usage: { input_tokens: 100, output_tokens: 40 }, usage_scope: 'session_total' });
+  f.run('host', { participant: 'host' }, null);
+  const summary = createUniverse(f.options).read().sessions[0];
+  assert.equal(Object.hasOwn(summary, 'cost_paid_usd'), false);
+  assert.equal(Object.hasOwn(summary, 'cost_subscription_usd'), false);
+  assert.equal(summary.cost_usd, 0.00162 + 0.00052 + 0.00162 + 0.00236);
+  assert.equal(summary.cost_partial, true);
 });
 
 test('agent slots retain config order, include unknown / out-of-window runs and queued since, never config secrets', (t) => {
@@ -170,6 +191,8 @@ test('all replay shares one mapping with every detail, ordered deltas, source st
   assert.equal(at(35.2).sessions.find((s) => s.id === 'demo-factor').state, 'dispatching');
   assert.deepEqual(at(35.2).sessions.find((s) => s.id === 'demo-factor').counts, { running: 1, done: 0, failed: 0 });
   assert.equal(at(35.2).sessions.find((s) => s.id === 'demo-factor').cost_usd, 0.00944); assert.equal(at(35.2).sessions.find((s) => s.id === 'demo-factor').cost_partial, true);
+  assert.equal(Object.hasOwn(at(35.2).sessions.find((s) => s.id === 'demo-factor'), 'cost_paid_usd'), false);
+  assert.equal(Object.hasOwn(at(35.2).sessions.find((s) => s.id === 'demo-factor'), 'cost_subscription_usd'), false);
   assert.equal(at(35.2).agents.find((a) => a.id === 'kimi-k2.6').queued[0].since, replay.clock.map(base + 35200));
   assert.equal(at(0.1).sessions.find((s) => s.id === 'demo-factor').state, 'thinking');
   assert.equal(at(100).sessions.find((s) => s.id === 'demo-factor').state, 'idle');

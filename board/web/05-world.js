@@ -130,7 +130,6 @@ function computeLayout(t) {
   L.ccDim = 1 - 0.8 * near;
   // 刻度带上下伸出屏幕，两头渐隐（drawBand 里画渐隐）
   L.band = { x: WL.bandX, y: vis.top - 40, w: WL.bandW, h: vis.bot - vis.top + 80 };
-  L.bandHead = { x: WL.bandX + 9, y: 14 };
   L.cc = { x: WL.ccX, y: L.H / 2 - WL.cardH / 2, w: WL.cardW, h: WL.cardH };
   const R = Math.max(300, L.H * 0.48);
   L.core = { cx: WL.ccX + WL.cardW + WL.coreGap + R, cy: L.H / 2, R, clipX: WL.bandX - 10 };

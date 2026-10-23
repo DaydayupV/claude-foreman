@@ -61,7 +61,7 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
 - `session_id`、`run_dir`：完整 diff 在 `run_dir/diff.patch`，审查的补丁在 `run_dir/review.patch`。
 - token 消耗：`usage` 是本次调用的输入、缓存、输出 token（`usage_scope` 为 `session_total` 时是整个会话的累计量）；`last_request` 是最近一次请求的用量和模型上下文窗口；`rate_limit` 是 Codex 额度的已用比例；`quota_resets_at` 是额度预计恢复的时间。Codex 的用量读自它自己的会话记录，每次请求一完成就有累计值，所以命令执行期间取消也记得到。被取消的任务只记得到取消前已经完成的请求的用量（正在进行的那次，厂商不报用量），一次都没完成时 `usage` 为 `null`，`notes` 里有说明；`errors` 写明是 `cancel` 命令、用户在实时查看里按 x，还是调度进程收到了终止信号。`cancel` 怎么处理各种任务见下面的"cancel 和 status"。API 协作方的厂商一次都没返回用量时，`usage` 和 `usage_scope` 都是 `null`，`notes` 里有说明，`stats` 把这一轮计入 `missing_runs`。
 - `agent`、`model_shown`、`effort`：这次交给了哪个协作方、实际用的模型和推理强度。`model_overridden` 为 `true` 表示这次用 `--model` 换了模型；`outside_cell` 为 `true` 表示格子是 `"claude code"`、这次是用 `--agent` 点名派出的。
-- `module`、`cell`、`plan`、`seat`、`role`：这次属于哪个模块和格子；用计划启动的，还有计划的 `plan_id`、席位序号和角色（不是计划派出的为 `null`）。图像任务另有 `step`（generate 或 draw）和 `route`（1–4），`level` 为 `null`。API、opencode 和 pi 协作方的讨论和审查结果没有改动追踪（`changes.available` 为 `false`）；API 协作方的 `files` 列出附带了哪些文件，opencode 和 pi 协作方多一个 `cost_usd`（按厂商价格折算的美元费用），`status` 和实时查看会把它接在 token 用量后面显示。
+- `module`、`cell`、`plan`、`seat`、`role`：这次属于哪个模块和格子；用计划启动的，还有计划的 `plan_id`、席位序号和角色（不是计划派出的为 `null`）。图像任务另有 `step`（generate 或 draw）和 `route`（1–4），`level` 为 `null`。API、opencode 和 pi 协作方的讨论和审查结果没有改动追踪（`changes.available` 为 `false`）；API 协作方的 `files` 列出附带了哪些文件，所有协作方的结果都有 `cost_usd`（按模型官方 API 价格算的美元费用，模型不在价格表里时为 `null`）和 `cost_source`（`api_price` 或 `unknown`），`status` 和实时查看会把它接在 token 用量后面显示；opencode 和 pi 自己报的费用另存在 `reported_cost_usd`，只留档。
 - `isolation`、`run_access`：opencode 和 pi 做执行时，写明没有系统沙箱（`tools`）和这次的权限档位。
 - `generated_images`：这一轮新出现的图片原文件（Codex 的在它的图片目录里）。能出图的适配器都通过同一个接口提供这一项和 `image_calls`。
 - `viewed_images`：这一轮 Codex 用 view_image 打开过的图片，`[{ path, ok }]`（读自 Codex 的会话记录；路径是变量、解析不出来时为 "unknown"；`ok` 为 `true` 表示图片读到了，`false` 表示调用了但没读到，`null` 表示没找到结果，或者一段代码里看了几张图、读到的张数对不上，分不清是哪一张没读到）。补丁工具（apply_patch）里写到的 view_image 不算。实时查看的时间线上会出现"Opened image …"。`commands_executed` 不包括它。
@@ -112,6 +112,6 @@ node "<脚本路径>" stats [--module discuss|run|review|image] [--since <天数
   - `rework`（只对执行和图像，其他模块为 `null`）：`seats`、`reworked`、`rate`。正常交回报告（报告是 partial 的也算）后又被 `resume` 续接的席位才算返工过；回答问题、卡死、失败或没交回有效结果后的续接不算。同一计划同一席重新启动的几条记录算同一个席位。
   - `duration_s`：`total`（各轮用时之和）、`median_per_seat`（没有运行中的轮次、每一轮都有用时的席位，按席位总用时取中位数）、`missing_runs`（没有用时的轮数）。
   - `tokens`：`input`、`cached_input`、`output`，有用量的轮数 `runs`，缺失的轮数 `missing_runs`。记的是会话累计（`usage_scope` 为 `session_total`）的续接，只算这一轮新增的部分。Codex 的轮次没记用量、又是这个会话的最后一轮（后面没有任何续接，正在运行的也算）时，从 Codex 自己的会话记录补读；读不到的计入 `missing_runs`，不当成 0。
-  - `cost_usd`：`total`、`runs`、`missing_runs`。只有 opencode 和 pi 记录费用；Codex 用订阅额度，API 协作方不折算费用，这两类不计入，也不算缺失。
+  - `cost_usd`：`total`、`runs`、`missing_runs`。一律按模型官方 API 价格算（插件自带的价格表 `scripts/prices.json`），和实际扣费不一定相同。表里没有的模型算不出费用，计入 `missing_runs`（Claude Code 席不算）。
 - 输出 JSON：`runs_dir`、`module`、`since_days`、`generated_at`、`totals`（`runs`、`seats`、`judged_runs`、`running_skipped`、`unreadable`、`unreadable_verdicts`）、`rows`（按讨论、审查、执行、图像的顺序，同一模块里席位多的在前）和 `notes`（上面几条口径的说明）。
 - 怎么用：偏好文件可以引用这份统计改某个模型的档位（比如"本地实测里 deepseek-v4.1-flash 审查的独有发现多，审查时按强档用"），以偏好文件为准；脚本不自动排名，也不改配置和档位。记过去留的轮数少时（看 `judged_runs` 和 `unique_basis_runs`），这些数字只作参考。

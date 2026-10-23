@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseTranscriptLines, plainCommand } from './claude-feed.mjs';
-import { priceFor } from './prices.mjs';
+import { priceFor, costOf } from '../prices.mjs';
 
 export const ms = (v) => v == null ? null : typeof v === 'number' ? v : Date.parse(v);
 const oneLine = (v) => String(v ?? '').replace(/\r/g, '').split('\n').map((s) => s.trim()).filter(Boolean).join(' ⏎ ');
@@ -12,7 +12,8 @@ const pidAlive = (pid) => { if (!Number.isInteger(pid) || pid <= 0) return true;
 export function stat(file) { try { return fs.statSync(file); } catch (e) { if (!transient(e)) throw e; return null; } }
 export function json(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { if (!transient(e) && !(e instanceof SyntaxError)) throw e; return null; } }
 
-const usageOf = (u) => ({ input: u.input_tokens == null ? null : u.input_tokens - (u.cached_input_tokens ?? 0), cached: u.cached_input_tokens ?? null, cache_write: null, output: u.output_tokens ?? null });
+const usageOf = (u) => ({ input: u.input_tokens == null ? null : Math.max(0, u.input_tokens - (u.cached_input_tokens ?? 0) - (u.cache_write_input_tokens ?? 0)),
+  cached: u.cached_input_tokens ?? null, cache_write: u.cache_write_input_tokens ?? null, output: u.output_tokens ?? null });
 export const usageTotals = (events) => events.reduce((sum, e) => {
   for (const [key, value] of Object.entries(e.u)) if (value != null) { const name = key === 'in' ? 'input' : key === 'out' ? 'output' : key; sum[name] = (sum[name] ?? 0) + value; }
   return sum;
@@ -22,6 +23,7 @@ export function hostCost(events, prices) {
   const costs = events.map((e) => priceFor(e.t, { input: e.u.in, cached: e.u.cached, cache_write: e.u.cache_write, output: e.u.out }, prices));
   return costs.length && costs.every((v) => v != null) ? costs.reduce((a, b) => a + b, 0) : null;
 }
+export const costFields = (cost, source) => ({ cost_usd: cost, cost_source: source });
 
 function flush(state, at, final = false) {
   const out = [];
@@ -139,10 +141,10 @@ export function runMessage(run, lane, prices) {
   const message = { id: clip(run.id), lane: clip(lane), parent: clip(m.parent), kind, model: clip(m.model_shown || m.model) };
   for (const key of ['mode', 'agent', 'agent_type', 'level', 'effort', 'group', 'round', 'plan', 'seat', 'role', 'title', 'status']) message[key] = typeof m[key] === 'string' ? clip(m[key]) : m[key] ?? null;
   if (m.participant === 'host') { message.kind = 'answer'; if (message.status === 'running') message.status = 'idle'; }
-  const usage = r?.usage ? usageOf(r.usage) : null, cost = r?.cost_usd ?? priceFor(message.model, usage, prices);
+  const usage = r?.usage ? usageOf(r.usage) : null, cost = costOf({ ...m, ...r }, prices);
   const head = kind === 'discuss' ? r?.report?.position ?? first(r?.last_message) : kind === 'review' ? r?.report && `${r.report.verdict} · ${(r.report.findings || []).length} findings` : ['exec', 'image'].includes(kind) ? r?.report?.summary ?? first(r?.last_message) : null;
   return { ...message, started_at: ms(m.started_at), ended_at: ms(m.ended_at), duration_s: r?.duration_s ?? null,
-    usage, cost_usd: cost, cost_source: r?.cost_usd != null ? 'reported' : cost != null ? 'api_equiv' : 'unknown', report_head: head ? String(head).slice(0, 160) : null,
+    usage, ...costFields(cost.cost_usd, cost.cost_source), report_head: head ? String(head).slice(0, 160) : null,
     changed: (r?.changes?.files || []).slice(0, 40).map((f) => Object.fromEntries(['path', 'kind', 'added', 'removed'].filter((k) => k in f).map((k) => [k, f[k]]))),
     review: kind === 'review' && r?.report ? { verdict: clip(r.report.verdict, 120),
       // 审查报告的字段名见 foreman 的 review.schema.json：位置是 location，问题是 issue
@@ -165,12 +167,12 @@ export function buildReplay(data, { speed = 1, maxgap = 20, clock } = {}, now) {
   const invalid = new Set(data.runs.filter((run) => !Number.isFinite(run.started_at)).map((run) => run.id));
   for (const run of data.runs) {
     if (invalid.has(run.id)) continue;
-    timeline.push({ time: run.started_at, event: 'run', data: { ...run, status: run.kind === 'answer' ? run.status : 'running', ended_at: null, duration_s: null, usage: null, cost_usd: null, cost_source: 'unknown', report_head: null, changed: [], review: null, files: [], queued: false } });
+    timeline.push({ time: run.started_at, event: 'run', data: { ...run, status: run.kind === 'answer' ? run.status : 'running', ended_at: null, duration_s: null, usage: null, ...costFields(null, 'unknown'), report_head: null, changed: [], review: null, files: [], queued: false } });
     if (run.kind === 'host') {
       const usage = [];
       for (const ev of data.events.filter((e) => e.run === 'cc' && e.k === 'usage' && Number.isFinite(e.ts))) {
         usage.push(ev); const cost = hostCost(usage, data.prices);
-        timeline.push({ time: ev.ts, event: 'run', data: { ...run, model: ev.t, status: 'running', usage: usageTotals(usage), cost_usd: cost, cost_source: cost == null ? 'unknown' : 'api_equiv' } });
+        timeline.push({ time: ev.ts, event: 'run', data: { ...run, model: ev.t, status: 'running', usage: usageTotals(usage), ...costFields(cost, cost == null ? 'unknown' : 'api_price') } });
       }
       timeline.push({ time: data.hostEnd, event: 'run', data: { ...run, status: 'idle' } });
     } else if (run.ended_at != null) timeline.push({ time: run.ended_at, event: 'run', data: run });
@@ -310,7 +312,7 @@ export function createFeed(root, options = {}) {
     if (m.started_at == null) return data;
     const cost = hostCost(parsed.events.filter((e) => e.k === 'usage'), options.prices);
     data.runs.push({ id: 'cc', lane: 'cc', kind: 'host', agent: 'claude code', agent_type: 'host', model: m.model, session: m.session || path.basename(file, '.jsonl'), title: m.title, cwd: m.cwd,
-      status: params.replay != null || now - Math.max(m.latest_at, tail.appendedAt ?? -Infinity) < 90000 ? 'running' : 'idle', started_at: m.started_at, ended_at: null, usage: m.usage, cost_usd: cost, cost_source: cost == null ? 'unknown' : 'api_equiv' });
+      status: params.replay != null || now - Math.max(m.latest_at, tail.appendedAt ?? -Infinity) < 90000 ? 'running' : 'idle', started_at: m.started_at, ended_at: null, usage: m.usage, ...costFields(cost, cost == null ? 'unknown' : 'api_price') });
     data.events.push(...parsed.events); data.versions.cc = `${file}:${tail.version}`; data.revisions.cc = '';
     data.hostEnd = session ? m.latest_at : end; return data;
   };

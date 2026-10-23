@@ -2,7 +2,7 @@
   --bg: #050506; --panel: #0b0b0e; --edge: #26262b; --edge2: #3a3a42;
   --dim: #5c5c66; --mid: #8f8f9c; --text: #d2d2d9; --hi: #f5f5f8; --bad: #e88a9f;
   --mono: ui-monospace, "Cascadia Mono", "Sarasa Mono SC", Consolas, Menlo, monospace;
-  --top-h: 36px; --table-h: 22vh;
+  --top-h: 36px; --table-h: min(191px, 32vh); /* 底部面板固定高度：表头、正好 7 行、合计；行多了在面板里滚动 */
 }
 * { box-sizing: border-box; }
 /* 整页可以往下滚：上面是星图和用量面板（打开时的位置），再往下是终端 */
@@ -24,41 +24,24 @@ button:hover, button:focus-visible { color: var(--hi); border-color: var(--mid);
 canvas#fx, canvas#ufx { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
 body:not(.u-on) canvas#ufx, body.uni canvas#fx { display: none; }
 #crumb { display: inline-flex; gap: 6px; margin-left: 12px; color: var(--dim); font-size: 11px; }
-#crumb a { color: var(--mid); cursor: pointer; text-decoration: none; }
-#crumb a:hover { color: var(--hi); }
+#brand.link { cursor: pointer; }
+#brand.link:hover { color: #fff; text-shadow: 0 0 8px rgba(255,255,255,.35); }
 #crumb i { font-style: normal; opacity: .5; }
 #crumb b { color: var(--text); font-weight: 500; }
 /* 边缘压暗一点，中间更通透 */
 #view::after { content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 1; background: radial-gradient(ellipse at 50% 50%, transparent 55%, rgba(0,0,0,.55) 100%); }
 #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; z-index: 2; }
-body.uni #world, body.uni #view::after, body.uni .board-only, body:not(.uni) .uni-only, body:not(.uni) #ulist, body:not(.uni) #uslots { display: none; }
-/* 宇宙层的侧栏：左边对话列表，右上名额带 */
-#ulist, #uslots { position: absolute; z-index: 3; top: 10px; display: flex; flex-direction: column; cursor: default; user-select: none;
+/* 看板画布分两层：底下 #fx 是弧线区（切换时炸开），上面 #fxo 是光线、刻度带、标签（切换时淡入淡出） */
+canvas#fxo { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+body.uni canvas#fxo { display: none; }
+body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.uni .board-only, body:not(.uni) .uni-only, body:not(.uni) #uslots { display: none; }
+/* 宇宙层右上的名额带 */
+#uslots { position: absolute; z-index: 3; top: 10px; display: flex; flex-direction: column; cursor: default; user-select: none;
   background: linear-gradient(180deg, rgba(22,22,27,.62), rgba(7,7,9,.86)); border: 1px solid rgba(170,170,182,.14); }
-#ulist { left: 10px; bottom: 40px; width: 248px; }
 #uslots { right: 10px; width: 236px; max-height: calc(100% - 60px); }
-#ulist > header, #uslots > header { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; border-bottom: 1px solid rgba(200,200,212,.12); flex: none; }
-#ulist > header b, #uslots > header b { color: var(--hi); font-size: 10px; letter-spacing: .16em; }
-#ulist > header .n, #uslots > header .n { color: var(--dim); font-size: 10px; flex: 1; }
-#ulist .fold { padding: 0 6px; height: 18px; line-height: 16px; font-size: 12px; }
-#ulist.folded { width: 34px; bottom: auto; }
-#ulist.folded > header b, #ulist.folded > header .n, #ulist.folded ol, #ulist.folded .empty { display: none; }
-#ulist .empty { margin: 0; padding: 8px 10px; color: var(--dim); font-size: 11px; line-height: 1.6; }
-#ulist .empty:empty { display: none; }
-#ulist.folded .fold { transform: rotate(180deg); }
-#ulist ol { list-style: none; margin: 0; padding: 4px 0; overflow-y: auto; min-height: 0; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
-#ulist li { display: grid; grid-template-columns: 12px 1fr auto; grid-template-rows: auto auto; column-gap: 6px; padding: 4px 10px; cursor: pointer; border-left: 2px solid transparent; }
-#ulist li:hover { background: rgba(255,255,255,.04); border-left-color: var(--mark); }
-#ulist li .mk { grid-row: 1 / 3; align-self: center; width: 7px; height: 7px; border-radius: 50%; background: var(--mark); box-shadow: 0 0 6px var(--mark); }
-#ulist li .t { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: "Microsoft YaHei", sans-serif; font-size: 12px; }
-#ulist li .run { color: var(--mark); font-size: 10px; }
-#ulist li .st, #ulist li .p { font-size: 10px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#ulist li .p { text-align: right; }
-#ulist li.s-idle .t { color: var(--mid); }
-#ulist li.s-idle .mk { opacity: .45; box-shadow: none; }
-#ulist li.s-waiting .st { color: rgb(255,186,90); }
-#ulist li.s-dispatching .st, #ulist li.s-thinking .st { color: var(--mid); }
-#ulist li.alert .st { color: var(--bad); }
+#uslots > header { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; border-bottom: 1px solid rgba(200,200,212,.12); flex: none; }
+#uslots > header b { color: var(--hi); font-size: 10px; letter-spacing: .16em; }
+#uslots > header .n { color: var(--dim); font-size: 10px; flex: 1; }
 #uslots .rows { padding: 6px 10px 8px; overflow-y: auto; min-height: 0; }
 #uslots .row { display: grid; grid-template-columns: 8px 1fr auto; gap: 6px; align-items: center; height: 18px; color: var(--dim); }
 #uslots .row.busy { color: var(--text); }
@@ -78,7 +61,11 @@ body.uni #world, body.uni #view::after, body.uni .board-only, body:not(.uni) .un
 #usage[data-mode="uni"] .tbody .tr.s-waiting span:nth-child(4) { color: rgb(255,186,90); }
 #usage[data-mode="uni"] .tbody .tr.s-idle span:nth-child(4), #usage[data-mode="uni"] .tbody .tr.s-idle span:nth-child(2) { color: var(--dim); }
 #usage[data-mode="uni"] .tbody .tr span:nth-child(5) { color: var(--tint); }
-#terms .pick { margin: auto; color: var(--dim); font-family: "Microsoft YaHei", sans-serif; }
+/* 对话行：悬停或星图里悬停到它的星系时亮起来，左边一道它的标记色；点一下飞进去 */
+#usage[data-mode="uni"] .tbody .tr { cursor: pointer; }
+#usage[data-mode="uni"] .tbody .tr:hover, #usage[data-mode="uni"] .tbody .tr.hot { background: rgba(255,255,255,.05); box-shadow: inset 2px 0 var(--tint); }
+#usage[data-mode="uni"] .tbody .tr.alert span:nth-child(4) { color: var(--bad); }
+#usage .tbody .empty { margin: 0; padding: 10px 22px; color: var(--dim); font-size: 11px; font-family: "Microsoft YaHei", sans-serif; }
 #hud { z-index: 3; position: absolute; left: 10px; bottom: 8px; display: flex; gap: 8px; align-items: center; color: var(--dim); font-size: 11px; }
 #hud button { width: 24px; height: 22px; padding: 0; }
 #hud .hint { opacity: .8; }
@@ -86,7 +73,7 @@ body.uni #world, body.uni #view::after, body.uni .board-only, body:not(.uni) .un
 #hud select:hover, #hud select:focus-visible { color: var(--hi); border-color: var(--mid); outline: none; }
 
 /* 卡片：世界坐标里一律 154×96，内容按缩放档位（lod0 简要 / lod1 摘要 / lod2 详情）换 */
-.card, .outbox, .ghead, .bandhead { position: absolute; }
+.card, .outbox, .ghead { position: absolute; }
 /* HUD 面板：半透明玻璃底、四角括号代替整圈边框、里面一圈模型颜色的淡光；运行中括号和边换成模型颜色 */
 .card, .outbox {
   --cc: rgba(215,215,225,.5); --cs: 8px;
@@ -168,10 +155,9 @@ body.uni #world, body.uni #view::after, body.uni .board-only, body:not(.uni) .un
 #world.lod2 .outbox { font-size: 3.4px; line-height: 1.36; padding: 2px 4px; }
 
 /* 刻度带里的组头 */
-.ghead, .bandhead { width: 154px; color: var(--mid); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; font-size: 6.5px; line-height: 1.4; }
+.ghead { width: 154px; color: var(--mid); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; font-size: 6.5px; line-height: 1.4; }
 .ghead b { color: var(--text); }
 .ghead.old { opacity: .45; }
-.bandhead { cursor: default; color: var(--dim); letter-spacing: .12em; font-size: 6px; }
 
 /* 底部用量表 */
 #table, #termsec { position: relative; margin: 0 8px 6px; height: calc(var(--table-h) - 6px); padding: 6px 14px; overflow: hidden; z-index: 3;
@@ -187,6 +173,8 @@ body.uni #world, body.uni #view::after, body.uni .board-only, body:not(.uni) .un
 #table .tr span { overflow: hidden; text-overflow: ellipsis; }
 #table .th { color: var(--dim); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; border-bottom: 1px solid rgba(200,200,212,.14); height: 21px; }
 #table .tbody { overflow-y: auto; min-height: 0; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
+/* 下面还有行时，最后一行淡出，提示可以在面板上滚动 */
+#table .tbody.more { mask-image: linear-gradient(180deg, #000 calc(100% - 14px), transparent); }
 #table .tr .av img { width: 18px; height: 18px; object-fit: cover; object-position: 50% 12%; image-rendering: pixelated; display: block; border: 1px solid var(--edge); }
 #table .tbody .tr span:nth-child(2) { color: var(--text); }
 #table .tbody .tr span:nth-child(4) { color: var(--tint); }

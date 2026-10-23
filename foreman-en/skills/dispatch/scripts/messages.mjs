@@ -219,7 +219,7 @@ const zh = {
   statsBadModule: (value, list) => `--module 只能是 ${list}，收到的是 ${value}`,
   statsNotes: [
     'Claude Code 的去留是它自己判的，不能和外部席位直接比，也不要据此改模型档位。',
-    '只有 opencode 和 pi 的任务记录费用（cost_usd）；Codex 用订阅额度，API 协作方不折算费用，这两类不计入 cost_usd，也不算缺失。',
+    '费用（cost_usd）一律按模型官方 API 价格计算（插件自带的价格表 prices.json），和实际扣费不一定相同：Codex、Claude Code 用订阅时不按 token 扣钱，opencode、pi 的实际扣费以它们自己的账单为准。价格表里没有的模型算不出费用，计入 missing_runs。',
     '"只有它发现"（unique）只在同一份计划（没有计划时是同一个任务组和 Claude 会话）里有两个以上不同的基础模型都用 judge 记过去留时才统计；unique_basis_runs 是参与统计的任务数。',
     '返工率只算执行和图像：正常交回报告后又被 resume 续接的才算返工，回答问题、卡死或失败后的续接不算。',
   ],
@@ -869,7 +869,7 @@ const en = {
   statsBadModule: (value, list) => `--module must be one of ${list}; got ${value}`,
   statsNotes: [
     "Claude Code's verdicts are self-judged: don't compare them directly with external seats or use them to change model tiers.",
-    'Only opencode and pi runs record a cost (cost_usd); Codex uses a subscription and API agents aren\'t priced, so those runs are neither added to cost_usd nor counted as missing.',
+    'Cost (cost_usd) is always computed from each model\'s official API price (the plugin\'s price table, prices.json) and may differ from what you\'re actually charged: Codex and Claude Code on a subscription aren\'t charged per token, and opencode and pi bill through their own accounts. Models missing from the price table have no cost and count in missing_runs.',
     '"unique" (points only that model found) is only counted when at least two different base models in one plan (without a plan: one group and Claude session) have verdicts recorded with judge; unique_basis_runs is how many runs that covers.',
     'Rework rate covers run and image only: a resume counts as rework only when the previous round had finished normally with its report; resumes that answer questions or continue after a stall or failure don\'t.',
   ],

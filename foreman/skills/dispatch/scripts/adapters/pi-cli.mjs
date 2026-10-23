@@ -73,6 +73,7 @@ function runPi({ agent, args, cwd, prompt = '', timeoutMs, stallMin = 0, runDir,
     const addUsage = (u = {}) => {
       out.usage.input_tokens += (u.input || 0) + (u.cacheRead || 0) + (u.cacheWrite || 0);
       out.usage.cached_input_tokens += u.cacheRead || 0;
+      if (u.cacheWrite != null) out.usage.cache_write_input_tokens = (out.usage.cache_write_input_tokens ?? 0) + u.cacheWrite;
       out.usage.output_tokens += u.output || 0;
       out.usage.reasoning_output_tokens += u.reasoning || 0;
       out.cost += u.cost?.total || 0;
@@ -277,7 +278,7 @@ async function piSession(run, schema, access) {
     errors.push(...out.errors);
     observed.questions.push(...out.questions);
     if (!repairing) observed.messages = out.messages;
-    for (const key of Object.keys(usage)) usage[key] += out.usage[key];
+    for (const [key, value] of Object.entries(out.usage)) usage[key] = (usage[key] ?? 0) + value;
     cost += out.cost;
     thinkingLevel = out.thinkingLevel ?? thinkingLevel;
     meta.status = out.status;

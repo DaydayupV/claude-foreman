@@ -182,8 +182,8 @@ test('opencode 注入只读代理、设置 PWD 并翻译工具事件和导出用
   assert.ok(call.stdin.includes('不能运行命令'));
   assert.ok(call.stdin.includes(h.cwd));
   assert.deepEqual(s.calls()[1].args, ['session', 'export', '--standalone', 'synthetic-opencode-session']);
-  assert.deepEqual(r.usage, { input_tokens: 157, cached_input_tokens: 22, output_tokens: 50, reasoning_output_tokens: 10 });
-  assert.equal(r.cost_usd, 0.375);
+  assert.deepEqual(r.usage, { input_tokens: 157, cached_input_tokens: 22, cache_write_input_tokens: 5, output_tokens: 60, reasoning_output_tokens: 10 }); // 输出含推理
+  assert.equal(r.cost_usd, null); assert.equal(r.cost_source, 'unknown'); assert.equal(r.reported_cost_usd, 0.375);
   assert.equal(r.commands_executed, 0);
   const events = h.events(r.run_id);
   assert.deepEqual(events.map((e) => e.type), ['thread.started', 'item.completed', 'item.completed', 'item.completed']);

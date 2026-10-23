@@ -20,7 +20,7 @@ function tracePath(E0, E1, n = 28) {
 }
 
 function drawOutBeam(E0, E1, color, I, live, seed, ages) {
-  const style = OUT.style, act = 0.2 + (0.3 + 0.5 * I) * live, sec = performance.now() / 1000, speed = 0.18 + 0.5 * I;
+  const style = OUT.style, act = 0.2 + (0.3 + 0.5 * I) * live, sec = performance.now() / 1000, flow = flowPhase(`out|${seed}`, 0.18 + 0.5 * I);
   const a0 = E0[0], a1 = E0[3];
   ctx.save();
   if (style === 'rays') {
@@ -37,7 +37,7 @@ function drawOutBeam(E0, E1, color, I, live, seed, ages) {
       ctx.strokeStyle = color(0.05 + 0.1 * act); ctx.lineWidth = 4 * FX.lw; ctx.stroke();
       ctx.strokeStyle = g; ctx.lineWidth = 1.1 * FX.lw; ctx.stroke();
       if (live) for (let j = 0; j < 2; j++) {
-        const u = ((sec * speed * (0.8 + f * 0.07) + f * 0.21 + j * 0.5) % 1);
+        const u = ((flow * (0.8 + f * 0.07) + f * 0.21 + j * 0.5) % 1);
         const [x, y] = cubicAt(q, u);
         glowDot(x, y, 1.6 + 0.8 * I, color, Math.min(1, u * 6, (1 - u) * 6));
       }
@@ -45,7 +45,7 @@ function drawOutBeam(E0, E1, color, I, live, seed, ages) {
   } else if (style === 'particles') {
     // 星河：通道里几条像核心网那样的细弧线（慢慢起伏、互相交错），上面漂着放慢的光点；没有输出时整条通道不画
     // 有多少：强度定粒子数，边界上那一颗按小数部分半透明；整条通道再乘上活跃程度和"有没有输出"，淡入淡出而不是整批出现
-    const rand = rng(seed), want = 20 + 32 * I, pres = clamp01(I / 0.06) * live, n = pres > 0.005 ? Math.ceil(want) : 0, slow = 0.05 + 0.14 * I;
+    const rand = rng(seed), want = 20 + 32 * I, pres = clamp01(I / 0.06) * live, n = pres > 0.005 ? Math.ceil(want) : 0, drift = flowPhase(`cloud|${seed}`, 0.05 + 0.14 * I);
     const ga = ctx.globalAlpha;
     ctx.globalAlpha = ga * pres;
     if (n) {
@@ -60,8 +60,8 @@ function drawOutBeam(E0, E1, color, I, live, seed, ages) {
       }
     }
     for (let i = 0; i < n; i++) {
-      const v = 0.08 + rand() * 0.84, ph = rand(), sp = slow * (0.6 + rand() * 0.8);
-      const u = (sec * sp + ph) % 1, [x, y] = at(E0, E1, u, v + Math.sin(sec * 2 + ph * 9) * 0.03);
+      const v = 0.08 + rand() * 0.84, ph = rand(), sp = 0.6 + rand() * 0.8;
+      const u = (drift * sp + ph) % 1, [x, y] = at(E0, E1, u, v + Math.sin(sec * 2 + ph * 9) * 0.03);
       const a = Math.min(1, u * 5, (1 - u) * 5) * (0.5 + 0.5 * act) * clamp01(want - i);
       ctx.fillStyle = i % 3 ? color(0.85 * a) : HI(0.9 * a);
       const r = (1.3 + rand() * 1.3) * FX.lw;
@@ -81,7 +81,7 @@ function drawOutBeam(E0, E1, color, I, live, seed, ages) {
     ctx.strokeStyle = color(0.08 + 0.16 * act); ctx.lineWidth = 7 * FX.lw; ctx.stroke();
     ctx.strokeStyle = HI(0.25 + 0.5 * act); ctx.lineWidth = 1.2 * FX.lw; ctx.stroke();
     if (live) for (let j = 0; j < 3; j++) {
-      const u = (sec * speed + j / 3) % 1, [x, y] = cubicAt(core, u);
+      const u = (flow + j / 3) % 1, [x, y] = cubicAt(core, u);
       glowDot(x, y, 2 + I, color, Math.min(1, u * 6, (1 - u) * 6));
     }
   } else if (style === 'curtain') {
@@ -91,7 +91,7 @@ function drawOutBeam(E0, E1, color, I, live, seed, ages) {
     g.addColorStop(0, HI(0.06 + 0.06 * act)); g.addColorStop(0.6, color(0.06 + 0.1 * act)); g.addColorStop(1, color(0.14 + 0.2 * act));
     ctx.fillStyle = g; ctx.fill();
     if (live) {
-      const s = (sec * speed * 0.8) % 1, sh = ctx.createLinearGradient(a0[0], a0[1], a1[0], a1[1]);
+      const s = (flow * 0.8) % 1, sh = ctx.createLinearGradient(a0[0], a0[1], a1[0], a1[1]);
       sh.addColorStop(Math.max(0, s - 0.12), HI(0)); sh.addColorStop(s, HI(0.12 + 0.18 * I)); sh.addColorStop(Math.min(1, s + 0.12), HI(0));
       ctx.fillStyle = sh; ctx.fill();
     }

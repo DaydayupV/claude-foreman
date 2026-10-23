@@ -66,7 +66,7 @@ function uniFitGoal() {
   if (!(r.width > 0 && r.height > 0)) return { k: UV.k > 0 ? UV.k : 1, tx: UV.tx, ty: UV.ty, bounds: b };
   // 让开左边的对话列表和右上的名额带（收起或没显示时不让）
   const side = (id, edge) => { const e = $(id).getBoundingClientRect(); return e.width ? (edge === 'l' ? e.right - r.left : r.right - e.left) + 8 : 0; };
-  const left = FLY.mode === 'universe' ? side('ulist', 'l') : 0, right = FLY.mode === 'universe' ? side('uslots', 'r') : 0;
+  const left = 0, right = FLY.mode === 'universe' ? side('uslots', 'r') : 0;
   const w = Math.max(200, r.width - left - right), k = Math.min(w / b.w, r.height / b.h) * 0.86;
   return (UV.fitCache = { k, tx: left + w / 2 - (b.x + b.w / 2) * k, ty: r.height / 2 - (b.y + b.h / 2) * k, bounds: b });
 }
@@ -109,8 +109,8 @@ const udrag = { on: false, x: 0, y: 0, moved: 0, target: null };
 viewEl.addEventListener('wheel', (e) => {
   if (!inUniverse()) return;
   e.preventDefault();
-  const r = viewEl.getBoundingClientRect();
-  uniZoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0016));
+  const r = viewEl.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
+  if (!uniWheelIn(e, sx, sy)) uniZoomAt(sx, sy, Math.exp(-e.deltaY * 0.0016));
   wake();
 }, { passive: false });
 viewEl.addEventListener('pointerdown', (e) => {
@@ -137,7 +137,7 @@ viewEl.addEventListener('pointermove', (e) => {
 });
 viewEl.addEventListener('pointerleave', () => { UV.hover = null; });
 viewEl.addEventListener('pointerup', () => {
-  if (!inUniverse()) return;
+  if (!inUniverse()) { udrag.on = false; viewEl.classList.remove('dragging'); return; }
   // 没拖动、点在星系上：飞进这个对话
   if (udrag.on && udrag.moved <= 4 && udrag.target) flyIn(udrag.target);
   udrag.on = false; viewEl.classList.remove('dragging'); wake();

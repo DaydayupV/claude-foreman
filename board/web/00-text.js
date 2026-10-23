@@ -27,24 +27,20 @@ const TEXTS = {
     gateOpen: '已开闸',
     crossCheck: (round, last) => `ROUND ${round} · 匿名成方案 A–${last} · 交叉挑错`,
     decisionWritten: '决策记录已写成',
-    universe: '宇宙',
+    backToUniverse: '回到所有对话（Esc）',
     conversations: (n) => `${n} 个对话`,
-    noneSelected: (n) => `${n} 个对话 · 未选择`,
-    pickHint: '在星图里点一个星系，或者在左边的列表里选一个对话，这里会显示它的终端。',
-    listTitle: '对话',
+    costTitle: '根据模型官方 API 价格计算（插件自带的价格表），和实际扣费不一定相同；+ 表示有的模型不在价格表里，这部分没算进去',
     emptyList: (h) => `最近 ${h} 小时没有派发过任务的对话。派发之后会出现在这里。`,
-    fold: '收起或展开',
     slotsTitle: '名额',
     shell: {
       crumb: '当前位置',
       view: '多模型协作视图：滚轮缩放，按住左键拖动，单击卡片放大，双击空白处复位',
-      list: '所有对话',
       slots: '协作方并发名额',
       fit: '复位（0）',
       hintBoard: '滚轮缩放（刻度带上是滚动）· 拖动平移 · 单击卡片放大 · 双击复位',
       hintUniverse: '滚轮缩放 · 拖动平移 · 双击复位',
       more: '▾ 终端',
-      moreTitle: '滚到下面的终端（在用量面板上滚动滚轮也可以）',
+      moreTitle: '滚到下面的终端（在用量面板上滚到底后继续滚动也可以）',
       terms: '终端：当前对话里各模型的终端对话',
     },
   },
@@ -68,24 +64,20 @@ const TEXTS = {
     gateOpen: 'gate open',
     crossCheck: (round, last) => `ROUND ${round} · anonymized as options A–${last} · cross-check`,
     decisionWritten: 'decision record written',
-    universe: 'Universe',
+    backToUniverse: 'Back to all conversations (Esc)',
     conversations: (n) => `${n} ${n === 1 ? 'conversation' : 'conversations'}`,
-    noneSelected: (n) => `${n} ${n === 1 ? 'conversation' : 'conversations'} · none selected`,
-    pickHint: 'Click a galaxy in the star map, or pick a conversation in the list on the left, to see its terminals here.',
-    listTitle: 'Conversations',
+    costTitle: "Computed from each model's official API price (the plugin's price table); may differ from what you're actually charged. + means some models aren't in the table and weren't counted",
     emptyList: (h) => `No conversation has dispatched work in the last ${h} hours. New ones show up here.`,
-    fold: 'Collapse or expand',
     slotsTitle: 'Slots',
     shell: {
       crumb: 'Where you are',
       view: 'Multi-model view: scroll to zoom, drag to pan, click a card to zoom in, double-click empty space to reset',
-      list: 'All conversations',
       slots: 'Parallel slots per agent',
       fit: 'Reset (0)',
       hintBoard: 'Scroll to zoom (scrolls the cards over the band) · drag to pan · click a card to zoom in · double-click to reset',
       hintUniverse: 'Scroll to zoom · drag to pan · double-click to reset',
       more: '▾ Terminals',
-      moreTitle: 'Scroll down to the terminals (scrolling over the usage panel works too)',
+      moreTitle: 'Scroll down to the terminals (or keep scrolling past the end of the usage panel)',
       terms: 'Terminals: each model in this conversation',
     },
   },
@@ -97,7 +89,7 @@ if (LANG !== 'zh') {
   document.documentElement.lang = 'en';
   const s = TEXT.shell, set = (sel, attr, value) => { const el = document.querySelector(sel); if (el) { if (attr) el.setAttribute(attr, value); else el.textContent = value; } };
   set('#crumb', 'aria-label', s.crumb); set('#view', 'aria-label', s.view);
-  set('#ulist', 'aria-label', s.list); set('#uslots', 'aria-label', s.slots);
+  set('#uslots', 'aria-label', s.slots);
   set('#fit', 'title', s.fit); set('.hint.board-only', null, s.hintBoard); set('.hint.uni-only', null, s.hintUniverse);
   set('#more', null, s.more); set('#more', 'title', s.moreTitle); set('#termsec', 'aria-label', s.terms);
 }

@@ -53,7 +53,8 @@ test('讨论：只读工具和守卫、隔离参数、事件翻译、用量和�
   const h = sandbox(t);
   configure(h, {}, (c) => { c.modules.discuss.complex = [{ agent: 'pi', effort: 'high' }]; });
   const guardFile = path.join(h.home, 'guard.log');
-  const s = h.scenario({ guard_file: guardFile, steps: [...tool('read', { path: path.join(h.cwd, 'src/file.mjs') }), ...tool('grep', { pattern: 'todo', path: 'src' })] });
+  const s = h.scenario({ guard_file: guardFile, steps: [...tool('read', { path: path.join(h.cwd, 'src/file.mjs') }), ...tool('grep', { pattern: 'todo', path: 'src' })],
+    calls: [{}, { pi_usage: { input: 10, output: 5, cacheRead: 3, cost: { total: 0.25 } } }] });
   const r = output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'pi', '--title', '合成讨论']), { env: s.env, input: '合成议题' }));
   assert.deepEqual(r.report, discussion);
   assert.equal(r.agent_type, 'pi cli');
@@ -62,8 +63,8 @@ test('讨论：只读工具和守卫、隔离参数、事件翻译、用量和�
   assert.deepEqual(policies(guardFile), [{ root: h.cwd, access: 'read' }]);
   assert.ok(call.stdin.startsWith('合成议题'));
   assert.ok(call.stdin.includes('不能运行命令'));
-  assert.deepEqual(r.usage, { input_tokens: 17, cached_input_tokens: 3, output_tokens: 5, reasoning_output_tokens: 2 });
-  assert.equal(r.cost_usd, 0.25);
+  assert.deepEqual(r.usage, { input_tokens: 17, cached_input_tokens: 3, cache_write_input_tokens: 4, output_tokens: 5, reasoning_output_tokens: 2 });
+  assert.equal(r.cost_usd, null); assert.equal(r.cost_source, 'unknown'); assert.equal(r.reported_cost_usd, 0.25);
   assert.equal(r.session_id, 'synthetic-pi-session');
   assert.equal(r.changes.note, M.piNoChanges);
   const events = h.events(r.run_id);
@@ -78,6 +79,8 @@ test('讨论：只读工具和守卫、隔离参数、事件翻译、用量和�
   assert.equal(runs(s)[1].args[runs(s)[1].args.indexOf('--session') + 1], 'synthetic-pi-session');
   assert.ok(runs(s)[1].stdin.includes(M.opencodeResumeFooter));
   assert.equal(resumed.status, 'done');
+  assert.equal(resumed.usage.input_tokens, 13); assert.equal(resumed.usage.cached_input_tokens, 3);
+  assert.equal(Object.hasOwn(resumed.usage, 'cache_write_input_tokens'), false);
 });
 
 test('审查：补丁材料、只读工具，审查不能续接', async (t) => {
@@ -135,7 +138,7 @@ test('执行报告不合格时，同一会话、不开任何工具修复一次�
   const h = sandbox(t);
   configure(h, { run_access: 'edit' }, (c) => { c.modules.run.complex = { agent: 'pi' }; });
   const guardFile = path.join(h.home, 'guard.log');
-  const s = h.scenario({ guard_file: guardFile, calls: [{ last_message: 'not json' }, { last_message: JSON.stringify(report) }] });
+  const s = h.scenario({ guard_file: guardFile, calls: [{ last_message: 'not json' }, { last_message: JSON.stringify(report), pi_usage: { input: 10, output: 5, cacheRead: 3, cost: { total: 0.25 } } }] });
   const r = output(await h.bridge(taskArgs(h), { env: s.env, input: '任务' }));
   assert.deepEqual(r.report, report);
   const [first, second] = runs(s);
@@ -144,7 +147,8 @@ test('执行报告不合格时，同一会话、不开任何工具修复一次�
   assert.equal(second.args[second.args.indexOf('--session') + 1], 'synthetic-pi-session');
   assert.deepEqual(policies(guardFile).map((p) => p.access), ['edit', 'none']);
   assert.equal(r.usage.output_tokens, 10);
-  assert.equal(r.cost_usd, 0.5);
+  assert.equal(r.usage.cache_write_input_tokens, 4);
+  assert.equal(r.cost_usd, null); assert.equal(r.cost_source, 'unknown'); assert.equal(r.reported_cost_usd, 0.5);
 });
 
 test('出错、限流、截断、自动重试和推理强度被 pi 改掉', async (t) => {
@@ -163,7 +167,8 @@ test('出错、限流、截断、自动重试和推理强度被 pi 改掉', asyn
   const changed = await discuss({ thinking_level: 'max' });
   assert.ok(changed.notes.includes(M.piEffortChanged('high', 'max')));
   const compacted = await discuss({ steps: [{ event: { type: 'compaction_end', reason: 'threshold', result: { summary: 's', usage: { input: 100, output: 20, cacheRead: 0, cacheWrite: 0, cost: { total: 0.5 } } }, aborted: false, willRetry: false } }] });
-  assert.equal(compacted.usage.input_tokens, 117); assert.equal(compacted.cost_usd, 0.75);
+  assert.equal(compacted.usage.input_tokens, 117); assert.equal(compacted.usage.cache_write_input_tokens, 4);
+  assert.equal(compacted.cost_usd, null); assert.equal(compacted.cost_source, 'unknown'); assert.equal(compacted.reported_cost_usd, 0.75);
   const unsigned = await discuss({ no_reply: true, exit_code: 1, stderr: 'synthetic: no API key for deepseek\n' }, 1);
   assert.equal(unsigned.status, 'failed');
   assert.ok(unsigned.errors.some((e) => e.includes('synthetic: no API key for deepseek')));

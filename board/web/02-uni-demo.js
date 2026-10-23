@@ -99,7 +99,7 @@ function demoSummary(sess, t) {
     waiting: waiting ? { tool: 'AskUserQuestion', since: DEMO_T0 + (k * DEMO_LEN + waiting[0]) * 1000, header: waiting[2] } : null,
     runs: runs.slice(0, 16), counts: { running, done, failed },
     usage: { input: 900 + talk * 40, cached: 30000 + talk * 2600, cache_write: 2000 + talk * 90, output: 400 + talk * 55 },
-    cost_usd: Math.round((0.4 + talk * 0.012 + done * 0.05) * 100) / 100, alert, detail: sess.detail || null };
+    cost_usd: Math.round((0.4 + talk * 0.012 + done * 0.05) * 100) / 100, cost_partial: false, alert, detail: sess.detail || null };
 }
 
 function demoUniverse(t) {

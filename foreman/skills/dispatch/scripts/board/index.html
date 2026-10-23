@@ -8,7 +8,7 @@
   --bg: #050506; --panel: #0b0b0e; --edge: #26262b; --edge2: #3a3a42;
   --dim: #5c5c66; --mid: #8f8f9c; --text: #d2d2d9; --hi: #f5f5f8; --bad: #e88a9f;
   --mono: ui-monospace, "Cascadia Mono", "Sarasa Mono SC", Consolas, Menlo, monospace;
-  --top-h: 36px; --table-h: 22vh;
+  --top-h: 36px; --table-h: min(191px, 32vh); /* 底部面板固定高度：表头、正好 7 行、合计；行多了在面板里滚动 */
 }
 * { box-sizing: border-box; }
 /* 整页可以往下滚：上面是星图和用量面板（打开时的位置），再往下是终端 */
@@ -30,41 +30,24 @@ button:hover, button:focus-visible { color: var(--hi); border-color: var(--mid);
 canvas#fx, canvas#ufx { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
 body:not(.u-on) canvas#ufx, body.uni canvas#fx { display: none; }
 #crumb { display: inline-flex; gap: 6px; margin-left: 12px; color: var(--dim); font-size: 11px; }
-#crumb a { color: var(--mid); cursor: pointer; text-decoration: none; }
-#crumb a:hover { color: var(--hi); }
+#brand.link { cursor: pointer; }
+#brand.link:hover { color: #fff; text-shadow: 0 0 8px rgba(255,255,255,.35); }
 #crumb i { font-style: normal; opacity: .5; }
 #crumb b { color: var(--text); font-weight: 500; }
 /* 边缘压暗一点，中间更通透 */
 #view::after { content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 1; background: radial-gradient(ellipse at 50% 50%, transparent 55%, rgba(0,0,0,.55) 100%); }
 #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; z-index: 2; }
-body.uni #world, body.uni #view::after, body.uni .board-only, body:not(.uni) .uni-only, body:not(.uni) #ulist, body:not(.uni) #uslots { display: none; }
-/* 宇宙层的侧栏：左边对话列表，右上名额带 */
-#ulist, #uslots { position: absolute; z-index: 3; top: 10px; display: flex; flex-direction: column; cursor: default; user-select: none;
+/* 看板画布分两层：底下 #fx 是弧线区（切换时炸开），上面 #fxo 是光线、刻度带、标签（切换时淡入淡出） */
+canvas#fxo { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+body.uni canvas#fxo { display: none; }
+body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.uni .board-only, body:not(.uni) .uni-only, body:not(.uni) #uslots { display: none; }
+/* 宇宙层右上的名额带 */
+#uslots { position: absolute; z-index: 3; top: 10px; display: flex; flex-direction: column; cursor: default; user-select: none;
   background: linear-gradient(180deg, rgba(22,22,27,.62), rgba(7,7,9,.86)); border: 1px solid rgba(170,170,182,.14); }
-#ulist { left: 10px; bottom: 40px; width: 248px; }
 #uslots { right: 10px; width: 236px; max-height: calc(100% - 60px); }
-#ulist > header, #uslots > header { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; border-bottom: 1px solid rgba(200,200,212,.12); flex: none; }
-#ulist > header b, #uslots > header b { color: var(--hi); font-size: 10px; letter-spacing: .16em; }
-#ulist > header .n, #uslots > header .n { color: var(--dim); font-size: 10px; flex: 1; }
-#ulist .fold { padding: 0 6px; height: 18px; line-height: 16px; font-size: 12px; }
-#ulist.folded { width: 34px; bottom: auto; }
-#ulist.folded > header b, #ulist.folded > header .n, #ulist.folded ol, #ulist.folded .empty { display: none; }
-#ulist .empty { margin: 0; padding: 8px 10px; color: var(--dim); font-size: 11px; line-height: 1.6; }
-#ulist .empty:empty { display: none; }
-#ulist.folded .fold { transform: rotate(180deg); }
-#ulist ol { list-style: none; margin: 0; padding: 4px 0; overflow-y: auto; min-height: 0; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
-#ulist li { display: grid; grid-template-columns: 12px 1fr auto; grid-template-rows: auto auto; column-gap: 6px; padding: 4px 10px; cursor: pointer; border-left: 2px solid transparent; }
-#ulist li:hover { background: rgba(255,255,255,.04); border-left-color: var(--mark); }
-#ulist li .mk { grid-row: 1 / 3; align-self: center; width: 7px; height: 7px; border-radius: 50%; background: var(--mark); box-shadow: 0 0 6px var(--mark); }
-#ulist li .t { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: "Microsoft YaHei", sans-serif; font-size: 12px; }
-#ulist li .run { color: var(--mark); font-size: 10px; }
-#ulist li .st, #ulist li .p { font-size: 10px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#ulist li .p { text-align: right; }
-#ulist li.s-idle .t { color: var(--mid); }
-#ulist li.s-idle .mk { opacity: .45; box-shadow: none; }
-#ulist li.s-waiting .st { color: rgb(255,186,90); }
-#ulist li.s-dispatching .st, #ulist li.s-thinking .st { color: var(--mid); }
-#ulist li.alert .st { color: var(--bad); }
+#uslots > header { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; border-bottom: 1px solid rgba(200,200,212,.12); flex: none; }
+#uslots > header b { color: var(--hi); font-size: 10px; letter-spacing: .16em; }
+#uslots > header .n { color: var(--dim); font-size: 10px; flex: 1; }
 #uslots .rows { padding: 6px 10px 8px; overflow-y: auto; min-height: 0; }
 #uslots .row { display: grid; grid-template-columns: 8px 1fr auto; gap: 6px; align-items: center; height: 18px; color: var(--dim); }
 #uslots .row.busy { color: var(--text); }
@@ -84,7 +67,11 @@ body.uni #world, body.uni #view::after, body.uni .board-only, body:not(.uni) .un
 #usage[data-mode="uni"] .tbody .tr.s-waiting span:nth-child(4) { color: rgb(255,186,90); }
 #usage[data-mode="uni"] .tbody .tr.s-idle span:nth-child(4), #usage[data-mode="uni"] .tbody .tr.s-idle span:nth-child(2) { color: var(--dim); }
 #usage[data-mode="uni"] .tbody .tr span:nth-child(5) { color: var(--tint); }
-#terms .pick { margin: auto; color: var(--dim); font-family: "Microsoft YaHei", sans-serif; }
+/* 对话行：悬停或星图里悬停到它的星系时亮起来，左边一道它的标记色；点一下飞进去 */
+#usage[data-mode="uni"] .tbody .tr { cursor: pointer; }
+#usage[data-mode="uni"] .tbody .tr:hover, #usage[data-mode="uni"] .tbody .tr.hot { background: rgba(255,255,255,.05); box-shadow: inset 2px 0 var(--tint); }
+#usage[data-mode="uni"] .tbody .tr.alert span:nth-child(4) { color: var(--bad); }
+#usage .tbody .empty { margin: 0; padding: 10px 22px; color: var(--dim); font-size: 11px; font-family: "Microsoft YaHei", sans-serif; }
 #hud { z-index: 3; position: absolute; left: 10px; bottom: 8px; display: flex; gap: 8px; align-items: center; color: var(--dim); font-size: 11px; }
 #hud button { width: 24px; height: 22px; padding: 0; }
 #hud .hint { opacity: .8; }
@@ -92,7 +79,7 @@ body.uni #world, body.uni #view::after, body.uni .board-only, body:not(.uni) .un
 #hud select:hover, #hud select:focus-visible { color: var(--hi); border-color: var(--mid); outline: none; }
 
 /* 卡片：世界坐标里一律 154×96，内容按缩放档位（lod0 简要 / lod1 摘要 / lod2 详情）换 */
-.card, .outbox, .ghead, .bandhead { position: absolute; }
+.card, .outbox, .ghead { position: absolute; }
 /* HUD 面板：半透明玻璃底、四角括号代替整圈边框、里面一圈模型颜色的淡光；运行中括号和边换成模型颜色 */
 .card, .outbox {
   --cc: rgba(215,215,225,.5); --cs: 8px;
@@ -174,10 +161,9 @@ body.uni #world, body.uni #view::after, body.uni .board-only, body:not(.uni) .un
 #world.lod2 .outbox { font-size: 3.4px; line-height: 1.36; padding: 2px 4px; }
 
 /* 刻度带里的组头 */
-.ghead, .bandhead { width: 154px; color: var(--mid); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; font-size: 6.5px; line-height: 1.4; }
+.ghead { width: 154px; color: var(--mid); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; font-size: 6.5px; line-height: 1.4; }
 .ghead b { color: var(--text); }
 .ghead.old { opacity: .45; }
-.bandhead { cursor: default; color: var(--dim); letter-spacing: .12em; font-size: 6px; }
 
 /* 底部用量表 */
 #table, #termsec { position: relative; margin: 0 8px 6px; height: calc(var(--table-h) - 6px); padding: 6px 14px; overflow: hidden; z-index: 3;
@@ -193,6 +179,8 @@ body.uni #world, body.uni #view::after, body.uni .board-only, body:not(.uni) .un
 #table .tr span { overflow: hidden; text-overflow: ellipsis; }
 #table .th { color: var(--dim); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; border-bottom: 1px solid rgba(200,200,212,.14); height: 21px; }
 #table .tbody { overflow-y: auto; min-height: 0; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
+/* 下面还有行时，最后一行淡出，提示可以在面板上滚动 */
+#table .tbody.more { mask-image: linear-gradient(180deg, #000 calc(100% - 14px), transparent); }
 #table .tr .av img { width: 18px; height: 18px; object-fit: cover; object-position: 50% 12%; image-rendering: pixelated; display: block; border: 1px solid var(--edge); }
 #table .tbody .tr span:nth-child(2) { color: var(--text); }
 #table .tbody .tr span:nth-child(4) { color: var(--tint); }
@@ -271,22 +259,22 @@ img { -webkit-user-drag: none; user-select: none; -webkit-user-select: none; }
 </head>
 <body>
 <header id="top">
-  <div class="brand"><b>CLAUDE CODE / FOREMAN</b><nav id="crumb" aria-label="当前位置"></nav><span id="scope"></span></div>
+  <div class="brand"><b id="brand">FOREMAN</b><nav id="crumb" aria-label="当前位置"></nav><span id="scope"></span></div>
   <div id="clock"></div>
   <i id="progress"></i>
 </header>
 <main id="view" aria-label="多模型协作视图：滚轮缩放，按住左键拖动，单击卡片放大，双击空白处复位">
   <canvas id="ufx" aria-hidden="true"></canvas>
   <canvas id="fx" aria-hidden="true"></canvas>
+  <canvas id="fxo" aria-hidden="true"></canvas>
   <div id="world"></div>
-  <aside id="ulist" aria-label="所有对话"></aside>
   <aside id="uslots" aria-label="协作方并发名额"></aside>
   <div id="hud">
     <button type="button" id="fit" title="复位（0）">⤢</button>
     <span id="zoom-val"></span>
     <span class="hint board-only">滚轮缩放（刻度带上是滚动）· 拖动平移 · 单击卡片放大 · 双击复位</span>
     <span class="hint uni-only">滚轮缩放 · 拖动平移 · 双击复位</span>
-    <button type="button" id="more" title="滚到下面的终端（在用量面板上滚动滚轮也可以）">▾ 终端</button>
+    <button type="button" id="more" title="滚到下面的终端（在用量面板上滚到底后继续滚动也可以）">▾ 终端</button>
   </div>
 </main>
 <footer id="table">
@@ -329,24 +317,20 @@ const TEXTS = {
     gateOpen: '已开闸',
     crossCheck: (round, last) => `ROUND ${round} · 匿名成方案 A–${last} · 交叉挑错`,
     decisionWritten: '决策记录已写成',
-    universe: '宇宙',
+    backToUniverse: '回到所有对话（Esc）',
     conversations: (n) => `${n} 个对话`,
-    noneSelected: (n) => `${n} 个对话 · 未选择`,
-    pickHint: '在星图里点一个星系，或者在左边的列表里选一个对话，这里会显示它的终端。',
-    listTitle: '对话',
+    costTitle: '根据模型官方 API 价格计算（插件自带的价格表），和实际扣费不一定相同；+ 表示有的模型不在价格表里，这部分没算进去',
     emptyList: (h) => `最近 ${h} 小时没有派发过任务的对话。派发之后会出现在这里。`,
-    fold: '收起或展开',
     slotsTitle: '名额',
     shell: {
       crumb: '当前位置',
       view: '多模型协作视图：滚轮缩放，按住左键拖动，单击卡片放大，双击空白处复位',
-      list: '所有对话',
       slots: '协作方并发名额',
       fit: '复位（0）',
       hintBoard: '滚轮缩放（刻度带上是滚动）· 拖动平移 · 单击卡片放大 · 双击复位',
       hintUniverse: '滚轮缩放 · 拖动平移 · 双击复位',
       more: '▾ 终端',
-      moreTitle: '滚到下面的终端（在用量面板上滚动滚轮也可以）',
+      moreTitle: '滚到下面的终端（在用量面板上滚到底后继续滚动也可以）',
       terms: '终端：当前对话里各模型的终端对话',
     },
   },
@@ -370,24 +354,20 @@ const TEXTS = {
     gateOpen: 'gate open',
     crossCheck: (round, last) => `ROUND ${round} · anonymized as options A–${last} · cross-check`,
     decisionWritten: 'decision record written',
-    universe: 'Universe',
+    backToUniverse: 'Back to all conversations (Esc)',
     conversations: (n) => `${n} ${n === 1 ? 'conversation' : 'conversations'}`,
-    noneSelected: (n) => `${n} ${n === 1 ? 'conversation' : 'conversations'} · none selected`,
-    pickHint: 'Click a galaxy in the star map, or pick a conversation in the list on the left, to see its terminals here.',
-    listTitle: 'Conversations',
+    costTitle: "Computed from each model's official API price (the plugin's price table); may differ from what you're actually charged. + means some models aren't in the table and weren't counted",
     emptyList: (h) => `No conversation has dispatched work in the last ${h} hours. New ones show up here.`,
-    fold: 'Collapse or expand',
     slotsTitle: 'Slots',
     shell: {
       crumb: 'Where you are',
       view: 'Multi-model view: scroll to zoom, drag to pan, click a card to zoom in, double-click empty space to reset',
-      list: 'All conversations',
       slots: 'Parallel slots per agent',
       fit: 'Reset (0)',
       hintBoard: 'Scroll to zoom (scrolls the cards over the band) · drag to pan · click a card to zoom in · double-click to reset',
       hintUniverse: 'Scroll to zoom · drag to pan · double-click to reset',
       more: '▾ Terminals',
-      moreTitle: 'Scroll down to the terminals (scrolling over the usage panel works too)',
+      moreTitle: 'Scroll down to the terminals (or keep scrolling past the end of the usage panel)',
       terms: 'Terminals: each model in this conversation',
     },
   },
@@ -399,7 +379,7 @@ if (LANG !== 'zh') {
   document.documentElement.lang = 'en';
   const s = TEXT.shell, set = (sel, attr, value) => { const el = document.querySelector(sel); if (el) { if (attr) el.setAttribute(attr, value); else el.textContent = value; } };
   set('#crumb', 'aria-label', s.crumb); set('#view', 'aria-label', s.view);
-  set('#ulist', 'aria-label', s.list); set('#uslots', 'aria-label', s.slots);
+  set('#uslots', 'aria-label', s.slots);
   set('#fit', 'title', s.fit); set('.hint.board-only', null, s.hintBoard); set('.hint.uni-only', null, s.hintUniverse);
   set('#more', null, s.more); set('#more', 'title', s.moreTitle); set('#termsec', 'aria-label', s.terms);
 }
@@ -477,6 +457,7 @@ function onEv(ev) {
   const lane = laneFor(ev.lane || B.runs.get(ev.run)?.lane || ev.run);
   ev.id = B.total++;
   insertByTs(lane.events, ev, LANE_EVENTS_MAX);
+  lane.ver = (lane.ver || 0) + 1;
   insertByTs(B.feed, ev, FEED_MAX);
   if (ev.k === 'fplan' || ev.k === 'verdict') insertByTs(B.life, ev, Infinity);
   if (!lane.last || ev.ts >= lane.last.ts) lane.last = ev;
@@ -812,7 +793,7 @@ function demoSummary(sess, t) {
     waiting: waiting ? { tool: 'AskUserQuestion', since: DEMO_T0 + (k * DEMO_LEN + waiting[0]) * 1000, header: waiting[2] } : null,
     runs: runs.slice(0, 16), counts: { running, done, failed },
     usage: { input: 900 + talk * 40, cached: 30000 + talk * 2600, cache_write: 2000 + talk * 90, output: 400 + talk * 55 },
-    cost_usd: Math.round((0.4 + talk * 0.012 + done * 0.05) * 100) / 100, alert, detail: sess.detail || null };
+    cost_usd: Math.round((0.4 + talk * 0.012 + done * 0.05) * 100) / 100, cost_partial: false, alert, detail: sess.detail || null };
 }
 
 function demoUniverse(t) {
@@ -1117,12 +1098,13 @@ function outLook(life) {
 'use strict';
 // token 速度和用量。各家记录用量的粒度都很粗，速度一律是估算（页面上写成 ≈）：
 // - 有分段用量的（Claude Code 每条消息、Codex 每轮）：这段输出摊到上一段用量到这一段之间，最长算 90 秒；
-// - 只有流式字数的（pi、API）：字数增量 ÷ 4 当作 token；
+// - 流式字数（pi、API）：最后一份用量之后的字数增量 ÷ 4 当作 token；
 // - 回放时还知道每个任务最后的总用量：没被上面两种算到的部分，摊到这个任务各个事件之间的空档上（"回放估算"）。
 
 const WINDOW = 10000, SEG_MAX = 90000, CHARS_PER_TOKEN = 4;
 const FINAL = new Map(); // run id → 回放结束时的 run 消息（总用量）
 const FINAL_EV = new Map(); // 车道 id → 回放的全部事件（估算速度用，不随回放进度变化）
+const SEG_RUN = new WeakMap(); // 分段归属仅供直播采样，不增加对外字段
 
 // 回放：取一次结束时的快照，拿到每个任务最后的用量
 function loadFinals() {
@@ -1148,23 +1130,51 @@ function usageOf(r) {
   return { input: Math.max(0, (u.input || 0) - (u.cached || 0)), cached: u.cached || 0, cache_write: 0, output: u.output || 0 };
 }
 
+// 事件未保留命令 ID，按任务计数，所有并行命令结束才恢复生成。
+function commandSpans(events) {
+  const spans = new Map(), counts = new Map();
+  for (const ev of events) {
+    const count = counts.get(ev.run) || 0;
+    if (ev.k === 'cmd') {
+      if (!count) {
+        if (!spans.has(ev.run)) spans.set(ev.run, []);
+        spans.get(ev.run).push({ a: ev.ts, b: Infinity });
+      }
+      counts.set(ev.run, count + 1);
+    } else if (ev.k === 'cmd_done' && count > 0) {
+      counts.set(ev.run, count - 1);
+      if (count === 1) spans.get(ev.run).at(-1).b = ev.ts;
+    }
+  }
+  return spans;
+}
+
 // 一条车道的输出分段：[{ a, b, tokens }]，a/b 是记录时间（毫秒）
 function segments(lane) {
   const events = FINAL_EV.get(lane.id) || lane.events;
-  if (lane.segs && lane.segsAt === events.length) return lane.segs;
+  // 分段还依赖车道上的任务（续接的任务会陆续出现），任务数变了也要重算
+  const ver = `${FINAL_EV.has(lane.id) ? events.length : (lane.ver || 0)}|${lane.runs.length}`;
+  if (lane.segs && lane.segsAt === ver) return lane.segs;
   const segs = [];
   const lastUsage = new Map(), lastChars = {};
+  const usageEnds = new Map(events.filter((e) => e.k === 'usage' && e.u?.out != null).map((e) => [e.run, e.ts]));
+  const commands = commandSpans(events);
   const counted = new Map(); // run id → 已经由分段用量或字数算到的 token
   const starts = new Map(lane.runs.map((r) => [r.id, r.started_at]));
-  // 一段时间里的 token 按其中事件的空档摊开：模型在两次动作之间生成，单个空档最多算 60 秒（跑命令的长空档不会吃掉全部）
+  // 按任务内事件的空档摊开，去掉命令时间后，单个空档最多算 60 秒。
   const spread = (run, a, b, tokens, est) => {
     if (!(tokens > 0) || !(b > a)) return;
     counted.set(run, (counted.get(run) || 0) + tokens);
     const times = [a, ...events.filter((e) => e.run === run && e.k !== 'usage' && e.ts > a && e.ts < b).map((e) => e.ts), b];
     const gaps = [];
     for (let i = 1; i < times.length; i++) if (times[i] > times[i - 1]) gaps.push({ b: times[i], w: Math.min(times[i] - times[i - 1], 60000) });
-    const total = gaps.reduce((s, g) => s + g.w, 0);
-    for (const g of gaps) segs.push({ a: g.b - g.w, b: g.b, tokens: (tokens * g.w) / total, est });
+    let active = gaps.filter((g) => !(commands.get(run) || []).some((c) => c.a < g.b && c.b > g.b - g.w));
+    if (!active.length) active = gaps; // 全被命令覆盖时仍保留原来的 token 摊分。
+    const total = active.reduce((s, g) => s + g.w, 0);
+    for (const g of active) {
+      const s = { a: g.b - g.w, b: g.b, tokens: (tokens * g.w) / total, est };
+      SEG_RUN.set(s, run); segs.push(s);
+    }
   };
   for (const ev of events) {
     if (ev.k === 'usage' && ev.u && ev.u.out != null) {
@@ -1174,7 +1184,8 @@ function segments(lane) {
       lastUsage.set(ev.run, ev.ts);
     } else if ((ev.k === 'think' || ev.k === 'answer') && ev.n != null) {
       const key = `${ev.run}:${ev.k}`, prev = lastChars[key];
-      if (prev && ev.n > prev.n) spread(ev.run, prev.ts, ev.ts, (ev.n - prev.n) / CHARS_PER_TOKEN, false);
+      // 用量覆盖此前的字数估算，跨过用量边界的字数也不带到下一段。
+      if (prev && prev.ts >= (usageEnds.get(ev.run) ?? -Infinity) && ev.n > prev.n) spread(ev.run, prev.ts, ev.ts, (ev.n - prev.n) / CHARS_PER_TOKEN, false);
       lastChars[key] = { ts: ev.ts, n: ev.n };
     }
   }
@@ -1188,8 +1199,48 @@ function segments(lane) {
   }
   segs.sort((x, y) => x.a - y.a);
   lane.segs = segs;
-  lane.segsAt = events.length;
+  lane.segsAt = ver;
   return segs;
+}
+
+function rateSample(lane, runs, t) {
+  const ids = new Set(runs.map((r) => r.id));
+  let tokens = 0, ms = 0;
+  for (const s of segments(lane)) {
+    if (s.est || s.b > t || !ids.has(SEG_RUN.get(s))) continue;
+    tokens += s.tokens; ms += s.b - s.a;
+  }
+  return { tokens, ms };
+}
+
+// 直播未报用量的当前轮只补速度，不回填分段、总量或平均速度。
+function liveRate(lane, t, win = WINDOW) {
+  if (B.clock.mode !== 'live' || B.clock.frozenAt != null) return 0;
+  const commands = commandSpans(lane.events);
+  let rate = 0;
+  for (const r of lane.runs) {
+    if (r.status !== 'running' || r.started_at > t || (r.ended_at != null && r.ended_at <= t)) continue;
+    const events = lane.events.filter((e) => e.run === r.id);
+    const turn = events.findLast((e) => e.k === 'turn'), usage = events.findLast((e) => e.k === 'usage' && e.u?.out != null);
+    if (!turn || turn.ts > t || turn.ts <= (usage?.ts ?? -Infinity)) continue;
+    if (events.some((e) => e.ts >= turn.ts && (e.k === 'think' || e.k === 'answer') && e.n != null)) continue;
+    const busy = commands.get(r.id) || [];
+    if (busy.some((c) => c.a <= t && c.b > t)) continue;
+    const sample = rateSample(lane, lane.runs.filter((x) => x.model === r.model && x.started_at <= t), t);
+    if (!sample.ms && r.model) {
+      for (const other of B.lanes) {
+        if (other === lane) continue;
+        const peer = rateSample(other, other.runs.filter((x) => x.model === r.model && x.started_at <= t), t);
+        sample.tokens += peer.tokens; sample.ms += peer.ms;
+      }
+    }
+    if (!sample.ms) continue;
+    const a = Math.max(turn.ts, t - win);
+    let active = t - a;
+    for (const c of busy) active -= Math.max(0, Math.min(c.b, t) - Math.max(c.a, a));
+    rate += (sample.tokens / (sample.ms / 1000)) * active / win;
+  }
+  return rate;
 }
 
 // 时刻 t 前 WINDOW 内的平均输出速度（token/秒）
@@ -1200,7 +1251,7 @@ function rateAt(lane, t, win = WINDOW) {
     const lo = Math.max(s.a, t - win), hi = Math.min(s.b, t);
     if (hi > lo) tokens += (s.tokens * (hi - lo)) / (s.b - s.a);
   }
-  return tokens / (win / 1000);
+  return tokens / (win / 1000) + liveRate(lane, t, win);
 }
 
 // 最近 span 毫秒的速度曲线，n 个点
@@ -1213,7 +1264,7 @@ function sparkline(lane, t, span = 120000, n = 40) {
 // 一条车道到时刻 t 的统计：已结束的任务用最终用量，进行中的按分段估到 t
 function laneStats(lane, t) {
   const sum = { input: 0, cached: 0, cache_write: 0, output: 0 };
-  let cost = 0, costKnown = false, costEquiv = false, est = false;
+  let cost = 0, costKnown = false, costPartial = false, est = false;
   let gen = 0, first = null, last = null, running = false;
   for (const r of lane.runs) {
     if (r.started_at > t) continue;
@@ -1226,7 +1277,11 @@ function laneStats(lane, t) {
     const u = ended || live ? usageOf(r) || (ended ? usageOf(FINAL.get(r.id)) : null) : null;
     if (u) for (const k in sum) sum[k] += u[k];
     const c = ended ? (r.cost_usd ?? FINAL.get(r.id)?.cost_usd) : live ? r.cost_usd : null;
-    if (c != null) { cost += c; costKnown = true; if ((r.cost_source || FINAL.get(r.id)?.cost_source) === 'api_equiv') costEquiv = true; }
+    // 算不出来：结束了却没有费用的任务，或者 Claude Code 车道有用量却没有费用（模型不在价格表里；它一直在进行中）。
+    // Claude Code 席自己提交的报告按规则不计费，不算
+    if (c == null && r.kind !== 'answer' && (ended || (live && Object.values(r.usage || {}).some((v) => v)))) costPartial = true;
+    // 费用一律按官方 API 价格（服务端算好），这里只是加起来
+    if (c != null) { costKnown = true; cost += c; }
   }
   // 进行中的输出：分段里 t 之前的部分
   let liveOut = 0;
@@ -1240,8 +1295,9 @@ function laneStats(lane, t) {
   for (const s of segments(lane)) { if (s.a >= t) break; gen += Math.min(s.b, t) - s.a; if (s.est) est = true; }
   const hostLive = lane.runs.some((r) => r.kind === 'host');
   const out = sum.output + (running && !hostLive ? liveOut : 0);
+  if (liveRate(lane, t) > 0) est = true;
   return {
-    ...sum, output: out, cost: costKnown ? cost : null, costEquiv, est, running,
+    ...sum, output: out, cost: costKnown ? cost : null, costPartial, est, running,
     rate: rateAt(lane, t), avg: gen > 0 ? out / (gen / 1000) : null,
     elapsed: first != null ? (last - first) / 1000 : 0,
   };
@@ -1385,7 +1441,6 @@ function computeLayout(t) {
   L.ccDim = 1 - 0.8 * near;
   // 刻度带上下伸出屏幕，两头渐隐（drawBand 里画渐隐）
   L.band = { x: WL.bandX, y: vis.top - 40, w: WL.bandW, h: vis.bot - vis.top + 80 };
-  L.bandHead = { x: WL.bandX + 9, y: 14 };
   L.cc = { x: WL.ccX, y: L.H / 2 - WL.cardH / 2, w: WL.cardW, h: WL.cardH };
   const R = Math.max(300, L.H * 0.48);
   L.core = { cx: WL.ccX + WL.cardW + WL.coreGap + R, cy: L.H / 2, R, clipX: WL.bandX - 10 };
@@ -1652,13 +1707,8 @@ function renderWorld(t, L) {
   const ccFiles = ccLane ? ccLane.events.filter((e) => e.k === 'edit' && e.ts > from && e.ts <= to).map((e) => editParts(e.t)) : [];
   fillOut(ccOut, 'CLAUDE CODE · OUTPUT', dedupeFiles(ccFiles), '', ccLead(t, from, to));
 
-  // 刻度带标题和各组
-  let bh = UI.heads.get('#band');
-  if (!bh) { bh = document.createElement('div'); bh.className = 'bandhead'; worldEl.append(bh); UI.heads.set('#band', bh); }
-  place(bh, L.bandHead);
-  const running = seatLanes(t).filter((l) => laneStatus(l, t).running).length;
-  setText(bh, `DISPATCHED · ${seatLanes(t).length} SEATS${running ? ` · ${running} RUNNING` : ''}`);
-  const headSeen = new Set(['#band']);
+  // 刻度带上的各组标题
+  const headSeen = new Set();
   for (const g of L.groups) {
     headSeen.add(g.key);
     let h = UI.heads.get(g.key);
@@ -1858,16 +1908,26 @@ function scopeLead(lane, t) {
 'use strict';
 // 底部用量表（每个模型一行，Claude Code 在最前，最后一行合计）和顶栏。
 
-const TABLE_HEAD = ['', 'model', 'status', 'now ≈tok/s', 'last 2 min', 'avg tok/s', 'input · cache', 'output', 'cost (API ≈)', 'time'];
+const TABLE_HEAD = ['', 'model', 'status', 'now ≈tok/s', 'last 2 min', 'avg tok/s', 'input · cache', 'output', 'cost', 'time'];
+// 费用：一律按模型官方 API 价格算（插件自带的价格表），悬停在表头和单元格上有说明；+ 表示有的模型不在价格表里
+// 不到 1 美分的按两位有效数字写（便宜的 API 模型一次常常只有零点零几美分），免得显示成 $0.00
+const fmtUsd = (n) => (n > 0 && n < 0.01 ? n.toPrecision(2) : n.toFixed(2));
+const fmtCost = (cost, partial = false) => (cost == null ? '—' : `$${fmtUsd(cost)}${partial ? '+' : ''}`);
+// 面板里下面还有没露出来的行时，最后一行淡出
+const markMore = (body) => body.classList.toggle('more', body.scrollHeight - body.scrollTop - body.clientHeight > 2);
+// 表头的费用列加说明
+function costHeadTitle(head) { const c = [...head.children].find((x) => x.textContent === 'cost'); if (c) c.title = TEXT.costTitle; }
 function renderTable(t) {
   const table = $('usage');
   if (!table.firstChild) {
     table.innerHTML = '<div class="tr th"></div><div class="tbody"></div><div class="tr total"></div>';
+    table.querySelector('.tbody').addEventListener('scroll', (e) => markMore(e.target), { passive: true });
     for (const h of TABLE_HEAD) { const c = document.createElement('span'); c.textContent = h; table.firstChild.append(c); }
+    costHeadTitle(table.firstChild);
   }
   const lanes = [B.laneById.get('cc'), ...seatLanes(t)].filter((l) => l && latest(l) && latest(l).started_at <= t);
   const body = table.querySelector('.tbody');
-  const tot = { input: 0, cached: 0, output: 0, cost: 0, rate: 0 };
+  const tot = { input: 0, cached: 0, output: 0, cost: null, partial: false, rate: 0 };
   lanes.forEach((lane, i) => {
     let tr = UI.tableRows.get(lane.id);
     if (!tr) {
@@ -1889,23 +1949,23 @@ function renderTable(t) {
     setText(c[5], s.avg != null ? `≈ ${Math.round(s.avg)}` : '—');
     setText(c[6], inAll ? `${fmtTok(inAll)} · ${Math.round((100 * s.cached) / inAll)}%` : '—');
     setText(c[7], s.output ? fmtTok(s.output) : '—');
-    setText(c[8], s.cost != null ? `${s.costEquiv ? '≈ ' : ''}$${s.cost.toFixed(2)}` : '—');
+    setText(c[8], fmtCost(s.cost, s.costPartial)); c[8].title = TEXT.costTitle;
     setText(c[9], fmtDur(s.elapsed));
     if (body.children[i] !== tr) body.insertBefore(tr, body.children[i] || null);
     tot.input += inAll; tot.cached += s.cached; tot.output += s.output; tot.rate += s.rate;
-    if (s.cost != null) tot.cost += s.cost;
+    if (s.cost != null) tot.cost = (tot.cost ?? 0) + s.cost;
+    if (s.costPartial) tot.partial = true;
   });
   while (body.children.length > lanes.length) body.lastChild.remove();
-  // 面板高度跟着模型数量走：表头、每个模型一行、合计行都放得下；最多占 45% 屏幕高，再多就在面板里滚动
-  const h = `min(45vh, max(22vh, ${66 + 19 * lanes.length}px))`;
-  if (UI.tableH !== h) { UI.tableH = h; document.documentElement.style.setProperty('--table-h', h); }
+  markMore(body);
   const total = table.querySelector('.total');
-  const sig = `${lanes.length}|${Math.round(tot.rate)}|${tot.input}|${tot.output}|${tot.cost.toFixed(2)}`;
+  const sig = `${lanes.length}|${Math.round(tot.rate)}|${tot.input}|${tot.output}|${fmtCost(tot.cost, tot.partial)}`;
   if (total.dataset.sig !== sig) {
     total.dataset.sig = sig;
     total.innerHTML = '';
-    const cells = ['', 'total', `${lanes.length} lanes`, `≈ ${Math.round(tot.rate)}`, '', '', tot.input ? `${fmtTok(tot.input)} · ${Math.round((100 * tot.cached) / tot.input)}%` : '—', fmtTok(tot.output), `≈ $${tot.cost.toFixed(2)}`, ''];
+    const cells = ['', 'total', `${lanes.length} lanes`, `≈ ${Math.round(tot.rate)}`, '', '', tot.input ? `${fmtTok(tot.input)} · ${Math.round((100 * tot.cached) / tot.input)}%` : '—', fmtTok(tot.output), fmtCost(tot.cost, tot.partial), ''];
     for (const x of cells) { const s = document.createElement('span'); s.textContent = x; total.append(s); }
+    total.children[8].title = TEXT.costTitle;
   }
 }
 
@@ -2098,7 +2158,7 @@ function fillSeat(el, lane, t, no) {
     const v = verdictCounts(lane.id, t);
     const u = r.usage || {}, inAll = (u.input || 0) + (u.cached || 0) + (u.cache_write || 0);
     setText(use.firstChild, [inAll ? `${fmtTok(inAll)} in` : null, u.output ? `${fmtTok(u.output)} out` : null,
-      r.cost_usd != null ? `${r.cost_source === 'api_equiv' ? '≈ ' : ''}${r.cost_usd.toFixed(2)}` : null, v ? `✓${v.a} ◐${v.p} ✗${v.r}` : null].filter(Boolean).join(' · '));
+      r.cost_usd != null ? `$${fmtUsd(r.cost_usd)}` : null, v ? `✓${v.a} ◐${v.p} ✗${v.r}` : null].filter(Boolean).join(' · '));
     setText(use.lastChild, r.id);
   }
 }
@@ -2131,14 +2191,13 @@ function fillHostSeat(el, h) {
 
 // ---- 07-uni-side.js
 'use strict';
-// 宇宙层的两块侧栏（只在宇宙层显示）：
-//  左边对话列表：按 等你确认 › 派发中 › 思考中 › 空闲 排，同一档里最近活动的在前；点一下飞进去。
-//  右上名额带：每个协作方一行，几个并发名额几格；被哪个对话占着就亮成那个对话的标记色，排队等服务的格子闪烁。
-// 每个对话有一个按 id 定的标记色，列表、名额格、用量表里同一个对话颜色一样；鼠标移上去时星图里那个星系高亮。
+// 宇宙层右上的名额带（只在宇宙层显示）：每个协作方一行，几个并发名额几格；被哪个对话占着就亮成那个对话的标记色，排队等服务的格子闪烁。
+// 每个对话有一个按 id 定的标记色，名额格、用量表里同一个对话颜色一样；鼠标移上去时星图里那个星系高亮。
+// 对话按 等你确认 › 派发中 › 思考中 › 空闲 排，同一档里最近活动的在前（底部用量表的顺序，07-uni-table.js）。
 
 const STATE_ORDER = { waiting: 0, dispatching: 1, thinking: 2, idle: 3 };
 const STATE_WORD = TEXT.states;
-const SIDE = { rows: new Map(), slots: new Map(), sigSlots: '' };
+const SIDE = { slots: new Map(), sigSlots: '' };
 // 标记色按对话出现的先后分配：相邻两个隔一个黄金角（约 137.5°），颜色总是拉得开；分到以后这个页面里不再变
 const MARKS = new Map();
 function markOf(id, a = 1) {
@@ -2155,37 +2214,6 @@ const runningOf = (s) => s.counts?.running ?? s.runs.filter((r) => r.status === 
 // 协作方代号去掉接入方式的后缀，名额带上更短
 const agentName = (id) => id.replace(/-(codex|opencode|pi)-cli$|-api$|-contributor$/, '');
 const agentVia = (id) => (/-(codex|opencode|pi)-cli$/.exec(id) || /-(api)$/.exec(id) || [])[1] || '';
-
-function renderList() {
-  const el = $('ulist');
-  if (!el.firstChild) {
-    el.innerHTML = `<header><b>${TEXT.listTitle}</b><span class="n"></span><button type="button" class="fold" title="${TEXT.fold}">‹</button></header><ol></ol><p class="empty"></p>`;
-    el.querySelector('.fold').addEventListener('click', () => { el.classList.toggle('folded'); UV.auto && uniFit(); wake(); });
-  }
-  const list = [...U.sessions.values()].sort(byState), ol = el.querySelector('ol'), seen = new Set();
-  setText(el.querySelector('.n'), String(list.length));
-  setText(el.querySelector('.empty'), list.length ? '' : TEXT.emptyList(U.hello?.window_h ?? 24));
-  list.forEach((s, i) => {
-    let li = SIDE.rows.get(s.id);
-    if (!li) {
-      li = document.createElement('li');
-      li.dataset.id = s.id;
-      li.innerHTML = '<i class="mk"></i><span class="t"></span><span class="run"></span><span class="st"></span><span class="p"></span>';
-      SIDE.rows.set(s.id, li);
-    }
-    li.style.setProperty('--mark', markOf(s.id));
-    const cls = `s-${s.state}${s.alert ? ' alert' : ''}`;
-    if (li.className !== cls) li.className = cls;
-    setText(li.querySelector('.t'), s.title || s.id.slice(0, 8));
-    setText(li.querySelector('.st'), s.state === 'waiting' && s.waiting?.header ? TEXT.asking(s.waiting.header) : s.alert ? `${STATE_WORD[s.state]} · ${s.alert.kind}` : STATE_WORD[s.state]);
-    setText(li.querySelector('.p'), U.projects.get(s.project)?.name || s.project);
-    const n = runningOf(s);
-    setText(li.querySelector('.run'), n ? `● ${n}` : '');
-    seen.add(s.id);
-    if (ol.children[i] !== li) ol.insertBefore(li, ol.children[i] || null);
-  });
-  for (const [id, li] of SIDE.rows) if (!seen.has(id)) { li.remove(); SIDE.rows.delete(id); }
-}
 
 function renderSlots() {
   const el = $('uslots');
@@ -2218,10 +2246,10 @@ function renderSlots() {
   setText(el.querySelector('.n'), `${used}/${total}`);
 }
 
-// 列表和名额格：点击飞进去，悬停高亮星系
-const pickOf = (e) => e.target.closest('#ulist li')?.dataset.id || e.target.closest('#uslots [data-session]')?.dataset.session || null;
-for (const id of ['ulist', 'uslots']) {
-  const el = $(id);
+// 名额格：点击飞进去，悬停高亮星系
+const pickOf = (e) => e.target.closest('#uslots [data-session]')?.dataset.session || null;
+{
+  const el = $('uslots');
   el.addEventListener('pointerover', (e) => { UV.pick = pickOf(e); wake(); });
   el.addEventListener('pointerleave', () => { UV.pick = null; wake(); });
   el.addEventListener('click', (e) => { const sid = pickOf(e); if (sid && inUniverse()) flyIn(sid); });
@@ -2232,10 +2260,11 @@ for (const id of ['ulist', 'uslots']) {
 
 // ---- 07-uni-table.js
 'use strict';
-// 宇宙层的底部：用量表按对话列（每个对话一行，最后一行合计），终端区提示先选一个对话。
+// 宇宙层的底部：用量表按对话列（每个对话一行，最后一行合计）。对话行和星图联动：悬停时星图里那个星系高亮，
+// 星图里悬停的星系对应的行也亮起来；点一行飞进那个对话。
 // 飞进某个对话以后，07-table.js / 07-terms.js 换回这个对话的明细（08-uni-fly.js 的 resetBoardView 会清空这里留下的东西）。
 
-const UNI_HEAD = ['', 'conversation', 'project', 'state', 'seats', 'done · failed', 'input · cache', 'output', 'cost (API ≈)', 'last'];
+const UNI_HEAD = ['', 'conversation', 'project', 'state', 'seats', 'done · failed', 'input · cache', 'output', 'cost', 'last'];
 const UNI_ROWS = new Map();
 // 记录时间里过去了多久：几秒、几分钟、几小时
 function fmtAgo(ms) {
@@ -2248,61 +2277,61 @@ function renderUniTable() {
   if (table.dataset.mode !== 'uni') {
     table.replaceChildren(); UNI_ROWS.clear(); table.dataset.mode = 'uni';
     table.innerHTML = '<div class="tr th"></div><div class="tbody"></div><div class="tr total"></div>';
+    const body = table.querySelector('.tbody');
+    body.addEventListener('scroll', (e) => markMore(e.target), { passive: true });
+    const rowOf = (e) => (table.dataset.mode === 'uni' ? e.target.closest('.tr[data-id]')?.dataset.id : null) || null;
+    body.addEventListener('pointerover', (e) => { UV.pick = rowOf(e); wake(); });
+    body.addEventListener('pointerleave', () => { UV.pick = null; wake(); });
+    body.addEventListener('click', (e) => { const id = rowOf(e); if (id && inUniverse()) flyIn(id); });
     for (const h of UNI_HEAD) { const c = document.createElement('span'); c.textContent = h; table.firstChild.append(c); }
+    costHeadTitle(table.firstChild);
   }
   const list = [...U.sessions.values()].sort(byState), body = table.querySelector('.tbody'), t = uNow();
-  const tot = { running: 0, done: 0, failed: 0, input: 0, cached: 0, output: 0, cost: 0, priced: true };
+  const tot = { running: 0, done: 0, failed: 0, input: 0, cached: 0, output: 0, cost: null, priced: true };
   list.forEach((s, i) => {
     let tr = UNI_ROWS.get(s.id);
     if (!tr) {
       tr = document.createElement('div');
       tr.className = 'tr';
       tr.innerHTML = '<span class="av"><i class="mk"></i></span>' + '<span></span>'.repeat(UNI_HEAD.length - 1);
+      tr.dataset.id = s.id;
       UNI_ROWS.set(s.id, tr);
     }
     const u = s.usage || {}, inAll = (u.input || 0) + (u.cached || 0) + (u.cache_write || 0), n = runningOf(s), c = tr.children;
     tr.style.setProperty('--tint', markOf(s.id));
-    const cls = `tr s-${s.state}`;
+    const cls = `tr s-${s.state}${s.alert ? ' alert' : ''}${UV.hot?.s.id === s.id ? ' hot' : ''}`;
     if (tr.className !== cls) tr.className = cls;
     setText(c[1], s.title || s.id.slice(0, 8));
     setText(c[2], U.projects.get(s.project)?.name || s.project);
-    setText(c[3], STATE_WORD[s.state]);
+    setText(c[3], s.state === 'waiting' && s.waiting?.header ? TEXT.asking(s.waiting.header) : s.alert ? `${STATE_WORD[s.state]} · ${s.alert.kind}` : STATE_WORD[s.state]);
     setText(c[4], n ? `● ${n}` : '—');
     setText(c[5], `${s.counts.done} · ${s.counts.failed}`);
     setText(c[6], inAll ? `${fmtTok(inAll)} · ${Math.round((100 * (u.cached || 0)) / inAll)}%` : '—');
     setText(c[7], u.output ? fmtTok(u.output) : '—');
     // 有一部分算不出价格时（还在跑、模型不在价格表里）在后面加 +
-    setText(c[8], s.cost_usd != null ? `≈ $${s.cost_usd.toFixed(2)}${s.cost_partial ? '+' : ''}` : '—');
+    setText(c[8], fmtCost(s.cost_usd ?? null, s.cost_partial)); c[8].title = TEXT.costTitle;
     setText(c[9], fmtAgo(t - s.last_at));
     if (body.children[i] !== tr) body.insertBefore(tr, body.children[i] || null);
     tot.running += n; tot.done += s.counts.done; tot.failed += s.counts.failed;
     tot.input += inAll; tot.cached += u.cached || 0; tot.output += u.output || 0;
-    if (s.cost_usd != null) tot.cost += s.cost_usd;
+    if (s.cost_usd != null) tot.cost = (tot.cost ?? 0) + s.cost_usd;
     if (s.cost_usd == null || s.cost_partial) tot.priced = false;
   });
   for (const [id, tr] of UNI_ROWS) if (!U.sessions.has(id)) { tr.remove(); UNI_ROWS.delete(id); }
-  // 面板高度和看板一样跟着行数走
-  const h = `min(45vh, max(22vh, ${66 + 19 * list.length}px))`;
-  if (UI.tableH !== h) { UI.tableH = h; document.documentElement.style.setProperty('--table-h', h); }
+  // 最近一段时间没有派发过的对话时，表格里写一句提示
+  let empty = body.querySelector('.empty');
+  if (!list.length && !empty) { empty = document.createElement('p'); empty.className = 'empty'; body.append(empty); }
+  if (empty) { if (list.length) empty.remove(); else setText(empty, TEXT.emptyList(U.hello?.window_h ?? 24)); }
+  markMore(table.querySelector('.tbody'));
   const total = table.querySelector('.total');
   const cells = ['', 'total', TEXT.conversations(list.length), '', tot.running ? `● ${tot.running}` : '—', `${tot.done} · ${tot.failed}`,
-    tot.input ? `${fmtTok(tot.input)} · ${Math.round((100 * tot.cached) / tot.input)}%` : '—', tot.output ? fmtTok(tot.output) : '—', `≈ $${tot.cost.toFixed(2)}${tot.priced ? '' : '+'}`, ''];
+    tot.input ? `${fmtTok(tot.input)} · ${Math.round((100 * tot.cached) / tot.input)}%` : '—', tot.output ? fmtTok(tot.output) : '—', fmtCost(tot.cost, !tot.priced), ''];
   const sig = cells.join('|');
   if (total.dataset.sig !== sig) {
     total.dataset.sig = sig; total.replaceChildren();
     for (const x of cells) { const s = document.createElement('span'); s.textContent = x; total.append(s); }
+    total.children[8].title = TEXT.costTitle;
   }
-}
-
-function renderUniTerms() {
-  const box = $('terms');
-  setText($('conv'), TEXT.noneSelected(U.sessions.size));
-  if (box.dataset.mode === 'uni') return;
-  box.replaceChildren(); PANEL.cols.clear(); box.dataset.mode = 'uni';
-  const p = document.createElement('p');
-  p.className = 'pick';
-  p.textContent = TEXT.pickHint;
-  box.append(p);
 }
 
 // 宇宙层的顶栏：范围、宇宙层自己的时钟和回放进度、连接状态（看板的 renderTop 在宇宙层不跑，不清掉会留着上一个对话的）
@@ -2324,7 +2353,7 @@ function renderUniPanels() {
   const ms = performance.now();
   if (U.version === uniPanelsVersion && ms - uniPanelsAt < 500) return;
   uniPanelsVersion = U.version; uniPanelsAt = ms;
-  renderList(); renderSlots(); renderUniTable(); renderUniTerms();
+  renderSlots(); renderUniTable();
 }
 
 // ---- 08-beams.js
@@ -2337,7 +2366,7 @@ function renderUniPanels() {
 function drawBundle(c, lane, p, I, live) {
   const rand = rng(hash(`bundle|${lane.id}`)), k = (p.visible === false ? 0.45 : 1) * (0.45 + 0.55 * live);
   const side = p.tok[0] < c.cx ? 1 : -1; // 卡片在左边时，线从卡片右侧进来
-  const color = tintOf(lane.id), speed = 10 + 70 * I, sec = performance.now() / 1000;
+  const color = tintOf(lane.id), flow = flowPhase(`bundle|${lane.id}`, 10 + 70 * I);
   ctx.save();
   for (let i = 0; i < 10; i++) {
     const a0 = rand() * Math.PI * 2, r0 = c.R * (0.15 + rand() * 0.3);
@@ -2353,7 +2382,7 @@ function drawBundle(c, lane, p, I, live) {
       // 流动的光点随活跃程度淡入淡出
       const d = ctx.createLinearGradient(sx, sy, ex, ey);
       d.addColorStop(0, HI(0)); d.addColorStop(0.35, HI((0.15 + 0.3 * I) * live)); d.addColorStop(1, HI((0.35 + 0.6 * I) * live));
-      ctx.lineDashOffset = -(sec * speed + i * 7 + (lane.seed % 50));
+      ctx.lineDashOffset = -(flow + i * 7 + (lane.seed % 50));
       if (LOOK.dots) {
         // 圆形光点：长度几乎为零的虚线段配圆头，外面再叠一圈同色柔光
         ctx.lineCap = 'round'; ctx.setLineDash([0.01, 22 * FX.lw]);
@@ -2386,12 +2415,12 @@ function drawCone(paths, color, I, live, seed, pulseAges) {
   for (const q of paths) { ctx.moveTo(...q[0]); ctx.bezierCurveTo(...q[1], ...q[2], ...q[3]); }
   ctx.stroke();
   // 流动的光段：只在对话活跃时流，越活跃越亮越快
-  const speed = 14 + 80 * I;
+  const flow = flowPhase(`cone|${seed}`, 14 + 80 * I);
   ctx.lineWidth = 1.9 * FX.lw;
   for (let i = 0; i < paths.length && live; i++) {
     const len = 8 + rand() * 20, gap = 50 + rand() * 90, ph = rand() * 200;
     ctx.setLineDash([len * FX.lw, gap * FX.lw]);
-    ctx.lineDashOffset = -(sec * speed * (0.7 + rand() * 0.6) + ph);
+    ctx.lineDashOffset = -(flow * (0.7 + rand() * 0.6) + ph);
     ctx.strokeStyle = i % 3 ? color(0.3 + 0.6 * act) : HI(0.35 + 0.6 * act);
     strokeCubic(paths[i]); ctx.stroke();
   }
@@ -2612,7 +2641,10 @@ function drawGalaxy(c, intensity) {
 // 核心网（token 的来源）、竖直刻度带、核心网 → 卡片的汇流线、Claude Code ↔ 席位穿过核心的交互光线、
 // 席位 → 产出框的放射线带（上下和两边的框一样高）、Claude Code → 顶上产出框的弧线。
 
-const FX = { cv: $('fx'), web: null, webR: 0, layout: null, lw: 1 };
+// cv 画弧线区（星云、尘埃、核心网、中心星系），ov 画其余的光线、刻度带和标签：切换时前者炸开、后者只淡入淡出
+const FX = { cv: $('fx'), ov: { cv: $('fxo') }, web: null, webR: 0, layout: null, lw: 1, burst: null };
+FX.ov.ctx = FX.ov.cv.getContext('2d');
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 // 宇宙层画在自己的画布上（08-uni-draw.js 里临时把 ctx 换过去），画星点、光晕的工具函数两边共用
 let ctx = FX.cv.getContext('2d');
 const UFX = { cv: $('ufx') };
@@ -2665,11 +2697,13 @@ function drawCore(c, intensity, pal) {
   for (const [{ paths, dots }, alpha, width, speed] of FX.web) {
     ctx.save();
     ctx.translate(c.cx, c.cy);
-    ctx.rotate(Math.sin(sec * speed) * 0.35 + sec * speed * 0.2);
+    // 炸开时各层带着多转的角度甩出来，越往后越慢；线条先亮再回落到平常（FX.burst，见 burstOf）
+    const b = FX.burst, boost = b ? 1 + 1.6 * b.boost : 1;
+    ctx.rotate(Math.sin(sec * speed) * 0.35 + sec * speed * 0.2 + (b ? Math.sign(speed) * 2.4 * b.spin : 0));
     ctx.lineWidth = width * FX.lw;
     paths.forEach((p, j) => {
       const col = j && pal.length ? pal[(j - 1) % pal.length] : HI;
-      ctx.strokeStyle = col(alpha * (j && pal.length ? 1.6 : 1) * (0.6 + 0.4 * intensity)); ctx.stroke(p);
+      ctx.strokeStyle = col(alpha * (j && pal.length ? 1.6 : 1) * (0.6 + 0.4 * intensity) * boost); ctx.stroke(p);
     });
     ctx.fillStyle = HI(0.5);
     const d = 1.3 * FX.lw;
@@ -2734,16 +2768,41 @@ function portsOf(L) {
   return P;
 }
 
-function drawFx(t, L) {
-  const dpr = devicePixelRatio || 1, w = viewEl.clientWidth, h = viewEl.clientHeight;
-  if (FX.cv.width !== Math.round(w * dpr) || FX.cv.height !== Math.round(h * dpr)) {
-    FX.cv.width = Math.round(w * dpr); FX.cv.height = Math.round(h * dpr);
-    FX.cv.style.width = `${w}px`; FX.cv.style.height = `${h}px`;
+// 切换中弧线区怎么画：以星系亮核此刻的位置为中心，按炸开的进度 p 缩放（先快后慢），带着多转的角度和更亮的线条
+function burstOf(T) {
+  const p = reduceMotion.matches ? 1 : T.p;
+  const s = 1 - Math.pow(1 - p, 4);
+  return { p, s, wx: (T.cx - VIEW.tx) / VIEW.k, wy: (T.cy - VIEW.ty) / VIEW.k, spin: Math.pow(1 - s, 2), boost: Math.pow(1 - p, 2) };
+}
+// 炸开的一瞬：亮核处一团白光很快散开；底下一团暖色的光散得慢一些，把星系亮核的橙色交给弧线区的中心（飞出时倒过来，收拢成亮核）
+function drawFlash(b, R) {
+  const glow = (a, r, inner) => {
+    if (a < 0.01) return;
+    const g = ctx.createRadialGradient(b.wx, b.wy, 0, b.wx, b.wy, r);
+    g.addColorStop(0, inner(a)); g.addColorStop(0.3, rgba('claude', 0.5 * a)); g.addColorStop(1, rgba('claude', 0));
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(b.wx, b.wy, r, 0, 6.283); ctx.fill();
+  };
+  const on = b.p <= 0 ? 0 : Math.min(1, b.p * 20);
+  glow(0.7 * on * Math.exp(-b.p * 2.4), R * 0.32 * (0.45 + 0.55 * b.s), (a) => rgba('claude', a));
+  glow(0.9 * on * Math.exp(-b.p * 6), R * (0.1 + 0.5 * b.s), HI);
+}
+function sizeCanvas(cv, w, h, dpr) {
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    cv.style.width = `${w}px`; cv.style.height = `${h}px`;
   }
+}
+
+function drawFx(t, L) {
+  const dpr = devicePixelRatio || 1, w = viewEl.clientWidth, h = viewEl.clientHeight, T = FLYFX;
+  sizeCanvas(FX.cv, w, h, dpr); sizeCanvas(FX.ov.cv, w, h, dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
   const fit = fitGoal();
+  // 看板的星空跟着界面一起淡入（宇宙层有自己的星空）
+  if (T) ctx.globalAlpha = T.rest;
   drawStars(w, h, fit);
+  ctx.globalAlpha = 1;
   ctx.setTransform(dpr * VIEW.k, 0, 0, dpr * VIEW.k, dpr * VIEW.tx, dpr * VIEW.ty);
   FX.layout = L;
   FX.lw = Math.pow(fit.k / VIEW.k, 0.6);
@@ -2756,11 +2815,37 @@ function drawFx(t, L) {
   // 刻度带的展开程度也平滑（最后一组离开时慢慢收起）
   const pal = webPalette(), bandA = smooth('band', bandReveal(L, t));
   // 刻度带没出现时，核心网和星系按本来的圆形完整画（不在刻度带左边切掉）；刻度带展开时一起收回去
-  L.core.clipX += (1 - bandA) * L.core.R * 1.3;
-  drawNebula(L, P, t, rates, pal);
-  drawDust(L);
-  drawCore(L.core, total, pal);
-  drawGalaxy(L.core, total);
+  // 切换中跟着界面一起：界面淡出时弧线区先恢复成完整的圆再收拢，淡入时才在刻度带左边切掉（不然收拢的圆上会有一道硬边）
+  L.core.clipX += (1 - (T ? bandA * T.rest : bandA)) * L.core.R * 1.3;
+  // 弧线区：切换中以星系亮核为中心按炸开的进度缩放；线宽和散点不跟着缩到看不见，小的时候是一团细亮的丝
+  const burst = T ? burstOf(T) : null, lw = FX.lw;
+  if (!burst || burst.s > 0.002) {
+    ctx.save();
+    if (burst) {
+      ctx.translate(burst.wx, burst.wy); ctx.scale(burst.s, burst.s); ctx.translate(-L.core.cx, -L.core.cy);
+      FX.burst = burst; FX.lw = lw * Math.pow(burst.s, -0.7);
+    }
+    try {
+      drawNebula(L, P, t, rates, pal);
+      drawDust(L);
+      drawCore(L.core, total, pal);
+      drawGalaxy(L.core, total);
+    } finally { ctx.restore(); FX.burst = null; FX.lw = lw; }
+  }
+  if (burst) drawFlash(burst, L.core.R);
+  // 其余的画在上面那层画布上，切换时整层淡入淡出（applyShare）
+  const base = ctx;
+  ctx = FX.ov.ctx;
+  try {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    ctx.setTransform(dpr * VIEW.k, 0, 0, dpr * VIEW.k, dpr * VIEW.tx, dpr * VIEW.ty);
+    drawOverlay(t, L, P, lanes, rates, live, bandA);
+  } finally { ctx = base; }
+}
+
+// 上面那层：核心网到卡片的汇流线、刻度带、席位到产出框的光带、产出框、状态、标签、交互光线
+function drawOverlay(t, L, P, lanes, rates, live, bandA) {
   const pulses = recentPulses(t);
   // 滚到刻度带两头的席位跟着渐隐，它的光线也一起淡掉
   // 还没被光点拉到的卡片、正在离开的组，光线也跟着淡入淡出
@@ -3217,7 +3302,7 @@ function tracePath(E0, E1, n = 28) {
 }
 
 function drawOutBeam(E0, E1, color, I, live, seed, ages) {
-  const style = OUT.style, act = 0.2 + (0.3 + 0.5 * I) * live, sec = performance.now() / 1000, speed = 0.18 + 0.5 * I;
+  const style = OUT.style, act = 0.2 + (0.3 + 0.5 * I) * live, sec = performance.now() / 1000, flow = flowPhase(`out|${seed}`, 0.18 + 0.5 * I);
   const a0 = E0[0], a1 = E0[3];
   ctx.save();
   if (style === 'rays') {
@@ -3234,7 +3319,7 @@ function drawOutBeam(E0, E1, color, I, live, seed, ages) {
       ctx.strokeStyle = color(0.05 + 0.1 * act); ctx.lineWidth = 4 * FX.lw; ctx.stroke();
       ctx.strokeStyle = g; ctx.lineWidth = 1.1 * FX.lw; ctx.stroke();
       if (live) for (let j = 0; j < 2; j++) {
-        const u = ((sec * speed * (0.8 + f * 0.07) + f * 0.21 + j * 0.5) % 1);
+        const u = ((flow * (0.8 + f * 0.07) + f * 0.21 + j * 0.5) % 1);
         const [x, y] = cubicAt(q, u);
         glowDot(x, y, 1.6 + 0.8 * I, color, Math.min(1, u * 6, (1 - u) * 6));
       }
@@ -3242,7 +3327,7 @@ function drawOutBeam(E0, E1, color, I, live, seed, ages) {
   } else if (style === 'particles') {
     // 星河：通道里几条像核心网那样的细弧线（慢慢起伏、互相交错），上面漂着放慢的光点；没有输出时整条通道不画
     // 有多少：强度定粒子数，边界上那一颗按小数部分半透明；整条通道再乘上活跃程度和"有没有输出"，淡入淡出而不是整批出现
-    const rand = rng(seed), want = 20 + 32 * I, pres = clamp01(I / 0.06) * live, n = pres > 0.005 ? Math.ceil(want) : 0, slow = 0.05 + 0.14 * I;
+    const rand = rng(seed), want = 20 + 32 * I, pres = clamp01(I / 0.06) * live, n = pres > 0.005 ? Math.ceil(want) : 0, drift = flowPhase(`cloud|${seed}`, 0.05 + 0.14 * I);
     const ga = ctx.globalAlpha;
     ctx.globalAlpha = ga * pres;
     if (n) {
@@ -3257,8 +3342,8 @@ function drawOutBeam(E0, E1, color, I, live, seed, ages) {
       }
     }
     for (let i = 0; i < n; i++) {
-      const v = 0.08 + rand() * 0.84, ph = rand(), sp = slow * (0.6 + rand() * 0.8);
-      const u = (sec * sp + ph) % 1, [x, y] = at(E0, E1, u, v + Math.sin(sec * 2 + ph * 9) * 0.03);
+      const v = 0.08 + rand() * 0.84, ph = rand(), sp = 0.6 + rand() * 0.8;
+      const u = (drift * sp + ph) % 1, [x, y] = at(E0, E1, u, v + Math.sin(sec * 2 + ph * 9) * 0.03);
       const a = Math.min(1, u * 5, (1 - u) * 5) * (0.5 + 0.5 * act) * clamp01(want - i);
       ctx.fillStyle = i % 3 ? color(0.85 * a) : HI(0.9 * a);
       const r = (1.3 + rand() * 1.3) * FX.lw;
@@ -3278,7 +3363,7 @@ function drawOutBeam(E0, E1, color, I, live, seed, ages) {
     ctx.strokeStyle = color(0.08 + 0.16 * act); ctx.lineWidth = 7 * FX.lw; ctx.stroke();
     ctx.strokeStyle = HI(0.25 + 0.5 * act); ctx.lineWidth = 1.2 * FX.lw; ctx.stroke();
     if (live) for (let j = 0; j < 3; j++) {
-      const u = (sec * speed + j / 3) % 1, [x, y] = cubicAt(core, u);
+      const u = (flow + j / 3) % 1, [x, y] = cubicAt(core, u);
       glowDot(x, y, 2 + I, color, Math.min(1, u * 6, (1 - u) * 6));
     }
   } else if (style === 'curtain') {
@@ -3288,7 +3373,7 @@ function drawOutBeam(E0, E1, color, I, live, seed, ages) {
     g.addColorStop(0, HI(0.06 + 0.06 * act)); g.addColorStop(0.6, color(0.06 + 0.1 * act)); g.addColorStop(1, color(0.14 + 0.2 * act));
     ctx.fillStyle = g; ctx.fill();
     if (live) {
-      const s = (sec * speed * 0.8) % 1, sh = ctx.createLinearGradient(a0[0], a0[1], a1[0], a1[1]);
+      const s = (flow * 0.8) % 1, sh = ctx.createLinearGradient(a0[0], a0[1], a1[0], a1[1]);
       sh.addColorStop(Math.max(0, s - 0.12), HI(0)); sh.addColorStop(s, HI(0.12 + 0.18 * I)); sh.addColorStop(Math.min(1, s + 0.12), HI(0));
       ctx.fillStyle = sh; ctx.fill();
     }
@@ -3400,6 +3485,17 @@ function outTarget(box, life) {
 // 时间突然跳的时候（?t= 停在固定时刻、刚打开页面、回放跳时间、画布停画了一阵）直接取目标值，截图和定位不受影响。
 
 const SMOOTH = { vals: new Map(), lastT: null, lastMs: 0, k: 1 };
+
+// 流动和旋转的相位按帧累加（速度 × 这一帧隔了多久）。直接用"时间 × 当前速度"的话，
+// 时间是几千秒，速度稍微变小相位就往回退一大截，看上去就是倒流、倒转
+const FLOW = new Map();
+function flowPhase(key, speed) {
+  const ms = performance.now(), f = FLOW.get(key);
+  if (!f) { FLOW.set(key, { ms, p: 0 }); return 0; }
+  f.p += speed * Math.min(0.1, (ms - f.ms) / 1000); // 画布停画了一阵再回来时不跳
+  f.ms = ms;
+  return f.p;
+}
 const SMOOTH_TAU = 0.35; // 秒：时间常数，越大过渡越慢
 
 // 每次画画布前调用：按这一帧和上一帧隔了多久算靠拢的比例
@@ -3633,10 +3729,16 @@ function drawNebulaOf(p) {
   }
 }
 
-function drawCoreOf(g, alpha) {
+// charge：飞入前的蓄能（0–1），亮核变大变亮，外面多一圈柔光
+function drawCoreOf(g, alpha, charge = 0) {
   const s = g.s, sec = performance.now() / 1000;
   const pulse = s.state === 'thinking' ? 1 + 0.18 * Math.sin(sec * 3.4 + g.seed % 7) : 1;
-  const r = 4.2 * pulse, c = (a) => rgba('claude', a);
+  const r = 4.2 * pulse * (1 + 1.4 * charge), c = (a) => rgba('claude', a);
+  if (charge > 0) {
+    const halo = ctx.createRadialGradient(g.x, g.y, 0, g.x, g.y, r * 7);
+    halo.addColorStop(0, c(0.35 * charge * alpha)); halo.addColorStop(1, c(0));
+    ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(g.x, g.y, r * 7, 0, 6.283); ctx.fill();
+  }
   const grd = ctx.createRadialGradient(g.x, g.y, 0, g.x, g.y, r * 2.8);
   grd.addColorStop(0, HI(0.95 * alpha)); grd.addColorStop(0.22, c(0.7 * alpha)); grd.addColorStop(1, c(0));
   ctx.fillStyle = grd; ctx.beginPath(); ctx.arc(g.x, g.y, r * 2.8, 0, 6.283); ctx.fill();
@@ -3698,8 +3800,10 @@ function drawUniverseOn(L) {
     const m = U.marks.get(g.s.id), born = m ? ease(clamp01(uniSec(m.born) / 1.5)) : 1;
     const a = smooth(`ua|${g.s.id}`, UNI_STATE_A[g.s.state] + (g === hover ? 0.25 : 0), UNI_STATE_A[g.s.state]) * born;
     if (!seen(g.x, g.y, GAL_R * 1.4) || a < 0.01) continue;
-    drawGalaxyOf(g, a, g === hover);
-    drawCoreOf(g, a);
+    // 正在飞入/飞出的星系：盘面在炸开前淡掉，亮核先蓄能（变亮变大），炸开后交给看板的弧线区（见 08-uni-fly.js 的分镜）
+    const focus = FLYFX && g.s.id === FLY.id;
+    drawGalaxyOf(g, focus ? a * (1 - ramp(FLYFX.v, 0.24, 0.4)) : a, g === hover);
+    drawCoreOf(g, focus ? a * (1 - ramp(FLYFX.v, 0.34, 0.44)) : a, focus ? ramp(FLYFX.v, 0.12, 0.34) : 0);
     drawSignals(g);
   }
   if (hover) {
@@ -3718,22 +3822,45 @@ function drawUniverseOn(L) {
 //  Esc、顶栏路径里的"宇宙"、看板缩到最小后继续往外滚，都是飞出。地址栏记 ?s=<对话 id>，刷新后直接回到这个对话。
 
 const FLY = { mode: 'universe', id: null, t0: 0, from: null, to: null, back: null, out: 0, crumb: '', pending: Q.get('s') };
-const FLY_IN = 1.1, FLY_OUT = 0.9;
+const FLY_IN = 1.6, FLY_OUT = 1.4;
+// 刷新页面时不再演一遍飞入
+const RELOADED = performance.getEntriesByType?.('navigation')[0]?.type === 'reload';
+// 打开链接后等自动飞入的那一小会儿里，用户点、滚、按键（包括按钮、侧栏、键盘缩放）都算自己在看了，不再自动飞入
+for (const type of ['pointerdown', 'wheel', 'keydown']) addEventListener(type, () => { if (FLY.mode === 'universe') FLY.pending = null; }, { capture: true, passive: true });
 const flyU = () => clamp01((performance.now() - FLY.t0) / 1000 / (FLY.mode === 'in' ? FLY_IN : FLY_OUT));
 
-// 宇宙和看板各占多少（0–1），画面按它淡入淡出
+// 切换的进度 v：0 在宇宙，1 在看板。飞入正着走，飞出（包括飞入途中退回）倒着走；缓动前后对称，所以退回时 v 不跳
+const flyV = () => { const e = ease(flyU()); return FLY.mode === 'in' ? e : 1 - e; };
+const ramp = (v, a, b) => ease(clamp01((v - a) / (b - a)));
+// 一次切换的分镜（v 的区间），飞出按同样的分镜倒着放：
+//  0–0.34    镜头推近；要进去的星系盘面淡掉，亮核蓄能（变亮变大，08-uni-draw.js）
+//  0.34–0.84 炸开：看板真正的弧线区（星云、尘埃、核心网、中心星系）从亮核此刻所在的位置长出来，先快后慢；
+//            各层先转得快、再慢到平常的转速，线条先亮后回落；炸开的一瞬亮核处一团白光（08-fx.js 的 burstOf）
+//  0.40–0.72 宇宙层其余的星系、星云淡出
+//  0.62–0.95 卡片、刻度带、光线、标签这些淡入（只淡入，不跟着炸）
+// 弧线区一直以亮核为中心，长到最后正好就是看板里的样子，所以没有"换一张画"的那一下
 function flyShare() {
-  const u = flyU();
-  if (FLY.mode === 'in') return { uni: 1 - clamp01((u - 0.55) / 0.45), board: clamp01((u - 0.45) / 0.5) };
-  if (FLY.mode === 'out') return { uni: clamp01(u / 0.35), board: 1 - clamp01(u / 0.4) };
-  return FLY.mode === 'board' ? { uni: 0, board: 1 } : { uni: 1, board: 0 };
+  if (FLY.mode !== 'in' && FLY.mode !== 'out') return FLY.mode === 'board' ? { v: 1, uni: 0, fx: 1, rest: 1 } : { v: 0, uni: 1, fx: 0, rest: 0 };
+  const v = flyV();
+  return { v, uni: 1 - ramp(v, 0.4, 0.72), fx: v >= 0.3 ? 1 : 0, rest: ramp(v, 0.62, 0.95) };
+}
+// 看板这一帧要知道的切换状态：进度、炸开的进度 p、界面的淡入程度、亮核此刻在屏幕上的位置；不在切换中为 null
+let FLYFX = null;
+function flyFx(share) {
+  if (FLY.mode !== 'in' && FLY.mode !== 'out') return null;
+  const g = uniLayout().galaxies.find((x) => x.s.id === FLY.id);
+  if (!g) return null;
+  return { v: share.v, p: clamp01((share.v - 0.34) / 0.5), rest: share.rest, cx: g.x * UV.k + UV.tx, cy: g.y * UV.k + UV.ty };
 }
 function applyShare(share) {
   const set = (el, a) => { const v = a >= 0.999 ? '' : a.toFixed(3); if (el.style.opacity !== v) el.style.opacity = v; };
-  set(UFX.cv, share.uni); set(FX.cv, share.board); set(worldEl, share.board);
+  // 弧线区在底下那层画布上，自己按分镜炸开；上面那层画布（光线、刻度带等）和卡片只做淡入淡出
+  set(UFX.cv, share.uni); set(FX.cv, share.fx); set(FX.ov.cv, share.rest); set(worldEl, share.rest);
+  // 底部表格在 v = 0.3 时从对话列表换成模型列表：换之前淡出，换之后跟界面一起淡入，不会一下子跳过去
+  set($('usage'), share.v < 0.3 ? 1 - ramp(share.v, 0.12, 0.3) : share.rest);
   // 完全看不见的那一层不参与合成
   const vis = (el, on) => { const v = on ? '' : 'hidden'; if (el.style.visibility !== v) el.style.visibility = v; };
-  vis(UFX.cv, share.uni > 0); vis(FX.cv, share.board > 0);
+  vis(UFX.cv, share.uni > 0); vis(FX.cv, share.fx > 0); vis(FX.ov.cv, share.rest > 0);
   document.body.classList.toggle('u-on', true);
   document.body.classList.toggle('uni', FLY.mode === 'universe');
 }
@@ -3779,13 +3906,13 @@ function flyIn(id, instant = false) {
   const r = viewEl.getBoundingClientRect();
   FLY.back = { k: UV.k, tx: UV.tx, ty: UV.ty, auto: UV.auto };
   FLY.from = { k: UV.k, sx: g.x * UV.k + UV.tx, sy: g.y * UV.k + UV.ty };
-  Object.assign(FLY, { id, mode: instant ? 'board' : 'in', t0: performance.now(), out: 0, pending: null });
+  Object.assign(FLY, { id, mode: instant ? 'board' : 'in', mirror: false, t0: performance.now(), out: 0, pending: null });
   UV.goal = null; UV.auto = false;
   openBoardFor(g.s);
-  // 星系的亮核最后落在看板 Claude Code 卡片出现的位置：看上去就是亮核变成了那张卡片
+  // 星系的亮核最后落在看板核心网（弧线区）的中心：它在那里炸开成弧线区（08-uni-burst.js）
   const L = computeLayout(now());
   VIEW.H = L.H;
-  const fit = fitGoal(), cx = fit.tx + (L.cc.x + L.cc.w / 2) * fit.k, cy = fit.ty + (L.cc.y + L.cc.h / 2) * fit.k;
+  const fit = fitGoal(), cx = fit.tx + L.core.cx * fit.k, cy = fit.ty + L.core.cy * fit.k;
   FLY.to = { k: uniFitGoal().k * 14, sx: Number.isFinite(cx) ? cx : r.width / 2, sy: Number.isFinite(cy) ? cy : r.height / 2 };
   setUrl(id);
   wake();
@@ -3793,9 +3920,12 @@ function flyIn(id, instant = false) {
 }
 function flyOut() {
   if (FLY.mode !== 'board' && FLY.mode !== 'in') return;
+  // 飞入还没结束就退回：从当前进度倒着走（缓动曲线前后对称，倒放的起点是 1 − 当前进度），不先跳到看板；
+  // 远端镜头沿用飞入前的那个，不重新适配（看板里算出来的全貌和宇宙层留出侧栏的全貌不一样，会跳）
+  const mirror = FLY.mode === 'in', back = mirror ? 1 - flyU() : 0;
   // 直接打开到看板（刷新进来）时没有飞入前的镜头，退回去就复位到全貌
-  if (!FLY.back || FLY.back.auto) { const g = uniFitGoal(); FLY.back = { ...g, auto: true }; }
-  Object.assign(FLY, { mode: 'out', t0: performance.now() });
+  if (!mirror && (!FLY.back || FLY.back.auto)) { const g = uniFitGoal(); FLY.back = { ...g, auto: true }; }
+  Object.assign(FLY, { mode: 'out', mirror, t0: performance.now() - back * FLY_OUT * 1000 });
   setUrl(null);
   wake();
 }
@@ -3819,6 +3949,25 @@ function stepFly() {
   }
 }
 
+// 宇宙层对着一个星系一直往里滚：星系大到占视图三分之一（或者已经放到最大）以后再攒一段就飞进去（和看板缩到最小往外滚退回宇宙对称）。
+// 鼠标下没有星系时取离视图中心最近的那个；往外滚清零
+function uniWheelIn(e, sx, sy) {
+  const L = UV.layout, r = viewEl.getBoundingClientRect();
+  if (e.deltaY >= 0 || !L) { FLY.inAcc = 0; return false; }
+  let g = galaxyAt(L, sx, sy);
+  if (!g) {
+    let bd = Infinity;
+    for (const x of L.galaxies) { const d = Math.hypot(x.x * UV.k + UV.tx - r.width / 2, x.y * UV.k + UV.ty - r.height / 2); if (d < bd) { bd = d; g = x; } }
+  }
+  const need = Math.min(Math.min(r.width, r.height) / 3, GAL_R * uniFitGoal().k * 14 * 0.9);
+  if (!g || GAL_R * UV.k < need) { FLY.inAcc = 0; return false; }
+  if (FLY.inId !== g.s.id) { FLY.inId = g.s.id; FLY.inAcc = 0; }
+  FLY.inAcc = (FLY.inAcc || 0) - e.deltaY;
+  if (FLY.inAcc < 220) return false; // 攒的时候照常放大
+  FLY.inAcc = 0;
+  return flyIn(g.s.id);
+}
+
 // 看板已经缩到最小还继续往外滚：攒够一段就退回宇宙（往里滚清零）
 function boardWheelOut(e) {
   if (!U.on || FLY.mode !== 'board') return false;
@@ -3829,11 +3978,13 @@ function boardWheelOut(e) {
   return true;
 }
 
-// 顶栏路径：宇宙 › 项目 › 对话
+// 顶栏路径：FOREMAN › 项目 › 对话；在看板里点 FOREMAN 回到宇宙
 function renderCrumb() {
   const s = FLY.id && U.sessions.get(FLY.id), inside = FLY.mode !== 'universe' && s;
   const proj = inside && (U.projects.get(s.project)?.name || s.project);
-  const html = inside ? `<a data-go="uni">${TEXT.universe}</a><i>›</i><span></span><i>›</i><b></b>` : `<b>${TEXT.universe}</b><i>·</i><span></span>`;
+  const html = inside ? '<i>›</i><span></span><i>›</i><b></b>' : '<i>·</i><span></span>';
+  $('brand').classList.toggle('link', !!inside);
+  $('brand').title = inside ? TEXT.backToUniverse : '';
   const key = inside ? `${html}|${proj}|${s.title}` : `${html}|${U.sessions.size}`;
   if (key === FLY.crumb) return;
   FLY.crumb = key;
@@ -3842,7 +3993,7 @@ function renderCrumb() {
   if (inside) { el.querySelector('span').textContent = proj; el.querySelector('b').textContent = s.title || s.id.slice(0, 8); }
   else el.querySelector('span').textContent = TEXT.conversations(U.sessions.size);
 }
-$('crumb').addEventListener('click', (e) => { if (e.target.closest('[data-go="uni"]')) flyOut(); });
+$('brand').addEventListener('click', () => { if ($('brand').classList.contains('link')) flyOut(); });
 addEventListener('keydown', (e) => { if (e.key === 'Escape' && U.on && (FLY.mode === 'board' || FLY.mode === 'in')) { flyOut(); e.preventDefault(); } });
 
 // ---- 08-uni-galaxy.js
@@ -3940,7 +4091,7 @@ function starsOf(g) {
 function drawGalaxyOf(g, alpha, hover) {
   const s = g.s, M = morphOf(g.seed), sec = performance.now() / 1000;
   // 整个盘面一起转（各点角速度相同），形状不会越转越卷
-  const spin = sec * smooth(`uspin|${s.id}`, GAL_SPIN[s.state], GAL_SPIN[s.state]) * M.speed * M.dir;
+  const spin = flowPhase(`uspin|${s.id}`, smooth(`uspin|${s.id}`, GAL_SPIN[s.state], GAL_SPIN[s.state])) * M.speed * M.dir;
   const pal = [(a) => rgba('claude', a), ...s.runs.filter((r) => r.status === 'running').map((r) => (a) => rgba(runKey(r), a))];
   // 盘面的柔光
   cloud(g.x, g.y, GAL_R * 1.05 * M.size, GAL_R * (M.flat + 0.06) * M.size, pal[0], 0.07 * alpha + (hover ? 0.05 : 0));
@@ -4083,7 +4234,7 @@ function uniFitGoal() {
   if (!(r.width > 0 && r.height > 0)) return { k: UV.k > 0 ? UV.k : 1, tx: UV.tx, ty: UV.ty, bounds: b };
   // 让开左边的对话列表和右上的名额带（收起或没显示时不让）
   const side = (id, edge) => { const e = $(id).getBoundingClientRect(); return e.width ? (edge === 'l' ? e.right - r.left : r.right - e.left) + 8 : 0; };
-  const left = FLY.mode === 'universe' ? side('ulist', 'l') : 0, right = FLY.mode === 'universe' ? side('uslots', 'r') : 0;
+  const left = 0, right = FLY.mode === 'universe' ? side('uslots', 'r') : 0;
   const w = Math.max(200, r.width - left - right), k = Math.min(w / b.w, r.height / b.h) * 0.86;
   return (UV.fitCache = { k, tx: left + w / 2 - (b.x + b.w / 2) * k, ty: r.height / 2 - (b.y + b.h / 2) * k, bounds: b });
 }
@@ -4126,8 +4277,8 @@ const udrag = { on: false, x: 0, y: 0, moved: 0, target: null };
 viewEl.addEventListener('wheel', (e) => {
   if (!inUniverse()) return;
   e.preventDefault();
-  const r = viewEl.getBoundingClientRect();
-  uniZoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0016));
+  const r = viewEl.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
+  if (!uniWheelIn(e, sx, sy)) uniZoomAt(sx, sy, Math.exp(-e.deltaY * 0.0016));
   wake();
 }, { passive: false });
 viewEl.addEventListener('pointerdown', (e) => {
@@ -4154,7 +4305,7 @@ viewEl.addEventListener('pointermove', (e) => {
 });
 viewEl.addEventListener('pointerleave', () => { UV.hover = null; });
 viewEl.addEventListener('pointerup', () => {
-  if (!inUniverse()) return;
+  if (!inUniverse()) { udrag.on = false; viewEl.classList.remove('dragging'); return; }
   // 没拖动、点在星系上：飞进这个对话
   if (udrag.on && udrag.moved <= 4 && udrag.target) flyIn(udrag.target);
   udrag.on = false; viewEl.classList.remove('dragging'); wake();
@@ -4196,10 +4347,11 @@ function step() {
     // 宇宙层：飞入飞出的过渡里两边都画，按各自占的份额淡入淡出
     stepFly();
     const share = flyShare();
-    if (share.uni > 0) uniFrame(share.board <= 0);
+    FLYFX = flyFx(share);
+    if (share.uni > 0) uniFrame(share.fx <= 0);
     applyShare(share);
     renderCrumb();
-    if (share.board <= 0) { wake(); return; }
+    if (share.fx <= 0) { wake(); return; }
   }
   stepReel(nowMs);
   const t = now();
@@ -4234,8 +4386,14 @@ function uniFrame(alone = true) {
     uniStarted = true;
     if (!(Q.get('focus') && uniFocus(L, Q.get('focus')))) uniFit(true);
   }
-  // ?s=<对话>：刷新后回到这个对话。回放时对话是陆续出现的，等它出现了再直接进去
-  if (FLY.pending && FLY.mode === 'universe' && U.sessions.has(FLY.pending)) { const id = FLY.pending; FLY.pending = null; flyIn(id, true); }
+  // ?s=<对话>：打开链接时先看一眼宇宙，再飞进这个对话；刷新页面时直接回到对话。回放时对话是陆续出现的，等它出现了再进去
+  if (FLY.pending && FLY.mode === 'universe' && U.sessions.has(FLY.pending)) {
+    const id = FLY.pending, ms = performance.now();
+    if (RELOADED) { FLY.pending = null; flyIn(id, true); }
+    else if (FLY.pendingAt == null) FLY.pendingAt = ms + 800;
+    else if (ms >= FLY.pendingAt) { FLY.pending = null; FLY.pendingAt = null; flyIn(id); }
+    wake();
+  }
   stepUni();
   // 往下滚到终端、星图整个移出屏幕时不画
   if (viewEl.getBoundingClientRect().bottom > 0) drawUniverse(L);

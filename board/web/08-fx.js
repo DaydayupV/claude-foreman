@@ -3,7 +3,10 @@
 // 核心网（token 的来源）、竖直刻度带、核心网 → 卡片的汇流线、Claude Code ↔ 席位穿过核心的交互光线、
 // 席位 → 产出框的放射线带（上下和两边的框一样高）、Claude Code → 顶上产出框的弧线。
 
-const FX = { cv: $('fx'), web: null, webR: 0, layout: null, lw: 1 };
+// cv 画弧线区（星云、尘埃、核心网、中心星系），ov 画其余的光线、刻度带和标签：切换时前者炸开、后者只淡入淡出
+const FX = { cv: $('fx'), ov: { cv: $('fxo') }, web: null, webR: 0, layout: null, lw: 1, burst: null };
+FX.ov.ctx = FX.ov.cv.getContext('2d');
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 // 宇宙层画在自己的画布上（08-uni-draw.js 里临时把 ctx 换过去），画星点、光晕的工具函数两边共用
 let ctx = FX.cv.getContext('2d');
 const UFX = { cv: $('ufx') };
@@ -56,11 +59,13 @@ function drawCore(c, intensity, pal) {
   for (const [{ paths, dots }, alpha, width, speed] of FX.web) {
     ctx.save();
     ctx.translate(c.cx, c.cy);
-    ctx.rotate(Math.sin(sec * speed) * 0.35 + sec * speed * 0.2);
+    // 炸开时各层带着多转的角度甩出来，越往后越慢；线条先亮再回落到平常（FX.burst，见 burstOf）
+    const b = FX.burst, boost = b ? 1 + 1.6 * b.boost : 1;
+    ctx.rotate(Math.sin(sec * speed) * 0.35 + sec * speed * 0.2 + (b ? Math.sign(speed) * 2.4 * b.spin : 0));
     ctx.lineWidth = width * FX.lw;
     paths.forEach((p, j) => {
       const col = j && pal.length ? pal[(j - 1) % pal.length] : HI;
-      ctx.strokeStyle = col(alpha * (j && pal.length ? 1.6 : 1) * (0.6 + 0.4 * intensity)); ctx.stroke(p);
+      ctx.strokeStyle = col(alpha * (j && pal.length ? 1.6 : 1) * (0.6 + 0.4 * intensity) * boost); ctx.stroke(p);
     });
     ctx.fillStyle = HI(0.5);
     const d = 1.3 * FX.lw;
@@ -125,16 +130,41 @@ function portsOf(L) {
   return P;
 }
 
-function drawFx(t, L) {
-  const dpr = devicePixelRatio || 1, w = viewEl.clientWidth, h = viewEl.clientHeight;
-  if (FX.cv.width !== Math.round(w * dpr) || FX.cv.height !== Math.round(h * dpr)) {
-    FX.cv.width = Math.round(w * dpr); FX.cv.height = Math.round(h * dpr);
-    FX.cv.style.width = `${w}px`; FX.cv.style.height = `${h}px`;
+// 切换中弧线区怎么画：以星系亮核此刻的位置为中心，按炸开的进度 p 缩放（先快后慢），带着多转的角度和更亮的线条
+function burstOf(T) {
+  const p = reduceMotion.matches ? 1 : T.p;
+  const s = 1 - Math.pow(1 - p, 4);
+  return { p, s, wx: (T.cx - VIEW.tx) / VIEW.k, wy: (T.cy - VIEW.ty) / VIEW.k, spin: Math.pow(1 - s, 2), boost: Math.pow(1 - p, 2) };
+}
+// 炸开的一瞬：亮核处一团白光很快散开；底下一团暖色的光散得慢一些，把星系亮核的橙色交给弧线区的中心（飞出时倒过来，收拢成亮核）
+function drawFlash(b, R) {
+  const glow = (a, r, inner) => {
+    if (a < 0.01) return;
+    const g = ctx.createRadialGradient(b.wx, b.wy, 0, b.wx, b.wy, r);
+    g.addColorStop(0, inner(a)); g.addColorStop(0.3, rgba('claude', 0.5 * a)); g.addColorStop(1, rgba('claude', 0));
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(b.wx, b.wy, r, 0, 6.283); ctx.fill();
+  };
+  const on = b.p <= 0 ? 0 : Math.min(1, b.p * 20);
+  glow(0.7 * on * Math.exp(-b.p * 2.4), R * 0.32 * (0.45 + 0.55 * b.s), (a) => rgba('claude', a));
+  glow(0.9 * on * Math.exp(-b.p * 6), R * (0.1 + 0.5 * b.s), HI);
+}
+function sizeCanvas(cv, w, h, dpr) {
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    cv.style.width = `${w}px`; cv.style.height = `${h}px`;
   }
+}
+
+function drawFx(t, L) {
+  const dpr = devicePixelRatio || 1, w = viewEl.clientWidth, h = viewEl.clientHeight, T = FLYFX;
+  sizeCanvas(FX.cv, w, h, dpr); sizeCanvas(FX.ov.cv, w, h, dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
   const fit = fitGoal();
+  // 看板的星空跟着界面一起淡入（宇宙层有自己的星空）
+  if (T) ctx.globalAlpha = T.rest;
   drawStars(w, h, fit);
+  ctx.globalAlpha = 1;
   ctx.setTransform(dpr * VIEW.k, 0, 0, dpr * VIEW.k, dpr * VIEW.tx, dpr * VIEW.ty);
   FX.layout = L;
   FX.lw = Math.pow(fit.k / VIEW.k, 0.6);
@@ -147,11 +177,37 @@ function drawFx(t, L) {
   // 刻度带的展开程度也平滑（最后一组离开时慢慢收起）
   const pal = webPalette(), bandA = smooth('band', bandReveal(L, t));
   // 刻度带没出现时，核心网和星系按本来的圆形完整画（不在刻度带左边切掉）；刻度带展开时一起收回去
-  L.core.clipX += (1 - bandA) * L.core.R * 1.3;
-  drawNebula(L, P, t, rates, pal);
-  drawDust(L);
-  drawCore(L.core, total, pal);
-  drawGalaxy(L.core, total);
+  // 切换中跟着界面一起：界面淡出时弧线区先恢复成完整的圆再收拢，淡入时才在刻度带左边切掉（不然收拢的圆上会有一道硬边）
+  L.core.clipX += (1 - (T ? bandA * T.rest : bandA)) * L.core.R * 1.3;
+  // 弧线区：切换中以星系亮核为中心按炸开的进度缩放；线宽和散点不跟着缩到看不见，小的时候是一团细亮的丝
+  const burst = T ? burstOf(T) : null, lw = FX.lw;
+  if (!burst || burst.s > 0.002) {
+    ctx.save();
+    if (burst) {
+      ctx.translate(burst.wx, burst.wy); ctx.scale(burst.s, burst.s); ctx.translate(-L.core.cx, -L.core.cy);
+      FX.burst = burst; FX.lw = lw * Math.pow(burst.s, -0.7);
+    }
+    try {
+      drawNebula(L, P, t, rates, pal);
+      drawDust(L);
+      drawCore(L.core, total, pal);
+      drawGalaxy(L.core, total);
+    } finally { ctx.restore(); FX.burst = null; FX.lw = lw; }
+  }
+  if (burst) drawFlash(burst, L.core.R);
+  // 其余的画在上面那层画布上，切换时整层淡入淡出（applyShare）
+  const base = ctx;
+  ctx = FX.ov.ctx;
+  try {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    ctx.setTransform(dpr * VIEW.k, 0, 0, dpr * VIEW.k, dpr * VIEW.tx, dpr * VIEW.ty);
+    drawOverlay(t, L, P, lanes, rates, live, bandA);
+  } finally { ctx = base; }
+}
+
+// 上面那层：核心网到卡片的汇流线、刻度带、席位到产出框的光带、产出框、状态、标签、交互光线
+function drawOverlay(t, L, P, lanes, rates, live, bandA) {
   const pulses = recentPulses(t);
   // 滚到刻度带两头的席位跟着渐隐，它的光线也一起淡掉
   // 还没被光点拉到的卡片、正在离开的组，光线也跟着淡入淡出

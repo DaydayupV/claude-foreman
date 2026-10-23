@@ -92,7 +92,7 @@ function starsOf(g) {
 function drawGalaxyOf(g, alpha, hover) {
   const s = g.s, M = morphOf(g.seed), sec = performance.now() / 1000;
   // 整个盘面一起转（各点角速度相同），形状不会越转越卷
-  const spin = sec * smooth(`uspin|${s.id}`, GAL_SPIN[s.state], GAL_SPIN[s.state]) * M.speed * M.dir;
+  const spin = flowPhase(`uspin|${s.id}`, smooth(`uspin|${s.id}`, GAL_SPIN[s.state], GAL_SPIN[s.state])) * M.speed * M.dir;
   const pal = [(a) => rgba('claude', a), ...s.runs.filter((r) => r.status === 'running').map((r) => (a) => rgba(runKey(r), a))];
   // 盘面的柔光
   cloud(g.x, g.y, GAL_R * 1.05 * M.size, GAL_R * (M.flat + 0.06) * M.size, pal[0], 0.07 * alpha + (hover ? 0.05 : 0));

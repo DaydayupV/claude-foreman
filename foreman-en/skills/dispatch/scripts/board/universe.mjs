@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { promptOf, toolsOf } from './claude-feed.mjs';
 import { ms, transient, stat, json, newTail, readLines, runMessage, laneOf, settleRun,
-  usageTotals, hostCost, createFeed, buildReplay, replayClock } from './feed.mjs';
+  usageTotals, hostCost, costFields, createFeed, buildReplay, replayClock } from './feed.mjs';
 
 const keyOf = (cwd) => cwd ? cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() : '?';
 const list = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { if (!transient(e)) throw e; return []; } };
@@ -67,16 +67,16 @@ function summaryOf(session, all, now, hours, prices) {
   for (const run of counted) counts[run.status === 'running' ? 'running' : run.status === 'done' ? 'done' : 'failed']++;
   const runs = own.filter((r) => r.status === 'running' || r.ended_at >= now - 600000)
     .sort((a, b) => b.started_at - a.started_at || a.id.localeCompare(b.id)).slice(0, 16).map(pickRun);
-  const usage = [...session.usage.values()].filter((u) => u.ts >= cutoff), costs = counted.map((r) => r.cost_usd);
-  if (usage.length) costs.push(hostCost(usage, prices));
+  const usage = [...session.usage.values()].filter((u) => u.ts >= cutoff), costs = [...counted];
+  if (usage.length) { const cost = hostCost(usage, prices); costs.push(costFields(cost, cost == null ? 'unknown' : 'api_price')); }
+  const cost = costs.some((c) => c.cost_usd != null) ? costs.reduce((sum, c) => sum + (c.cost_usd ?? 0), 0) : null;
   const failure = own.filter((r) => r.status !== 'running' && r.status !== 'done' && r.ended_at != null && r.ended_at >= now - 1800000)
     .sort((a, b) => b.ended_at - a.ended_at)[0];
   const alert = failure && session.promptAt <= failure.ended_at ? { kind: failure.status, run: failure.id, model: failure.model, at: failure.ended_at } : null;
   return { id: session.id, project: keyOf(session.cwd), cwd: session.cwd, title: session.title ?? session.firstPrompt, model: session.model,
     ...stateOf(session, runs, now), started_at: session.started_at, last_at: session.last_at, runs, counts,
     // 还在跑的运行没有费用、有的模型不在价格表里：能算的照样加起来，另外标出不完整，不让整份变成未知
-    usage: usageTotals(usage), cost_usd: costs.some((v) => v != null) ? costs.reduce((a, b) => a + (b ?? 0), 0) : null,
-    cost_partial: costs.some((v) => v == null), alert };
+    usage: usageTotals(usage), cost_usd: cost, cost_partial: costs.some((c) => c.cost_usd == null), alert };
 }
 export function agentSlots(config, runs) {
   const agents = new Map(config.map((agent) => [agent.id, { ...agent, running: [], queued: [] }]));
@@ -140,7 +140,7 @@ export function createUniverse(options) {
         const file = path.join(run.dir, `${name}.json`), st = stat(file), signature = st && `${st.size}:${st.mtimeMs}`;
         if (signature && signature !== run.signatures[name]) {
           const value = json(file);
-          if (value) { run[name] = name === 'result' ? Object.fromEntries(['status', 'duration_s', 'usage', 'cost_usd'].map((k) => [k, value[k]])) : value; run.signatures[name] = signature; }
+          if (value) { run[name] = name === 'result' ? Object.fromEntries(['status', 'duration_s', 'usage', 'usage_scope', 'cost_usd', 'cost_source', 'model', 'agent_type'].filter((k) => k in value).map((k) => [k, value[k]])) : value; run.signatures[name] = signature; }
         }
       }
       if (!run.meta) continue;
@@ -232,7 +232,7 @@ export function createUniverse(options) {
       times.push(...buildReplay(data, { maxgap: Number.MAX_VALUE }, now).timeline.map((m) => m.time));
       for (const run of data.runs.filter((r) => r.id !== 'cc' && r.kind !== 'answer' && Number.isFinite(r.started_at))) {
         const final = { ...run, session: session.id, host: false, since: null };
-        sources.push({ time: run.started_at, run: { ...final, status: 'running', ended_at: null, usage: null, cost_usd: null, queued: false } });
+        sources.push({ time: run.started_at, run: { ...final, status: 'running', ended_at: null, usage: null, ...costFields(null, 'unknown'), queued: false } });
         if (Number.isFinite(run.ended_at)) sources.push({ time: run.ended_at, run: final });
         const state = {};
         for (const raw of readLines(path.join(options.runs, run.id, 'events.jsonl'), newTail()).lines) {

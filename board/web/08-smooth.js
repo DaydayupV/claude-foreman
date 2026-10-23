@@ -3,6 +3,17 @@
 // 时间突然跳的时候（?t= 停在固定时刻、刚打开页面、回放跳时间、画布停画了一阵）直接取目标值，截图和定位不受影响。
 
 const SMOOTH = { vals: new Map(), lastT: null, lastMs: 0, k: 1 };
+
+// 流动和旋转的相位按帧累加（速度 × 这一帧隔了多久）。直接用"时间 × 当前速度"的话，
+// 时间是几千秒，速度稍微变小相位就往回退一大截，看上去就是倒流、倒转
+const FLOW = new Map();
+function flowPhase(key, speed) {
+  const ms = performance.now(), f = FLOW.get(key);
+  if (!f) { FLOW.set(key, { ms, p: 0 }); return 0; }
+  f.p += speed * Math.min(0.1, (ms - f.ms) / 1000); // 画布停画了一阵再回来时不跳
+  f.ms = ms;
+  return f.p;
+}
 const SMOOTH_TAU = 0.35; // 秒：时间常数，越大过渡越慢
 
 // 每次画画布前调用：按这一帧和上一帧隔了多久算靠拢的比例

@@ -32,10 +32,11 @@ function step() {
     // 宇宙层：飞入飞出的过渡里两边都画，按各自占的份额淡入淡出
     stepFly();
     const share = flyShare();
-    if (share.uni > 0) uniFrame(share.board <= 0);
+    FLYFX = flyFx(share);
+    if (share.uni > 0) uniFrame(share.fx <= 0);
     applyShare(share);
     renderCrumb();
-    if (share.board <= 0) { wake(); return; }
+    if (share.fx <= 0) { wake(); return; }
   }
   stepReel(nowMs);
   const t = now();
@@ -70,8 +71,14 @@ function uniFrame(alone = true) {
     uniStarted = true;
     if (!(Q.get('focus') && uniFocus(L, Q.get('focus')))) uniFit(true);
   }
-  // ?s=<对话>：刷新后回到这个对话。回放时对话是陆续出现的，等它出现了再直接进去
-  if (FLY.pending && FLY.mode === 'universe' && U.sessions.has(FLY.pending)) { const id = FLY.pending; FLY.pending = null; flyIn(id, true); }
+  // ?s=<对话>：打开链接时先看一眼宇宙，再飞进这个对话；刷新页面时直接回到对话。回放时对话是陆续出现的，等它出现了再进去
+  if (FLY.pending && FLY.mode === 'universe' && U.sessions.has(FLY.pending)) {
+    const id = FLY.pending, ms = performance.now();
+    if (RELOADED) { FLY.pending = null; flyIn(id, true); }
+    else if (FLY.pendingAt == null) FLY.pendingAt = ms + 800;
+    else if (ms >= FLY.pendingAt) { FLY.pending = null; FLY.pendingAt = null; flyIn(id); }
+    wake();
+  }
   stepUni();
   // 往下滚到终端、星图整个移出屏幕时不画
   if (viewEl.getBoundingClientRect().bottom > 0) drawUniverse(L);

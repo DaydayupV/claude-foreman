@@ -233,7 +233,7 @@ test('judge 和 stats 的 --help/-h 在坏配置下仍输出中英文用法且�
   assert.equal(fs.existsSync(h.runs), false);
 });
 
-test('stats 合并两种接入的基础模型，保留用量缺失并只对 opencode/pi 计费用缺失', async (t) => {
+test('stats 合并两种接入的基础模型，费用未知的外部任务都计入缺失', async (t) => {
   const h = sandbox(t);
   seedRun(h, 'oc-1', { ...review, model: 'opencode-go/Deepseek-V4.1-Flash', agent_type: 'opencode cli' }, { ...report('F1', 'F2'), model: 'ignored', duration_s: 2, usage: usage(100, 20, 30), cost_usd: 0.25 });
   seedRun(h, 'oc-2', { ...review, model: 'deepseek-v4.1-flash', agent_type: 'opencode cli' }, { duration_s: 4, usage: null });
@@ -247,11 +247,13 @@ test('stats 合并两种接入的基础模型，保留用量缺失并只对 open
   assert.deepEqual(r.rows.map((row) => [row.model, row.seats]), [['deepseek-v4.1-flash', 3], ['deepseek-flash', 2], ['gpt-6', 2], ['unknown', 1]]);
   const [flash, pi, codex, unknown] = r.rows;
   assert.deepEqual(flash.tokens, { input: 100, cached_input: 20, output: 30, runs: 1, missing_runs: 2 });
-  assert.deepEqual(flash.cost_usd, { total: 0.25, runs: 1, missing_runs: 1 });
+  assert.deepEqual(flash.cost_usd, { total: null, runs: 0, missing_runs: 3 });
   assert.deepEqual(flash.duration_s, { total: 12, median_per_seat: 4, missing_runs: 0 });
   assert.equal(flash.findings_reported, 2);
-  assert.deepEqual(pi.cost_usd, { total: null, runs: 0, missing_runs: 1 });
-  assert.deepEqual(codex.cost_usd, { total: null, runs: 0, missing_runs: 0 });
+  assert.deepEqual(pi.cost_usd, { total: null, runs: 0, missing_runs: 2 });
+  assert.deepEqual(codex.cost_usd, { total: null, runs: 0, missing_runs: 2 });
+  assert.deepEqual(Object.keys(codex).filter((k) => k.startsWith('cost_')), ['cost_usd']);
+  assert.equal(unknown.cost_usd.missing_runs, 1);
   assert.deepEqual(codex.tokens, { input: null, cached_input: null, output: null, runs: 0, missing_runs: 2 });
   assert.equal(unknown.duration_s.total, 4);
 });

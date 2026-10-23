@@ -269,18 +269,20 @@ async function opencodeSession(run, schema, agentId) {
   if (meta.status === 'failed' && errors.some((e) => /rate.?limit|concurrency|too many requests|\b429\b/i.test(e))) notes.push(M.rateLimited(model, 'opencode'));
   let usage = null, cost = null;
   if (meta.session_id) {
-    // 最后一步没有 step_finish，用会话导出按开始时间过滤，包含同一轮的格式修复。
+    // 按开始时间汇总导出，包含压缩和格式修复；统一按主模型计价。
     const exported = await runOpencode({ agent, args: ['session', 'export', '--standalone', meta.session_id], cwd, timeoutMs: 60000 });
     try {
       if (exported.status !== 'done') throw new Error(exported.errors.join('; ') || exported.stderrTail || exported.status);
-      const messages = JSON.parse(exported.stdout).messages.filter((m) => m.type === 'assistant' && m.time.created >= started);
+      const messages = JSON.parse(exported.stdout).messages.filter((m) => m.time.created >= started
+        && (m.type === 'assistant' || m.type === 'compaction' && m.tokens != null));
       usage = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 };
       cost = 0;
       for (const m of messages) {
         const t = m.tokens || {}; // 出错的那条回复没有 tokens
         usage.input_tokens += (t.input || 0) + (t.cache?.read || 0) + (t.cache?.write || 0);
         usage.cached_input_tokens += t.cache?.read || 0;
-        usage.output_tokens += t.output || 0;
+        if (t.cache?.write != null) usage.cache_write_input_tokens = (usage.cache_write_input_tokens ?? 0) + t.cache.write;
+        usage.output_tokens += (t.output || 0) + (t.reasoning || 0);
         usage.reasoning_output_tokens += t.reasoning || 0;
         cost += m.cost || 0;
       }

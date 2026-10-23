@@ -135,13 +135,8 @@ function renderWorld(t, L) {
   const ccFiles = ccLane ? ccLane.events.filter((e) => e.k === 'edit' && e.ts > from && e.ts <= to).map((e) => editParts(e.t)) : [];
   fillOut(ccOut, 'CLAUDE CODE · OUTPUT', dedupeFiles(ccFiles), '', ccLead(t, from, to));
 
-  // 刻度带标题和各组
-  let bh = UI.heads.get('#band');
-  if (!bh) { bh = document.createElement('div'); bh.className = 'bandhead'; worldEl.append(bh); UI.heads.set('#band', bh); }
-  place(bh, L.bandHead);
-  const running = seatLanes(t).filter((l) => laneStatus(l, t).running).length;
-  setText(bh, `DISPATCHED · ${seatLanes(t).length} SEATS${running ? ` · ${running} RUNNING` : ''}`);
-  const headSeen = new Set(['#band']);
+  // 刻度带上的各组标题
+  const headSeen = new Set();
   for (const g of L.groups) {
     headSeen.add(g.key);
     let h = UI.heads.get(g.key);

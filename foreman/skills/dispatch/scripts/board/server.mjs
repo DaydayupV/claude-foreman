@@ -6,7 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { createFeed, buildReplay, snapshotAt, imagesOf } from './feed.mjs';
-import { loadPrices } from './prices.mjs';
+import { loadPrices } from '../prices.mjs';
 import { createUniverse, universeChanges, universeAt } from './universe.mjs';
 import { buildId } from './build-id.mjs';
 import { retryFile, removeLock } from './lock.mjs';
@@ -141,7 +141,7 @@ async function main() {
   if (reused) { process.stdout.write(`${address(reused)} (reused pid ${reused.pid})\n`); return; }
 
   const options = { transcript: values.transcript, session: values.session, claudeDir: values['claude-dir'] || path.join(os.homedir(), '.claude', 'projects'),
-    lead: Number(values.lead ?? 10), tail: Number(values.tail ?? 5), prices: loadPrices(values.prices || path.join(here, 'prices.json')) };
+    lead: Number(values.lead ?? 10), tail: Number(values.tail ?? 5), prices: loadPrices(values.prices || path.join(here, '../prices.json')) };
   const feed = createFeed(root, options), universe = createUniverse({ ...options, runs: root, config: configFile, windowH }), clients = new Set(), replays = new Map();
   const allReplay = (scope, now, refresh = false) => {
     const key = `${scope.speed}:${scope.maxgap}`;

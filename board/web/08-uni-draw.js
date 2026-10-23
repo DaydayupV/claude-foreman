@@ -49,10 +49,16 @@ function drawNebulaOf(p) {
   }
 }
 
-function drawCoreOf(g, alpha) {
+// charge：飞入前的蓄能（0–1），亮核变大变亮，外面多一圈柔光
+function drawCoreOf(g, alpha, charge = 0) {
   const s = g.s, sec = performance.now() / 1000;
   const pulse = s.state === 'thinking' ? 1 + 0.18 * Math.sin(sec * 3.4 + g.seed % 7) : 1;
-  const r = 4.2 * pulse, c = (a) => rgba('claude', a);
+  const r = 4.2 * pulse * (1 + 1.4 * charge), c = (a) => rgba('claude', a);
+  if (charge > 0) {
+    const halo = ctx.createRadialGradient(g.x, g.y, 0, g.x, g.y, r * 7);
+    halo.addColorStop(0, c(0.35 * charge * alpha)); halo.addColorStop(1, c(0));
+    ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(g.x, g.y, r * 7, 0, 6.283); ctx.fill();
+  }
   const grd = ctx.createRadialGradient(g.x, g.y, 0, g.x, g.y, r * 2.8);
   grd.addColorStop(0, HI(0.95 * alpha)); grd.addColorStop(0.22, c(0.7 * alpha)); grd.addColorStop(1, c(0));
   ctx.fillStyle = grd; ctx.beginPath(); ctx.arc(g.x, g.y, r * 2.8, 0, 6.283); ctx.fill();
@@ -114,8 +120,10 @@ function drawUniverseOn(L) {
     const m = U.marks.get(g.s.id), born = m ? ease(clamp01(uniSec(m.born) / 1.5)) : 1;
     const a = smooth(`ua|${g.s.id}`, UNI_STATE_A[g.s.state] + (g === hover ? 0.25 : 0), UNI_STATE_A[g.s.state]) * born;
     if (!seen(g.x, g.y, GAL_R * 1.4) || a < 0.01) continue;
-    drawGalaxyOf(g, a, g === hover);
-    drawCoreOf(g, a);
+    // 正在飞入/飞出的星系：盘面在炸开前淡掉，亮核先蓄能（变亮变大），炸开后交给看板的弧线区（见 08-uni-fly.js 的分镜）
+    const focus = FLYFX && g.s.id === FLY.id;
+    drawGalaxyOf(g, focus ? a * (1 - ramp(FLYFX.v, 0.24, 0.4)) : a, g === hover);
+    drawCoreOf(g, focus ? a * (1 - ramp(FLYFX.v, 0.34, 0.44)) : a, focus ? ramp(FLYFX.v, 0.12, 0.34) : 0);
     drawSignals(g);
   }
   if (hover) {

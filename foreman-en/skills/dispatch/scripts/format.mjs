@@ -4,6 +4,7 @@
 import path from 'node:path';
 import { MESSAGES } from './messages.mjs';
 import { modelOf, agentTypeOf, oneLine, plainCommand, textWidth, fitWidth } from './util.mjs';
+import { costOf, loadPrices } from './prices.mjs';
 
 const D = MESSAGES.en;
 
@@ -102,9 +103,10 @@ const changedFor = (r, m) => (m?.kind === 'exec' || agentTotal(r?.changes) ? cha
 // 费用按金额大小保留足够精度，零不带小数。status 和 watch 共用同一行用量与费用，只有费用时也照常显示。
 const formatUsd = (n) => (n === 0 ? '0' : n < 0.01 ? n.toPrecision(2) : n < 1 ? n.toFixed(3) : n.toFixed(2));
 function usageLine(result, meta) {
+  const cost = costOf({ ...meta, ...result }, loadPrices());
   return [result?.usage ? D.tokenSummary(result.usage, result.last_request ?? result.context, D.tokenCount,
     (result.usage_scope ?? (meta?.mode === 'resume' ? 'session_total' : 'this_run')) === 'session_total') : '',
-  result?.cost_usd != null ? D.costUsd(formatUsd(result.cost_usd)) : ''].filter(Boolean).join(' · ');
+  cost.cost_usd != null && cost.cost_source !== 'unknown' ? D.costUsd(formatUsd(cost.cost_usd)) : ''].filter(Boolean).join(' · ');
 }
 
 // opencode 和 pi 的读文件、搜索工具在时间线上写什么，适配器存进事件的 label，各适配器写法一致：

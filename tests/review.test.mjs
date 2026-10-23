@@ -41,8 +41,8 @@ for (const lang of ['zh', 'en']) test(`opencode 审查注入只读 foreman-revie
     merge_base: null, commit: null, files_total: 4, fingerprint: scope.fingerprint });
   assert.equal(r.kind, 'review'); assert.equal(json(path.join(r.run_dir, 'meta.json')).kind, 'review');
   assert.equal(r.report, null); assert.equal(r.last_message, last); assert.equal(read(path.join(r.run_dir, 'last-message.txt')), last);
-  assert.deepEqual(r.usage, { input_tokens: 17, cached_input_tokens: 3, output_tokens: 5, reasoning_output_tokens: 2 });
-  assert.equal(r.cost_usd, 0.25); assert.equal(r.session_id, 'synthetic-opencode-session');
+  assert.deepEqual(r.usage, { input_tokens: 17, cached_input_tokens: 3, cache_write_input_tokens: 4, output_tokens: 7, reasoning_output_tokens: 2 }); // 输出含推理
+  assert.equal(r.cost_usd, null); assert.equal(r.cost_source, 'unknown'); assert.equal(r.reported_cost_usd, 0.25); assert.equal(r.session_id, 'synthetic-opencode-session');
   assert.deepEqual(r.questions, []); assert.equal(r.needs_decision, false); assert.ok(!r.warnings.includes(m.reviewScopeChanged));
   failed(await h.bridge(['resume', '--run', r.run_id, '--level', 'normal', '--brief', '-']), M.reviewNoResume);
 });

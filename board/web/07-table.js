@@ -1,16 +1,26 @@
 'use strict';
 // 底部用量表（每个模型一行，Claude Code 在最前，最后一行合计）和顶栏。
 
-const TABLE_HEAD = ['', 'model', 'status', 'now ≈tok/s', 'last 2 min', 'avg tok/s', 'input · cache', 'output', 'cost (API ≈)', 'time'];
+const TABLE_HEAD = ['', 'model', 'status', 'now ≈tok/s', 'last 2 min', 'avg tok/s', 'input · cache', 'output', 'cost', 'time'];
+// 费用：一律按模型官方 API 价格算（插件自带的价格表），悬停在表头和单元格上有说明；+ 表示有的模型不在价格表里
+// 不到 1 美分的按两位有效数字写（便宜的 API 模型一次常常只有零点零几美分），免得显示成 $0.00
+const fmtUsd = (n) => (n > 0 && n < 0.01 ? n.toPrecision(2) : n.toFixed(2));
+const fmtCost = (cost, partial = false) => (cost == null ? '—' : `$${fmtUsd(cost)}${partial ? '+' : ''}`);
+// 面板里下面还有没露出来的行时，最后一行淡出
+const markMore = (body) => body.classList.toggle('more', body.scrollHeight - body.scrollTop - body.clientHeight > 2);
+// 表头的费用列加说明
+function costHeadTitle(head) { const c = [...head.children].find((x) => x.textContent === 'cost'); if (c) c.title = TEXT.costTitle; }
 function renderTable(t) {
   const table = $('usage');
   if (!table.firstChild) {
     table.innerHTML = '<div class="tr th"></div><div class="tbody"></div><div class="tr total"></div>';
+    table.querySelector('.tbody').addEventListener('scroll', (e) => markMore(e.target), { passive: true });
     for (const h of TABLE_HEAD) { const c = document.createElement('span'); c.textContent = h; table.firstChild.append(c); }
+    costHeadTitle(table.firstChild);
   }
   const lanes = [B.laneById.get('cc'), ...seatLanes(t)].filter((l) => l && latest(l) && latest(l).started_at <= t);
   const body = table.querySelector('.tbody');
-  const tot = { input: 0, cached: 0, output: 0, cost: 0, rate: 0 };
+  const tot = { input: 0, cached: 0, output: 0, cost: null, partial: false, rate: 0 };
   lanes.forEach((lane, i) => {
     let tr = UI.tableRows.get(lane.id);
     if (!tr) {
@@ -32,23 +42,23 @@ function renderTable(t) {
     setText(c[5], s.avg != null ? `≈ ${Math.round(s.avg)}` : '—');
     setText(c[6], inAll ? `${fmtTok(inAll)} · ${Math.round((100 * s.cached) / inAll)}%` : '—');
     setText(c[7], s.output ? fmtTok(s.output) : '—');
-    setText(c[8], s.cost != null ? `${s.costEquiv ? '≈ ' : ''}$${s.cost.toFixed(2)}` : '—');
+    setText(c[8], fmtCost(s.cost, s.costPartial)); c[8].title = TEXT.costTitle;
     setText(c[9], fmtDur(s.elapsed));
     if (body.children[i] !== tr) body.insertBefore(tr, body.children[i] || null);
     tot.input += inAll; tot.cached += s.cached; tot.output += s.output; tot.rate += s.rate;
-    if (s.cost != null) tot.cost += s.cost;
+    if (s.cost != null) tot.cost = (tot.cost ?? 0) + s.cost;
+    if (s.costPartial) tot.partial = true;
   });
   while (body.children.length > lanes.length) body.lastChild.remove();
-  // 面板高度跟着模型数量走：表头、每个模型一行、合计行都放得下；最多占 45% 屏幕高，再多就在面板里滚动
-  const h = `min(45vh, max(22vh, ${66 + 19 * lanes.length}px))`;
-  if (UI.tableH !== h) { UI.tableH = h; document.documentElement.style.setProperty('--table-h', h); }
+  markMore(body);
   const total = table.querySelector('.total');
-  const sig = `${lanes.length}|${Math.round(tot.rate)}|${tot.input}|${tot.output}|${tot.cost.toFixed(2)}`;
+  const sig = `${lanes.length}|${Math.round(tot.rate)}|${tot.input}|${tot.output}|${fmtCost(tot.cost, tot.partial)}`;
   if (total.dataset.sig !== sig) {
     total.dataset.sig = sig;
     total.innerHTML = '';
-    const cells = ['', 'total', `${lanes.length} lanes`, `≈ ${Math.round(tot.rate)}`, '', '', tot.input ? `${fmtTok(tot.input)} · ${Math.round((100 * tot.cached) / tot.input)}%` : '—', fmtTok(tot.output), `≈ $${tot.cost.toFixed(2)}`, ''];
+    const cells = ['', 'total', `${lanes.length} lanes`, `≈ ${Math.round(tot.rate)}`, '', '', tot.input ? `${fmtTok(tot.input)} · ${Math.round((100 * tot.cached) / tot.input)}%` : '—', fmtTok(tot.output), fmtCost(tot.cost, tot.partial), ''];
     for (const x of cells) { const s = document.createElement('span'); s.textContent = x; total.append(s); }
+    total.children[8].title = TEXT.costTitle;
   }
 }
 

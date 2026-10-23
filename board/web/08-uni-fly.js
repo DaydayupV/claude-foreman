@@ -6,22 +6,45 @@
 //  Esc、顶栏路径里的"宇宙"、看板缩到最小后继续往外滚，都是飞出。地址栏记 ?s=<对话 id>，刷新后直接回到这个对话。
 
 const FLY = { mode: 'universe', id: null, t0: 0, from: null, to: null, back: null, out: 0, crumb: '', pending: Q.get('s') };
-const FLY_IN = 1.1, FLY_OUT = 0.9;
+const FLY_IN = 1.6, FLY_OUT = 1.4;
+// 刷新页面时不再演一遍飞入
+const RELOADED = performance.getEntriesByType?.('navigation')[0]?.type === 'reload';
+// 打开链接后等自动飞入的那一小会儿里，用户点、滚、按键（包括按钮、侧栏、键盘缩放）都算自己在看了，不再自动飞入
+for (const type of ['pointerdown', 'wheel', 'keydown']) addEventListener(type, () => { if (FLY.mode === 'universe') FLY.pending = null; }, { capture: true, passive: true });
 const flyU = () => clamp01((performance.now() - FLY.t0) / 1000 / (FLY.mode === 'in' ? FLY_IN : FLY_OUT));
 
-// 宇宙和看板各占多少（0–1），画面按它淡入淡出
+// 切换的进度 v：0 在宇宙，1 在看板。飞入正着走，飞出（包括飞入途中退回）倒着走；缓动前后对称，所以退回时 v 不跳
+const flyV = () => { const e = ease(flyU()); return FLY.mode === 'in' ? e : 1 - e; };
+const ramp = (v, a, b) => ease(clamp01((v - a) / (b - a)));
+// 一次切换的分镜（v 的区间），飞出按同样的分镜倒着放：
+//  0–0.34    镜头推近；要进去的星系盘面淡掉，亮核蓄能（变亮变大，08-uni-draw.js）
+//  0.34–0.84 炸开：看板真正的弧线区（星云、尘埃、核心网、中心星系）从亮核此刻所在的位置长出来，先快后慢；
+//            各层先转得快、再慢到平常的转速，线条先亮后回落；炸开的一瞬亮核处一团白光（08-fx.js 的 burstOf）
+//  0.40–0.72 宇宙层其余的星系、星云淡出
+//  0.62–0.95 卡片、刻度带、光线、标签这些淡入（只淡入，不跟着炸）
+// 弧线区一直以亮核为中心，长到最后正好就是看板里的样子，所以没有"换一张画"的那一下
 function flyShare() {
-  const u = flyU();
-  if (FLY.mode === 'in') return { uni: 1 - clamp01((u - 0.55) / 0.45), board: clamp01((u - 0.45) / 0.5) };
-  if (FLY.mode === 'out') return { uni: clamp01(u / 0.35), board: 1 - clamp01(u / 0.4) };
-  return FLY.mode === 'board' ? { uni: 0, board: 1 } : { uni: 1, board: 0 };
+  if (FLY.mode !== 'in' && FLY.mode !== 'out') return FLY.mode === 'board' ? { v: 1, uni: 0, fx: 1, rest: 1 } : { v: 0, uni: 1, fx: 0, rest: 0 };
+  const v = flyV();
+  return { v, uni: 1 - ramp(v, 0.4, 0.72), fx: v >= 0.3 ? 1 : 0, rest: ramp(v, 0.62, 0.95) };
+}
+// 看板这一帧要知道的切换状态：进度、炸开的进度 p、界面的淡入程度、亮核此刻在屏幕上的位置；不在切换中为 null
+let FLYFX = null;
+function flyFx(share) {
+  if (FLY.mode !== 'in' && FLY.mode !== 'out') return null;
+  const g = uniLayout().galaxies.find((x) => x.s.id === FLY.id);
+  if (!g) return null;
+  return { v: share.v, p: clamp01((share.v - 0.34) / 0.5), rest: share.rest, cx: g.x * UV.k + UV.tx, cy: g.y * UV.k + UV.ty };
 }
 function applyShare(share) {
   const set = (el, a) => { const v = a >= 0.999 ? '' : a.toFixed(3); if (el.style.opacity !== v) el.style.opacity = v; };
-  set(UFX.cv, share.uni); set(FX.cv, share.board); set(worldEl, share.board);
+  // 弧线区在底下那层画布上，自己按分镜炸开；上面那层画布（光线、刻度带等）和卡片只做淡入淡出
+  set(UFX.cv, share.uni); set(FX.cv, share.fx); set(FX.ov.cv, share.rest); set(worldEl, share.rest);
+  // 底部表格在 v = 0.3 时从对话列表换成模型列表：换之前淡出，换之后跟界面一起淡入，不会一下子跳过去
+  set($('usage'), share.v < 0.3 ? 1 - ramp(share.v, 0.12, 0.3) : share.rest);
   // 完全看不见的那一层不参与合成
   const vis = (el, on) => { const v = on ? '' : 'hidden'; if (el.style.visibility !== v) el.style.visibility = v; };
-  vis(UFX.cv, share.uni > 0); vis(FX.cv, share.board > 0);
+  vis(UFX.cv, share.uni > 0); vis(FX.cv, share.fx > 0); vis(FX.ov.cv, share.rest > 0);
   document.body.classList.toggle('u-on', true);
   document.body.classList.toggle('uni', FLY.mode === 'universe');
 }
@@ -67,13 +90,13 @@ function flyIn(id, instant = false) {
   const r = viewEl.getBoundingClientRect();
   FLY.back = { k: UV.k, tx: UV.tx, ty: UV.ty, auto: UV.auto };
   FLY.from = { k: UV.k, sx: g.x * UV.k + UV.tx, sy: g.y * UV.k + UV.ty };
-  Object.assign(FLY, { id, mode: instant ? 'board' : 'in', t0: performance.now(), out: 0, pending: null });
+  Object.assign(FLY, { id, mode: instant ? 'board' : 'in', mirror: false, t0: performance.now(), out: 0, pending: null });
   UV.goal = null; UV.auto = false;
   openBoardFor(g.s);
-  // 星系的亮核最后落在看板 Claude Code 卡片出现的位置：看上去就是亮核变成了那张卡片
+  // 星系的亮核最后落在看板核心网（弧线区）的中心：它在那里炸开成弧线区（08-uni-burst.js）
   const L = computeLayout(now());
   VIEW.H = L.H;
-  const fit = fitGoal(), cx = fit.tx + (L.cc.x + L.cc.w / 2) * fit.k, cy = fit.ty + (L.cc.y + L.cc.h / 2) * fit.k;
+  const fit = fitGoal(), cx = fit.tx + L.core.cx * fit.k, cy = fit.ty + L.core.cy * fit.k;
   FLY.to = { k: uniFitGoal().k * 14, sx: Number.isFinite(cx) ? cx : r.width / 2, sy: Number.isFinite(cy) ? cy : r.height / 2 };
   setUrl(id);
   wake();
@@ -81,9 +104,12 @@ function flyIn(id, instant = false) {
 }
 function flyOut() {
   if (FLY.mode !== 'board' && FLY.mode !== 'in') return;
+  // 飞入还没结束就退回：从当前进度倒着走（缓动曲线前后对称，倒放的起点是 1 − 当前进度），不先跳到看板；
+  // 远端镜头沿用飞入前的那个，不重新适配（看板里算出来的全貌和宇宙层留出侧栏的全貌不一样，会跳）
+  const mirror = FLY.mode === 'in', back = mirror ? 1 - flyU() : 0;
   // 直接打开到看板（刷新进来）时没有飞入前的镜头，退回去就复位到全貌
-  if (!FLY.back || FLY.back.auto) { const g = uniFitGoal(); FLY.back = { ...g, auto: true }; }
-  Object.assign(FLY, { mode: 'out', t0: performance.now() });
+  if (!mirror && (!FLY.back || FLY.back.auto)) { const g = uniFitGoal(); FLY.back = { ...g, auto: true }; }
+  Object.assign(FLY, { mode: 'out', mirror, t0: performance.now() - back * FLY_OUT * 1000 });
   setUrl(null);
   wake();
 }
@@ -107,6 +133,25 @@ function stepFly() {
   }
 }
 
+// 宇宙层对着一个星系一直往里滚：星系大到占视图三分之一（或者已经放到最大）以后再攒一段就飞进去（和看板缩到最小往外滚退回宇宙对称）。
+// 鼠标下没有星系时取离视图中心最近的那个；往外滚清零
+function uniWheelIn(e, sx, sy) {
+  const L = UV.layout, r = viewEl.getBoundingClientRect();
+  if (e.deltaY >= 0 || !L) { FLY.inAcc = 0; return false; }
+  let g = galaxyAt(L, sx, sy);
+  if (!g) {
+    let bd = Infinity;
+    for (const x of L.galaxies) { const d = Math.hypot(x.x * UV.k + UV.tx - r.width / 2, x.y * UV.k + UV.ty - r.height / 2); if (d < bd) { bd = d; g = x; } }
+  }
+  const need = Math.min(Math.min(r.width, r.height) / 3, GAL_R * uniFitGoal().k * 14 * 0.9);
+  if (!g || GAL_R * UV.k < need) { FLY.inAcc = 0; return false; }
+  if (FLY.inId !== g.s.id) { FLY.inId = g.s.id; FLY.inAcc = 0; }
+  FLY.inAcc = (FLY.inAcc || 0) - e.deltaY;
+  if (FLY.inAcc < 220) return false; // 攒的时候照常放大
+  FLY.inAcc = 0;
+  return flyIn(g.s.id);
+}
+
 // 看板已经缩到最小还继续往外滚：攒够一段就退回宇宙（往里滚清零）
 function boardWheelOut(e) {
   if (!U.on || FLY.mode !== 'board') return false;
@@ -117,11 +162,13 @@ function boardWheelOut(e) {
   return true;
 }
 
-// 顶栏路径：宇宙 › 项目 › 对话
+// 顶栏路径：FOREMAN › 项目 › 对话；在看板里点 FOREMAN 回到宇宙
 function renderCrumb() {
   const s = FLY.id && U.sessions.get(FLY.id), inside = FLY.mode !== 'universe' && s;
   const proj = inside && (U.projects.get(s.project)?.name || s.project);
-  const html = inside ? `<a data-go="uni">${TEXT.universe}</a><i>›</i><span></span><i>›</i><b></b>` : `<b>${TEXT.universe}</b><i>·</i><span></span>`;
+  const html = inside ? '<i>›</i><span></span><i>›</i><b></b>' : '<i>·</i><span></span>';
+  $('brand').classList.toggle('link', !!inside);
+  $('brand').title = inside ? TEXT.backToUniverse : '';
   const key = inside ? `${html}|${proj}|${s.title}` : `${html}|${U.sessions.size}`;
   if (key === FLY.crumb) return;
   FLY.crumb = key;
@@ -130,5 +177,5 @@ function renderCrumb() {
   if (inside) { el.querySelector('span').textContent = proj; el.querySelector('b').textContent = s.title || s.id.slice(0, 8); }
   else el.querySelector('span').textContent = TEXT.conversations(U.sessions.size);
 }
-$('crumb').addEventListener('click', (e) => { if (e.target.closest('[data-go="uni"]')) flyOut(); });
+$('brand').addEventListener('click', () => { if ($('brand').classList.contains('link')) flyOut(); });
 addEventListener('keydown', (e) => { if (e.key === 'Escape' && U.on && (FLY.mode === 'board' || FLY.mode === 'in')) { flyOut(); e.preventDefault(); } });

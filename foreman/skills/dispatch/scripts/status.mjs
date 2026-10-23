@@ -5,6 +5,7 @@ import { RUNS_ROOT, UNFINISHED_STATUSES, requestCancel, listRuns, findRun, readM
 import { M, die, need, pidAlive, processStartedAt, killTreeIfSame, sleep, modelOf, agentTypeOf, replaceFile } from './util.mjs';
 import { D, C, padWidth, visibleWidth, modelLabel, clock, took, outcomeStyle, usageLine, paintPlanWord } from './format.mjs';
 import { planStatus, describePlans } from './plan.mjs';
+import { costOf, loadPrices } from './prices.mjs';
 
 function cmdStatus(o, sessionStats) {
   if (o.plan) { process.stdout.write(JSON.stringify(planStatus(o.plan), null, 2) + '\n'); return; }
@@ -183,6 +184,7 @@ function writeForcedResult(dir, m, sessionStats) {
     group: m.group ?? null, round: m.round ?? null, scope: m.scope ?? [], parent: m.parent ?? null, session_id: m.session_id ?? null,
     exit_code: null, duration_s: Math.round((Date.parse(m.ended_at) - Date.parse(m.started_at)) / 1000),
     usage, usage_scope: usage ? (m.mode === 'resume' ? 'session_total' : 'this_run') : null,
+    ...costOf({ ...m, usage, usage_scope: usage ? (m.mode === 'resume' ? 'session_total' : 'this_run') : null }, loadPrices()),
     errors: [M.runCancelled(modelOf(m), 'command')], notes: [M.cancelForced, usage ? M.cancelledUsagePartial : M.cancelledUsageMissing],
     warnings: [], report: null, last_message: '', changes: { available: false }, questions: [], needs_decision: false, run_dir: dir,
   }, null, 2));

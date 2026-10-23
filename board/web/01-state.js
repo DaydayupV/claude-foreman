@@ -70,6 +70,7 @@ function onEv(ev) {
   const lane = laneFor(ev.lane || B.runs.get(ev.run)?.lane || ev.run);
   ev.id = B.total++;
   insertByTs(lane.events, ev, LANE_EVENTS_MAX);
+  lane.ver = (lane.ver || 0) + 1;
   insertByTs(B.feed, ev, FEED_MAX);
   if (ev.k === 'fplan' || ev.k === 'verdict') insertByTs(B.life, ev, Infinity);
   if (!lane.last || ev.ts >= lane.last.ts) lane.last = ev;

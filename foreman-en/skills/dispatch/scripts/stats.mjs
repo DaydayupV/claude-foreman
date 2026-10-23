@@ -4,6 +4,7 @@ import path from 'node:path';
 import { RUNS_ROOT, listRuns, findRun, readMeta, checkRunners, isRunning, runOutcome, resultValid } from './records.mjs';
 import { M, die, need, isObject, modelOf, agentTypeOf, replaceFile } from './util.mjs';
 import { acquireLock } from './locks.mjs';
+import { costOf, loadPrices } from './prices.mjs';
 
 const MODULES = ['discuss', 'review', 'run', 'image'];
 const VERDICTS = ['accept', 'partial', 'reject'];
@@ -189,6 +190,7 @@ function cmdStats(o, statsOf) {
   const since = o.since == null ? null : Number(o.since);
   if (since != null && (!Number.isFinite(since) || since <= 0)) die(M.statsBadSince(o.since));
   const cutoff = since == null ? null : Date.now() - since * 86400000;
+  const prices = loadPrices();
   const totals = { runs: 0, seats: 0, judged_runs: 0, running_skipped: 0, unreadable: 0, unreadable_verdicts: 0 };
   const loaded = listRuns().map((id) => { const dir = path.join(RUNS_ROOT, id); return { id, dir, meta: readMeta(dir) }; });
   checkRunners(loaded.map((run) => run.meta)); // 停在 running 的几条一次核对完，不逐条启动查询
@@ -261,10 +263,14 @@ function cmdStats(o, statsOf) {
           for (const [j, key] of ['input', 'cached_input', 'output'].entries()) row.tokens[key] = (row.tokens[key] ?? 0) + usage[j];
           row.tokens.runs++;
         }
-        if (Number.isFinite(result?.cost_usd)) {
-          row.cost_usd.total = (row.cost_usd.total ?? 0) + result.cost_usd;
+        const cost = costOf({ ...meta, ...result, agent_type: agentTypeOf(meta) }, prices);
+        if (cost.cost_source === 'unknown') {
+          if (agentTypeOf(meta) !== 'host') row.cost_usd.missing_runs++;
+        }
+        else {
+          row.cost_usd.total = (row.cost_usd.total ?? 0) + cost.cost_usd;
           row.cost_usd.runs++;
-        } else if (['opencode cli', 'pi cli'].includes(agentTypeOf(meta))) row.cost_usd.missing_runs++;
+        }
       }
       const findings = findingsOf(result, module);
       if (findings) row.findings_reported += findings.length;

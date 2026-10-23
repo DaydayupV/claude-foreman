@@ -15,9 +15,13 @@ const redactKey = (s, key) => (key && key.length >= 8 ? s.replaceAll(key, '[REDA
 const apiUsage = (u) => ({
   input_tokens: u?.prompt_tokens || 0,
   cached_input_tokens: u?.prompt_cache_hit_tokens ?? u?.prompt_tokens_details?.cached_tokens ?? 0,
+  cache_write_input_tokens: u?.prompt_tokens_details?.cache_write_tokens ?? u?.cache_creation_input_tokens ?? 0,
   output_tokens: u?.completion_tokens || 0,
   reasoning_output_tokens: u?.completion_tokens_details?.reasoning_tokens ?? 0,
 });
+
+// 没有缓存写入时不写这个字段，用量的形状和以前一样
+const trimUsage = (u) => { if (!u || u.cache_write_input_tokens) return u; const { cache_write_input_tokens, ...rest } = u; return rest; };
 
 // 配置里直接写的 api_key 优先（看得见，也不会被忘了删的旧环境变量顶替），没有再读 api_key_env 指向的环境变量。
 const apiKeyOf = (agent) => (agent.api_key ? { key: agent.api_key, source: 'config' }
@@ -73,7 +77,7 @@ async function executeApi(ctx) {
     const target = meta.group != null ? `--group ${meta.group}` : `--run ${id}`;
     process.stderr.write(`foreman: ${M.busyHint(`node "${ENTRY}" await-busy ${target}`, cfg.dispatch.busy_ask_min)}\n`);
   }
-  const usage = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 };
+  const usage = apiUsage(); // 字段和 apiUsage 一致（全为 0），下面按字段累加，新增的用量字段不会漏掉
   let gotUsage = false;
   let completedRequests = 0, requestsWithUsage = 0;
   const notes = [];
@@ -171,7 +175,7 @@ async function executeApi(ctx) {
   if (usageMissing && meta.status !== 'cancelled') notes.push(M.apiUsageMissing);
   fs.writeFileSync(path.join(dir, 'last-message.txt'), last);
   fs.writeFileSync(path.join(dir, 'messages.json'), JSON.stringify(last || meta.status === 'done' ? [...history, { role: 'assistant', content: last }] : history, null, 2));
-  return finishDiscussion(run, { usage: gotUsage && (meta.status === 'cancelled' || !usageMissing) ? usage : null, errors, notes, warnings, report, last, files, changesNote: M.apiNoChanges });
+  return finishDiscussion(run, { usage: gotUsage && (meta.status === 'cancelled' || !usageMissing) ? trimUsage(usage) : null, errors, notes, warnings, report, last, files, changesNote: M.apiNoChanges });
 }
 
 // 厂商接口列出的模型 ID。兼容 OpenAI 的接口一般都有 /models，但不给推理强度，那部分要查厂商文档。
@@ -198,7 +202,7 @@ async function checkApiAgent(name, agent) {
       url: agent.base_url, apiKey, timeoutMs: 120000, stallMs: 60000,
       body: { model: agent.model, messages: [{ role: 'user', content: 'Reply with the single word OK.' }], stream: true, stream_options: { include_usage: true }, ...agent.extra_body },
     });
-    return { ...out, ok: true, seconds: Number(((Date.now() - started) / 1000).toFixed(1)), reply: redactKey(reply.content, apiKey).trim().slice(0, 40), usage: apiUsage(reply.usage), fix: null };
+    return { ...out, ok: true, seconds: Number(((Date.now() - started) / 1000).toFixed(1)), reply: redactKey(reply.content, apiKey).trim().slice(0, 40), usage: trimUsage(apiUsage(reply.usage)), fix: null };
   } catch (e) {
     const fix = { auth: M.fixApiAuth(name, source, agent.api_key_env), balance: M.fixApiBalance, bad_request: M.fixApiRequest(name), network: M.fixApiNetwork(agent.base_url), busy: M.fixApiBusy }[e.kind] || M.fixApiRetry;
     return { ...out, error: `${e.kind}${e.status ? ` ${e.status}` : ''}: ${redactKey(e.message, apiKey)}`, fix };
