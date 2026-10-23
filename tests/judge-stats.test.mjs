@@ -615,3 +615,13 @@ for (const [label, owner, age] of [['新死进程锁', { pid: 2147483647 }, 0], 
     released(dir, legacy ? 1 : 2);
   });
 }
+
+// 根本没调用协作方就失败的任务（开工前拍快照失败，result 里 not_started）不算一席；重新派出的那一份照常算
+test('stats 不把没开始就失败的任务算成一席', async (t) => {
+  const h = sandbox(t), run = { module: 'run', mode: 'run', kind: 'exec', model: 'minimax-m3', agent_type: 'pi cli' };
+  seedRun(h, '20261023-192034-7305', run, { status: 'failed', not_started: true, duration_s: 1 });
+  seedRun(h, '20261023-192125-i0ya', run, { status: 'done', duration_s: 47, report: { status: 'completed' } });
+  const r = output(await h.bridge(['stats', '--module', 'run']));
+  assert.deepEqual(r.rows.map((row) => [row.model, row.seats, row.rework.seats]), [['minimax-m3', 1, 1]]);
+  assert.equal(r.totals.not_started, 1); assert.equal(r.totals.seats, 1);
+});

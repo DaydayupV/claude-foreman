@@ -451,6 +451,30 @@ function groupScopeOwner(meta) {
   };
 }
 
+// 改动归属要看同目录所有并行执行任务；准入和按组查看仍保留各自原来的边界。
+// 运行 id 里带着开始时刻（本地时间）；不是这种格式的返回 null
+const idTime = (id) => {
+  const p = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-/.exec(id);
+  return p ? new Date(+p[1], +p[2] - 1, +p[3], +p[4], +p[5], +p[6]).getTime() : null;
+};
+export function concurrentExecRuns(meta, previous = []) {
+  // 近期记录之外合并活动项和开工时见过的任务，长任务结束并移出活动集合后也不会漏掉。
+  const since = Date.parse(meta.started_at) - UNVERIFIED_LIMIT_MS;
+  const names = fs.readdirSync(RUNS_ROOT).filter((id) => {
+    const at = idTime(id);
+    return at == null ? !id.startsWith('.') && id !== 'plans' && !id.includes('.') : !(at < since);
+  });
+  const ids = new Set([...names, ...(activeState()?.active ?? []), ...previous.map((r) => r.id)]);
+  const all = [...ids].map((id) => ({ id, meta: readMeta(path.join(RUNS_ROOT, id)) }));
+  const own = new Set([meta.id]);
+  for (let parent = meta.parent; parent && !own.has(parent); parent = all.find((r) => r.id === parent)?.meta?.parent) own.add(parent);
+  const sameSeat = (m) => meta.plan != null && m.plan === meta.plan && m.seat === meta.seat;
+  const start = Date.parse(meta.started_at), end = meta.ended_at ? Date.parse(meta.ended_at) : Date.now();
+  return all.filter((r) => r.meta?.cwd && !own.has(r.id) && !sameSeat(r.meta) && writesFiles(r.meta)
+    && absolute(r.meta.cwd, '.') === absolute(meta.cwd, '.')
+    && Date.parse(r.meta.started_at) <= end && runEnd(path.join(RUNS_ROOT, r.id), r.meta) >= start);
+}
+
 // 准入检查（在登记锁内）：同一协作方正在运行的任务不超过它的 max_parallel，所有组和会话都算，
 // 因为服务商的限流和额度是按账号的；同组的执行任务写入范围不能重叠。
 // 历史计划和续接关系留索引，避免结束任务移出活动集合后，席位与最新轮次的检查丢失。

@@ -150,6 +150,9 @@ test('讨论失败首轮可重启，第二轮须先交第二份报告，submit �
   failed(await h.bridge(resume, { env: s.env }), M.hostAnswerRequired(p.plan_id, 2));
   const answer = output(await h.bridge(submitArgs(h, p)));
   assert.deepEqual(answer.commands, [a, b].map((r) => `node "${BRIDGE}" resume --run ${r.run_id} --level complex --brief "<续接说明.md>"`));
+  // 后面几轮另列能续接的席位和模型，并写明广度席不续接（脚本不知道档位，由 Claude 挑）
+  assert.deepEqual(answer.resumable.map((s) => [s.seat, s.agent, s.run_id]), [[1, 'codex', a.run_id], [2, 'codex', b.run_id]]);
+  assert.equal(answer.note, M.submitResumeNote);
   const next = output(await h.bridge(resume, { env: s.env })); assert.equal(next.round, 2); assert.equal(next.parent, a.run_id);
 });
 

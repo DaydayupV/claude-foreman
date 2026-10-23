@@ -220,6 +220,8 @@ function cmdStats(o, statsOf) {
   };
   for (const { root, module, rounds } of seatChains(runs, totals)) {
     if (root.running || o.module != null && module !== o.module || cutoff != null && !(Date.parse(root.meta.started_at) >= cutoff)) continue;
+    // 根本没调用协作方就失败的（比如开工前拍快照失败）不算一席：模型什么也没做，算进来会把返工率和失败数算错
+    if (rounds.every((run) => run.result?.not_started)) { totals.not_started = (totals.not_started || 0) + 1; continue; }
     totals.seats++;
     totals.runs += rounds.filter((run) => !run.running).length;
     const rootRow = rowFor(root.meta, root.result, module);

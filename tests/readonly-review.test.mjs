@@ -35,6 +35,7 @@ for (const kind of ['discuss', 'review']) test(`audited ${M.modeNames[kind]}拒�
   assert.equal(h.records().filter((m) => m.participant !== 'host').length, 0); assert.equal(h.calls().length, 0);
   const r = output(await h.bridge(taskArgs(h, kind), { env: { PATH: h.home } }), 1);
   assert.equal(r.status, 'failed'); assert.equal(r.readonly, 'audited'); assert.equal(r.session_id, null);
+  assert.equal(r.not_started, true); assert.equal(json(path.join(r.run_dir, 'result.json')).not_started, true);
   assert.equal(h.calls().length, 0); assert.equal(json(path.join(r.run_dir, 'meta.json')).status, 'failed');
   assert.ok(r.errors.some((e) => e.includes('拍不了快照就发现不了写入，所以没有开始')));
 });

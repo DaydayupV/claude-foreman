@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { CLAUDE_SESSION, registerRun, groupScopeOwner, absolute, isCancelled, cancelSource, saveMeta, metaWriteWarning } from './records.mjs';
+import { CLAUDE_SESSION, registerRun, concurrentExecRuns, absolute, isCancelled, cancelSource, saveMeta, metaWriteWarning } from './records.mjs';
 import { makeTracker } from './tracker.mjs';
 import { computeReviewMaterial } from './review-scope.mjs';
 import { M, die, notice, relativePath, pathKey, modelOf, replaceFile, killTree, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision } from './util.mjs';
@@ -284,17 +284,30 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
   let tracker = null;
   const cleanup = () => tracker?.cleanup();
   try {
+    const concurrentAtStart = opts['no-snapshot'] ? [] : concurrentExecRuns(meta);
     let before = null;
+    let after = null;
+    let incomplete = false;
+    const unstableFiles = [];
+    const noteUnstable = (snap, phase) => {
+      incomplete ||= snap.incomplete;
+      if (snap.timed_out) notes.push(M.snapshotDeadlineNote(phase));
+      if (!snap.unstable.length) return;
+      unstableFiles.push(...snap.unstable.map((path) => ({ path, phase })));
+      notes.push(M.unstableFiles(snap.unstable, phase));
+    };
     let snapshotError = null;
     if (!opts['no-snapshot']) {
       try {
         tracker = makeTracker(dir, cwd, track, { ignored: kind !== 'exec' });
         process.once('exit', cleanup);
-        // 大目录拍快照要几分钟：先在事件里记一笔，实时查看和 status 能写出正在拍快照，而不是一片空白
+        // 先记事件，让实时查看能显示正在拍快照。
         const event = eventWriter(dir);
         const snapStart = Date.now();
         event({ type: 'foreman.snapshot', phase: 'start' });
         before = tracker.snap('before');
+        noteUnstable(before, 'before');
+        if (audited && before.incomplete) throw new Error(M.snapshotIncomplete);
         event({ type: 'foreman.snapshot', phase: 'done', seconds: Math.round((Date.now() - snapStart) / 1000) });
       }
       catch (e) {
@@ -341,7 +354,14 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
     let outsideClaims = [];
     if (tracker) {
       try {
-        changes = { available: true, ...tracker.diff(before, tracker.snap('after'), path.join(dir, 'diff.patch')) };
+        after = tracker.snap('after');
+        noteUnstable(after, 'after');
+        if (audited && after.incomplete) {
+          r.status = 'failed'; r.code = 1; r.errors.push(M.auditedSnapshotIncomplete);
+        }
+        changes = { available: true, ...tracker.diff(before, after, path.join(dir, 'diff.all.patch')) };
+        changes.all_shortstat = changes.shortstat;
+        changes.all_patch_bytes = changes.patch_bytes;
         if (kind !== 'exec') {
           try {
             const covered = tracker.covers(reported, claims.filter((c) => c.dir).map((c) => c.rel));
@@ -352,9 +372,13 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
           }
         }
       }
-      catch (e) { warnings.push(M.trackingFailed(e.message)); }
-      finally { tracker.cleanup(); }
+      catch (e) {
+        warnings.push(M.trackingFailed(e.message));
+        if (audited) { r.status = 'failed'; r.code = 1; r.errors.push(M.auditedSnapshotIncomplete); }
+      }
     }
+    if (unstableFiles.length) changes.unstable_files = unstableFiles;
+    if (incomplete) changes.incomplete = true;
     const tracked = [...(changes.files || []), ...(changes.large_files_changed || [])];
     // 归属分三种：agent 有工具事件作证据；reported 只有协作方在报告里自称改过（比如用脚本写的文件）；unknown 都没有，可能是别人改的。
     const reportedPaths = new Set(claims.map((c) => c.key));
@@ -365,12 +389,31 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
     changes.agent_total = tracked.filter((f) => f.by === 'agent').length;
     changes.reported_total = tracked.filter((f) => f.by === 'reported').length;
     changes.unknown_total = tracked.length - changes.agent_total - changes.reported_total;
-    const ownerOf = groupScopeOwner(meta);
+    const otherRuns = tracked.some((f) => f.by === 'unknown') ? concurrentExecRuns(meta, concurrentAtStart) : [];
+    const ownRoots = [...opts.scope, ...track].map((root) => absolute(cwd, root));
+    const ambiguous = [];
+    const ownerOf = (file) => {
+      const a = absolute(cwd, file);
+      const owners = otherRuns.filter((r) => (r.meta.scope || []).some((s) => { const b = absolute(r.meta.cwd, s); return a === b || a.startsWith(`${b}/`); }));
+      if (!owners.length) return null;
+      if (owners.length > 1 || ownRoots.some((root) => a === root || a.startsWith(`${root}/`))) { ambiguous.push(file); return null; }
+      return owners[0].id;
+    };
     const groupOwned = tracked.filter((f) => f.by === 'unknown').map((f) => ({ f, owner: ownerOf(relativePath(cwd, f.path)) })).filter((x) => x.owner);
     for (const { f, owner } of groupOwned) f.group_run = owner;
     changes.group_total = groupOwned.length;
     if (groupOwned.length) notes.push(M.groupScopeChanges(groupOwned.length, M.list([...new Set(groupOwned.map((x) => x.owner))])));
+    if (ambiguous.length) notes.push(M.ambiguousScopeChanges(ambiguous));
     if (changes.unknown_total > groupOwned.length) notes.push(M.unattributedChanges(changes.unknown_total - groupOwned.length));
+    if (changes.available) {
+      try {
+        if (groupOwned.length) {
+          const patch = tracker.diff(before, after, path.join(dir, 'diff.patch'), groupOwned.map(({ f }) => f.path));
+          changes.shortstat = patch.shortstat;
+          changes.patch_bytes = patch.patch_bytes;
+        } else fs.copyFileSync(path.join(dir, 'diff.all.patch'), path.join(dir, 'diff.patch'));
+      } catch (e) { changes.available = false; warnings.push(M.trackingFailed(e.message)); }
+    }
     // 自称改过、却没追踪到的：文件看它本身，目录看前缀下有没有被追踪的文件；工作目录本身不算一条自称的改动
     const trackedKeys = tracked.map((f) => pathKey(relativePath(cwd, f.path)));
     const untracked = [...new Map(claims.filter((c) => !c.root && !trackedKeys.includes(c.key) && !(c.dir && trackedKeys.some((k) => k.startsWith(`${c.key}/`))))
@@ -432,6 +475,7 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
       mode,
       kind,
       status: meta.status,
+      ...(snapshotError ? { not_started: true } : {}),
       title: meta.title,
       cwd,
       track,

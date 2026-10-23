@@ -48,12 +48,17 @@ export async function cmdSubmit(o, load) {
     fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ id, ...common, group: plan.group, cwd: plan.cwd, level: plan.level,
       cell: plan.cell, title: null, ...(kind === 'review' ? { review_fingerprint: plan.review.fingerprint } : {}),
       claude_session: CLAUDE_SESSION, started_at: submitted_at, ended_at: submitted_at, pid: null, session_id: null }, null, 2));
-    const commands = round === 1 ? startCommands(plan) : plan.seats.flatMap((seat) => {
+    const resumable = round === 1 ? [] : plan.seats.flatMap((seat) => {
       const latest = runs.filter((run) => run.meta.participant !== 'host' && run.meta.seat === seat.seat).at(-1);
       return latest && (latest.meta.session_id || fs.existsSync(path.join(RUNS_ROOT, latest.id, 'messages.json')))
-        ? [`node "${ENTRY}" resume --run ${latest.id} --level ${plan.level} --brief "${M.planPlaceholders.resume}"`] : [];
+        // 模型写这一席上一轮实际用的（启动时可能用 --model 换过），没有记录时才用建计划时的
+        ? [{ seat: seat.seat, agent: seat.agent, model: latest.meta.model ?? seat.model ?? null, run_id: latest.id,
+          command: `node "${ENTRY}" resume --run ${latest.id} --level ${plan.level} --brief "${M.planPlaceholders.resume}"` }] : [];
     });
-    result = { run_id: id, plan: plan.plan_id, seat: 0, round, submitted_at, report_sha256, run_dir: dir, commands };
+    const commands = round === 1 ? startCommands(plan) : resumable.map((seat) => seat.command);
+    // 脚本不知道模型档位：后面几轮把能续接的每一席都列出来，并写明广度席不续接，由 Claude 按档位挑
+    result = { run_id: id, plan: plan.plan_id, seat: 0, round, submitted_at, report_sha256, run_dir: dir, commands,
+      ...(round > 1 ? { resumable: resumable.map(({ command, ...seat }) => seat), note: M.submitResumeNote } : {}) };
   } finally { release(); }
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');
 }
