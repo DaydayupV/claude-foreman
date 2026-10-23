@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { sandbox, taskArgs, output, failed, poll, seedRun, expected, json, read, MESSAGES } from './helpers.mjs';
+import { pathToFileURL } from 'node:url';
+import { sandbox, taskArgs, output, failed, poll, seedRun, expected, json, read, ROOT, MESSAGES } from './helpers.mjs';
 import { command } from './fixtures/reports.mjs';
 import { watchRecords, watchText } from './fixtures/watch.mjs';
 const M = MESSAGES.zh;
@@ -172,4 +173,37 @@ test('组汇总里交回问题后已续接的任务记作已续接，结果看�
   seedRun(h, '20000101-answer', { group: 'resumed-group', parent: '20000101-ask' }, { status: 'done', report: { status: 'completed' } });
   const r = await h.bridge(['status', '--group', 'resumed-group']);
   assert.ok(r.stdout.endsWith(`${D.groupSummary(2, 0, 1, 0, 0, 1)}\n`));
+  assert.match(r.stdout, /20000101-ask\s+run\s+↪ resumed/);
+  assert.ok(!r.stdout.includes('questions returned'), r.stdout);
+});
+
+test('正常结束的 partial 单独计数并用不同标记，执行失败和交回问题仍算原来的类别', async (t) => {
+  const h = sandbox(t), group = 'partial-group';
+  seedRun(h, 'partial', { group }, { status: 'done', report: { status: 'partial' } });
+  seedRun(h, 'completed', { group }, { status: 'done', report: { status: 'completed' } });
+  seedRun(h, 'failed-partial', { group, status: 'failed' }, { status: 'failed', report: { status: 'partial' } });
+  seedRun(h, 'blocked-partial', { group }, { status: 'done', needs_decision: true, report: { status: 'partial' } });
+  const records = pathToFileURL(path.join(ROOT, 'foreman/skills/dispatch/scripts/records.mjs')).href;
+  const script = h.write('partial-tally.mjs', `import { initializeRecords, groupRuns, groupTally } from ${JSON.stringify(records)};
+initializeRecords({ dispatch: { runs_dir: ${JSON.stringify(h.runs)} } });
+console.log(JSON.stringify(groupTally(groupRuns(${JSON.stringify(group)}))));`);
+  assert.deepEqual(output(await h.start(script).done), { running: 0, ok: 1, blocked: 1, failed: 1, resumed: 0, partial: 1 });
+  const r = await h.bridge(['status', '--group', group]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /^partial\s+run\s+◐ partly done/m);
+  assert.match(r.stdout, /^failed-partial\s+run\s+✗ failed/m);
+  assert.match(r.stdout, /^blocked-partial\s+run\s+\? questions returned/m);
+  assert.ok(r.stdout.endsWith(`${D.groupSummary(4, 0, 1, 1, 1, 0, 0, 1)}\n`), r.stdout);
+  assert.ok(r.stdout.includes('1 partly done'), r.stdout);
+});
+
+test('单任务查看的结尾行把部分完成标成 ◐，和组视图、status 一致', async (t) => {
+  const h = sandbox(t);
+  // 正常结束的部分完成和成功一样，不再把临时的重连提示当成报错列出
+  seedRun(h, 'partial-run', {}, { status: 'done', report: { status: 'partial', summary: '只做完一半' }, errors: ['Reconnecting... 1/5 (stream disconnected)'] });
+  const r = await h.bridge(['watch', '--run', 'partial-run', '--no-intro']);
+  assert.equal(r.code, 0, r.stderr);
+  const text = r.stdout.replace(/\x1b\[[0-9;]*m/g, '');
+  assert.match(text, /◐ partly done/);
+  assert.doesNotMatch(text, /✗/);
 });

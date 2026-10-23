@@ -400,7 +400,7 @@ function createTimeline(meta, rel, { stream = false, write = (l) => process.stdo
     }
     // 报错：先按纯文字折行，再给行首的记号上色，免得颜色码算进宽度
     const [mark, color] = r.status === 'needs_input' ? ['?', C.yellow] : ['✗', C.red];
-    for (const e of realErrors(r, o.ok)) {
+    for (const e of realErrors(r, o.ok || o.partial)) {
       add((W) => wrapWidth(`${mark} ${oneLine(e)}`, Math.max(8, W - 5)).map((l, i) => `  ${i ? `  ${l}` : color(mark) + l.slice(mark.length)}`));
     }
     return o;
@@ -417,7 +417,8 @@ function createTimeline(meta, rel, { stream = false, write = (l) => process.stdo
 function resultOutcome(r) {
   const blocked = r.status === 'needs_input' || r.status === 'done' && (!!r.needs_decision || r.report?.status === 'blocked');
   const valid = resultValid(r, r);
-  return { running: false, status: r.status, result: r, blocked, valid, ok: !blocked && valid && r.status === 'done' && (!r.report?.status || r.report.status === 'completed') };
+  const partial = !blocked && r.status === 'done' && r.report?.status === 'partial';
+  return { running: false, status: r.status, result: r, blocked, valid, partial, ok: !blocked && valid && r.status === 'done' && (!r.report?.status || r.report.status === 'completed') };
 }
 
 export { createTimeline, reviewConclusion, resultOutcome, realErrors, durationOf, finishedParts, liveStatus, eventReader, wrapAtDots, hhmm };

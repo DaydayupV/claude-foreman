@@ -62,9 +62,10 @@ const took = (sec) => (Number.isFinite(sec) ? D.took(D.duration(sec)) : ''); // 
 
 // 执行顺利结束时以报告里的状态为准（完成、部分完成、交回问题……）
 const shownStatus = (status, r) => (status === 'done' ? r?.needs_decision ? 'blocked' : r?.report?.status || status : status);
-// o 是 runOutcome 的结果：运行中 ●、完成 ✔、交回问题和等人回答 ?，其余 ✗
+// 部分完成仍有可用交付，不能和失败共用红色的叉号。
 function outcomeStyle(o) {
-  const style = o.running ? { mark: '●', color: C.cyan } : o.ok ? { mark: '✔', color: C.green } : o.blocked ? { mark: '?', color: C.yellow } : { mark: '✗', color: C.red };
+  if (o.resumed) return { mark: '↪', color: C.dim, word: D.statusResumed };
+  const style = o.running ? { mark: '●', color: C.cyan } : o.ok ? { mark: '✔', color: C.green } : o.blocked ? { mark: '?', color: C.yellow } : o.partial ? { mark: '◐', color: C.yellow } : { mark: '✗', color: C.red };
   return { ...style, word: D.statusName(o.running ? 'running' : o.status === 'done' && !o.blocked && o.valid === false ? 'no_result' : shownStatus(o.status, o.result)) };
 }
 
@@ -106,6 +107,7 @@ function usageLine(result, meta) {
   const cost = costOf({ ...meta, ...result }, loadPrices());
   return [result?.usage ? D.tokenSummary(result.usage, result.last_request ?? result.context, D.tokenCount,
     (result.usage_scope ?? (meta?.mode === 'resume' ? 'session_total' : 'this_run')) === 'session_total') : '',
+  result?.output_tokens_per_s != null ? D.outputSpeed(result.output_tokens_per_s) : '',
   cost.cost_usd != null && cost.cost_source !== 'unknown' ? D.costUsd(formatUsd(cost.cost_usd)) : ''].filter(Boolean).join(' · ');
 }
 

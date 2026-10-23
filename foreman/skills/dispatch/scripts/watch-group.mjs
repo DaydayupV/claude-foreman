@@ -1,6 +1,7 @@
 // 组视图：一组任务（讨论、审查的各席，或者并发拆分的几份）排在一个画面里。
 // 标题行写 <模块> · <模式> · <标题> · <等级>[ · round N]，右边是各状态的个数；计划只在有缺口时多写一行。
 // Claude Code 席排在最前（席位号 0）；每席是身份行、分工行和正文，按席位号打开那一席的完整时间线。
+import fs from 'node:fs';
 import path from 'node:path';
 import { RUNS_ROOT, requestCancel, readMeta, checkRunners, isRunning, runOutcome, groupRuns } from './records.mjs';
 import { describePlans } from './plan.mjs';
@@ -27,9 +28,9 @@ function seatState(run, feed) {
   }
   const style = outcomeStyle(o);
   const sec = durationOf(o.result, run.meta);
-  return { style, right: [style.word, Number.isFinite(sec) ? clock(sec * 1000) : null], kind: o.ok ? 'ok' : o.blocked ? 'blocked' : 'failed', o };
+  return { style, right: [style.word, Number.isFinite(sec) ? clock(sec * 1000) : null], kind: o.ok ? 'ok' : o.blocked ? 'blocked' : o.partial ? 'partial' : 'failed', o };
 }
-const COUNT_STYLE = { running: ['●', C.cyan], queued: ['⋯', C.yellow], ok: ['✔', C.green], blocked: ['?', C.yellow], failed: ['✗', C.red] };
+const COUNT_STYLE = { running: ['●', C.cyan], queued: ['⋯', C.yellow], ok: ['✔', C.green], partial: ['◐', C.yellow], blocked: ['?', C.yellow], failed: ['✗', C.red] };
 const countsText = (states) => Object.entries(COUNT_STYLE).map(([kind, [mark, color]]) => {
   const n = states.filter((s) => s.kind === kind).length;
   return n ? color(`${mark}${n}`) : '';
@@ -177,7 +178,7 @@ function createSeat(run) {
     if (feed.state.running) return;
     if (o.result || ++misses >= RESULT_RETRIES) { finished = true; tl.finish(o.result, feed.run.meta); }
   };
-  feed.final = (inner) => finalLines(feed.run, feed.outcome?.result, isHost(feed.run) || feed.outcome?.ok, inner);
+  feed.final = (inner) => finalLines(feed.run, feed.outcome?.result, isHost(feed.run) || feed.outcome?.ok || feed.outcome?.partial, inner);
   return feed;
 }
 
@@ -206,11 +207,57 @@ function seatBlock(run, feed, rows, width, no, split) {
 }
 
 async function watchGroup(group, o, loadCfg) {
-  let planRuns = [];
+  let planRuns = [], lastGrouped = [];
+  // 号码显示过就不再变。计划席用计划里的席位号、Claude Code 席用 0（一组里有几份计划、号码撞了时顺延到空号），
+  // 其余按出现先后取最小的空号；续接和同席重启沿用这一席原来的号。
+  const seatNumbers = new Map(), shownNumbers = new Map(); // 席位 → 号码；run id → 号码
+  const numberOf = (run) => shownNumbers.get(run.id);
+  const assignNumbers = (runs) => {
+    const byId = new Map(planRuns.map((run) => [run.id, run]));
+    const seatKey = (run) => {
+      if (run.meta.plan && run.meta.seat != null) return `${run.meta.plan}:${run.meta.seat}`;
+      while (byId.has(run.meta.parent)) run = byId.get(run.meta.parent);
+      return run.id;
+    };
+    const used = new Set(seatNumbers.values());
+    // 祖先第一次显示时读不出、后来才读到的，算出来的根就变了：先沿用续接链上已经显示过的号码
+    const inherited = (run) => {
+      for (let id = run.meta.parent; id; id = byId.get(id)?.meta.parent) if (shownNumbers.has(id)) return shownNumbers.get(id);
+      return null;
+    };
+    const take = (run, wanted) => {
+      const key = seatKey(run);
+      if (!seatNumbers.has(key)) {
+        let n = inherited(run);
+        if (n == null) {
+          n = wanted ?? 1;
+          if (used.has(n)) for (n = 1; used.has(n); n++);
+        }
+        seatNumbers.set(key, n);
+        used.add(n);
+      }
+      shownNumbers.set(run.id, seatNumbers.get(key));
+    };
+    // 先给有指定号码的，免得别的任务先占了它们的号
+    for (const run of runs) if (run.meta.plan && run.meta.seat != null) take(run, isHost(run) ? 0 : run.meta.seat);
+    for (const run of runs) if (!shownNumbers.has(run.id)) take(run, isHost(run) ? 0 : null);
+  };
   const recentRuns = () => {
     const grouped = groupRuns(group, Date.now() - 86400000);
+    // meta.json 正被替换时会暂时读不到，这一席就会从列表里掉出去、下一秒重建：上次见过、文件还在的再读一次，还读不出就沿用上次读到的
+    const ids = new Set(grouped.all.map((run) => run.id));
+    const missed = lastGrouped.filter((run) => !ids.has(run.id) && fs.existsSync(path.join(run.dir, 'meta.json')))
+      .map((run) => ({ ...run, meta: readMeta(run.dir) || run.meta }));
+    if (missed.length) {
+      const newest = (a, b) => (a.id < b.id ? 1 : -1);
+      grouped.push(...missed); grouped.sort(newest);
+      grouped.all.push(...missed); grouped.all.sort(newest);
+    }
+    lastGrouped = [...grouped];
     planRuns = grouped.all;
-    const runs = ordered(current(grouped).reverse());
+    // 先按最早一轮排位，再换成最新一轮，续接不会把原来的席挪到末尾。
+    const runs = ordered(current([...grouped].reverse(), planRuns));
+    assignNumbers(runs);
     checkRunners(runs.map((run) => run.meta));
     return runs;
   };
@@ -247,8 +294,8 @@ async function watchGroup(group, o, loadCfg) {
   let introPlayed = false;
   let handOff = () => {};
   if (early == null && introWanted(o, runs.map((run) => run.meta), loadCfg)) {
-    const fresh = (list) => list.filter((run) => !isHost(run) && !run.meta.parent).map((run) => introOf(run.meta));
-    const first = runs.find((run) => !isHost(run) && !run.meta.parent).meta;
+    const fresh = (list) => list.filter((run) => !isHost(run) && !run.meta.parent && !run.meta.dismissed_at && isRunning(run.meta)).map((run) => introOf(run.meta));
+    const first = runs.find((run) => !isHost(run) && !run.meta.parent && !run.meta.dismissed_at && isRunning(run.meta)).meta;
     const kind = runs.some((run) => kindOf(run.meta) === 'discuss') ? 'discuss' : kindOf(first);
     // meta.json 正被替换时会暂时读不到，组里的任务就会从列表里消失：见过的任务都记着，读不到的不算结束
     const seen = new Map(runs.map((run) => [run.id, run]));
@@ -291,8 +338,6 @@ async function watchGroup(group, o, loadCfg) {
   };
   const anyRunning = () => update().some((run) => feeds.get(run.id).state.running);
   const settled = () => !anyRunning() && Date.now() - lastAdded >= 5000; // 等几秒，同组后派出的任务也能收进来
-  const hasHost = () => list().some(isHost);
-  const numberOf = (i) => (hasHost() ? i : i + 1);
 
   // 计划只在有缺口时写一行：缺了必选、补漏席没跑完、材料变了、Claude Code 席还没提交报告
   const planNotes = (width, wrap) => describePlans(list(), planRuns).filter((p) => p.details || p.state === 'incomplete').flatMap((p) => {
@@ -329,7 +374,7 @@ async function watchGroup(group, o, loadCfg) {
         all.forEach((run, i) => { if (spare > 0 && rows[i] < Math.min(want[i], MAX_ROWS)) { rows[i]++; spare--; grew = true; } });
       }
     }
-    return all.map((run, i) => seatBlock(run, feeds.get(run.id), rows[i], width, numbered ? numberOf(i) : null, split));
+    return all.map((run, i) => seatBlock(run, feeds.get(run.id), rows[i], width, numbered ? numberOf(run) : null, split));
   };
 
   // 打开的那一席：顶部是它的身份行、分工行和组的任务行，下面是它的完整时间线
@@ -339,8 +384,7 @@ async function watchGroup(group, o, loadCfg) {
   let seatTotal = 0;
   let seatWidth = 0;
   const renderSeat = (all, W, H) => {
-    const i = all.findIndex((_, k) => numberOf(k) === focus);
-    const run = all[i];
+    const run = all.find((run) => numberOf(run) === focus);
     const feed = feeds.get(run.id);
     const st = seatState(run, feed);
     const width = W - 1;
@@ -370,16 +414,17 @@ async function watchGroup(group, o, loadCfg) {
   let allDone = false;
   const render = (W, H) => {
     const all = update();
-    if (focus != null && all.some((_, k) => numberOf(k) === focus)) return renderSeat(all, W, H);
+    if (focus != null && all.some((run) => numberOf(run) === focus)) return renderSeat(all, W, H);
     const width = Math.max(20, W - 1);
     const built = blocks(all, width, H - 2 - planNotes(width).length, allDone);
     const top = [headLine(all, built.map((b) => b.state), width), ...planNotes(width)];
     const body = built.flatMap((b) => [C.dim('─'.repeat(width)), ...b.lines]);
     const { shown, above, below } = groupScroll.view(body, Math.max(1, H - top.length - 1));
     const queued = queuedRuns();
-    // 按键只认一位数字，提示里的范围到 9 为止
-    const last = Math.min(all.length - 1, hasHost() ? 9 : 8);
-    const range = all.length ? (last > 0 ? `${numberOf(0)}–${numberOf(last)}` : `${numberOf(0)}`) : '';
+    const seats = all.map(numberOf).sort((a, b) => a - b);
+    // 连续的号码合成一段（0–3,5–14），席位多又有缺号时提示不会太长
+    const range = seats.reduce((spans, n) => { const last = spans.at(-1); if (last && n === last[1] + 1) last[1] = n; else spans.push([n, n]); return spans; }, [])
+      .map(([a, b]) => (a === b ? `${a}` : b === a + 1 ? `${a},${b}` : `${a}–${b}`)).join(',');
     let foot;
     if (confirmCancel && queued.length) foot = C.yellow(fitWidth(D.dashCancelConfirm(D.list(queued.map((run) => shortModel(modelOf(run.meta))))), width));
     else {
@@ -388,7 +433,7 @@ async function watchGroup(group, o, loadCfg) {
       const done = (s) => C.green(s.slice(0, 1)) + C.dim(s.slice(1));
       const left = allDone && where ? { text: `✔ ${D.dots([D.dashAllFinishedShort, where])}`, paint: done }
         : where ? { text: where, paint: C.yellow } : allDone ? { text: `✔ ${D.dashAllFinished}`, paint: done } : null;
-      const keys = D.dashKeys(range, queued.length > 0);
+      const keys = D.dashKeys(range, queued.length > 0, seats.some((n) => n >= 10));
       const paintKeys = queued.length ? C.yellow : C.dim;
       const space = width - textWidth(keys) - 2;
       if (!left) foot = ' '.repeat(Math.max(0, width - textWidth(keys))) + paintKeys(fitWidth(keys, width));
@@ -421,19 +466,34 @@ async function watchGroup(group, o, loadCfg) {
     const screen = liveScreen(render);
     let quit = null;
     const done = new Promise((resolve) => { quit = resolve; });
+    let digits = '', digitTimer = null;
+    const openSeat = () => {
+      if (digits && list().some((run) => numberOf(run) === Number(digits))) { focus = Number(digits); seatScroll.offset = 0; }
+      digits = '';
+      clearTimeout(digitTimer);
+    };
     const onKeys = (d) => {
       const page = Math.max(1, termRows() - 4);
       for (const k of splitKeys(d.toString('utf8'))) {
         if (k === '\x03' || k === 'q') { quit(k === '\x03' ? 130 : 0); return; }
+        // 除了接着输入的数字，任何键都取消还在等第二位的席位号
+        if (!/^[0-9]$/.test(k) || focus != null) { digits = ''; clearTimeout(digitTimer); }
         if ((k === 'x' || k === 'X') && focus == null && queuedRuns().length) {
           if (confirmCancel) for (const run of queuedRuns()) { requestCancel(run.dir, 'watch'); cancelSent.add(run.id); }
           confirmCancel = !confirmCancel;
           continue;
         }
         confirmCancel = false;
-        if (/^[0-9]$/.test(k) && focus == null && list().some((_, i) => numberOf(i) === Number(k))) { focus = Number(k); seatScroll.offset = 0; }
-        else if ((k === '\x1b' || k === '\x7f' || k === '\b') && focus != null) focus = null;
-        else (focus != null ? seatScroll : groupScroll).key(k, page);
+        if (/^[0-9]$/.test(k) && focus == null) {
+          digits += k;
+          clearTimeout(digitTimer);
+          // 还有以这几位开头的更长号码时才等第二位，否则立即打开
+          if (!list().some((run) => String(numberOf(run)).length > digits.length && String(numberOf(run)).startsWith(digits))) openSeat();
+          else digitTimer = setTimeout(() => { openSeat(); screen.draw(); }, 600);
+        } else {
+          if ((k === '\x1b' || k === '\x7f' || k === '\b') && focus != null) focus = null;
+          else (focus != null ? seatScroll : groupScroll).key(k, page);
+        }
       }
       screen.draw();
     };
@@ -444,18 +504,16 @@ async function watchGroup(group, o, loadCfg) {
     handOff(); // 实时面板接手了备用屏幕，由它负责退出时恢复终端
     let code = null;
     done.then((c) => { code = c; });
-    for (let tick = 0; code == null && !allDone; tick++) {
+    while (code == null) {
+      allDone = settled();
       screen.draw();
-      if (settled()) { allDone = true; break; }
+      if (allDone && !interactive()) break;
       await sleep(1000);
-      for (const run of known.values()) run.meta = readMeta(run.dir) || run.meta;
-      if (tick % 2 === 1) { runs = recentRuns(); refresh(); }
+      // 结束后仍跟着同组的新派发和续接走，不能停在已经过时的汇总上。
+      runs = recentRuns();
+      refresh();
     }
-    // 全部结束：有人能按键时停在画面里，之后只在按键和窗口变化时重画
-    if (allDone && code == null && interactive()) {
-      screen.draw();
-      code = await done;
-    }
+    clearTimeout(digitTimer);
     if (interactive()) stopKeys(onKeys);
     screen.stop();
     if (code != null && !allDone) { process.stdout.write(`${C.dim(D.watchDetached)}\n`); process.exit(code); }

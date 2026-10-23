@@ -202,7 +202,7 @@ function cmdStats(o, statsOf) {
     if (running) totals.running_skipped++;
     return { id, dir, meta, running, result: meta && !running ? readRecord(dir, 'result.json') : null };
   });
-  const rows = new Map(), seatTimes = new Map(), groups = new Map();
+  const rows = new Map(), seatTimes = new Map(), speeds = new Map(), groups = new Map();
   const rowFor = (meta, result, module) => {
     const host = meta.participant === 'host', model = host ? meta.model ?? 'claude-code' : baseModel(meta, result);
     const key = JSON.stringify([host, model, module]);
@@ -212,9 +212,11 @@ function cmdStats(o, statsOf) {
         rework: ['run', 'image'].includes(module) ? { seats: 0, reworked: 0, rate: null } : null,
         duration_s: { total: 0, median_per_seat: null, missing_runs: 0 },
         tokens: { input: null, cached_input: null, output: null, runs: 0, missing_runs: 0 },
+        output_tokens_per_s: null,
         cost_usd: { total: null, runs: 0, missing_runs: 0 } };
       rows.set(key, row);
       seatTimes.set(row, []);
+      speeds.set(row, { output: 0, seconds: 0 });
     }
     return rows.get(key);
   };
@@ -238,10 +240,11 @@ function cmdStats(o, statsOf) {
     }
     const host = root.meta.participant === 'host', durations = host ? [] : rounds.map(durationOf);
     if (!host && !rounds.some((run) => run.running) && durations.every((n) => n != null)) seatTimes.get(rootRow).push(durations.reduce((sum, n) => sum + n, 0));
-    let cumulative = [0, 0, 0];
+    // gap：前面有一轮缺了用量，下一次会话累计的差值里混着那一轮的输出，分不清各轮各占多少
+    let cumulative = [0, 0, 0], gap = false;
     for (const [i, run] of rounds.entries()) {
       // 同一席重启的那一轮是新会话，会话累计用量从零算起。
-      if (!run.meta.parent) cumulative = [0, 0, 0];
+      if (!run.meta.parent) { cumulative = [0, 0, 0]; gap = false; }
       if (run.running) continue;
       const { meta, result } = run, row = rowFor(meta, result, module);
       run.row = row;
@@ -255,9 +258,13 @@ function cmdStats(o, statsOf) {
           usage = statsOf(meta)?.total_token_usage;
           scope = 'session_total';
         }
-        if (usage != null) {
+        let shared = false;
+        if (usage == null) gap = true;
+        else {
           // 会话累计值先扣掉之前各轮；累计倒退时这轮缺失，但仍以新累计值为下一轮基线。
           const values = TOKEN_FIELDS.map((key) => usage[key] ?? 0);
+          shared = scope === 'session_total' && gap;
+          if (scope === 'session_total') gap = false;
           usage = scope === 'session_total' ? values.map((n, j) => n - cumulative[j]) : values;
           cumulative = scope === 'session_total' ? values : cumulative.map((n, j) => n + values[j]);
           if (usage.some((n) => n < 0)) usage = null;
@@ -266,6 +273,8 @@ function cmdStats(o, statsOf) {
         else {
           for (const [j, key] of ['input', 'cached_input', 'output'].entries()) row.tokens[key] = (row.tokens[key] ?? 0) + usage[j];
           row.tokens.runs++;
+          // 速度只算用量和用时都有的轮次，两边缺的轮次不一样，不能拿两个总数直接相除。
+          if (durations[i] > 0 && !shared) { speeds.get(row).output += usage[2]; speeds.get(row).seconds += durations[i]; }
         }
         const cost = costOf({ ...meta, ...result, agent_type: agentTypeOf(meta) }, prices);
         if (cost.cost_source === 'unknown') {
@@ -300,6 +309,8 @@ function cmdStats(o, statsOf) {
   countUnique(groups);
   for (const row of rows.values()) {
     row.duration_s.median_per_seat = median(seatTimes.get(row));
+    const speed = speeds.get(row);
+    if (speed.seconds > 0) row.output_tokens_per_s = Math.round(speed.output / speed.seconds * 10) / 10;
     if (row.rework?.seats) row.rework.rate = Number((row.rework.reworked / row.rework.seats).toFixed(2));
   }
   print({ runs_dir: RUNS_ROOT, module: o.module ?? null, since_days: since, generated_at: new Date().toISOString(), totals,

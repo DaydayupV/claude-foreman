@@ -91,11 +91,16 @@ test('续接时跳过开工前的会话文件，只读新增请求用量', async
   fs.appendFileSync(s.file, JSON.stringify({ timestamp: '2099-01-01T00:00:00.000Z', ...old }) + '\n');
   const next = tokenUsageRecord(largerUsage);
   next.payload.response_id = 'resp_new'; next.payload.usage = usage;
-  const scenario = h.scenario({ session_id: sessionId, append_rollout: true, rollout: [next] }, 'resume');
+  // 拖 1.6 秒，让这一轮有能算速度的时长（duration_s 取整到秒）
+  const scenario = h.scenario({ session_id: sessionId, append_rollout: true, rollout: [next], steps: [{ delay_ms: 1600 }] }, 'resume');
   const r = output(await h.bridge(['resume', '--run', parent.run_id, '--level', 'complex', '--brief', '-'], { env: scenario.env }));
   assert.deepEqual(h.events(r.run_id).filter((e) => e.type === 'step.usage').map((e) => e.usage), [usage]);
   assert.equal(r.usage_scope, 'this_run');
   assert.equal(r.usage.input_tokens, 120); assert.equal(r.usage.output_tokens, 40);
+  assert.ok(r.duration_s >= 2, String(r.duration_s));
+  assert.equal(r.output_tokens_per_s, Math.round(40 / r.duration_s * 10) / 10);
+  // 父任务没拿到这一轮自己的用量或时长为 0 时不给速度
+  assert.equal(parent.output_tokens_per_s, parent.duration_s > 0 && parent.usage_scope === 'this_run' ? Math.round(parent.usage.output_tokens / parent.duration_s * 10) / 10 : null);
 });
 
 test('只有 token_count 时保留最新累计用量、最近请求和额度，没有用量记录时为 null', (t) => {

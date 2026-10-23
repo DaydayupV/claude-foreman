@@ -148,6 +148,9 @@ function finishRun(run, result, code = result.exit_code, observed = {}) {
     result.notes.push(spent ? M.cancelledUsagePartial : M.cancelledUsageMissing);
   }
   Object.assign(result, costOf({ ...run.meta, ...result }, loadPrices()));
+  // 平均输出速度按这一轮的整段时间算（含跑命令和等待），只用这一轮自己的用量：会话累计量除以这一轮的时长没有意义。
+  const output = result.usage_scope === 'this_run' ? result.usage?.output_tokens : null;
+  result.output_tokens_per_s = output > 0 && result.duration_s > 0 ? Math.round(output / result.duration_s * 10) / 10 : null;
   result.questions = collectQuestions({ ...result, ...observed, last: observed.last ?? result.last_message ?? '' });
   const decisions = result.questions.filter(needsDecision).length;
   result.needs_decision = decisions > 0;

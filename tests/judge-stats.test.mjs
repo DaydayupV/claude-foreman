@@ -248,6 +248,9 @@ test('stats 合并两种接入的基础模型，费用未知的外部任务都�
   assert.deepEqual(r.rows.map((row) => [row.model, row.seats]), [['deepseek-flash', 5], ['gpt-6', 2], ['unknown', 1]]);
   const [flash, codex, unknown] = r.rows;
   assert.deepEqual(flash.tokens, { input: 100, cached_input: 20, output: 30, runs: 1, missing_runs: 4 });
+  // 速度只用同时有用量和用时的轮次：30 个输出 token / 2 秒；其余四轮没有用量，不把它们的 18 秒算进去
+  assert.equal(flash.output_tokens_per_s, 15);
+  assert.equal(codex.output_tokens_per_s, null);
   assert.deepEqual(flash.cost_usd, { total: null, runs: 0, missing_runs: 5 });
   assert.deepEqual(flash.duration_s, { total: 20, median_per_seat: 4, missing_runs: 0 });
   assert.equal(flash.findings_reported, 2);
@@ -277,9 +280,24 @@ test('stats 按链扣除累计用量、处理倒退并将升级轮次记在各�
   assert.deepEqual([r.totals.seats, r.totals.runs, small.model, small.seats, large.model, large.seats], [2, 7, 'small', 2, 'large', 0]);
   assert.deepEqual(small.tokens, { input: 100, cached_input: 20, output: 10, runs: 2, missing_runs: 0 });
   assert.deepEqual(large.tokens, { input: 105, cached_input: 25, output: 25, runs: 3, missing_runs: 2 });
+  // small：(10 + 0) / (2 + 4)；large：用量倒退的 a4 和没用量的 b2 不算，(10 + 5 + 10) / (3 + 4 + 6)
+  assert.deepEqual([small.output_tokens_per_s, large.output_tokens_per_s], [1.7, 1.9]);
   assert.deepEqual(small.duration_s, { total: 6, median_per_seat: 20, missing_runs: 0 });
   assert.deepEqual(large.duration_s, { total: 18, median_per_seat: null, missing_runs: 1 });
   assert.deepEqual(large.rework, { seats: 0, reworked: 0, rate: null });
+});
+
+test('stats 的速度不用混着缺失轮次输出的会话累计差值', async (t) => {
+  const h = sandbox(t);
+  // c1 没记用量；c2 的累计 110 里有 c1 的输出，只除以 c2 的 10 秒会高估；c3 以 c2 的累计为基线，(130 - 110) / 10
+  const rounds = [['c1', null, 100, null], ['c2', 'c1', 10, usage(200, 0, 110)], ['c3', 'c2', 10, usage(260, 0, 130)]];
+  for (const [i, [id, parent, duration_s, tokens]] of rounds.entries()) {
+    seedRun(h, id, { parent, model: 'chain', mode: parent ? 'resume' : 'run', started_at: new Date(1700000000000 + i * 10000).toISOString(), ended_at: undefined, session_id: null },
+      { status: 'done', duration_s, usage: tokens, usage_scope: tokens ? 'session_total' : undefined });
+  }
+  const [row] = output(await h.bridge(['stats'])).rows;
+  assert.deepEqual(row.tokens, { input: 260, cached_input: 0, output: 130, runs: 2, missing_runs: 1 });
+  assert.equal(row.output_tokens_per_s, 2);
 });
 
 test('stats 返工只算正常交回报告后的续接，图像沿根模块统计', async (t) => {

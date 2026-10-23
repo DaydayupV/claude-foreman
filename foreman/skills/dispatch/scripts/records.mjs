@@ -168,10 +168,10 @@ function createRunDir(previous) {
   return { id, dir };
 }
 
-function listRuns() {
+function listRuns(skip) {
   if (!fs.existsSync(RUNS_ROOT)) return [];
   return fs.readdirSync(RUNS_ROOT)
-    .filter((n) => fs.existsSync(path.join(RUNS_ROOT, n, 'meta.json')))
+    .filter((n) => !skip?.has(n) && fs.existsSync(path.join(RUNS_ROOT, n, 'meta.json')))
     .sort()
     .reverse();
 }
@@ -310,10 +310,15 @@ function describeActivity(dir) {
 
 // 一个组的任务，只取同一会话派出的那一批：当前会话用过这个组名就取当前会话的，
 // 否则（比如在终端里查看）跟最新派出的任务所在的会话。旧记录没有会话 ID，彼此算同一批。
+// 组名登记后不再改：实时查看每秒都要找一遍组里的任务，别的组的记录读到一次就记下、以后跳过（上千条记录全读一遍要几百毫秒）。
+const otherGroups = new Map(); // 组名 → 不属于它的 run id
 function groupRuns(group, since = 0) {
-  const runs = listRuns().map((id) => {
-    const dir = path.join(RUNS_ROOT, id);
-    return { id, dir, meta: readMeta(dir) };
+  if (!otherGroups.has(group)) otherGroups.set(group, new Set());
+  const skip = otherGroups.get(group);
+  const runs = listRuns(skip).map((id) => {
+    const dir = path.join(RUNS_ROOT, id), meta = readMeta(dir);
+    if (meta && meta.group !== group) skip.add(id);
+    return { id, dir, meta };
   }).filter(({ meta }) => meta?.group === group);
   const recent = runs.filter(({ meta }) => Date.parse(meta.started_at) >= since);
   if (!recent.length) return Object.assign(recent, { all: runs });
@@ -630,29 +635,37 @@ function runOutcome(run) {
   const blocked = status === 'needs_input' || status === 'done' && (result?.needs_decision || result?.report?.status === 'blocked');
   const valid = resultValid(m, result);
   const ok = !blocked && status === 'done' && valid && (!result?.report?.status || result.report.status === 'completed');
-  return { running, status, result, valid, ok, blocked };
+  // 部分完成仍有可用的交付，不算失败
+  const partial = !blocked && status === 'done' && result?.report?.status === 'partial';
+  return { running, status, result, valid, ok, blocked, partial };
+}
+
+// 已经续接过的任务：被别的任务续接的，以及同一计划同一席后来又重新启动过的（结果看最新的一轮）。
+function resumedRuns(runs, all = runs.all ?? runs) {
+  const resumedIds = new Set(all.map((run) => run.meta?.parent).filter(Boolean));
+  const seatOf = (run) => (run.meta?.plan && run.meta.seat != null ? `${run.meta.plan}:${run.meta.seat}` : null);
+  const latest = new Map();
+  for (const run of all) if (seatOf(run) && !(latest.get(seatOf(run)) > run.id)) latest.set(seatOf(run), run.id);
+  for (const run of runs) if (seatOf(run) && latest.get(seatOf(run)) > run.id) resumedIds.add(run.id);
+  return resumedIds;
 }
 
 // 组里各状态的个数。交回问题或失败、但已经续接过的任务记作"已续接"，结果看续接的那一轮。
 function groupTally(runs, all = runs.all ?? runs) {
-  const resumedIds = new Set(all.map((run) => run.meta.parent).filter(Boolean));
-  // 同一计划同一席重新启动过的，前面那几轮也算"已续接"，结果看最新的一轮。
-  const seatOf = (run) => (run.meta.plan && run.meta.seat != null ? `${run.meta.plan}:${run.meta.seat}` : null);
-  const latest = new Map();
-  for (const run of all) if (seatOf(run) && !(latest.get(seatOf(run)) > run.id)) latest.set(seatOf(run), run.id);
-  for (const run of runs) if (seatOf(run) && latest.get(seatOf(run)) > run.id) resumedIds.add(run.id);
+  const resumedIds = resumedRuns(runs, all);
   const tally = { running: 0, ok: 0, blocked: 0, failed: 0, resumed: 0 };
   for (const run of runs) {
     if (run.meta.participant === 'host') { tally.submitted = (tally.submitted || 0) + 1; continue; }
     const o = runOutcome(run);
-    tally[o.running ? 'running' : o.ok ? 'ok' : resumedIds.has(run.id) ? 'resumed' : o.blocked ? 'blocked' : 'failed']++;
+    const kind = o.running ? 'running' : o.ok ? 'ok' : resumedIds.has(run.id) ? 'resumed' : o.blocked ? 'blocked' : o.partial ? 'partial' : 'failed';
+    tally[kind] = (tally[kind] || 0) + 1;
   }
   return tally;
 }
 
 function groupSummary(runs) {
   const t = groupTally(runs);
-  return D.groupSummary(runs.length, t.running, t.ok, t.failed, t.blocked, t.resumed, t.submitted);
+  return D.groupSummary(runs.length, t.running, t.ok, t.failed, t.blocked, t.resumed, t.submitted, t.partial);
 }
 
 // settle 为 false 时原样返回磁盘上的内容，不用 result.json 兜底（cancel 要分清是元数据真写成了结束，还是只有结果写好了）
@@ -696,4 +709,4 @@ function isRunning(m, { query = true } = {}) {
 }
 const UNVERIFIED_LIMIT_MS = 25 * 3600000;
 
-export { RUNS_ROOT, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, saveMeta, metaWriteWarning, settleMeta, findRun, describeActivity, groupRuns, checkAdmission, readRunsLocked, runEnd, runOutcome, resultValid, groupTally, groupSummary, groupScopeOwner, absolute, readMeta, checkRunners, isRunning, writesFiles };
+export { RUNS_ROOT, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, saveMeta, metaWriteWarning, settleMeta, findRun, describeActivity, groupRuns, checkAdmission, readRunsLocked, runEnd, runOutcome, resultValid, resumedRuns, groupTally, groupSummary, groupScopeOwner, absolute, readMeta, checkRunners, isRunning, writesFiles };

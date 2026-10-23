@@ -1,7 +1,7 @@
 // 状态列表、终止任务和排队检查；会话统计由入口提供只读函数。
 import fs from 'node:fs';
 import path from 'node:path';
-import { RUNS_ROOT, UNFINISHED_STATUSES, requestCancel, listRuns, findRun, readMeta, checkRunners, isRunning, runEnd, runOutcome, groupRuns, groupSummary, describeActivity, saveMeta, metaWriteWarning, queuedRuns } from './records.mjs';
+import { RUNS_ROOT, UNFINISHED_STATUSES, requestCancel, listRuns, findRun, readMeta, checkRunners, isRunning, runEnd, runOutcome, resumedRuns, groupRuns, groupSummary, describeActivity, saveMeta, metaWriteWarning, queuedRuns } from './records.mjs';
 import { M, die, need, pidExists, processStartedAt, killTreeIfSame, sleep, modelOf, agentTypeOf, replaceFile } from './util.mjs';
 import { D, C, padWidth, visibleWidth, modelLabel, clock, took, outcomeStyle, usageLine, paintPlanWord } from './format.mjs';
 import { planStatus, describePlans } from './plan.mjs';
@@ -41,6 +41,8 @@ function cmdStatus(o, sessionStats) {
   checkRunners(loaded.map((run) => run.meta));
   // 执行和图像的续接不记轮次，按续接链往回数（和实时查看一致）
   const metaOf = new Map(loaded.map((run) => [run.id, run.meta]));
+  // 逐行显示和汇总计数（groupTally）用同一个判定：续接过的不再显示成交回问题或失败
+  const resumedIds = resumedRuns(loaded, grouped?.all ?? loaded);
   const roundOf = (m) => {
     if (m.round != null || !m.parent) return m.round;
     let n = 1;
@@ -55,7 +57,7 @@ function cmdStatus(o, sessionStats) {
     const outcome = runOutcome(run);
     const m = run.meta;
     if (m.participant === 'host') return [{ cells: [rid, 'submit', D.hostSubmitted(new Date(m.submitted_at).toTimeString().slice(0, 5), m.round), m.level, C.bold(modelLabel(m)), ''], tail: `${D.statusGroup(m.group)}  ${C.dim(`@ ${m.cwd}`)}`, detail: '' }];
-    const { mark, color, word } = outcomeStyle(outcome);
+    const { mark, color, word } = outcomeStyle({ ...outcome, resumed: !outcome.running && !outcome.ok && resumedIds.has(rid) });
     const r = outcome.result;
     const elapsed = runEnd(dir, m) - Date.parse(m.started_at);
     const image = m.module === 'image', mode = image && m.mode === 'run' ? 'image' : m.mode;
