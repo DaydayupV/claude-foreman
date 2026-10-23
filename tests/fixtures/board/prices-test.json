@@ -1,0 +1,8 @@
+{
+  "as_of": "2026-10-18",
+  "models": [
+    { "match": ["claude-opus-5"], "input": 10, "cached": 1, "cache_write": 12, "output": 20, "source": "synthetic test rates" },
+    { "match": ["gpt-6"], "input": 2, "output": 8, "source": "synthetic fallback rates" },
+    { "match": ["claude"], "input": 99, "output": 99, "source": "synthetic later match" }
+  ]
+}

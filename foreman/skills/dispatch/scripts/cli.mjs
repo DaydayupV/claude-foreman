@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // 唯一入口：参数解析、子命令分发和适配器选择。
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { M, die, need, resolveDir, readBrief, isGitRepo, isAscii, agentTypeOf, closestMatches, pathKey } from './util.mjs';
+import { HERE, M, die, need, resolveDir, readBrief, isGitRepo, isAscii, agentTypeOf, closestMatches, pathKey, pidExists, sleep, LANGUAGE } from './util.mjs';
 
 // 不带值的选项；其余选项都把下一个参数当作它的值。
 const FLAGS = new Set(['uncommitted', 'no-snapshot', 'verbose', 'no-intro', 'snap', 'vector', 'allow-edge', 'author']);
@@ -45,7 +46,7 @@ const { cmdSubmit } = await import('./submissions.mjs');
 const load = (cwd) => loadConfig(cwd, adapters);
 const CONFIG = process.argv[2] === 'assets' ? null : load(null);
 if (CONFIG) records.initializeRecords(CONFIG);
-const { RUNS_ROOT, findRun, readMeta, listRuns, isRunning } = records; // 记录目录在 initializeRecords 之后才定下来
+const { RUNS_ROOT, CLAUDE_SESSION, findRun, readMeta, listRuns, isRunning } = records; // 记录目录在 initializeRecords 之后才定下来
 
 function parseArgs(argv) {
   const [cmd, ...rest] = argv;
@@ -208,6 +209,93 @@ function cmdConfig(o) {
   process.stdout.write(o.format === 'md' ? configReport(cfg, result.summary) : JSON.stringify(result, null, 2) + '\n');
 }
 
+async function cmdBoard(o) {
+  if (o.session !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(o.session)) die(M.badArg(`--session ${o.session}`));
+  const cfg = load(null);
+  if (!cfg.dispatch.web) {
+    process.stdout.write(JSON.stringify({ enabled: false, message: M.boardOff }, null, 2) + '\n');
+    return;
+  }
+  const [{ buildId }, { removeLock }] = await Promise.all([import('./board/build-id.mjs'), import('./board/lock.mjs')]);
+  const boardDir = path.join(HERE, 'board'), build = buildId(boardDir);
+  const lockFile = path.join(RUNS_ROOT, 'board.lock.json'), errFile = path.join(RUNS_ROOT, 'board.err');
+  let reason = 'health check failed';
+  // 只采信这次启动的子进程写下的 board.err（按 pid 认），别的尝试留下的不算
+  const fail = (fallback, childPid) => {
+    let message = fallback;
+    try {
+      const err = JSON.parse(fs.readFileSync(errFile, 'utf8'));
+      if (childPid && err.pid === childPid && err.error) message = err.error;
+    } catch { /* 没有这次的服务端错误时用退出原因 */ }
+    die(M.boardStartFailed(message));
+  };
+  const reclaim = (raw) => { try { removeLock(lockFile, raw); } catch (error) { fail(error.message); } };
+  const liveBoard = async (timeout = 1000) => {
+    let raw, lock;
+    try { raw = fs.readFileSync(lockFile, 'utf8'); lock = JSON.parse(raw); }
+    catch (error) { reason = error.message; return { state: 'absent' }; }
+    if (!Number.isInteger(lock?.pid) || lock.pid <= 0 || !pidExists(lock.pid)) return { state: 'absent' };
+    try {
+      if (lock.port > 0) {
+        const response = await fetch(`http://127.0.0.1:${lock.port}/${lock.token}/health`, { signal: AbortSignal.timeout(timeout) });
+        const health = await response.json();
+        if (response.ok && health.ok === true && health.v === 1 && health.pid === lock.pid) return { state: 'ready', lock, raw, build: health.build };
+        reason = 'health check failed';
+      }
+    } catch (error) {
+      reason = error.message;
+      if (error.cause?.code === 'ECONNREFUSED') return { state: 'absent' };
+    }
+    return { state: 'wait', lock, raw };
+  };
+  const existingDeadline = Date.now() + 15000;
+  let found = await liveBoard(5000);
+  while (found.state === 'wait' && Date.now() < existingDeadline) {
+    await sleep(100);
+    found = await liveBoard(Math.max(1, Math.min(1000, existingDeadline - Date.now())));
+  }
+  // 等了 15 秒还没回应就接管；原来的服务恢复后发现锁不是自己的会自行退出
+  if (found.state === 'wait') reclaim(found.raw);
+  let lock = found.state === 'ready' ? found.lock : null;
+  if (lock && found.build !== build) {
+    try { process.kill(lock.pid); } catch (error) { if (error.code !== 'ESRCH') fail(error.message); }
+    // POSIX 上旧服务正忙时信号要等同步读取结束才处理，和接管一样最多等 15 秒；
+    // Windows 上 kill 是强制结束，旧服务来不及自己删锁，所以只等进程退出，锁由下面回收
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline && pidExists(lock.pid)) await sleep(100);
+    if (pidExists(lock.pid)) fail(`old board server (pid ${lock.pid}) did not exit`);
+    reclaim(found.raw);
+    lock = null;
+  }
+  const started = !lock;
+  if (!lock) {
+    let spawnError, exited, child;
+    try {
+      fs.mkdirSync(RUNS_ROOT, { recursive: true });
+      fs.rmSync(errFile, { force: true });
+      // Windows 上必须脱离调用方控制台，否则后续命令的 Ctrl+C 会把看板一起停掉。
+      child = spawn(process.execPath, [path.join(boardDir, 'server.mjs'), '--runs', RUNS_ROOT, '--config', USER_CONFIG, '--idle-min', '30'], {
+        cwd: boardDir, detached: true, stdio: 'ignore', windowsHide: true,
+      });
+      child.once('error', (error) => { spawnError = error; });
+      child.once('exit', (code) => { exited = `exit code ${code}`; });
+      child.unref();
+    } catch (error) { fail(error.message); }
+    const deadline = Date.now() + 20000;
+    while (Date.now() < deadline) {
+      found = await liveBoard(Math.max(1, Math.min(1000, deadline - Date.now())));
+      lock = found.state === 'ready' ? found.lock : null;
+      if (lock) break;
+      if (spawnError || exited) fail(spawnError?.message || exited, child.pid);
+      await sleep(Math.max(0, Math.min(100, deadline - Date.now())));
+    }
+    if (!lock) fail(reason, child.pid);
+  }
+  const session = o.session ?? CLAUDE_SESSION;
+  const url = `http://127.0.0.1:${lock.port}/${lock.token}/?level=all&lang=${encodeURIComponent(LANGUAGE)}${session ? `&s=${encodeURIComponent(session)}` : ''}`;
+  process.stdout.write(JSON.stringify({ enabled: true, url, started }, null, 2) + '\n');
+}
+
 // 所有协作方都报告，仅被等级引用的协作方影响总体结果。
 async function cmdCheck(o) {
   const cfg = load(o.cwd ? resolveDir(o.cwd) : null);
@@ -218,12 +306,16 @@ async function cmdCheck(o) {
   const gitVersion = git.status === 0 ? git.stdout.trim() : null;
   const [major, minor] = (/(\d+)\.(\d+)/.exec(gitVersion || '') || []).slice(1).map(Number);
   const gitOk = major > 2 || (major === 2 && minor >= 25);
+  const [total_gb, available_gb] = (process.env.FOREMAN_TEST_MEMORY
+    ? process.env.FOREMAN_TEST_MEMORY.split(',').map(Number)
+    : [os.totalmem() / 1024 ** 3, os.freemem() / 1024 ** 3]).map((gb) => Math.round(gb * 10) / 10);
   const result = {
     ok: nodeOk,
     node: { ok: nodeOk, version: process.version, fix: nodeOk ? null : M.fixNode(process.version) },
     git: { ok: gitOk, version: gitVersion, fix: gitOk ? null : M.fixGit(gitVersion) },
     // 只影响桌面版终端面板里的实时查看，不计入总体结果
     watch: { ok: isAscii(path.join(RUNS_ROOT, 'watch.mjs')), launcher: path.join(RUNS_ROOT, 'watch.mjs'), fix: isAscii(path.join(RUNS_ROOT, 'watch.mjs')) ? null : M.fixLauncherNotAscii },
+    memory: { total_gb, available_gb, enough: total_gb >= 8 && (process.platform === 'darwin' || available_gb >= 2), web: cfg.dispatch.web },
     agents: {},
   };
   const variants = new Map(), usedModes = new Map();
@@ -287,6 +379,6 @@ if (['config', 'check', 'models'].includes(cmd) && opts.format !== undefined && 
 // 新建任务组时组名只用 ASCII：实时查看要把它写进终端命令，桌面版的终端面板只接受 ASCII 命令。
 if (['run', 'discuss', 'resume', 'review', 'image', 'plan'].includes(cmd) && opts.group != null && !/^[A-Za-z0-9._-]{1,64}$/.test(opts.group)) die(M.badGroupName(opts.group));
 const statsOf = (meta) => adapters[agentTypeOf(meta)]?.stats?.(meta.session_id, meta.started_at);
-const commands = { run: cmdRun, discuss: cmdDiscuss, resume: cmdResume, review: cmdReview, image: cmdImage, plan: (o) => cmdPlan(o, load, adapters), submit: (o) => cmdSubmit(o, load), judge: cmdJudge, stats: (o) => cmdStats(o, statsOf), status: (o) => cmdStatus(o, statsOf), watch: (o) => cmdWatch(o, load), config: cmdConfig, check: cmdCheck, models: cmdModels, cancel: (o) => cmdCancel(o, statsOf), 'await-busy': (o) => cmdAwaitBusy(o, CONFIG, load), assets: cmdAssets };
+const commands = { run: cmdRun, discuss: cmdDiscuss, resume: cmdResume, review: cmdReview, image: cmdImage, plan: (o) => cmdPlan(o, load, adapters), submit: (o) => cmdSubmit(o, load), judge: cmdJudge, stats: (o) => cmdStats(o, statsOf), status: (o) => cmdStatus(o, statsOf), watch: (o) => cmdWatch(o, load), board: cmdBoard, config: cmdConfig, check: cmdCheck, models: cmdModels, cancel: (o) => cmdCancel(o, statsOf), 'await-busy': (o) => cmdAwaitBusy(o, CONFIG, load), assets: cmdAssets };
 if (!commands[cmd]) die(M.usage);
 await commands[cmd](opts);

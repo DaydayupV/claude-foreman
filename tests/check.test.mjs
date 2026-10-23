@@ -185,3 +185,29 @@ test('check 不调模型地探测 Codex 沙箱：坏了判不通过并给出修�
   assert.equal(r2.agents.codex.sandbox, undefined);
   assert.equal(probes(), before);
 });
+
+// macOS 上可用内存不参与判断（空闲页不含可回收的缓存），只看总内存
+const darwin = process.platform === 'darwin';
+for (const [lang, web, memory, total, available, enough, state] of [
+  ['zh', true, '8,2', 8, 2, true, 'reportWebOn'],
+  ['en', true, '7.9,2', 7.9, 2, false, 'reportWebOnLow'],
+  ['zh', false, '16.26,4.14', 16.3, 4.1, true, 'reportWebOff'],
+  ['zh', false, '8,1.9', 8, 1.9, darwin, darwin ? 'reportWebOff' : 'reportWebOffLow'],
+]) {
+  test(`check 内存和网页看板状态 ${state} (${lang})`, async (t) => {
+    const h = sandbox(t), messages = MESSAGES[lang];
+    h.config({ dispatch: { web } });
+    const options = { env: { FOREMAN_LANG: lang, FOREMAN_TEST_MEMORY: memory } };
+    const result = output(await h.bridge(['check'], options));
+    assert.deepEqual(result.memory, { total_gb: total, available_gb: available, enough, web });
+    assert.equal(result.ok, true);
+    const md = await h.bridge(['check', '--format', 'md'], options);
+    assert.equal(md.code, 0, md.stderr);
+    assert.ok(md.stdout.includes(`| ${messages.reportMemoryLabel} | ${messages.reportMemory(total, available)} |`));
+    assert.ok(md.stdout.includes(`| ${messages.reportWebLabel} | ${messages[state]} |`));
+    const issue = `⚠ ${messages.reportIssue(messages.reportEnvironmentItems.web, messages.fixWebLowMemory)}`;
+    assert.equal(md.stdout.includes(issue), web && !enough);
+    assert.equal(md.stdout.includes(messages.reportEnvironmentOk), !web || enough);
+    assert.equal(fs.existsSync(path.join(h.runs, 'board.lock.json')), false);
+  });
+}

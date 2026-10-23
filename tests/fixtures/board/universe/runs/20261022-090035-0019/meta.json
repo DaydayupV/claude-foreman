@@ -1,0 +1,23 @@
+{
+  "id": "20261022-090035-0019",
+  "mode": "discuss",
+  "kind": "discuss",
+  "module": "run",
+  "agent": "kimi-k2.6",
+  "agent_type": "api",
+  "model": "kimi-k2.6",
+  "model_shown": "kimi-k2.6",
+  "cwd": "D:/work/factor-lab",
+  "claude_session": "demo-factor",
+  "title": "动量因子研究",
+  "status": "quota_exhausted",
+  "pid": null,
+  "parent": null,
+  "group": "factor-q-1022",
+  "plan": "plan-factor-q-1022-35",
+  "seat": 1,
+  "role": null,
+  "round": 1,
+  "started_at": "2026-10-22T09:00:35.000Z",
+  "ended_at": "2026-10-22T09:01:30.000Z"
+}

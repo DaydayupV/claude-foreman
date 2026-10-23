@@ -96,7 +96,7 @@ function normalizeModules(cfg) {
   return { ...cfg, modules };
 }
 const DEFAULT_CONFIG = {
-  dispatch: { auto: true, watch: 'auto', intro: true, discuss_max_rounds: 2, timeout_min: 480, stall_min: 40, busy_ask_min: 2, runs_dir: null },
+  dispatch: { auto: true, watch: 'auto', web: false, intro: true, discuss_max_rounds: 2, timeout_min: 480, stall_min: 40, busy_ask_min: 2, runs_dir: null },
   agents: {},
   modules: { ...Object.fromEntries(MODES.map((mode) => [mode, Object.fromEntries(LEVELS.map((lv) => [lv, CLAUDE_CODE]))])), image: { generate: null, draw: null } },
 };
@@ -225,7 +225,11 @@ function migrateConfig(config, file, base, project) {
       return converted;
     });
   });
-  if (old && !project) result = mergeConfig(Object.hasOwn(config, 'modules') ? DEFAULT_CONFIG : LEGACY_DEFAULT_CONFIG, result);
+  if (old && !project) {
+    result = mergeConfig(Object.hasOwn(config, 'modules') ? DEFAULT_CONFIG : LEGACY_DEFAULT_CONFIG, result);
+    // 旧版可能不认识 web，迁移只保留用户显式写入的值。
+    if (!Object.hasOwn(config.dispatch || {}, 'web')) delete result.dispatch.web;
+  }
   if (old && isObject(result.modules)) result.modules = mapCells(result.modules, (value) => value === 'claude' ? CLAUDE_CODE : isObject(value) ? [value] : value);
   if (project && (old || hasLevels)) notice(M.projectOldFormat(file));
   const seats = project || result.modules !== undefined && !isObject(result.modules) ? [] : ['discuss', 'review'].filter((module) => {
@@ -363,6 +367,7 @@ function validateConfig(cfg, adapters, fail = die) {
   for (const key of ['dispatch', 'agents', 'modules']) check(isObject(cfg[key]), key, why.object);
   check(typeof cfg.dispatch.auto === 'boolean', 'dispatch.auto', why.boolean);
   check(['auto', 'off'].includes(cfg.dispatch.watch), 'dispatch.watch', why.watch);
+  check(typeof cfg.dispatch.web === 'boolean', 'dispatch.web', why.boolean);
   check(typeof cfg.dispatch.intro === 'boolean', 'dispatch.intro', why.boolean);
   check(Number.isInteger(cfg.dispatch.discuss_max_rounds) && cfg.dispatch.discuss_max_rounds >= 1, 'dispatch.discuss_max_rounds', why.positiveInt);
   for (const key of ['timeout_min', 'stall_min', 'busy_ask_min']) check(Number.isFinite(cfg.dispatch[key]) && (key === 'timeout_min' ? cfg.dispatch[key] > 0 : cfg.dispatch[key] >= 0), `dispatch.${key}`, why.minutes);
@@ -527,6 +532,8 @@ const API_STARTERS = [
 ];
 function buildStarterConfig(environment) {
   const cfg = structuredClone(DEFAULT_CONFIG);
+  // web 的默认值只在加载时补齐，不自动写进用户配置。
+  delete cfg.dispatch.web;
   if (environment.codex.found && environment.codex.logged_in) {
     for (const model of ['gpt-6.1-sol', 'gpt-6-astra']) cfg.agents[model] = { type: 'codex cli', model };
     cfg.modules.run.complex = [{ agent: 'gpt-6.1-sol', effort: 'max' }];

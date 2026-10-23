@@ -1,0 +1,47 @@
+{
+  "plan_id": "plan-skills-roles-1018-125",
+  "created_at": "2026-10-22T09:02:04.000Z",
+  "module": "discuss",
+  "cell": "normal",
+  "group": "skills-roles-1018",
+  "claude_session": "demo-roles",
+  "cwd": "C:/demo-lab/roles",
+  "why": "合成派发计划",
+  "seats": [
+    {
+      "seat": 1,
+      "agent": "gpt-6-astra-codex-cli",
+      "model": "gpt-6-astra",
+      "role": null,
+      "required": false
+    },
+    {
+      "seat": 2,
+      "agent": "gemini-4-argon-contributor",
+      "model": "opencode-go/gemini-4-argon-contributor",
+      "role": null,
+      "required": false
+    },
+    {
+      "seat": 3,
+      "agent": "deepseek-v4.1-flash",
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "role": null,
+      "required": false
+    },
+    {
+      "seat": 4,
+      "agent": "mimo-v2.6-pro-pi-cli",
+      "model": "xiaomi/mimo-v2.6-pro",
+      "role": null,
+      "required": false
+    },
+    {
+      "seat": 5,
+      "agent": "glm-5.3-flash",
+      "model": "opencode-go/glm-5.3-flash",
+      "role": null,
+      "required": false
+    }
+  ]
+}

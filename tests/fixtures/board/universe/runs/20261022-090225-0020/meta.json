@@ -1,0 +1,23 @@
+{
+  "id": "20261022-090225-0020",
+  "mode": "run",
+  "kind": "exec",
+  "module": "run",
+  "agent": "fixture-unconfigured-agent",
+  "agent_type": "api",
+  "model": "unpriced-fixture-model",
+  "model_shown": "unpriced-fixture-model",
+  "cwd": "c:\\DEMO-LAB\\roles\\",
+  "claude_session": "demo-star",
+  "title": "board 星图设计",
+  "status": "done",
+  "pid": null,
+  "parent": null,
+  "group": null,
+  "plan": null,
+  "seat": null,
+  "role": null,
+  "round": 1,
+  "started_at": "2026-10-22T09:02:25.000Z",
+  "ended_at": "2026-10-22T09:02:49.000Z"
+}

@@ -1,0 +1,23 @@
+{
+  "id": "20261022-090115-0013",
+  "mode": "review",
+  "kind": "review",
+  "module": "review",
+  "agent": "gpt-6-astra-codex-cli",
+  "agent_type": "codex cli",
+  "model": "gpt-6-astra",
+  "model_shown": "gpt-6-astra",
+  "cwd": "d:\\WORK\\shop-api\\",
+  "claude_session": "demo-review",
+  "title": "审查缓存层改动",
+  "status": "done",
+  "pid": null,
+  "parent": null,
+  "group": "roles-review-1018",
+  "plan": "plan-roles-review-1018-75",
+  "seat": 1,
+  "role": null,
+  "round": 1,
+  "started_at": "2026-10-22T09:01:15.000Z",
+  "ended_at": "2026-10-22T09:02:20.000Z"
+}

@@ -1,0 +1,32 @@
+{
+  "agents": {
+    "gpt-6.1-sol-codex-cli": {
+      "type": "codex cli",
+      "max_parallel": 2
+    },
+    "gpt-6-astra-codex-cli": {
+      "type": "codex cli",
+      "max_parallel": 4
+    },
+    "gemini-4-argon-contributor": {
+      "type": "opencode cli",
+      "max_parallel": 4
+    },
+    "deepseek-v4.1-flash": {
+      "type": "opencode cli",
+      "max_parallel": 4
+    },
+    "glm-5.3-flash": {
+      "type": "opencode cli",
+      "max_parallel": 4
+    },
+    "mimo-v2.6-pro-pi-cli": {
+      "type": "pi cli",
+      "max_parallel": 4
+    },
+    "kimi-k2.6": {
+      "type": "api",
+      "max_parallel": 4
+    }
+  }
+}

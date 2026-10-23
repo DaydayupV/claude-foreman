@@ -1,0 +1,7 @@
+{"type":"api.request","ts":"2026-10-22T09:00:35.000Z","model":"kimi-k2.6","attempt":1}
+{"type":"api.queued","ts":"2026-10-22T09:00:35.200Z"}
+{"type":"item.completed","ts":"2026-10-22T09:00:36.000Z","item":{"id":"think","type":"reasoning","text":"UNIVERSE_PRIVATE_SENTINEL_8D4A"}}
+{"type":"item.started","ts":"2026-10-22T09:00:37.000Z","item":{"id":"read","type":"command_execution","category":"read","label":"src/demo.mjs"}}
+{"type":"item.completed","ts":"2026-10-22T09:00:38.000Z","item":{"id":"read","type":"command_execution","category":"read","label":"src/demo.mjs"}}
+{"type":"api.request","ts":"2026-10-22T09:01:00.000Z","model":"kimi-k2.6","attempt":1}
+{"type":"api.error","ts":"2026-10-22T09:01:30.000Z","message":"UNIVERSE_PRIVATE_SENTINEL_8D4A"}

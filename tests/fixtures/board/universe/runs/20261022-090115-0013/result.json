@@ -1,0 +1,16 @@
+{
+  "run_id": "20261022-090115-0013",
+  "status": "done",
+  "duration_s": 65,
+  "cost_usd": 0.02,
+  "usage": {
+    "input_tokens": 1000,
+    "cached_input_tokens": 700,
+    "output_tokens": 80
+  },
+  "last_message": "UNIVERSE_PRIVATE_SENTINEL_8D4A",
+  "report": {
+    "verdict": "approve",
+    "findings": []
+  }
+}

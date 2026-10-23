@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>foreman board</title>
+<style>/*CSS*/</style>
+</head>
+<body>
+<header id="top">
+  <div class="brand"><b>CLAUDE CODE / FOREMAN</b><nav id="crumb" aria-label="当前位置"></nav><span id="scope"></span></div>
+  <div id="clock"></div>
+  <i id="progress"></i>
+</header>
+<main id="view" aria-label="多模型协作视图：滚轮缩放，按住左键拖动，单击卡片放大，双击空白处复位">
+  <canvas id="ufx" aria-hidden="true"></canvas>
+  <canvas id="fx" aria-hidden="true"></canvas>
+  <div id="world"></div>
+  <aside id="ulist" aria-label="所有对话"></aside>
+  <aside id="uslots" aria-label="协作方并发名额"></aside>
+  <div id="hud">
+    <button type="button" id="fit" title="复位（0）">⤢</button>
+    <span id="zoom-val"></span>
+    <span class="hint board-only">滚轮缩放（刻度带上是滚动）· 拖动平移 · 单击卡片放大 · 双击复位</span>
+    <span class="hint uni-only">滚轮缩放 · 拖动平移 · 双击复位</span>
+    <button type="button" id="more" title="滚到下面的终端（在用量面板上滚动滚轮也可以）">▾ 终端</button>
+  </div>
+</main>
+<footer id="table">
+  <section id="usage"></section>
+</footer>
+<section id="termsec" aria-label="终端：当前对话里各模型的终端对话">
+  <header><b>TERMINAL</b><span id="conv"></span></header>
+  <div id="terms"></div>
+</section>
+<div id="status" role="status"></div>
+<script>/*JS*/</script>
+</body>
+</html>

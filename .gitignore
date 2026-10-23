@@ -9,3 +9,6 @@ Thumbs.db
 
 # 本地 Claude Code 设置
 .claude/settings.local.json
+
+tests/fixtures/board/**/board.lock.json
+tests/fixtures/board/runs-multi/

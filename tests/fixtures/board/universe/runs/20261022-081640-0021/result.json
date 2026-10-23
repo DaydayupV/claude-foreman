@@ -1,0 +1,16 @@
+{
+  "run_id": "20261022-081640-0021",
+  "status": "failed",
+  "duration_s": 100,
+  "cost_usd": 0.02,
+  "usage": {
+    "input_tokens": 1000,
+    "cached_input_tokens": 700,
+    "output_tokens": 80
+  },
+  "last_message": "UNIVERSE_PRIVATE_SENTINEL_8D4A",
+  "report": {
+    "summary": "UNIVERSE_PRIVATE_SENTINEL_8D4A",
+    "position": "UNIVERSE_PRIVATE_SENTINEL_8D4A"
+  }
+}

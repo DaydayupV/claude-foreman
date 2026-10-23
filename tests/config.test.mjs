@@ -14,7 +14,10 @@ test('没有用户配置时生成初始配置并提示首次使用', async (t) =
   assert.equal(c.effective.modules.run.simple, 'claude code');
   assert.equal(c.effective.modules.run.normal, 'claude code');
   assert.deepEqual(c.effective.agents, {});
-  assert.deepEqual(json(h.userConfig), c.effective);
+  const saved = json(h.userConfig);
+  assert.equal(c.effective.dispatch.web, false);
+  assert.equal(Object.hasOwn(saved.dispatch, 'web'), false);
+  assert.deepEqual({ ...saved, dispatch: { ...saved.dispatch, web: false } }, c.effective);
   assert.equal(r.stderr.split('\n')[0], `foreman: ${M.starterCreated(h.userConfig, M.starterNoCodex + M.starterNext)}`);
   assert.ok(!(await h.bridge(['config'])).stderr.includes('foreman:'));
   assert.equal(h.calls().length, 0);
@@ -32,6 +35,8 @@ test('零点十以前的配置自动改写并保留原文备份', async (t) => {
   assert.equal(migrated.auto_dispatch, undefined);
   assert.equal(migrated.agents['legacy-model'].bin, CODEX);
   assert.equal(c.effective.dispatch.auto, false);
+  assert.equal(c.effective.dispatch.web, false);
+  assert.equal(Object.hasOwn(migrated.dispatch, 'web'), false);
   assert.deepEqual(c.resolved_modules.run.normal, [{ agent: 'legacy-model', model: 'legacy-model', effort: 'high', required: false }]);
   assert.deepEqual(c.resolved_modules.discuss.simple, [{ agent: 'legacy-model', model: 'legacy-model', effort: 'low', required: false }]);
   assert.ok(r.stderr.includes(M.configStructureMigrated(h.userConfig, `${h.userConfig}.bak`, 'codex → legacy-model')));
@@ -40,6 +45,7 @@ test('零点十以前的配置自动改写并保留原文备份', async (t) => {
 });
 
 for (const [name, change, key, reason] of [
+  ['网页看板开关必须是布尔值', (c) => { c.dispatch.web = 'true'; }, 'dispatch.web', M.invalid.boolean],
   ['未知协作方类型被拒绝', (c) => { c.agents.codex.type = 'unknown'; }, 'agents.codex.type', M.invalid.agentType],
   ['执行等级不能使用 API 协作方', (c) => {
     c.agents.api = apiAgent('http://127.0.0.1:1');
@@ -63,17 +69,19 @@ for (const [name, change, key, reason] of [
 test('项目配置忽略不允许的字段并保留允许的覆盖', async (t) => {
   const h = sandbox(t);
   const file = h.write('.claude/foreman.json', {
-    unexpected: true, dispatch: { auto: false, runs_dir: 'ignored', timeout_min: 0.5 },
+    unexpected: true, dispatch: { auto: false, runs_dir: 'ignored', timeout_min: 0.5, watch: 'auto', web: true },
     agents: { codex: { bin: 'ignored', model: 'project-model' }, extra: opencodeAgent() },
   });
   const original = read(file), r = await h.bridge(['config', '--cwd', h.cwd]), c = output(r);
   assert.equal(c.effective.dispatch.auto, true);
+  assert.equal(c.effective.dispatch.watch, 'off');
+  assert.equal(c.effective.dispatch.web, false);
   assert.equal(c.effective.dispatch.timeout_min, 0.5);
   assert.equal(c.runs_dir, h.runs);
   assert.equal(c.effective.agents.codex.bin, CODEX);
   assert.equal(c.effective.agents.codex.model, 'fake-codex');
   assert.equal(c.effective.agents.extra, undefined);
-  assert.ok(r.stderr.includes(M.projectIgnored(M.list(['unexpected', 'dispatch.auto', 'dispatch.runs_dir', 'agents']))));
+  assert.ok(r.stderr.includes(M.projectIgnored(M.list(['unexpected', 'dispatch.auto', 'dispatch.runs_dir', 'dispatch.watch', 'dispatch.web', 'agents']))));
   assert.equal(read(file), original);
 });
 
@@ -113,4 +121,36 @@ test('英文覆盖变量使用英文首次提示', async (t) => {
   output(r);
   assert.equal(r.stderr.split('\n')[0], `foreman: ${MESSAGES.en.starterCreated(h.userConfig, MESSAGES.en.starterNoCodex + MESSAGES.en.starterNext)}`);
   assert.ok(fs.existsSync(h.userConfig));
+});
+
+test('加载配置、补写席位和迁移 levels 都不写入默认 dispatch.web', async (t) => {
+  const h = sandbox(t);
+  for (const kind of ['current', 'seats', 'levels']) {
+    const c = baseConfig();
+    if (kind === 'seats') for (const mode of ['discuss', 'review']) delete c.modules[mode].seats;
+    if (kind === 'levels') { c.levels = c.modules; delete c.modules; }
+    h.config(c);
+    const original = read(h.userConfig);
+    assert.equal(output(await h.bridge(['config'])).effective.dispatch.web, false);
+    assert.equal(Object.hasOwn(json(h.userConfig).dispatch, 'web'), false);
+    if (kind === 'current') assert.equal(read(h.userConfig), original);
+    else {
+      const saved = json(h.userConfig);
+      assert.ok(saved.modules.discuss.seats);
+      assert.ok(saved.modules.review.seats);
+    }
+    const saved = read(h.userConfig);
+    assert.equal(output(await h.bridge(['config'])).effective.dispatch.web, false);
+    assert.equal(read(h.userConfig), saved);
+  }
+});
+
+test('用户显式开启 dispatch.web 后迁移仍保留该值，项目配置不能关闭它', async (t) => {
+  const h = sandbox(t), c = baseConfig();
+  c.dispatch.web = true;
+  delete c.modules.discuss.seats;
+  h.config(c);
+  h.write('.claude/foreman.json', { dispatch: { web: false } });
+  assert.equal(output(await h.bridge(['config', '--cwd', h.cwd])).effective.dispatch.web, true);
+  assert.equal(json(h.userConfig).dispatch.web, true);
 });

@@ -1,0 +1,23 @@
+{
+  "id": "20261022-090245-0016",
+  "mode": "review",
+  "kind": "review",
+  "module": "review",
+  "agent": "deepseek-v4.1-flash",
+  "agent_type": "opencode cli",
+  "model": "opencode-go/deepseek-v4.1-flash",
+  "model_shown": "opencode-go/deepseek-v4.1-flash",
+  "cwd": "d:\\WORK\\shop-api\\",
+  "claude_session": "demo-review",
+  "title": "审查缓存层改动",
+  "status": "done",
+  "pid": null,
+  "parent": null,
+  "group": "roles-review-1018",
+  "plan": "plan-roles-review-1018-75",
+  "seat": 4,
+  "role": "补漏",
+  "round": 1,
+  "started_at": "2026-10-22T09:02:45.000Z",
+  "ended_at": "2026-10-22T09:03:05.000Z"
+}

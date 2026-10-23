@@ -1,0 +1,24 @@
+{
+  "as_of": "2026-10-22",
+  "note": "USD per million tokens. Used only for an API-equivalent cost estimate of subscription seats (Claude Code, Codex). Seats whose tools report their own cost (opencode, pi) keep the reported number. Usage is summed per run, not per request, so the long-context and fast-mode rates are recorded here but not applied.",
+  "models": [
+    { "match": ["claude-opus-5-5"], "input": 4, "cached": 0.2, "cache_write": 5, "output": 20,
+      "source": "Anthropic API pricing via the claude-api reference (2026-10-06); cache write at the 5-minute rate, 1.25x input" },
+    { "match": ["claude-sonnet-5-5"], "input": 2, "cached": 0.2, "cache_write": 2.5, "output": 10,
+      "source": "Anthropic API pricing via the claude-api reference (2026-10-06); cache write at 1.25x input" },
+    { "match": ["claude-opus-5"], "input": 5, "cached": 0.5, "cache_write": 6.25, "output": 25,
+      "source": "Anthropic API pricing via the claude-api reference (2026-10-06); cache read 0.1x, write 1.25x input" },
+    { "match": ["gpt-6.1-sol"], "input": 2, "cached": 0.1, "cache_write": 2.5, "output": 10,
+      "long_context": { "threshold": 272000, "input": 4, "cached": 0.2, "cache_write": 5, "output": 15 }, "fast_multiplier": 2,
+      "source": "user-provided GPT price table (2026-10-22)" },
+    { "match": ["gpt-6-sol"], "input": 2, "cached": 0.2, "cache_write": 2.5, "output": 10,
+      "long_context": { "threshold": 272000, "input": 4, "cached": 0.4, "cache_write": 5, "output": 15 }, "fast_multiplier": 2,
+      "source": "user-provided GPT price table (2026-10-22)" },
+    { "match": ["gpt-6-astra"], "input": 10, "cached": 1, "cache_write": 12.5, "output": 50,
+      "long_context": { "threshold": 272000, "input": 20, "cached": 2, "cache_write": 25, "output": 75 }, "fast_multiplier": 2,
+      "source": "user-provided GPT price table (2026-10-22)" },
+    { "match": ["gpt-6-luna"], "input": 0.1, "cached": 0.01, "cache_write": 0.125, "output": 0.5,
+      "long_context": { "threshold": 272000, "input": 0.2, "cached": 0.02, "cache_write": 0.25, "output": 0.75 }, "fast_multiplier": 2,
+      "source": "user-provided GPT price table (2026-10-22)" }
+  ]
+}

@@ -16,6 +16,8 @@ const closed = (cfg, module, cell) => cfg.closed_by_project.includes(`${module}.
 export const environmentReport = (checks, environment, agents) => {
   const issues = ['node', 'git', 'watch'].filter((key) => !checks[key].ok)
     .map((key) => `${key === 'node' ? '❌' : '⚠'} ${M.reportIssue(M.reportEnvironmentItems[key], checks[key].fix)}`);
+  const { total_gb, available_gb, enough, web } = checks.memory;
+  if (web && !enough) issues.push(`⚠ ${M.reportIssue(M.reportEnvironmentItems.web, M.fixWebLowMemory)}`);
   for (const [name, agent] of Object.entries(checks.agents)) {
     if (agent.type !== 'codex cli' || !checks.summary.agents[name].used_at.length) continue;
     if (agent.sandbox?.checked.some((item) => item.ok === false)) issues.push(`⚠ ${M.reportIssue(M.reportCodexSandbox(name), agent.fix)}`);
@@ -29,6 +31,8 @@ export const environmentReport = (checks, environment, agents) => {
       ['opencode', opencode.found ? M.reportModelsInstalled(opencode.models) : M.reportNotInstalled],
       ['pi', pi.found ? M.reportModelsInstalled(pi.models) : M.reportNotInstalled],
       [M.reportApiVariables, (api_keys.length ? M.reportVariablesFound(M.list(api_keys)) : M.reportNoVariables) + (keys ? M.reportConfigKeys(keys) : '')],
+      [M.reportMemoryLabel, M.reportMemory(total_gb, available_gb)],
+      [M.reportWebLabel, web ? enough ? M.reportWebOn : M.reportWebOnLow : enough ? M.reportWebOff : M.reportWebOffLow],
     ]),
   ]);
 };

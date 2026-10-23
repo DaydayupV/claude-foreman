@@ -1,0 +1,23 @@
+{
+  "id": "20261022-090115-0015",
+  "mode": "review",
+  "kind": "review",
+  "module": "review",
+  "agent": "glm-5.3-flash",
+  "agent_type": "opencode cli",
+  "model": "opencode-go/glm-5.3-flash",
+  "model_shown": "opencode-go/glm-5.3-flash",
+  "cwd": "d:\\WORK\\shop-api\\",
+  "claude_session": "demo-review",
+  "title": "审查缓存层改动",
+  "status": "done",
+  "pid": null,
+  "parent": null,
+  "group": "roles-review-1018",
+  "plan": "plan-roles-review-1018-75",
+  "seat": 3,
+  "role": null,
+  "round": 1,
+  "started_at": "2026-10-22T09:01:15.000Z",
+  "ended_at": "2026-10-22T09:02:40.000Z"
+}

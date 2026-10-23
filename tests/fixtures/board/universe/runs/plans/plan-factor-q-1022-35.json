@@ -1,0 +1,19 @@
+{
+  "plan_id": "plan-factor-q-1022-35",
+  "created_at": "2026-10-22T09:00:34.000Z",
+  "module": "discuss",
+  "cell": "normal",
+  "group": "factor-q-1022",
+  "claude_session": "demo-factor",
+  "cwd": "D:/work/factor-lab",
+  "why": "合成派发计划",
+  "seats": [
+    {
+      "seat": 1,
+      "agent": "kimi-k2.6",
+      "model": "kimi-k2.6",
+      "role": null,
+      "required": false
+    }
+  ]
+}

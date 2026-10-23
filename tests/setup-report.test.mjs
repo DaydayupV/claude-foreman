@@ -45,7 +45,7 @@ const urlOf = (file) => pathToFileURL(path.join(scripts, file)).href;
 
 test('config/check md 固定四张格子表、六种派法、权限和合并提醒，JSON 格式选择保持原输出', async (t) => {
   const h = sandbox(t), api = await apiServer(t, [{}], { models: ['fake-api', 'VOICE-TTS', 'embedding', 'asr', 'rerank', 'moderation'] });
-  h.config(sampleConfig(api.url)); Object.assign(h.env, h.scenario(catalogs).env);
+  h.config(sampleConfig(api.url)); Object.assign(h.env, h.scenario(catalogs).env, { FOREMAN_TEST_MEMORY: '16,4' });
   const config = await markdown(h, ['config']);
   has(config, ['| 候选 | simple | normal | complex |', '| 候选 | 出图 generate | 手画 draw |',
     '| Claude Code | 不找外部模型 | — | — |', '| Claude Code | 自己做 | — | — |', '| （关掉） | — | 关掉 |', '| a | max ★ | 默认 | 默认 |',
@@ -163,6 +163,7 @@ test('环境故障逐项输出 fix，API 变量只显示名字，未使用 Codex
   const h = sandbox(t), broken = await h.bridge(['check', '--format', 'md'], { env: h.scenario({ sandbox_broken: true }).env });
   assert.equal(broken.code, 1); has(broken.stdout, ['⚠ Codex 沙箱（codex）：', 'windows sandbox failed']); assert.equal(broken.stdout.includes(M.reportEnvironmentOk), false);
   const cfg = output(await h.bridge(['config'])), checks = { node: { ok: false, fix: 'node fix' }, git: { ok: false, fix: 'git fix' }, watch: { ok: false, fix: 'watch fix' },
+    memory: { total_gb: 16, available_gb: 4, enough: true, web: false },
     agents: { codex: { type: 'codex cli', fix: 'unused sandbox', sandbox: { checked: [{ ok: false }] } } }, summary: { agents: { codex: { used_at: [] } } } };
   const env = { codex: { found: true, logged_in: false }, opencode: { found: false }, pi: { found: false }, api_keys: ['KIMI_API_KEY', 'MIMO_API_KEY'] };
   const r = await isolated(h, `import { environmentReport } from ${JSON.stringify(urlOf('report.mjs'))}; console.log(environmentReport(${JSON.stringify(checks)}, ${JSON.stringify(env)}, ${JSON.stringify(cfg.effective.agents)}));`);
@@ -171,8 +172,8 @@ test('环境故障逐项输出 fix，API 变量只显示名字，未使用 Codex
 
 test('英文完整环境输出和非法 format；check 成功仍退出 0', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.modules.discuss.simple = 'claude code'; h.config(c);
-  const r = await h.bridge(['check', '--format', 'md'], { env: { FOREMAN_LANG: 'en' } }); assert.equal(r.code, 0, r.stderr);
-  assert.equal(r.stdout.split('\n\n## Configuration')[0], '## Environment\n\n✅ Node.js, Git, the live view and the Codex sandbox all work.\n\n| Tool | Status |\n| --- | --- |\n| Codex | installed, logged in |\n| opencode | not installed |\n| pi | not installed |\n| API key variables | none found |');
+  const r = await h.bridge(['check', '--format', 'md'], { env: { FOREMAN_LANG: 'en', FOREMAN_TEST_MEMORY: '16,4' } }); assert.equal(r.code, 0, r.stderr);
+  assert.equal(r.stdout.split('\n\n## Configuration')[0], '## Environment\n\n✅ Node.js, Git, the live view and the Codex sandbox all work.\n\n| Tool | Status |\n| --- | --- |\n| Codex | installed, logged in |\n| opencode | not installed |\n| pi | not installed |\n| API key variables | none found |\n| Memory | 16 GB in total, 4 GB available now |\n| Web board | off (enough memory to turn it on) |');
   has(r.stdout, ['**Cells**', '| Candidate | simple | normal | complex | Check |', '| Claude Code | no outside model', '**Seats and required agents**', '**Agents**', '**Notes**']);
   for (const cmd of ['config', 'check', 'models']) failed(await h.bridge([cmd, '--format', 'yaml']), M.reportFormatInvalid);
   failed(await h.bridge(['models', '--format', 'xml'], { env: { FOREMAN_LANG: 'en' } }), MESSAGES.en.reportFormatInvalid);

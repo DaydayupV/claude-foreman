@@ -1,0 +1,467 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import http from 'node:http';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { fileURLToPath } from 'node:url';
+import { createUniverse, universeAt, universeChanges } from '../foreman/skills/dispatch/scripts/board/universe.mjs';
+import { createFeed, selectScope, buildReplay } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
+import { loadPrices } from '../foreman/skills/dispatch/scripts/board/prices.mjs';
+
+const here = path.dirname(fileURLToPath(import.meta.url)), base = Date.parse('2026-10-22T09:00:00Z'), now = base + 210000;
+const prices = loadPrices(path.join(here, 'fixtures/board/prices-test.json')), sentinel = 'UNIVERSE_PRIVATE_SENTINEL_8D4A';
+const sample = { runs: path.join(here, 'fixtures/board/universe/runs'), claudeDir: path.join(here, 'fixtures/board/universe/claude'), config: path.join(here, 'fixtures/board/universe/config.json'), prices, now: () => now };
+const row = (type, at, content, fields = {}) => ({ type, timestamp: new Date(at).toISOString(), cwd: 'C:/Demo/Project', message: { content, ...fields } });
+const answer = (at, fields = {}) => row('assistant', at, [{ type: 'text', text: sentinel }], { id: `msg-${at}`, model: 'claude-opus-5-5', stop_reason: 'end_turn', ...fields });
+const tool = (at, name = 'AskUserQuestion', id = 'ask') => row('assistant', at, [{ type: 'tool_use', id, name, input: { questions: [{ header: '确认'.repeat(20), question: sentinel }] } }]);
+const result = (at, id = 'ask') => row('user', at, [{ type: 'tool_result', tool_use_id: id, content: sentinel }]);
+function temp(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'board-universe-'));
+  const options = { runs: path.join(root, 'runs'), claudeDir: path.join(root, 'claude'), config: path.join(root, 'config.json'), prices, now: () => now };
+  fs.mkdirSync(options.runs); fs.mkdirSync(options.claudeDir);
+  fs.writeFileSync(options.config, '{}');
+  t.after(() => { assert.equal(path.dirname(root), os.tmpdir()); fs.rmSync(root, { recursive: true, force: true }); });
+  const write = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value)); };
+  const session = (id, rows, folder = 'demo', mtime = now) => {
+    const file = path.join(options.claudeDir, folder, `${id}.jsonl`);
+    write(file, rows.map((r) => JSON.stringify(r)).join('\n') + '\n'); fs.utimesSync(file, new Date(mtime), new Date(mtime)); return file;
+  };
+  const run = (id, fields = {}, cost = 1, events = []) => {
+    const dir = path.join(options.runs, id), meta = { id, claude_session: 's', agent: 'configured', kind: 'exec', model: 'claude-opus-5-5',
+      status: 'done', started_at: now - 10000, ended_at: now - 5000, ...fields };
+    write(path.join(dir, 'meta.json'), meta);
+    if (meta.status !== 'running') write(path.join(dir, 'result.json'), { status: meta.status, cost_usd: cost });
+    write(path.join(dir, 'events.jsonl'), events.map((e) => JSON.stringify(e)).join('\n') + '\n'); return meta;
+  };
+  return { root, options, write, session, run };
+}
+
+test('sample index merges Windows cwd variants, skips deep files, counts older and has no message text', () => {
+  const data = createUniverse(sample).read();
+  assert.equal(data.sessions.length, 9); assert.equal(data.projects.length, 4);
+  assert.equal(data.projects.find((p) => p.key === 'c:/demo-lab/roles').older, 1);
+  assert.equal(data.projects.find((p) => p.key === 'd:/work/shop-api').cwd, 'd:\\WORK\\shop-api\\');
+  assert.equal(data.sessions.find((s) => s.id === 'demo-star').title, 'board 星图设计');
+  assert.equal(data.sessions.find((s) => s.id === 'demo-factor').alert.kind, 'quota_exhausted');
+  assert.equal(data.sessions.find((s) => s.id === 'demo-migrate').alert, null);
+  assert.ok(!JSON.stringify(data).includes(sentinel));
+  assert.deepEqual(data.sessions.find((s) => s.id === 'demo-review').counts, { running: 0, done: 4, failed: 0 }); // 三席加一个补漏席
+  assert.equal(data.agents[0].max_parallel, 2);
+});
+
+test('index tails partial UTF-8 once, retries transient reads, notices files and expires last_at', (t) => {
+  const f = temp(t), file = f.session('s', [row('user', now - 1000, 'first')]);
+  const old = f.session('old', [], 'demo', now - 86400001);
+  f.session('deep', [row('user', now, 'skip')], 'demo/subagents');
+  const open = fs.openSync, reads = [];
+  t.mock.method(fs, 'openSync', function (name, ...args) { assert.notEqual(name, old); reads.push(name); return open.call(this, name, ...args); });
+  const universe = createUniverse(f.options);
+  assert.equal(universe.read().sessions.length, 1);
+  const count = reads.filter((name) => name === file).length;
+  universe.read(); assert.equal(reads.filter((name) => name === file).length, count);
+  const bytes = Buffer.from(JSON.stringify(row('user', now, '中文')) + '\n'), cut = bytes.indexOf(Buffer.from('中文')) + 1;
+  fs.appendFileSync(file, bytes.subarray(0, cut)); assert.equal(universe.read().sessions[0].last_at, now - 1000);
+  fs.appendFileSync(file, bytes.subarray(cut, -1)); assert.equal(universe.read().sessions[0].last_at, now - 1000);
+  fs.appendFileSync(file, '\n'); assert.equal(universe.read().sessions[0].last_at, now);
+  for (const code of ['EPERM', 'EBUSY', 'EACCES']) {
+    fs.appendFileSync(file, JSON.stringify(answer(now + 1)) + '\n');
+    const mock = t.mock.method(fs, 'openSync', function (name, ...args) { if (name === file) throw Object.assign(new Error(code), { code }); return open.call(this, name, ...args); });
+    assert.doesNotThrow(() => universe.read()); mock.mock.restore();
+    const original = fs.statSync, statMock = t.mock.method(fs, 'statSync', function (name, ...args) { if (name === file) throw Object.assign(new Error(code), { code }); return original.call(this, name, ...args); });
+    assert.equal(universe.read().sessions.length, 1); statMock.mock.restore();
+  }
+  fs.writeFileSync(file, JSON.stringify(row('user', now + 2, 'reset')) + '\n');
+  assert.equal(universe.read().sessions[0].title, 'reset');
+  const added = f.session('added', [row('user', now + 3, 'added')]);
+  const before = universe.read(); assert.equal(before.sessions.length, 2);
+  fs.unlinkSync(added); assert.ok(universeChanges(before, universe.read()).some((m) => m.event === 'session_gone' && m.data.id === 'added'));
+  fs.utimesSync(file, new Date(now + 86400002), new Date(now + 86400002));
+  assert.equal(universe.read(now + 86400003).sessions.length, 0);
+});
+
+test('index limit, unknown projects, newest cwd, title fallback and timestamped custom titles', (t) => {
+  const f = temp(t);
+  for (let i = 0; i < 202; i++) f.session(`s${i}`, [row('user', now - i, `title ${i}`)]);
+  let data = createUniverse(f.options).read();
+  assert.equal(data.sessions.length, 200); assert.equal(data.sessions[0].id, 's0'); assert.equal(data.sessions.at(-1).id, 's199');
+  f.session('s0', [{ ...row('user', now, '<command-name>ignored'), cwd: undefined }]);
+  f.session('s1', [row('user', now - 3, 'a'.repeat(80)), { type: 'custom-title', timestamp: new Date(now - 1).toISOString(), customTitle: 'chosen' }]);
+  f.session('s2', [row('user', now - 4, 'b'.repeat(80))]);
+  data = createUniverse(f.options).read();
+  assert.equal(data.sessions.find((s) => s.id === 's0').title, null);
+  assert.equal(data.projects.find((p) => p.key === '?').name, '(unknown)');
+  assert.equal(data.sessions.find((s) => s.id === 's1').title, 'chosen');
+  assert.equal(data.sessions.find((s) => s.id === 's2').title, 'b'.repeat(60));
+  const cwd = temp(t);
+  cwd.session('one', [row('user', now - 2, 'one'), { ...answer(now), cwd: undefined }]);
+  cwd.session('two', [{ ...row('user', now - 1, 'two'), cwd: 'c:\\DEMO\\project\\' }]);
+  assert.equal(createUniverse(cwd.options).read().projects[0].cwd, 'c:\\DEMO\\project\\');
+});
+
+test('states follow waiting, dispatching, thinking, idle priority and injectable 90 s / 10 min limits', (t) => {
+  const f = temp(t), file = f.session('s', [row('user', base, 'title'), tool(base + 1)]);
+  f.run('work', { status: 'running', started_at: base, ended_at: null });
+  const universe = createUniverse(f.options), summary = (at) => universe.read(at).sessions[0];
+  assert.equal(summary(base + 10).state, 'waiting'); assert.equal(summary(base + 10).waiting.header.length, 24);
+  fs.appendFileSync(file, JSON.stringify(result(base + 20)) + '\n');
+  assert.equal(summary(base + 20).state, 'dispatching');
+  f.run('work', { started_at: base, ended_at: base + 30 });
+  fs.appendFileSync(file, JSON.stringify(answer(base + 30)) + '\n'); assert.equal(summary(base + 30).state, 'idle');
+  fs.appendFileSync(file, JSON.stringify(row('user', base + 40, 'new')) + '\n');
+  assert.equal(summary(base + 40 + 89999).state, 'thinking'); assert.equal(summary(base + 40 + 90000).state, 'idle');
+  fs.appendFileSync(file, JSON.stringify(tool(base + 100000, 'Read', 'read')) + '\n');
+  fs.appendFileSync(file, JSON.stringify(answer(base + 100001)) + '\n');
+  assert.equal(summary(base + 699999).state, 'thinking'); assert.equal(summary(base + 700000).state, 'idle');
+  fs.appendFileSync(file, JSON.stringify(tool(base + 710000, 'ExitPlanMode', 'exit')) + '\n');
+  assert.equal(summary(base + 800000).state, 'waiting'); assert.equal(summary(base + 800000).waiting.header, null);
+});
+
+test('run summaries cap at 16 / ten minutes, omit host, count the window, deduplicate usage and clear alerts on prompts', (t) => {
+  const f = temp(t), file = f.session('s', [row('user', now - 40000, 'title'),
+    answer(now - 86400001, { usage: { input_tokens: 999 } }), answer(now - 30000, { id: 'same', usage: { input_tokens: 999 } }),
+    answer(now - 29000, { id: 'same', usage: { input_tokens: 100, cache_read_input_tokens: 200, cache_creation_input_tokens: 30, output_tokens: 40 } })]);
+  for (let i = 0; i < 17; i++) f.run(`done${i}`, { started_at: now - 10000 - i, ended_at: now - 8000 - i });
+  f.run('old', { started_at: now - 700000, ended_at: now - 600001 });
+  f.run('host', { participant: 'host' });
+  f.run('outside', { started_at: now - 86400001, ended_at: now - 86400000 });
+  f.run('failed', { status: 'failed', started_at: now - 4000, ended_at: now - 2000 });
+  f.run('quota', { status: 'quota_exhausted', started_at: now - 3000, ended_at: now - 1000 });
+  const universe = createUniverse(f.options);
+  let s = universe.read().sessions[0];
+  assert.equal(s.runs.length, 16); assert.equal(s.runs[0].id, 'quota'); assert.ok(!s.runs.some((r) => ['host', 'old'].includes(r.id)));
+  assert.deepEqual(s.counts, { running: 0, done: 18, failed: 2 });
+  assert.deepEqual(s.usage, { input: 100, cached: 200, cache_write: 30, output: 40 });
+  assert.equal(s.cost_usd, 20.00236); assert.equal(s.alert.kind, 'quota_exhausted');
+  assert.equal(universe.read(now + 1799000).sessions[0].alert.kind, 'quota_exhausted');
+  assert.equal(universe.read(now + 1799001).sessions[0].alert, null);
+  fs.appendFileSync(file, JSON.stringify(answer(now - 28000, { id: 'same' })) + '\n');
+  assert.equal(universe.read().sessions[0].usage.input, null);
+  fs.appendFileSync(file, JSON.stringify(row('user', now - 500, 'new prompt')) + '\n');
+  assert.equal(universe.read().sessions[0].alert, null);
+  fs.appendFileSync(file, JSON.stringify(answer(now - 400, { model: 'unpriced', usage: { input_tokens: 1 } })) + '\n');
+  s = universe.read().sessions[0]; assert.equal(s.cost_usd, 20); assert.equal(s.cost_partial, true);
+  assert.equal(s.runs.some((r) => Object.hasOwn(r, 'report_head')), false);
+});
+
+test('agent slots retain config order, include unknown / out-of-window runs and queued since, never config secrets', (t) => {
+  const f = temp(t);
+  f.write(f.options.config, { api_key: 'SECRET_CONFIG_SENTINEL', agents: { z: { type: 'api', max_parallel: 2, api_key: 'SECRET_AGENT_SENTINEL' }, a: { type: 'cli', max_parallel: 3 } } });
+  f.run('unknown-z', { agent: 'unknown-z', status: 'running', ended_at: null });
+  f.run('unknown-b', { agent: 'unknown-b', status: 'running', started_at: now - 90000000, ended_at: null, claude_session: 'outside' });
+  const meta = f.run('queued', { agent: 'z', status: 'running', ended_at: null }, null, [{ type: 'api.queued', ts: now - 1000 }]);
+  const universe = createUniverse(f.options), data = universe.read();
+  assert.deepEqual(data.agents.map((a) => a.id), ['z', 'a', 'unknown-b', 'unknown-z']);
+  assert.deepEqual(data.agents[0].queued, [{ run: 'queued', session: 's', since: now - 1000 }]);
+  assert.deepEqual(data.agents[2], { id: 'unknown-b', type: null, max_parallel: 4, running: [{ run: 'unknown-b', session: 'outside' }], queued: [] });
+  assert.ok(!JSON.stringify(data).includes('SECRET')); assert.ok(!JSON.stringify(data).includes('api_key'));
+  fs.appendFileSync(path.join(f.options.runs, 'queued/events.jsonl'), JSON.stringify({ type: 'api.request', ts: now, model: meta.model }) + '\n');
+  assert.deepEqual(universe.read().agents[0].queued, []);
+});
+
+test('all replay shares one mapping with every detail, ordered deltas, source states, queues and mapped now', (t) => {
+  const universe = createUniverse(sample), replay = universe.replay({ speed: 2, maxgap: 1 }), { start, speed } = replay.hello.replay;
+  const at = (sec) => universeAt(replay, (replay.clock.map(base + sec * 1000) - start) / (1000 * speed));
+  assert.equal(universeAt(replay, 0).sessions.length, 0);
+  assert.equal(universeAt(replay, 0).projects.length, 0);
+  assert.equal(at(30).sessions.find((s) => s.id === 'demo-mascot').state, 'waiting');
+  assert.equal(at(35.2).sessions.find((s) => s.id === 'demo-factor').state, 'dispatching');
+  assert.deepEqual(at(35.2).sessions.find((s) => s.id === 'demo-factor').counts, { running: 1, done: 0, failed: 0 });
+  assert.equal(at(35.2).sessions.find((s) => s.id === 'demo-factor').cost_usd, 0.00944); assert.equal(at(35.2).sessions.find((s) => s.id === 'demo-factor').cost_partial, true);
+  assert.equal(at(35.2).agents.find((a) => a.id === 'kimi-k2.6').queued[0].since, replay.clock.map(base + 35200));
+  assert.equal(at(0.1).sessions.find((s) => s.id === 'demo-factor').state, 'thinking');
+  assert.equal(at(100).sessions.find((s) => s.id === 'demo-factor').state, 'idle');
+  assert.equal(at(100).sessions.find((s) => s.id === 'demo-factor').alert.kind, 'quota_exhausted');
+  assert.equal(at(145).agents.at(-1).id, 'fixture-unconfigured-agent');
+  assert.ok(replay.timeline.every((m, i) => !i || m.time >= replay.timeline[i - 1].time));
+  assert.ok(!JSON.stringify(replay.timeline).includes(sentinel));
+  for (const s of universe.read().sessions) {
+    const detail = replay.detail(s.id), raw = createFeed(sample.runs, { ...sample }).read({ session: s.id, replay: s.id }, now);
+    assert.deepEqual(detail.hello.replay, replay.hello.replay);
+    for (const ev of raw.events) assert.ok(detail.timeline.some((m) => m.event === 'ev' && m.data.k === ev.k && m.data.run === ev.run && m.data.ts === replay.clock.map(ev.ts)));
+    assert.ok(detail.timeline.every((m) => Number.isFinite(m.time)));
+  }
+  const zero = universe.replay({ maxgap: 0 });
+  assert.ok(zero.timeline.filter((m) => m.event === 'session' && m.data.id === 'demo-factor').length > 3);
+  const f = temp(t);
+  const file = f.session('s', [row('user', base, 'first'), row('user', base + 200000, 'again')]);
+  const short = createUniverse({ ...f.options, windowH: 0.01 }).replay({ maxgap: 1000 });
+  const during = universeAt(short, (base + 36001 - short.hello.replay.start) / 1000);
+  assert.equal(during.sessions.length, 0); assert.equal(during.projects[0].older, 1);
+  assert.equal(universeAt(short).sessions.length, 1); assert.equal(universeAt(short).projects[0].older, 0);
+  fs.appendFileSync(file, JSON.stringify(row('user', base + 150000, 'post-cache')) + '\n');
+  f.run('new-run', { started_at: base + 190000, ended_at: now });
+  const frozen = short.detail('s');
+  assert.ok(frozen.timeline.every((m) => Number.isFinite(m.time)));
+  assert.ok(!frozen.timeline.some((m) => m.data.t === 'post-cache' || m.data.id === 'new-run' || m.data.run === 'new-run'));
+});
+
+async function collect(url, stop, onFrame = () => {}) {
+  const response = await fetch(url, { signal: AbortSignal.timeout(10000) }), reader = response.body.getReader(), decoder = new TextDecoder();
+  assert.equal(response.status, 200);
+  const frames = [], opened = performance.now(); let buffer = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read(); if (done) break; buffer += decoder.decode(value, { stream: true });
+      let end;
+      while ((end = buffer.indexOf('\n\n')) >= 0) {
+        const frame = buffer.slice(0, end); buffer = buffer.slice(end + 2);
+        const event = /^event: (.+)$/m.exec(frame)?.[1], data = /^data: (.+)$/m.exec(frame)?.[1];
+        if (!data) continue;
+        const message = { event, data: JSON.parse(data), elapsed: performance.now() - opened }; frames.push(message); onFrame(message);
+        if (stop(message, frames)) return frames;
+      }
+    }
+  } finally { await reader.cancel(); }
+  return frames;
+}
+
+async function startServer(t, f, args = []) {
+  const child = spawn(process.execPath, [path.join(here, '../foreman/skills/dispatch/scripts/board/server.mjs'), '--runs', f.options.runs, '--claude-dir', f.options.claudeDir, '--config', f.options.config,
+    '--prices', path.join(here, 'fixtures/board/prices-test.json'), ...args], { cwd: here, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(async () => { if (child.exitCode == null) { child.kill(); await once(child, 'exit'); } });
+  const [ready] = await once(child.stdout, 'data'), url = new URL(String(ready).match(/board: (http:\/\/\S+)/)[1]);
+  return { url, address: `${url.origin}${url.pathname}` };
+}
+
+test('routes preserve guards, universe live order/removal, session snapshots and all-replay from scheduling', { timeout: 15000 }, async (t) => {
+  const f = temp(t), liveNow = Date.now();
+  f.session('s', [row('user', liveNow - 20000, 'first'), answer(liveNow - 10000)], 'demo', liveNow);
+  f.session('other', [row('user', liveNow - 15000, 'other'), answer(liveNow - 5000)], 'demo', liveNow);
+  f.run('work', { started_at: liveNow - 18000, ended_at: liveNow - 8000 });
+  const child = spawn(process.execPath, [path.join(here, '../foreman/skills/dispatch/scripts/board/server.mjs'), '--runs', f.options.runs, '--claude-dir', f.options.claudeDir, '--config', f.options.config,
+    '--window-h', '1', '--prices', path.join(here, 'fixtures/board/prices-test.json')], { cwd: here, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(async () => { if (child.exitCode == null) { child.kill(); await once(child, 'exit'); } });
+  const [ready] = await once(child.stdout, 'data'), address = String(ready).match(/board: (http:\/\/\S+?)\?/)[1];
+  const response = await fetch(`${address}sessions`); assert.equal(response.headers.get('cache-control'), 'no-store');
+  assert.equal((await response.json()).sessions.length, 2);
+  assert.equal((await fetch(`${address}sessions`, { method: 'HEAD' })).status, 200);
+  assert.equal((await fetch(`${address}sessions`, { method: 'POST' })).status, 405);
+  const badHost = await new Promise((resolve, reject) => http.get(`${address}sessions`, { headers: { Host: 'invalid' } }, (res) => { res.resume(); resolve(res.statusCode); }).on('error', reject));
+  assert.equal(badHost, 403);
+  assert.equal((await fetch(`${new URL(address).origin}/wrong/sessions`)).status, 404);
+  let added;
+  const live = await collect(`${address}stream?level=all`, (m) => m.event === 'session_gone', (m) => {
+    if (m.event === 'universe') added = f.session('added', [{ ...row('user', liveNow, 'added'), cwd: 'D:/New' }], 'new', liveNow);
+    if (m.event === 'session' && m.data.id === 'added') fs.unlinkSync(added);
+  });
+  assert.deepEqual(live.slice(0, 2).map((m) => m.event), ['hello', 'universe']);
+  assert.ok(live.findIndex((m) => m.event === 'project') < live.findIndex((m) => m.event === 'session'));
+  const snapshot = await (await fetch(`${address}snapshot?session=s`)).json();
+  assert.deepEqual(snapshot.hello.scope, { kind: 'session', value: 's' });
+  assert.ok(snapshot.events.some((e) => e.k === 'prompt' && e.t === 'first')); assert.ok(!snapshot.events.some((e) => e.t === 'other'));
+  const replay = await collect(`${address}stream?level=all&replay=all&maxgap=0.2`, (m) => m.event === 'done');
+  assert.deepEqual(replay.slice(0, 2).map((m) => m.event), ['hello', 'universe']);
+  const clock = replay[0].data.replay, all = await (await fetch(`${address}snapshot?session=s&replay=all&maxgap=0.2`)).json();
+  assert.deepEqual(all.hello.replay, clock);
+  const everything = await collect(`${address}stream?session=s&replay=all&maxgap=0.2&from=${clock.end}`, (m) => m.event === 'done');
+  const messages = everything.filter((m) => ['run', 'ev'].includes(m.event));
+  const expected = createUniverse(f.options).replay({ maxgap: 0.2 }, replay[0].data.now).detail('s').timeline;
+  assert.deepEqual(messages.map(({ event, data }) => ({ event, data })), expected.map(({ event, data }) => ({ event, data })));
+  const from = expected.at(-1).time - 150;
+  const detail = await collect(`${address}stream?session=s&replay=all&maxgap=0.2&from=${from}`, (m) => m.event === 'done');
+  assert.deepEqual(detail[0].data.replay, clock);
+  assert.deepEqual(detail.filter((m) => ['run', 'ev'].includes(m.event)).map(({ event, data }) => ({ event, data })), messages.map(({ event, data }) => ({ event, data })));
+  const timed = detail.filter((m) => ['run', 'ev'].includes(m.event));
+  assert.ok(timed.filter((_, i) => expected[i].time <= from).every((m) => m.elapsed < 100));
+  assert.ok(timed.find((_, i) => expected[i].time > from).elapsed >= 100);
+  const startState = await (await fetch(`${address}sessions?replay=all&maxgap=0.2&t=0`)).json(); assert.equal(startState.sessions.length, 0);
+});
+
+test('review 1: session rejects empty and traversal requests and transcript lookup stays in its project', { timeout: 10000 }, async (t) => {
+  const f = temp(t), at = Date.now(), outside = path.join(f.root, 'outside.jsonl');
+  f.write(outside, JSON.stringify(row('user', at, 'OUTSIDE_CANARY')) + '\n');
+  f.session('safe-1.x_y', [row('user', at, 'safe')], 'demo', at);
+  const { address } = await startServer(t, f);
+  for (const session of ['', '../../outside', '..', 'a..b', '/absolute', '_bad', 'a/b', 'a\\b']) {
+    for (const route of ['stream', 'snapshot']) for (const method of ['GET', 'HEAD']) {
+      const response = await fetch(`${address}${route}?${new URLSearchParams({ session })}`, { method });
+      assert.equal(response.status, 400, `${method} ${route} ${session}`); assert.equal(await response.text(), '');
+    }
+  }
+  const safe = await (await fetch(`${address}snapshot?session=safe-1.x_y`)).json();
+  assert.ok(safe.events.some((e) => e.t === 'safe'));
+  const original = fs.statSync;
+  t.mock.method(fs, 'statSync', function (file, ...args) { assert.notEqual(path.resolve(file), outside); return original.call(this, file, ...args); });
+  assert.deepEqual(createFeed(f.options.runs, f.options).read({ session: '../../outside' }, at).events, []);
+});
+
+test('review 2: printed addresses select the universe by default and for replay all', { timeout: 10000 }, async (t) => {
+  const f = temp(t);
+  const cases = [
+    [[], { level: 'all' }],
+    [['--replay', 'all', '--speed', '9', '--maxgap', '2'], { level: 'all', replay: 'all', speed: '9', maxgap: '2' }],
+    [['--group', 'g'], { group: 'g' }], [['--run', 'r'], { run: 'r' }], [['--replay', 's'], { replay: 's' }],
+  ];
+  for (const [args, expected] of cases) assert.deepEqual(Object.fromEntries((await startServer(t, f, args)).url.searchParams), expected);
+});
+
+test('review 3: live session keeps current and appended activity beyond the run tail without changing group/run', (t) => {
+  const f = temp(t), file = f.session('s', [row('user', base - 700000, 'before'), row('user', now, 'current')]);
+  f.run('work', { group: 'g', started_at: base - 700000, ended_at: base - 600000 });
+  const feed = createFeed(f.options.runs, f.options), prompts = (scope) => feed.read(scope, now).events.filter((e) => e.k === 'prompt').map((e) => e.t);
+  assert.deepEqual(prompts({ group: 'g' }), ['before']); assert.deepEqual(prompts({ run: 'work' }), ['before']);
+  assert.deepEqual(prompts({ session: 's' }), ['before', 'current']);
+  fs.appendFileSync(file, JSON.stringify(row('user', now + 600000, 'appended')) + '\n');
+  assert.deepEqual(prompts({ session: 's' }), ['before', 'current', 'appended']);
+  assert.deepEqual(prompts({ group: 'g' }), ['before']); assert.deepEqual(prompts({ run: 'work' }), ['before']);
+  f.session('no-runs', [row('user', now - 1800001, 'too early'), row('user', now + 1, 'open end')]);
+  assert.deepEqual(prompts({ session: 'no-runs' }), ['open end']);
+});
+
+test('review 4: session replay includes the entire transcript with a finite idle time, with or without runs', (t) => {
+  const f = temp(t);
+  f.session('s', [row('user', now - 10800000, 'old'), answer(now - 7200000)]);
+  const check = () => {
+    const data = createFeed(f.options.runs, f.options).read({ session: 's', replay: 's' }, now);
+    assert.ok(data.events.some((e) => e.t === 'old')); assert.equal(data.hostEnd, now - 7200000);
+    const own = buildReplay(data, {}, now); assert.ok(own.timeline.every((m) => Number.isFinite(m.time)));
+    const all = createUniverse(f.options).replay(), detail = all.detail('s');
+    assert.ok(detail.timeline.some((m) => m.data.t === 'old'));
+    assert.equal(detail.timeline.find((m) => m.event === 'run' && m.data.id === 'cc' && m.data.status === 'idle').time, all.clock.map(data.hostEnd));
+  };
+  check(); f.run('work', { started_at: now - 10000, ended_at: now - 5000 }); check();
+  const sampleReplay = createUniverse(sample).replay();
+  assert.ok(sampleReplay.detail('demo-readme').timeline.some((m) => m.event === 'ev' && m.data.k === 'prompt'));
+});
+
+test('review 5: transcript LRU retains three files across session/recent/group/run and evicts only the least used', (t) => {
+  const f = temp(t), files = ['a', 'b', 'c', 'd'].map((id) => f.session(id, [row('user', now - 1000, id)]));
+  const ids = files.map((_, i) => `20261022-09000${i}-lru${i}`);
+  ids.forEach((id, i) => f.run(id, { claude_session: ['a', 'b', 'c', 'd'][i], group: `g${i}`, started_at: now - (i + 1) * 1000, ended_at: now - 500 }));
+  const original = fs.openSync, reads = new Map(files.map((file) => [file, 0]));
+  t.mock.method(fs, 'openSync', function (file, ...args) { if (reads.has(file)) reads.set(file, reads.get(file) + 1); return original.call(this, file, ...args); });
+  const feed = createFeed(f.options.runs, f.options);
+  for (const scope of [{ session: 'a' }, { group: 'g1' }, { run: ids[2] }, {}, { session: 'd' }, { session: 'c' }, { session: 'a' }]) {
+    assert.ok(feed.read(scope, now).runs.some((r) => r.id === 'cc'));
+  }
+  assert.deepEqual([...reads.values()], [1, 1, 1, 1]);
+  feed.read({ session: 'b' }, now); assert.deepEqual([...reads.values()], [1, 2, 1, 1]);
+});
+
+test('review 6: universe streams refresh replay while detail/sessions share the latest two-entry LRU', { timeout: 10000 }, async (t) => {
+  const f = temp(t), at = Date.now();
+  f.session('s', [row('user', at - 20000, 'first')], 'demo', at);
+  const { address } = await startServer(t, f);
+  const snapshot = async (maxgap) => (await (await fetch(`${address}sessions?replay=all&speed=1000&maxgap=${maxgap}`)).json()).sessions.map((s) => s.id).sort();
+  assert.deepEqual(await snapshot(1), ['s']);
+  f.session('second', [row('user', at - 10000, 'second')], 'demo', at);
+  assert.deepEqual(await snapshot(1), ['s']);
+  const stream = await collect(`${address}stream?level=all&replay=all&speed=1000&maxgap=1`, (m) => m.event === 'done');
+  assert.ok(stream.some((m) => m.event === 'session' && m.data.id === 'second'));
+  assert.deepEqual(await snapshot(1), ['s', 'second']);
+  const detail = await collect(`${address}stream?session=second&replay=all&speed=1000&maxgap=1&from=${stream[0].data.replay.end}`, (m) => m.event === 'done');
+  assert.deepEqual(detail[0].data.replay, stream[0].data.replay); assert.ok(detail.some((m) => m.event === 'ev' && m.data.t === 'second'));
+  assert.deepEqual(await snapshot(2), ['s', 'second']);
+  f.session('third', [row('user', at - 5000, 'third')], 'demo', at);
+  assert.deepEqual(await snapshot(1), ['s', 'second']);
+  assert.deepEqual(await snapshot(3), ['s', 'second', 'third']);
+  assert.deepEqual(await snapshot(1), ['s', 'second']);
+  assert.deepEqual(await snapshot(2), ['s', 'second', 'third']);
+});
+
+test('review 7: older-only projects read just the newest file header up to 64 KB and cache by file/mtime', (t) => {
+  const f = temp(t), older = f.session('older', [row('user', now - 4 * 86400000, 'older')], 'old', now - 4 * 86400000);
+  const file = f.session('latest', [row('user', now - 2 * 86400000, 'latest')], 'old', now - 2 * 86400000);
+  fs.appendFileSync(file, 'x'.repeat(70000)); fs.utimesSync(file, new Date(now - 2 * 86400000), new Date(now - 2 * 86400000));
+  const hidden = path.join(f.options.claudeDir, 'hidden', 'old.jsonl');
+  f.write(hidden, JSON.stringify({ padding: 'x'.repeat(65536) }) + '\n' + JSON.stringify(row('user', now - 86400001, 'hidden')) + '\n');
+  fs.utimesSync(hidden, new Date(now - 86400001), new Date(now - 86400001));
+  const open = fs.openSync, read = fs.readSync, descriptors = new Map(), reads = [];
+  t.mock.method(fs, 'openSync', function (name, ...args) { assert.notEqual(name, older); const fd = open.call(this, name, ...args); descriptors.set(fd, name); return fd; });
+  t.mock.method(fs, 'readSync', function (fd, buffer, offset, length, position) { reads.push({ file: descriptors.get(fd), length, position }); return read.call(this, fd, buffer, offset, length, position); });
+  const universe = createUniverse(f.options), first = universe.read();
+  assert.equal(first.sessions.length, 0); assert.equal(first.projects.find((p) => p.key === 'c:/demo/project').older, 2);
+  assert.equal(first.projects.find((p) => p.key === '?').older, 1);
+  universe.read(now + 1000); assert.equal(reads.filter((r) => r.file === file).length, 1);
+  assert.ok(reads.every((r) => r.length <= 65536 && r.position === 0));
+  f.session('latest', [{ ...row('user', now - 1.5 * 86400000, 'updated'), cwd: 'D:/Older' }], 'old', now - 1.5 * 86400000);
+  assert.equal(universe.read(now + 30001).projects.find((p) => p.key === 'd:/older').older, 2);
+  assert.equal(reads.filter((r) => r.file === file).length, 2);
+});
+
+test('review 8: index scans top folders every 2 s, projects on mtime/30 s and stats only active known files', (t) => {
+  const f = temp(t), active = f.session('s', [row('user', now, 'active')]);
+  const old = [f.session('old1', [row('user', now - 40000, 'old1')], 'demo', now - 40000), f.session('old2', [row('user', now - 50000, 'old2')], 'demo', now - 50000)];
+  const dir = path.dirname(active); fs.utimesSync(dir, new Date(now), new Date(now));
+  const readdir = fs.readdirSync, stat = fs.statSync, lists = new Map(), stats = new Map();
+  let busy = false;
+  t.mock.method(fs, 'readdirSync', function (name, ...args) { lists.set(name, (lists.get(name) || 0) + 1); return readdir.call(this, name, ...args); });
+  t.mock.method(fs, 'statSync', function (name, ...args) { stats.set(name, (stats.get(name) || 0) + 1); if (busy && name === active) throw Object.assign(new Error('EPERM'), { code: 'EPERM' }); return stat.call(this, name, ...args); });
+  const universe = createUniverse({ ...f.options, windowH: 0.01 });
+  assert.equal(universe.read(now).projects[0].older, 2);
+  universe.read(now + 1000); universe.read(now + 1999);
+  assert.equal(lists.get(f.options.claudeDir), 1); assert.equal(lists.get(dir), 1);
+  assert.deepEqual(old.map((file) => stats.get(file)), [1, 1]); assert.ok(stats.get(active) > 1);
+  f.session('new', [row('user', now + 2000, 'new')], 'demo', now + 2000); fs.utimesSync(dir, new Date(now + 2000), new Date(now + 2000));
+  assert.ok(universe.read(now + 2000).sessions.some((s) => s.id === 'new')); assert.equal(lists.get(dir), 2);
+  f.session('new-project', [row('user', now + 2001, 'new project')], 'second', now + 2001);
+  assert.ok(!universe.read(now + 3999).sessions.some((s) => s.id === 'new-project'));
+  assert.ok(universe.read(now + 4000).sessions.some((s) => s.id === 'new-project'));
+  assert.equal(lists.get(f.options.claudeDir), 3); assert.equal(lists.get(dir), 2);
+  universe.read(now + 31999); assert.equal(lists.get(dir), 2);
+  busy = true; const before = universe.read(now + 32000); busy = false;
+  assert.ok(before.sessions.some((s) => s.id === 's')); assert.equal(lists.get(dir), 3); assert.deepEqual(old.map((file) => stats.get(file)), [3, 3]);
+  const after = universe.read(now + 36001);
+  assert.ok(universeChanges(before, after).some((m) => m.event === 'session_gone' && m.data.id === 's'));
+  assert.equal(after.projects.find((p) => p.key === 'c:/demo/project').older, 3);
+});
+
+test('review 9: replay ids without runs resolve to a full session while group/run selection stays intact', { timeout: 10000 }, async (t) => {
+  const f = temp(t), at = Date.now();
+  f.session('orphan', [row('user', at - 14400000, 'old orphan')], 'demo', at);
+  const data = createFeed(f.options.runs, f.options).read({ replay: 'orphan' }, at);
+  assert.deepEqual(data.scope, { kind: 'session', value: 'orphan' }); assert.ok(data.events.some((e) => e.t === 'old orphan'));
+  const runs = [{ id: 'r', meta: { group: 'g', claude_session: 'assigned' } }];
+  for (const [value, kind] of [['g', 'group'], ['r', 'run'], ['assigned', 'session'], ['orphan', 'session']]) assert.equal(selectScope(runs, { replay: value }, at).scope.kind, kind);
+  const { address } = await startServer(t, f, ['--replay', 'orphan']);
+  const snapshot = await (await fetch(`${address}snapshot?replay=orphan`)).json();
+  assert.deepEqual(snapshot.hello.scope, data.scope); assert.ok(snapshot.events.some((e) => e.t === 'old orphan'));
+});
+
+test('review 10: universe snapshots reject level all on snapshot and use sessions instead', { timeout: 10000 }, async (t) => {
+  const f = temp(t), { address } = await startServer(t, f);
+  for (const query of ['level=all', 'level=all&replay=all']) for (const method of ['GET', 'HEAD']) {
+    const response = await fetch(`${address}snapshot?${query}`, { method }); assert.equal(response.status, 400); assert.equal(await response.text(), '');
+  }
+  for (const query of ['', '?replay=all&t=0']) {
+    const response = await fetch(`${address}sessions${query}`); assert.equal(response.status, 200); assert.equal((await response.json()).v, 3);
+  }
+});
+
+test('review 11: invalid dates never enter replay clocks and nonfinite playback deadlines finish without spinning', { timeout: 10000 }, async (t) => {
+  const f = temp(t), at = Date.now();
+  f.session('s', [row('user', at - 1000, 'safe'), { type: 'custom-title', timestamp: 'invalid-date', customTitle: 'invalid time' }], 'demo', at);
+  f.run('bad-start', { started_at: 'invalid-date', ended_at: at - 100 });
+  f.run('bad-end', { started_at: at - 500, ended_at: 'invalid-date' });
+  const data = createFeed(f.options.runs, f.options).read({ session: 's', replay: 's' }, at);
+  data.events.push({ run: 'bad-end', lane: 'bad-end', ts: NaN, k: 'msg' });
+  const own = buildReplay(data, {}, at), all = createUniverse(f.options).replay({}, at);
+  for (const replay of [own, all, all.detail('s')]) {
+    assert.ok(Number.isFinite(replay.hello.replay.start) && Number.isFinite(replay.hello.replay.end));
+    assert.ok(replay.timeline.every((m) => Number.isFinite(m.time)));
+    assert.ok(!replay.timeline.some((m) => m.data.id === 'bad-start' || m.data.run === 'bad-start' || m.data.runs?.some((r) => r.id === 'bad-start')));
+  }
+  const { address } = await startServer(t, f);
+  const frames = await collect(`${address}stream?session=s&replay=s&speed=1e-320`, (m) => m.event === 'done');
+  assert.deepEqual(frames.map((m) => m.event), ['hello', 'done']);
+});
+
+test('image route serves only the image files a run recorded, by index', { timeout: 15000 }, async (t) => {
+  const f = temp(t), id = '20261023-120000-img1', png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  const bytes = (file, data) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, data); }; // f.write 会把非字符串转成 JSON
+  bytes(path.join(f.root, 'gen', 'a.png'), png); bytes(path.join(f.root, 'work', 'art', 'b.png'), png); bytes(path.join(f.root, 'work', '.env'), 'SECRET=1');
+  f.write(path.join(f.options.runs, id, 'meta.json'), { id, module: 'image', kind: 'image', cwd: path.join(f.root, 'work'), status: 'done', started_at: now - 9000, ended_at: now - 1000 });
+  f.write(path.join(f.options.runs, id, 'result.json'), { status: 'done', generated_images: [path.join(f.root, 'gen', 'a.png')],
+    changes: { files: [{ path: 'art/b.png', status: 'A' }, { path: '.env', status: 'A' }, { path: 'art/gone.png', status: 'D' }] } });
+  const { address } = await startServer(t, f);
+  const a = await fetch(`${address}image?run=${id}&n=0`);
+  assert.equal(a.status, 200); assert.equal(a.headers.get('content-type'), 'image/png'); assert.deepEqual(Buffer.from(await a.arrayBuffer()), png);
+  assert.equal((await fetch(`${address}image?run=${id}&n=1`)).status, 200);
+  // .env 不是图片、art/gone.png 已删除：都不在列表里，序号 2 就没有了
+  assert.equal((await fetch(`${address}image?run=${id}&n=2`)).status, 404);
+  for (const bad of ['..%2F..%2Fx', '20261023-120000-img1%2F..', 'x']) assert.equal((await fetch(`${address}image?run=${bad}&n=0`)).status, 400);
+  assert.equal((await fetch(`${address}image?run=${id}&n=-1`)).status, 400);
+});

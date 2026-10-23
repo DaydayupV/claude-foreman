@@ -1,0 +1,61 @@
+{
+  "module": "discuss",
+  "cell": "normal",
+  "seats": [
+    {
+      "seat": 1,
+      "agent": "gpt-6-astra-codex-cli",
+      "role": null,
+      "model": "gpt-6-astra",
+      "effort": "high",
+      "required": true
+    },
+    {
+      "seat": 2,
+      "agent": "gemini-4-argon-contributor",
+      "role": null,
+      "model": "opencode-go/gemini-4-argon-contributor",
+      "effort": "high",
+      "required": false
+    },
+    {
+      "seat": 3,
+      "agent": "deepseek-v4.1-flash",
+      "role": null,
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "effort": "high",
+      "required": false
+    },
+    {
+      "seat": 4,
+      "agent": "mimo-v2.6-pro-pi-cli",
+      "role": null,
+      "model": "xiaomi/mimo-v2.6-pro",
+      "effort": "high",
+      "required": false
+    },
+    {
+      "seat": 5,
+      "agent": "glm-5.3-flash",
+      "role": null,
+      "model": "opencode-go/glm-5.3-flash",
+      "effort": "high",
+      "required": false
+    }
+  ],
+  "seat_target": 5,
+  "host": {
+    "seat": 0,
+    "role": null
+  },
+  "created_at": "2026-10-18T13:40:20.500Z",
+  "claude_session": "00000000-0000-4000-8000-0000000d3e40",
+  "cwd": "C:\\demo-lab\\roles",
+  "level": "normal",
+  "group": "skills-roles-1018",
+  "required": [
+    "gpt-6-astra-codex-cli"
+  ],
+  "why": "示例文字 841.1：演示项目的角色分工讨论，内容已替换。",
+  "plan_id": "20261018-214020-skrl"
+}
