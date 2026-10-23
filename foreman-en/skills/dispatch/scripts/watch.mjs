@@ -5,7 +5,7 @@ import path from 'node:path';
 import { RUNS_ROOT, requestCancel, listRuns, findRun, readMeta, checkRunners, isRunning } from './records.mjs';
 import { M, die, sleep, clip, oneLine, plainCommand, RECONNECT, modelOf, agentTypeOf, fitWidth, textWidth } from './util.mjs';
 import { D, C, termCols, termRows, shortModel, fullModel, modelLabel, taskLine, identityLine, clock, outcomeStyle, changedFor, usageLine, commandAction } from './format.mjs';
-import { liveCapable, interactive, liveScreen, splitKeys, scroller, LEAVE_SCREEN, kindOf, introWanted, introOf } from './watch-screen.mjs';
+import { liveCapable, interactive, listenKeys, stopKeys, liveScreen, splitKeys, scroller, LEAVE_SCREEN, kindOf, introWanted, introOf } from './watch-screen.mjs';
 import { createTimeline, reviewConclusion, resultOutcome, durationOf, finishedParts, liveStatus, eventReader, hhmm } from './watch-timeline.mjs';
 import { introScene, playIntro } from './watch-intro.mjs';
 import { watchGroup } from './watch-group.mjs';
@@ -146,19 +146,53 @@ function footLine(lead, left, keys, W) {
   return lead + left.color(text) + ' '.repeat(room - textWidth(text) - textWidth(keys)) + C.dim(keys);
 }
 
+// 续接出来的最新一轮：顺着 meta.parent 往下找（续接只能接在最新一轮后面，每轮最多一个后继）。
+// 后继登记得晚，run_id 排在后面（登记时保证递增），只读排在后面的记录；读到的 parent 记着，不再重读
+function descendants() {
+  const parents = new Map();
+  return (id) => {
+    let names;
+    try { names = fs.readdirSync(RUNS_ROOT); } catch { return null; }
+    const children = new Map();
+    for (const x of names) {
+      if (x <= id) continue;
+      if (!parents.has(x)) {
+        const m = readMeta(path.join(RUNS_ROOT, x), { settle: false });
+        if (!m) continue; // 还没写好 meta.json 的（或者不是任务目录），下次再读
+        parents.set(x, m.parent ?? null);
+      }
+      const p = parents.get(x);
+      if (p && (!children.has(p) || x > children.get(p))) children.set(p, x);
+    }
+    let latest = null;
+    const seen = new Set([id]);
+    for (let next = children.get(id); next && !seen.has(next); next = children.get(next)) { latest = next; seen.add(next); }
+    return latest;
+  };
+}
+// 续接的提示：放不下整句时先去掉 run_id，再换更短的说法，最后才截断
+const continuedLine = (id, W) => C.dim(fitWidth([D.watchContinued(id), D.watchContinuedShort].find((s) => textWidth(s) <= W - 1) ?? D.watchContinuedTiny, W - 1));
+
 // 单任务视图：顶部固定身份行和任务行，中间是时间线（方向键、翻页键、滚轮往回翻），底部一行是最近的思考和按键。
 // 结束后有人能按键时停在画面里，按 q 离开，再把完整的记录写进普通屏幕留在标签页里；没人能按键时直接写。
-function singleView(meta, tl, dir) {
+// 这一轮被续接了（latest 找得到后继）时，底部上面多一行提示，按 n 换成最新的一轮
+function singleView(meta, tl, dir, latest) {
   const sc = scroller({ fromBottom: true });
-  const api = tl.state.api;
+  let api = tl.state.api;
   let ended = null; // 结束后：{ o, durationS }
   let tick = 0;
   let ticker = null;
+  let watcher = null; // 结束后每秒看一次有没有续接
+  let started = false;
+  let next = null; // 续接出来的最新一轮
+  let following = null; // 按了 n 要跟过去的那一轮
   let confirmCancel = false;
   let cancelSent = false;
   let lastTotal = 0;
   let lastWidth = 0;
   let onQuit = null;
+  const check = () => { const id = latest(meta.id); if (id === next) return false; next = id; return true; };
+  const tickOn = () => { ticker = setInterval(() => { if (++tick % 4 === 0) check(); screen.draw(); }, 250); };
   const footer = (W) => {
     const lead = ended ? '' : `${C.cyan(SPIN[tick % SPIN.length])} `;
     if (cancelSent) return footLine(lead, { text: D.watchCancelSent, color: C.yellow }, '', W);
@@ -183,18 +217,29 @@ function singleView(meta, tl, dir) {
     if (sc.offset && W === lastWidth) sc.offset += all.length - lastTotal;
     lastTotal = all.length;
     lastWidth = W;
-    const { shown } = sc.view(all, Math.max(1, H - top.length - 1));
-    return [...top, ...shown, footer(W)];
+    const tail = next ? [continuedLine(next, W)] : [];
+    const { shown } = sc.view(all, Math.max(1, H - top.length - 1 - tail.length));
+    return [...top, ...shown, ...tail, footer(W)];
   };
   const screen = liveScreen(render);
-  // 离开画面：恢复终端，把完整的记录写进普通屏幕
+  // 离开画面：恢复终端，把完整的记录写进普通屏幕；续接过的在最后写一句续接成了哪一轮
   const leave = () => {
     clearInterval(ticker);
+    clearInterval(watcher);
     if (!screen.active) return;
     screen.stop();
-    if (process.stdin.isTTY) { process.stdin.off('data', onKeys); process.stdin.setRawMode(false); process.stdin.pause(); }
+    if (interactive()) stopKeys(onKeys);
     const W = termCols();
-    process.stdout.write(`\n${[...runHead(meta, ended, api, W), ...tl.lines(W)].join('\n')}\n`);
+    const after = next ? ['', C.dim(D.watchContinuedOut(next))] : [];
+    process.stdout.write(`\n${[...runHead(meta, ended, api, W), ...tl.lines(W), ...after].join('\n')}\n`);
+  };
+  // 按 n：结束后等着按键的直接交回 watchRun，运行中的由它在下次读取时换过去
+  const follow = () => {
+    following = next;
+    clearInterval(watcher);
+    const done = onQuit;
+    onQuit = null;
+    done?.({ follow: following });
   };
   // 按 q 或 Ctrl+C：运行中是退出查看（任务照常运行），结束后是离开画面
   const quit = (code) => {
@@ -207,6 +252,7 @@ function singleView(meta, tl, dir) {
     const page = Math.max(1, termRows() - 5);
     for (const k of splitKeys(d.toString('utf8'))) {
       if (k === '\x03' || k === 'q') { quit(k === '\x03' ? 130 : 0); return; }
+      if ((k === 'n' || k === 'N') && next && !following) { follow(); return; }
       // 排队时按 x 终止：第一次按要求确认，第二次才写终止标记
       if ((k === 'x' || k === 'X') && api.queued && !ended && !cancelSent) {
         if (confirmCancel) { requestCancel(dir, 'watch'); cancelSent = true; }
@@ -219,14 +265,18 @@ function singleView(meta, tl, dir) {
     screen.draw();
   }
   const start = () => {
+    if (started) return;
+    started = true;
+    check();
     screen.start();
-    if (!ended) ticker = setInterval(() => { tick++; screen.draw(); }, 250);
-    if (process.stdin.isTTY) { process.stdin.setRawMode(true); process.stdin.resume(); process.stdin.on('data', onKeys); }
+    if (!ended) tickOn();
+    if (interactive()) listenKeys(onKeys);
     process.on('SIGINT', () => quit(130));
     process.on('exit', () => screen.stop());
   };
   return {
     start,
+    get following() { return following; },
     // 任务结束：停在画面里等 q；没人能按键时直接离开。打开时就已经结束的，到这里才进画面，第一帧就是结束的样子
     finished(r, m, o, onStart) {
       ended = { o: o ?? { running: false, status: m?.status ?? 'interrupted', ok: false, blocked: false }, durationS: durationOf(r, m) };
@@ -235,8 +285,22 @@ function singleView(meta, tl, dir) {
       confirmCancel = false;
       if (!screen.active) { start(); onStart?.(); }
       if (!interactive()) { leave(); return Promise.resolve(0); }
+      check();
+      watcher = setInterval(() => { if (check()) screen.draw(); }, 1000);
       screen.draw();
       return new Promise((resolve) => { onQuit = resolve; });
+    },
+    // 跟到续接的一轮：同一个画面换成它的时间线，从第一个事件排起，停在最新处。
+    // 这里不画：读完它的事件后，运行中的由计时器画，已经结束的由 finished 画，免得先闪一下"运行中"
+    load(m, t, d) {
+      clearInterval(ticker);
+      clearInterval(watcher);
+      [meta, tl, dir, api] = [m, t, d, t.state.api];
+      ended = null; next = null; following = null; onQuit = null;
+      confirmCancel = false; cancelSent = false;
+      sc.offset = 0; lastTotal = 0;
+      check();
+      tickOn();
     },
   };
 }
@@ -250,7 +314,7 @@ function roundOf(meta) {
 }
 
 async function watchRun(o, loadCfg) {
-  const { id, dir, meta } = await pickWatchRun(o.run);
+  let { id, dir, meta } = await pickWatchRun(o.run);
   meta.id ??= id;
   meta.round = roundOf(meta);
   const host = meta.participant === 'host';
@@ -262,9 +326,10 @@ async function watchRun(o, loadCfg) {
       isOver: () => { const m = readMeta(dir); return !!m && !isRunning(m); },
     });
   }
-  const cwd = meta.cwd;
-  const rel = (p) => { const r = path.relative(cwd, p); return r && !r.startsWith('..') && !path.isAbsolute(r) ? r : p; };
+  const relOf = (cwd) => (p) => { const r = path.relative(cwd, p); return r && !r.startsWith('..') && !path.isAbsolute(r) ? r : p; };
+  const rel = relOf(meta.cwd);
   const running = isRunning(meta);
+  const latest = descendants();
   // 任务还在运行、或者有人能按键时，画在可以随窗口重排、能翻看的画面里；否则直接输出
   const screenMode = !o.verbose && liveCapable() && (running || interactive());
   // 动画期间任务就结束了：时间线不进实时画面，先离开动画留下的备用屏幕（--verbose 时动画已经自己离开过，不再离开一次）
@@ -285,7 +350,7 @@ async function watchRun(o, loadCfg) {
   } else {
     const tl = createTimeline(meta, rel, { stream: !screenMode });
     ({ show, finish, goLive } = tl);
-    if (screenMode) view = singleView(meta, tl, dir);
+    if (screenMode) view = singleView(meta, tl, dir, latest);
     else {
       // 直接输出：先写顶部两行（已经结束的写结果），再随事件写时间线
       const r = running ? null : readResult(dir);
@@ -294,21 +359,39 @@ async function watchRun(o, loadCfg) {
     }
   }
 
-  const read = eventReader(dir, show);
-  read();
-  goLive();
-  if (view && running) { view.start(); handOff?.(); } // 实时画面接手了备用屏幕，由它负责退出时恢复终端
-  let m = readMeta(dir);
-  while (isRunning(m)) {
-    await sleep(500);
+  // 实时画面里按 n 跟到续接的一轮时，换成它的记录再走一遍
+  for (;;) {
+    const read = eventReader(dir, show);
     read();
-    m = readMeta(dir);
+    goLive();
+    if (view && running) { view.start(); handOff?.(); } // 实时画面接手了备用屏幕，由它负责退出时恢复终端
+    let m = readMeta(dir);
+    while (isRunning(m) && !view?.following) {
+      await sleep(500);
+      read();
+      m = readMeta(dir);
+    }
+    if (!view?.following) {
+      read();
+      const r = readResult(dir);
+      const outcome = finish(r, m ?? meta);
+      if (!view) {
+        // 直接输出的，已经被续接了就在最后写一句
+        const next = latest(id);
+        if (next) process.stdout.write(`\n${C.dim(D.watchContinuedOut(next))}\n`);
+        return;
+      }
+      const code = await view.finished(r, m ?? meta, outcome, () => handOff?.());
+      if (code === 130) process.exitCode = 130; // 结束后按 Ctrl+C 离开的，退出码和中断一致
+      if (typeof code === 'number') return;
+    }
+    ({ id, dir, meta } = findRun(view.following));
+    meta.id ??= id;
+    meta.round = roundOf(meta);
+    const tl = createTimeline(meta, relOf(meta.cwd));
+    ({ show, finish, goLive } = tl);
+    view.load(meta, tl, dir);
   }
-  read();
-  const r = readResult(dir);
-  const outcome = finish(r, m ?? meta);
-  // 结束后按 Ctrl+C 离开的，退出码和中断一致
-  if (view && await view.finished(r, m ?? meta, outcome, () => handOff?.()) === 130) process.exitCode = 130;
 }
 
 async function cmdWatch(o, loadCfg) {

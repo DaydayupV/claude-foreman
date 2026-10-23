@@ -106,7 +106,8 @@ export function sandbox(t, { config = true } = {}) {
     const handle = { child, done, stop: () => stop(child), get stdout() { return stdout; }, get stderr() { return stderr; } };
     active.add(handle);
     done.catch(() => {});
-    child.stdin.end(options.input ?? '合成测试任务');
+    // keepStdin：输入一直开着，测试之后再按键（配合 FOREMAN_TEST_KEYS）
+    if (!options.keepStdin) child.stdin.end(options.input ?? '合成测试任务');
     return handle;
   };
   const h = {
