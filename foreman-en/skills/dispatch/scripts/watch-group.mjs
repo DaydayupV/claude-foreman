@@ -7,7 +7,7 @@ import { describePlans } from './plan.mjs';
 import { M, die, sleep, oneLine, needsDecision, modelOf, textWidth, fitWidth, wrapWidth } from './util.mjs';
 import { D, C, termCols, termRows, visibleWidth, shortModel, modelLabel, moduleOf, taskLine, seatLine, identityLine, clock, outcomeStyle,
   changedFor, usageLine, foldText, paintPlanWord, replayCommand } from './format.mjs';
-import { liveCapable, interactive, liveScreen, splitKeys, scroller, LEAVE_SCREEN, kindOf, introWanted, introOf } from './watch-screen.mjs';
+import { liveCapable, interactive, listenKeys, stopKeys, liveScreen, splitKeys, scroller, LEAVE_SCREEN, kindOf, introWanted, introOf } from './watch-screen.mjs';
 import { createTimeline, reviewConclusion, realErrors, durationOf, liveStatus, eventReader, wrapAtDots, hhmm } from './watch-timeline.mjs';
 import { introScene, playIntro } from './watch-intro.mjs';
 
@@ -220,7 +220,7 @@ async function watchGroup(group, o, loadCfg) {
   const earlyKeys = (d) => { for (const k of splitKeys(d.toString('utf8'))) if (k === 'q' || k === '\x03') early = k === '\x03' ? 130 : 0; };
   const listenEarly = interactive();
   let settlingShown = false;
-  if (listenEarly) { process.stdin.setRawMode(true); process.stdin.resume(); process.stdin.on('data', earlyKeys); }
+  if (listenEarly) listenKeys(earlyKeys);
   for (let waited = 0; ; waited += 500) {
     runs = recentRuns();
     // 找到的一批都已结束时多等几秒：可能是别的会话用过的同名组，新派出的任务还没登记
@@ -240,8 +240,8 @@ async function watchGroup(group, o, loadCfg) {
   // 等完了就把那句提示擦掉（上移一行再清掉），不留在后面的汇总上方
   if (settlingShown) process.stdout.write('\x1b[1A\x1b[2K');
   if (listenEarly) {
-    process.stdin.off('data', earlyKeys);
-    if (early != null) { process.stdin.setRawMode(false); process.stdin.pause(); }
+    if (early != null) stopKeys(earlyKeys);
+    else process.stdin.off('data', earlyKeys);
   }
   // 启动动画：画出组里新派出的各位，播放中后登记的任务也会出场；结束后接着用备用屏幕画实时面板
   let introPlayed = false;
@@ -437,7 +437,7 @@ async function watchGroup(group, o, loadCfg) {
       }
       screen.draw();
     };
-    if (process.stdin.isTTY) { process.stdin.setRawMode(true); process.stdin.resume(); process.stdin.on('data', onKeys); }
+    if (interactive()) listenKeys(onKeys);
     process.on('exit', () => screen.stop());
     process.on('SIGINT', () => quit(130));
     screen.start();
@@ -456,7 +456,7 @@ async function watchGroup(group, o, loadCfg) {
       screen.draw();
       code = await done;
     }
-    if (process.stdin.isTTY) { process.stdin.off('data', onKeys); process.stdin.setRawMode(false); process.stdin.pause(); }
+    if (interactive()) stopKeys(onKeys);
     screen.stop();
     if (code != null && !allDone) { process.stdout.write(`${C.dim(D.watchDetached)}\n`); process.exit(code); }
     if (code === 130) process.exitCode = 130; // 结束后按 Ctrl+C 离开，照样写汇总，退出码和中断一致

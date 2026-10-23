@@ -6,8 +6,13 @@ import { avatarFor } from './watch-intro.mjs';
 
 // 能画实时画面的终端：输出到终端，而且不是 TERM=dumb 这种不认光标控制的终端（测试用 FOREMAN_TEST_SCREEN 模拟）
 const liveCapable = () => (process.stdout.isTTY && process.env.TERM !== 'dumb') || !!TEST_SCREEN;
-// 有人能按键：结束后停在画面里等 q，不自动退出。输入不是终端时（比如测试、被别的程序读取）照旧结束就退出
-const interactive = () => liveCapable() && !!process.stdin.isTTY;
+// 有人能按键：结束后停在画面里等 q，不自动退出。输入不是终端时（比如测试、被别的程序读取）照旧结束就退出；
+// 测试用 FOREMAN_TEST_KEYS=1 把管道输入当成按键
+const TEST_KEYS = !!process.env.FOREMAN_TEST_KEYS;
+const interactive = () => liveCapable() && (!!process.stdin.isTTY || TEST_KEYS);
+// 开始和停止读按键：终端切到原始模式，测试的管道输入照原样读（停下后不再拖着进程不退出）
+const listenKeys = (fn) => { if (process.stdin.isTTY) process.stdin.setRawMode(true); else process.stdin.ref?.(); process.stdin.resume(); process.stdin.on('data', fn); };
+const stopKeys = (fn) => { process.stdin.off('data', fn); if (process.stdin.isTTY) process.stdin.setRawMode(false); else process.stdin.unref?.(); process.stdin.pause(); };
 
 // 在终端的备用屏幕里整屏重画。关闭自动换行，超出窗口的部分直接截掉，不会折到下一行把画面挤乱；
 // 每行先定位光标再写。窗口大小变化时清屏重画，停下来 0.2 秒后再补画一次：
@@ -91,4 +96,4 @@ const introWanted = (o, metas, loadCfg) => liveCapable() && !process.env.NO_COLO
   && metas.some((m) => isRunning(m) && !m.parent) && loadCfg(metas[0].cwd).dispatch.intro !== false;
 const introOf = (m) => ({ key: avatarFor(m.model_name ?? m.model, agentTypeOf(m)), model: shortModel(modelOf(m)), who: modelLabel(m) });
 
-export { liveCapable, interactive, liveScreen, splitKeys, scroller, LEAVE_SCREEN, kindOf, introWanted, introOf };
+export { liveCapable, interactive, listenKeys, stopKeys, liveScreen, splitKeys, scroller, LEAVE_SCREEN, kindOf, introWanted, introOf };
