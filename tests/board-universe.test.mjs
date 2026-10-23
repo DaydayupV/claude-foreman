@@ -564,11 +564,17 @@ test('review 5: transcript LRU retains three files across session/recent/group/r
   const original = fs.openSync, reads = new Map(files.map((file) => [file, 0]));
   t.mock.method(fs, 'openSync', function (file, ...args) { if (reads.has(file)) reads.set(file, reads.get(file) + 1); return original.call(this, file, ...args); });
   const feed = createFeed(f.options.runs, f.options);
-  for (const scope of [{ session: 'a' }, { group: 'g1' }, { run: ids[2] }, {}, { session: 'd' }, { session: 'c' }, { session: 'a' }]) {
-    assert.ok(feed.read(scope, now).runs.some((r) => r.id === 'cc'));
+  const scopes = [{ session: 'a' }, { group: 'g1' }, { run: ids[2] }, {}, { session: 'd' }, { session: 'c' }, { session: 'a' }];
+  for (const [i, scope] of scopes.entries()) {
+    const data = feed.read(scope, now);
+    assert.ok(data.runs.some((r) => r.id === 'cc'));
+    assert.deepEqual(data.events.filter((e) => e.run === 'cc' && e.k === 'prompt').map((e) => e.t), [['a'], ['b'], ['c'], ['a'], ['d'], ['c'], ['a']][i]);
   }
-  assert.deepEqual([...reads.values()], [1, 1, 1, 1]);
-  feed.read({ session: 'b' }, now); assert.deepEqual([...reads.values()], [1, 2, 1, 1]);
+  // 不再缓存原始行，a/c 换窗口需要重读；同一窗口仍复用，b 被三文件 LRU 淘汰后才重新打开。
+  assert.deepEqual([...reads.values()], [3, 1, 2, 1]);
+  feed.read({ session: 'a' }, now); feed.read({ session: 'c' }, now);
+  assert.deepEqual([...reads.values()], [3, 1, 2, 1]);
+  feed.read({ group: 'g1' }, now); assert.deepEqual([...reads.values()], [3, 2, 2, 1]);
 });
 
 test('review 6: debug replay freezes universe and detail once before listening and reuses them across streams and queries', { timeout: 10000 }, async (t) => {

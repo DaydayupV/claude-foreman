@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { CLAUDE_SESSION, checkAdmission, groupScopeOwner, absolute, isCancelled, cancelSource, saveMeta, metaWriteWarning } from './records.mjs';
+import { CLAUDE_SESSION, registerRun, groupScopeOwner, absolute, isCancelled, cancelSource, saveMeta, metaWriteWarning } from './records.mjs';
 import { makeTracker } from './tracker.mjs';
 import { computeReviewMaterial } from './review-scope.mjs';
 import { M, die, notice, relativePath, pathKey, modelOf, replaceFile, killTree, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision } from './util.mjs';
@@ -98,7 +98,7 @@ function startRun(ctx, { started = Date.now(), track = [], modelShown = ctx.mode
   let rejection;
   // 登记时还拿着全局登记锁，不做收尾那种长时间重试：写不进就不启动，免得没登记的任务躲过并发上限和范围检查
   try {
-    rejection = saveMeta(dir, meta) ? checkAdmission(meta, ctx.cfg) : metaWriteWarning(dir);
+    rejection = registerRun(dir, meta, ctx.cfg);
     if (rejection) try { fs.rmSync(dir, { recursive: true }); } catch { /* 删不掉就留着，照样给出不启动的原因 */ }
   } finally { ctx.release(); }
   if (rejection) die(rejection);

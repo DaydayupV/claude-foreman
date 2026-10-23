@@ -420,7 +420,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 ```
 
 - `sandbox`：Codex 每类任务（`run`、`review`、`discuss`）用的沙箱，`read-only`、`workspace-write` 或 `danger-full-access`；不写就用 Codex 自己的配置。Windows 上不要用 `read-only`。
-- `max_parallel`：这个协作方同时最多跑几个任务，默认 4。
+- `max_parallel`：这个协作方同时最多跑几个任务，默认 4。满了以后，新的派发按先来后到排队等名额（默认最多等 60 分钟，`--queue-timeout` 可以改，写 0 表示不排队、直接拒绝），不同对话派出的任务也一起排。
 - `run_access`：允许 opencode 或 pi 做执行任务，见上文。
 - `extra_body`：API 请求里额外带的参数。
 - `bin`：找不到命令时，写可执行文件的完整路径。

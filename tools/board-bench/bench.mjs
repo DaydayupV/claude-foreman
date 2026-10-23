@@ -1,4 +1,4 @@
-// node bench.mjs <root> [replay|build]：用合成数据量耗时、进程峰值内存和读取次数
+// node bench.mjs <root> [live|replay|build]：用合成数据量耗时、进程峰值内存和读取次数
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -27,6 +27,29 @@ const time = (label, fn) => {
   return out;
 };
 console.log('start', mem());
+if (mode === 'live') {
+  // 固定同一份合成数据，每秒采样；分开释放明细和宇宙，避免互相抬高常驻内存。
+  async function detail() {
+    const feed = createFeed(runs, options); feed.watch(true);
+    try {
+      time('feed.read session first', () => feed.read({ session: 'sess-000' }));
+      for (let i = 1; i <= 5; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        time(`feed.read session second #${i}`, () => feed.read({ session: 'sess-000' }));
+      }
+      global.gc?.(); console.log('feed retained', mem());
+    } finally { feed.watch(false); }
+  }
+  await detail(); global.gc?.(); console.log('before universe', mem());
+  const universe = createUniverse({ ...options, runs, config: path.join(root, 'config.json'), windowH: 24 });
+  time('universe.read first', () => universe.read());
+  for (let i = 1; i <= 5; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    time(`universe.read second #${i}`, () => universe.read());
+  }
+  global.gc?.(); console.log('universe retained', mem());
+  process.exit(0);
+}
 if (mode === 'build') {
   const dir = fs.readdirSync(claudeDir).find((name) => fs.readdirSync(path.join(claudeDir, name)).some((file) => file.endsWith('.jsonl')));
   const file = fs.readdirSync(path.join(claudeDir, dir)).find((name) => name.endsWith('.jsonl')), session = file.slice(0, -6);

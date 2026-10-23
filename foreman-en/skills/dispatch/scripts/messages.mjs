@@ -467,7 +467,15 @@ ${schema}`,
   badAfter: (min) => `--after 应为大于 0 的分钟数。不写就用配置里的 busy_ask_min（现在是 ${min} 分钟）`,
   badGroupName: (name) => `组名 ${name} 不能用：只能用英文字母、数字和 . _ -，最多 64 个字符，比如 factor-scripts-1013。实时查看要把组名写进终端命令，桌面版的终端面板只接受 ASCII 命令`,
   groupNeedsScope: '用 --group 派活时必须用 --scope 写明允许改动的路径（可以给多次），用来检查同组任务的范围是否重叠',
-  agentFull: (agent, n, max, ids) => `协作方 ${agent} 已有 ${n} 个任务在运行（${ids}），达到它的并发上限 ${max}。等其中一个结束再派，或者调大 ~/.claude/foreman/config.json 里的 agents.${agent}.max_parallel`,
+  agentFull: (agent, n, max, ids) => `协作方 ${agent} 已有 ${n} 个任务在运行（${ids}），达到它的并发上限 ${max}。去掉 --queue-timeout 0 就会自动排队`,
+  queueAhead: (agent) => `协作方 ${agent} 已有派发在排队，不能插队。去掉 --queue-timeout 0 就会自动排队`,
+  queuePosition: (agent, max, n, min) => `协作方 ${agent} 的 ${max} 个名额都在用，排在第 ${n} 位，前面还有 ${n - 1} 个；最多再等 ${min} 分钟`,
+  queueLost: (agent) => `协作方 ${agent} 的排队票据已被回收，这次没有启动任务。请重新派发，重新排队`,
+  queueTimeout: (agent, min) => `等协作方 ${agent} 的名额超过 ${min} 分钟，已退出排队。这次没有启动任务`,
+  queueTimeoutInvalid: '--queue-timeout 要填 0 到 1440 之间的分钟数（最多等一天）',
+  queueHelp: '--queue-timeout <分钟>：名额满了按先来后到排队，默认最多等 60 分钟；0 表示立即拒绝。',
+  queueHeading: '排队中的派发',
+  queueRow: (agent, n, title, session, min) => `${agent}  第 ${n} 位  ${title || '-'}  会话 ${session || '-'}  已排 ${min} 分钟`,
   scopeOverlap: (group, other, paths) => `和任务组 ${group} 里正在运行的任务 ${other} 写入范围重叠：${paths.join('、')}。同组任务写入的文件不能重叠，请重新划分范围`,
   groupNotFound: (group) => `24 小时内没有找到任务组 ${group} 的任务`,
   badArg: (a) => `无法识别的参数：${a}`,
@@ -1139,7 +1147,15 @@ ${schema}`,
   badAfter: (min) => `--after must be a number of minutes above 0. Leave it out to use busy_ask_min from the config (${min} min now)`,
   badGroupName: (name) => `Group name ${name} can't be used: use only letters, digits, ".", "_" and "-", up to 64 characters, for example factor-scripts-1013. The live view puts the group name on a terminal command line, and the desktop app's terminal panel only accepts ASCII commands`,
   groupNeedsScope: 'When handing off with --group, give the paths the task may change with --scope (can be repeated), so overlapping scopes in the group can be caught',
-  agentFull: (agent, n, max, ids) => `Agent ${agent} already has ${n} runs in progress (${ids}), its parallel limit of ${max}. Wait for one to finish, or raise agents.${agent}.max_parallel in ~/.claude/foreman/config.json`,
+  agentFull: (agent, n, max, ids) => `Agent ${agent} already has ${n} runs in progress (${ids}), its parallel limit of ${max}. Remove --queue-timeout 0 to queue automatically`,
+  queueAhead: (agent) => `Agent ${agent} already has dispatches waiting in line. Remove --queue-timeout 0 to join the queue`,
+  queuePosition: (agent, max, n, min) => `Agent ${agent} has all ${max} slots in use; position ${n}, with ${n - 1} ahead; waiting up to ${min} more minutes`,
+  queueLost: (agent) => `The queue ticket for agent ${agent} was reclaimed. No run was started. Dispatch again to rejoin the queue`,
+  queueTimeout: (agent, min) => `Waited over ${min} minutes for a slot with agent ${agent}; left the queue. No run was started`,
+  queueTimeoutInvalid: '--queue-timeout must be a number of minutes from 0 to 1440 (one day at most)',
+  queueHelp: '--queue-timeout <minutes>: queue in arrival order when slots are full, for up to 60 minutes by default; 0 rejects immediately.',
+  queueHeading: 'Queued dispatches',
+  queueRow: (agent, n, title, session, min) => `${agent}  position ${n}  ${title || '-'}  session ${session || '-'}  waiting ${min} min`,
   scopeOverlap: (group, other, paths) => `The write scope overlaps with run ${other} in progress in group ${group}: ${paths.join(', ')}. Runs in the same group must not write the same files; split the scope again`,
   groupNotFound: (group) => `No runs found for group ${group} in the last 24 hours`,
   statusGroup: (group) => `[group ${group}] `,
@@ -1441,5 +1457,9 @@ ${schema}`,
   // Model jokes used only for hands-on runs (discussions and reviews don't write code)
   introModelRunJokes: { chatgpt: ['GPT is cracking its knuckles to start coding…'] },
 };
+
+for (const messages of [zh, en]) {
+  for (const cmd of ['run', 'discuss', 'review', 'resume', 'image']) messages.help[cmd] += `\n${messages.queueHelp}`;
+}
 
 export const MESSAGES = { zh, en };

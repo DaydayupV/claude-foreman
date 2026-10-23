@@ -126,14 +126,16 @@ function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-// 锁用的存活判断：没权限探测（EPERM，比如持有者在管理员终端里）也算进程还在，宁可多等，不能抢走活着的锁。
-// 任务是否在运行仍用 pidAlive：进程号被系统进程复用时，那里要能把记录判成中断。
+// 没权限探测（EPERM，比如进程在管理员终端里）也算还活着；任务身份另用启动时间核对，不能据此放出名额。
 function pidExists(pid) {
   try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
 }
 
 // 启动时间用于识别进程号复用；查不到时交给调用方决定，不能据此强行结束进程。
 // Windows 上按系统目录里的完整路径调用 PowerShell，PATH 被精简过也查得到。
+export const PROFILE = process.env.FOREMAN_PROFILE === '1';
+export const profile = (stage, started) => process.stderr.write(`foreman-profile ${stage} ${(performance.now() - started).toFixed(3)}\n`);
+
 function processStartTimes(pids, { timeoutMs = 15000 } = {}) {
   const times = new Map(pids.filter((pid) => Number.isInteger(pid) && pid > 0).map((pid) => [pid, null]));
   if (!times.size) return times;
@@ -141,9 +143,11 @@ function processStartTimes(pids, { timeoutMs = 15000 } = {}) {
   const powershell = path.join(process.env.SystemRoot || 'C:/Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   try {
     // 缺失进程会使 PowerShell 以 1 退出，显式成功以保留同批其余进程的结果。
+    const began = PROFILE ? performance.now() : 0;
     const r = process.platform === 'win32'
       ? spawnSync(fs.existsSync(powershell) ? powershell : 'powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Get-Process -Id ${ids} -ErrorAction SilentlyContinue | ForEach-Object { try { [Console]::WriteLine(('{0} {1}' -f $_.Id, $_.StartTime.ToUniversalTime().ToString('o'))) } catch {} }; exit 0`], { encoding: 'utf8', windowsHide: true, timeout: timeoutMs })
       : spawnSync('ps', ['-o', 'pid=,lstart=', '-p', ids], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, timeout: timeoutMs });
+    if (PROFILE) profile('process-query', began);
     if (r.error || r.signal) return times;
     // ps 在有的进程号已不存在时以非零退出，查到的那几行照样能用。
     for (const line of (r.stdout || '').trim().split(/\r?\n/)) {

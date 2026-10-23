@@ -230,14 +230,18 @@ test('replay final-output spreading also excludes commands and avoids API double
   assert.equal(b.laneStats(l, 10000).est, true);
 });
 
-test('older data without commands keeps the original capped-gap result and public segment fields', () => {
+// 推理模型一次请求里可以几分钟不出事件：2 分钟的空档整段算生成时间，超过 5 分钟的才截到 5 分钟（当成中间有空闲）
+test('gaps without commands count in full up to five minutes and keep the public segment fields', () => {
   const b = board(), l = lane(b, 'old', [[10000, 'think', { t: 'thinking' }],
     [130000, 'usage', { u: { out: 700 } }]],
   { status: 'done', ended_at: 130000, usage: { output: 700 } });
-  assert.deepEqual(Array.from(b.segments(l), (s) => ({ ...s })), [
-    { a: 0, b: 10000, tokens: 100, est: false }, { a: 70000, b: 130000, tokens: 600, est: false },
-  ]);
-  near(b.rateAt(l, 130000), 10); near(b.laneStats(l, 130000).avg, 10);
+  const segs = Array.from(b.segments(l), (s) => ({ ...s }));
+  assert.deepEqual(segs.map(({ a, b: end, est }) => ({ a, b: end, est })), [{ a: 0, b: 10000, est: false }, { a: 10000, b: 130000, est: false }]);
+  near(segs[0].tokens, 700 * 10 / 130); near(segs[1].tokens, 700 * 120 / 130);
+  near(b.rateAt(l, 130000), 700 / 130); near(b.laneStats(l, 130000).avg, 700 / 130);
+  const c = board(), long = lane(c, 'long', [[10000, 'think', { t: 'thinking' }], [410000, 'usage', { u: { out: 700 } }]],
+    { status: 'done', ended_at: 410000, usage: { output: 700 } });
+  assert.deepEqual(Array.from(c.segments(long), (s) => [s.a, s.b]), [[0, 10000], [110000, 410000]]);
 });
 
 test('parallel commands keep estimates paused until every command finishes', () => {
@@ -345,4 +349,20 @@ test('a Claude Code lane with usage but no price marks the cost as partial; with
 test('a Claude Code lane whose usage fields are all still empty does not mark the cost as partial', () => {
   const b = board(), l = lane(b, 'cc', [], { kind: 'host', status: 'running', ended_at: null, usage: { input: null, cached: null, cache_write: null, output: null }, cost_usd: null, cost_source: 'unknown' });
   assert.equal(b.laneStats(l, 2000).costPartial, false);
+});
+
+// 服务端从头重读了某个任务的记录：backlog 带 reset 时，先清掉这个任务以前的事件，别的任务不动
+test('a reset backlog drops the run old events before adding the new ones', () => {
+  const context = vm.createContext({ window: { __BOARD_FIXTURE__: true }, location: { search: '' }, URLSearchParams, wake: () => {} });
+  vm.runInContext(`${stateSource}\nglobalThis.state = { B, onRun, onEv, onBacklog };`, context);
+  const { B, onRun, onEv, onBacklog } = context.state;
+  onRun({ id: 'a', lane: 'a', started_at: 0 }); onRun({ id: 'b', lane: 'b', started_at: 0 });
+  for (const [run, ts, t] of [['a', 1, 'old-1'], ['a', 2, 'old-2'], ['b', 3, 'other']]) onEv({ run, ts, k: 'msg', t });
+  onBacklog({ run: 'a', reset: true, events: [{ run: 'a', ts: 5, k: 'msg', t: 'new' }] });
+  const texts = (list) => Array.from(list, (e) => e.t); // VM 里的数组和这里不是同一个 realm
+  assert.deepEqual(texts(B.laneById.get('a').events), ['new']);
+  assert.deepEqual(texts(B.laneById.get('b').events), ['other']);
+  assert.deepEqual(texts(B.feed), ['other', 'new']);
+  onBacklog({ run: 'b', events: [{ run: 'b', ts: 6, k: 'msg', t: 'more' }] }); // 没有 reset：只是补上
+  assert.deepEqual(texts(B.laneById.get('b').events), ['other', 'more']);
 });

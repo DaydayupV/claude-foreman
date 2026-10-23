@@ -1,8 +1,8 @@
 // 状态列表、终止任务和排队检查；会话统计由入口提供只读函数。
 import fs from 'node:fs';
 import path from 'node:path';
-import { RUNS_ROOT, UNFINISHED_STATUSES, requestCancel, listRuns, findRun, readMeta, checkRunners, isRunning, runEnd, runOutcome, groupRuns, groupSummary, describeActivity, saveMeta, metaWriteWarning } from './records.mjs';
-import { M, die, need, pidAlive, processStartedAt, killTreeIfSame, sleep, modelOf, agentTypeOf, replaceFile } from './util.mjs';
+import { RUNS_ROOT, UNFINISHED_STATUSES, requestCancel, listRuns, findRun, readMeta, checkRunners, isRunning, runEnd, runOutcome, groupRuns, groupSummary, describeActivity, saveMeta, metaWriteWarning, queuedRuns } from './records.mjs';
+import { M, die, need, pidExists, processStartedAt, killTreeIfSame, sleep, modelOf, agentTypeOf, replaceFile } from './util.mjs';
 import { D, C, padWidth, visibleWidth, modelLabel, clock, took, outcomeStyle, usageLine, paintPlanWord } from './format.mjs';
 import { planStatus, describePlans } from './plan.mjs';
 import { costOf, loadPrices } from './prices.mjs';
@@ -82,6 +82,9 @@ function cmdStatus(o, sessionStats) {
   }
   process.stdout.write(rows.length ? rows.join('\n') + '\n' + (quota ? `\n${D.rateLimit(quota)}\n` : '') : `${D.noRuns}\n`);
   if (grouped) process.stdout.write(`${[...describePlans(grouped).map((plan) => paintPlanWord(plan.text, plan.state)), groupSummary(grouped)].join('\n')}\n`);
+  const queue = queuedRuns(o.group);
+  if (queue.length) process.stdout.write(`\n${M.queueHeading}\n${queue.map((q) => M.queueRow(q.agent, q.position, q.title, q.claude_session,
+    Math.max(0, (Date.now() - Date.parse(q.queued_at)) / 60000).toFixed(1))).join('\n')}\n`);
 }
 
 function sameRunner(meta) {
@@ -104,14 +107,14 @@ async function cmdCancel(o, sessionStats) {
   const handleEnded = async (m, note) => {
     // 结果已落盘但 runner 还在重试元数据时，先等它收尾，免得 dismissed_at 被旧快照覆盖；磁盘上的元数据这一刻读不出也按还没写完算。
     const onDisk = UNFINISHED_STATUSES.includes(m.status) ? readMeta(run.dir, { settle: false }) : null;
-    if (UNFINISHED_STATUSES.includes(m.status) && (!onDisk || onDisk.status === 'running') && pidAlive(m.pid) && sameRunner(m) !== false) {
+    if (UNFINISHED_STATUSES.includes(m.status) && (!onDisk || onDisk.status === 'running') && pidExists(m.pid) && sameRunner(m) !== false) {
       const waitMs = Number(process.env.FOREMAN_TEST_CANCEL_WAIT_MS) || 20000;
-      for (const until = Date.now() + waitMs; pidAlive(m.pid) && Date.now() < until;) await sleep(Math.min(250, until - Date.now()));
+      for (const until = Date.now() + waitMs; pidExists(m.pid) && Date.now() < until;) await sleep(Math.min(250, until - Date.now()));
       m = readMeta(run.dir) || m;
     }
     const status = m.status === 'running' ? 'interrupted' : m.status;
     if (!UNFINISHED_STATUSES.includes(status)) {
-      if (!pidAlive(m.pid) && readMeta(run.dir, { settle: false })?.status === 'running') saveMeta(run.dir, m);
+      if (!pidExists(m.pid) && readMeta(run.dir, { settle: false })?.status === 'running') saveMeta(run.dir, m);
       print({ ok: false, status, note: M.cancelAlreadyEnded });
       return;
     }
@@ -126,7 +129,7 @@ async function cmdCancel(o, sessionStats) {
     }
     print({ ok: false, status: 'running', error: M.metaUnreadable(path.join(run.dir, 'meta.json')) });
   };
-  if (run.meta.status !== 'running' || !pidAlive(run.meta.pid)) {
+  if (run.meta.status !== 'running' || !pidExists(run.meta.pid)) {
     await handleEnded(readMeta(run.dir) || run.meta);
     return;
   }
@@ -138,13 +141,13 @@ async function cmdCancel(o, sessionStats) {
     const m = readMeta(run.dir);
     if (m && m.status !== 'running') { print({ ok: true, status: m.status }); return; }
     // 这一次读不出不等于已经停下：调度进程还活着就接着等，已经退出就不再等。
-    if (!pidAlive(run.meta.pid)) break;
+    if (!pidExists(run.meta.pid)) break;
   }
   // 确认它真的退出之后才动它的记录，免得和它自己的收尾交错。非 Windows 上只发 SIGTERM，等不到退出就再核对、发 SIGKILL。
   const pid = run.meta.pid;
-  const exited = async () => { for (let i = 0; i < 20 && pidAlive(pid); i++) await sleep(150); return !pidAlive(pid); };
+  const exited = async () => { for (let i = 0; i < 20 && pidExists(pid); i++) await sleep(150); return !pidExists(pid); };
   let forced = false;
-  if (pidAlive(pid)) {
+  if (pidExists(pid)) {
     const stopped = killTreeIfSame(pid, run.meta.started_at);
     if (stopped === 'other') { await handleReused(M.cancelPidReused(pid)); return; }
     if (stopped === null) { print({ ok: false, status: 'running', error: M.cancelUnverified(pid) }); return; }

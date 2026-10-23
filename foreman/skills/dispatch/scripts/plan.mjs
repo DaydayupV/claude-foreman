@@ -176,7 +176,9 @@ function planStatus(id, runs = null, plan = readPlan(id)) {
     seat_target: plan.seat_target ?? null, count_why: plan.count_why ?? null,
     ...(host ? { host } : {}), missing,
     missing_required: required.filter((seat) => seat.ok !== true).map(({ seat, agent, status }) => ({ seat, agent, status })),
-    gap_unfinished: gap.map(({ seat, agent, status }) => ({ seat, agent, status })) };
+    gap_unfinished: gap.map(({ seat, agent, status }) => ({ seat, agent, status })),
+    // state 只看要交回有效结果的席位：complete 时非必选的席位可能还在跑，单独列出来，免得以为全都结束了
+    running: seats.filter((seat) => seat.status === 'running').map(({ seat, agent }) => ({ seat, agent })) };
 }
 
 // 组里每份计划一行，列出还没交回有效结果的席位；计划文件读不到的跳过。

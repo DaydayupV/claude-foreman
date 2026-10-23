@@ -48,31 +48,42 @@ export function plainCommand(cmd) {
 }
 
 export function parseTranscriptLines(lines, ctx) {
-  // 同一消息的内容块分行写入，先确定末行，避免重复计量。
-  const rows = [], last = new Map(), events = [], tasks = {}, tools = new Map(), linked = new Set();
+  const parser = createTranscriptParser(ctx);
+  for (const line of lines) parser.write(line);
+  return parser.finish();
+}
+
+export function createTranscriptParser(ctx) {
+  // 只保留事件和关联状态；后续块可撤掉同一消息的旧用量，不必保留原始正文。
+  let events = [], cwdChanged = false;
+  const last = new Map(), removed = new Set(), paths = new Map(), tasks = {}, tools = new Map(), linked = new Set();
   const runs = [...(ctx.runsInScope || [])].sort((a, b) => Date.parse(a.meta.started_at) - Date.parse(b.meta.started_at));
   const byId = new Map(runs.map((r) => [r.id, r])), runIds = new Set(ctx.runIds || byId.keys());
   const lane = (id) => { const seen = new Set(); let r = byId.get(id); while (r?.meta.parent && byId.has(r.meta.parent) && !seen.has(r.id) && r.meta.participant !== 'host') { seen.add(r.id); r = byId.get(r.meta.parent); } return r ? r.meta.participant === 'host' ? 'cc' : r.lane || r.id : null; };
   const targets = (ids) => [...new Set(ids.filter((id) => runIds.has(id)).map(lane).filter(Boolean))];
   const meta = { title: null, model: null, session: null, cwd: ctx.cwd, started_at: null, latest_at: null, usage: { input: null, cached: null, cache_write: null, output: null } };
-  for (const line of lines) {
-    let row;
-    try { row = typeof line === 'string' ? JSON.parse(line) : line; } catch { continue; }
-    if (row.isSidechain) continue;
-    if (row.type === 'custom-title') { meta.title = row.customTitle; continue; }
-    if (!['assistant', 'user'].includes(row.type) || !Number.isFinite(Date.parse(row.timestamp))) continue;
-    rows.push(row); meta.started_at ??= Date.parse(row.timestamp); meta.latest_at = Date.parse(row.timestamp);
-    meta.cwd = row.cwd ?? meta.cwd; meta.session = row.sessionId ?? meta.session;
-    if (row.type === 'assistant') { meta.model = row.message.model ?? meta.model; if (row.message.id) last.set(row.message.id, row); }
-  }
   const filePath = (file) => {
     const p = /^[A-Za-z]:[\\/]/.test(meta.cwd || file) ? path.win32 : path.posix;
     const absolute = meta.cwd ? p.resolve(meta.cwd, file) : file;
     const relative = meta.cwd && p.relative(meta.cwd, absolute), inside = relative != null && relative !== '..' && !relative.startsWith(`..${p.sep}`) && !p.isAbsolute(relative);
     return slash(inside ? relative || '.' : absolute).slice(-120);
   };
-  for (const row of rows) {
-    const emit = (k, fields = {}) => { const ev = { run: 'cc', lane: 'cc', ts: Date.parse(row.timestamp), k, ...fields }; if (!ev.target?.length) delete ev.target; if (ev.t != null) ev.t = String(ev.t).replace(/\r/g, '').replace(/\n/g, ' ⏎ ').slice(0, 160); events.push(ev); return ev; };
+  const label = (v) => String(v).replace(/\r/g, '').replace(/\n/g, ' ⏎ ').slice(0, 160);
+  return { write(line) {
+    let row;
+    try { row = typeof line === 'string' ? JSON.parse(line) : line; } catch { return; }
+    if (row.isSidechain) return;
+    if (row.type === 'custom-title') { meta.title = row.customTitle; return; }
+    if (!['assistant', 'user'].includes(row.type) || !Number.isFinite(Date.parse(row.timestamp))) return;
+    meta.started_at ??= Date.parse(row.timestamp); meta.latest_at = Date.parse(row.timestamp);
+    cwdChanged ||= row.cwd != null && row.cwd !== meta.cwd;
+    meta.cwd = row.cwd ?? meta.cwd; meta.session = row.sessionId ?? meta.session;
+    if (row.type === 'assistant') {
+      meta.model = row.message.model ?? meta.model;
+      if (row.message.id) { const old = last.get(row.message.id); if (old) removed.add(old); last.delete(row.message.id); }
+    }
+    const emit = (k, fields = {}) => { const ev = { run: 'cc', lane: 'cc', ts: Date.parse(row.timestamp), k, ...fields }; if (!ev.target?.length) delete ev.target; if (ev.t != null) ev.t = label(ev.t); events.push(ev); return ev; };
+    const emitPath = (k, file, fields = {}, prefix = '') => { const ev = emit(k, { t: `${prefix}${filePath(file)}`, ...fields }); paths.set(ev, { file, prefix }); return ev; };
     const content = row.message.content, blocks = typeof content === 'string' ? [{ type: 'text', text: content }] : content || [];
     if (row.type === 'user') {
       const value = text(content).trim(), task = /<task-notification>[\s\S]*?<task-id>([^<]+)<\/task-id>/.exec(value)?.[1];
@@ -85,7 +96,7 @@ export function parseTranscriptLines(lines, ctx) {
         // 弹窗被回答（或被取消）：看板上"等你确认"的光环收掉
         if (tool?.k === 'ask') emit('ask_done', { t: tool.t });
       }
-      continue;
+      return;
     }
     for (const b of blocks) {
       if (b.type === 'thinking' && first(b.thinking)) emit('think', { t: first(b.thinking) });
@@ -113,11 +124,11 @@ export function parseTranscriptLines(lines, ctx) {
           const lanes = [...targets(ids), ...taskIds.flatMap((id) => tasks[id])];
           if (collect && collect[1] !== 'stats' && (group || plan)) lanes.push(...targets(runs.filter((r) => group ? r.meta.group === group : r.meta.plan === plan).map((r) => r.id)));
           const inRuns = b.name === 'Read' && runs.some((r) => r.dir && slash(file).toLowerCase().startsWith(`${slash(path.dirname(r.dir)).toLowerCase()}/`));
-          if (lanes.length || taskIds.length || ids.some((id) => runIds.has(id)) || collect || inRuns) ev = emit('collect', { t: collect ? collect[1] : file ? filePath(file) : 'results', target: [...new Set(lanes)] });
-          else if (['Read', 'NotebookRead'].includes(b.name)) ev = emit('read', { t: filePath(file) });
+          if (lanes.length || taskIds.length || ids.some((id) => runIds.has(id)) || collect || inRuns) ev = !collect && file ? emitPath('collect', file, { target: [...new Set(lanes)] }) : emit('collect', { t: collect ? collect[1] : 'results', target: [...new Set(lanes)] });
+          else if (['Read', 'NotebookRead'].includes(b.name)) ev = emitPath('read', file);
           else if (['Grep', 'Glob'].includes(b.name)) ev = emit('search', { t: input.pattern });
           else if (['WebSearch', 'WebFetch'].includes(b.name)) ev = emit('web', { t: input.query ?? input.url?.replace(/^\w+:\/\//, '') });
-          else if (['Edit', 'MultiEdit', 'NotebookEdit', 'Write'].includes(b.name)) ev = emit('edit', { t: `${b.name === 'Write' ? 'write' : 'update'} ${filePath(file)}` });
+          else if (['Edit', 'MultiEdit', 'NotebookEdit', 'Write'].includes(b.name)) ev = emitPath('edit', file, {}, `${b.name === 'Write' ? 'write' : 'update'} `);
           else if (['Bash', 'PowerShell'].includes(b.name)) ev = emit('cmd', { t: plainCommand(command) });
           // 向用户弹窗确认（角色分配、图像路线、计划审批）：t 是弹窗标题，没有就写工具名
           else if (['AskUserQuestion', 'ExitPlanMode'].includes(b.name)) ev = emit('ask', { t: input.questions?.[0]?.header || (b.name === 'ExitPlanMode' ? '计划审批' : b.name) });
@@ -126,12 +137,23 @@ export function parseTranscriptLines(lines, ctx) {
         tools.set(b.id, ev);
       }
     }
-    if (row.message.id && last.get(row.message.id) === row && row.message.usage) {
+    if (row.message.id && row.message.usage) {
       const u = row.message.usage, usage = { in: u.input_tokens ?? null, cached: u.cache_read_input_tokens ?? null, cache_write: u.cache_creation_input_tokens ?? null, out: u.output_tokens ?? null };
       // 消息标识只供实时推送去重，不进入协议数据。
-      Object.defineProperty(emit('usage', { n: usage.out, t: row.message.model, u: usage }), 'messageId', { value: row.message.id });
-      for (const [key, value] of Object.entries(usage)) if (value != null) { const name = key === 'in' ? 'input' : key === 'out' ? 'output' : key; meta.usage[name] = (meta.usage[name] ?? 0) + value; }
+      const ev = Object.defineProperty(emit('usage', { n: usage.out, t: row.message.model, u: usage }), 'messageId', { value: row.message.id });
+      last.set(row.message.id, ev);
     }
-  }
-  return { meta, events, tasks };
+  }, finish() {
+    if (removed.size) { events = events.filter((ev) => !removed.has(ev)); removed.clear(); }
+    // 旧解析器用全窗最后的 cwd 显示路径；改目录时只重算路径标签，并保留之前快照。
+    if (cwdChanged) events = events.map((ev) => {
+      const p = paths.get(ev); if (!p) return ev;
+      const next = { ...ev, t: label(`${p.prefix}${filePath(p.file)}`) }; paths.delete(ev); paths.set(next, p); return next;
+    });
+    cwdChanged = false; meta.usage = { input: null, cached: null, cache_write: null, output: null };
+    for (const ev of events) if (ev.k === 'usage') for (const [key, value] of Object.entries(ev.u)) if (value != null) {
+      const name = key === 'in' ? 'input' : key === 'out' ? 'output' : key; meta.usage[name] = (meta.usage[name] ?? 0) + value;
+    }
+    return { meta, events, tasks };
+  } };
 }

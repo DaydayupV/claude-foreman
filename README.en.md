@@ -420,7 +420,7 @@ Fields this config doesn't use but that are often adjusted:
 ```
 
 - `sandbox`: the sandbox Codex uses for each task type (`run`, `review`, `discuss`): `read-only`, `workspace-write` or `danger-full-access`. Left out, Codex's own config applies. Don't use `read-only` on Windows.
-- `max_parallel`: how many runs this agent may have at once; 4 by default.
+- `max_parallel`: how many runs this agent may have at once; 4 by default. When it's full, new dispatches queue for a slot in arrival order (for up to 60 minutes by default; `--queue-timeout` changes that, and 0 refuses right away instead of queueing), across all conversations.
 - `run_access`: lets opencode or pi do hands-on work; see above.
 - `extra_body`: extra parameters to send with API requests.
 - `bin`: the full path to the executable, if the command can't be found.

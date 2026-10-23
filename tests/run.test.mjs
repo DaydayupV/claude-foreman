@@ -137,7 +137,7 @@ test('达到协作方并发上限时拒绝新任务', async (t) => {
   c.agents.codex.max_parallel = 1;
   h.config(c);
   seedRun(h, '20000101-active', { status: 'running', pid: process.pid, group: 'other-group', claude_session: 'other-session' });
-  failed(await h.bridge(taskArgs(h)), M.agentFull('codex', 1, 1, '20000101-active'));
+  failed(await h.bridge(taskArgs(h, 'run', ['--queue-timeout', '0'])), M.agentFull('codex', 1, 1, '20000101-active'));
   assert.equal(h.calls().length, 0);
   assert.equal(h.records().length, 1);
 });

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseTranscriptLines, plainCommand } from './claude-feed.mjs';
+import { parseTranscriptLines, createTranscriptParser, plainCommand } from './claude-feed.mjs';
 import { priceFor, costOf } from '../prices.mjs';
 
 export const ms = (v) => v == null ? null : typeof v === 'number' ? v : Date.parse(v);
@@ -216,23 +216,39 @@ export function newTail(version = 0) { return { offset: 0, parts: [], decoder: n
 // 整块先解码成大字符串、再和上一块的半行拼接，是首次读大文件时内存峰值的主要来源。
 // 沿用同一个流式解码器（文件开头的 BOM 照旧只去掉一次）；没读完的半行按字节片段留着，一行再长也不反复拼接。
 // 给了 onLine 就每解析出一行交出去一行，不攒成数组（宇宙层只要累计值）；没给照旧返回 lines。
-const CHUNK = 1024 * 1024;
-export function readLines(file, tail, onLine) {
+const CHUNK = 1024 * 1024, SAMPLE = 4096;
+export function readLines(file, tail, onLine, onReset) {
   const lines = [], st = stat(file);
   if (!st) return { tail, lines };
-  if (tail.offset > st.size) tail = newTail(tail.version + 1);
-  const signature = `${st.size}:${st.mtimeMs}`;
+  const reset = () => { tail = newTail(tail.version + 1); onReset?.(tail); };
+  const identity = st.ino ? `${st.dev}:${st.ino}:${st.birthtimeMs}` : null;
+  if (tail.offset > st.size || identity && tail.identity && identity !== tail.identity) reset();
+  const signature = `${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
+  // 上次读完整了、这次大小没长但修改时间变了：只追加的日志不会这样，是被原地改写了，整份重读
+  if (tail.signature && tail.signature !== signature && tail.offset > 0 && st.size === tail.offset) reset();
   if (tail.signature !== signature) {
     let fd;
     try {
       fd = fs.openSync(file, 'r');
-      const bytes = Buffer.alloc(Math.min(CHUNK, Math.max(1, st.size - tail.offset)));
+      const bytes = Buffer.alloc(Math.min(CHUNK, Math.max(1, st.size)));
+      // 同 inode 截短再长回时身份不变：文件变了就核对已读部分的开头和末尾各 4 KB 还在不在原处。
+      // 只读这两小段，不重读整个已读前缀：一百多 MB 的对话每秒都在追加，整段重算会把增量解析的收益全吃掉
+      if (identity && tail.identity && tail.offset && tail.head) {
+        const same = (sample, at) => {
+          const buf = Buffer.alloc(sample.length);
+          return fs.readSync(fd, buf, 0, sample.length, at) === sample.length && buf.equals(sample);
+        };
+        if (!same(tail.head, 0) || !same(tail.last, tail.offset - tail.last.length)) reset();
+      }
+      tail.identity = identity;
       let complete = true;
       while (tail.offset < st.size) {
         const count = fs.readSync(fd, bytes, 0, Math.min(bytes.length, st.size - tail.offset), tail.offset);
         if (count <= 0) { complete = false; break; }
         tail.offset += count;
         const buf = bytes.subarray(0, count);
+        if (!tail.head || tail.head.length < SAMPLE) tail.head = Buffer.concat([tail.head ?? Buffer.alloc(0), buf.subarray(0, SAMPLE - (tail.head?.length ?? 0))]);
+        tail.last = Buffer.concat([tail.last ?? Buffer.alloc(0), buf.subarray(-SAMPLE)]).subarray(-SAMPLE);
         let start = 0, i;
         while ((i = buf.indexOf(10, start)) >= 0) {
           let piece = buf.subarray(start, i + 1);
@@ -311,31 +327,64 @@ export function createFeed(root, options = {}) {
     if (!file || !recent && !session && !runs.length) return data;
     const previous = transcript ? null : transcripts.get(file), read = transcript ? { tail: newTail(), lines: transcript.records } : readLines(file, previous || newTail()), tail = read.tail;
     if (previous && read.lines.some((r) => !r.isSidechain && ['user', 'assistant'].includes(r.type))) tail.appendedAt = now;
-    tail.records ??= []; append(tail.records, read.lines);
-    if (!transcript) { transcripts.delete(file); transcripts.set(file, tail); }
-    if (transcripts.size > 3) { const old = transcripts.keys().next().value; transcripts.delete(old); recentWindows.delete(old); }
+    const initial = tail.count ?? 0; tail.count = initial + read.lines.length;
     let window = recentWindows.get(file);
     // 首次取最近半小时，此后保留追加记录，不让窗口滑动丢掉会话用量。
-    if (recent && (!window || window.version !== tail.version)) { window = { from: now - 1800000, to: now, initial: tail.records.length, version: tail.version }; recentWindows.set(file, window); }
+    if (recent && (!window || window.version !== tail.version)) { window = { from: now - 1800000, to: now, initial: tail.count, version: tail.version }; recentWindows.set(file, window); }
     const replay = session && params.replay != null;
-    let firstAt = Infinity, lastAt = -Infinity;
-    for (const run of runs) { firstAt = Math.min(firstAt, ms(run.meta.started_at)); lastAt = Math.max(lastAt, ms(run.meta.ended_at) ?? now); }
+    let firstAt = Infinity, lastAt = -Infinity, openEnd = false;
+    for (const run of runs) { const ended = ms(run.meta.ended_at); firstAt = Math.min(firstAt, ms(run.meta.started_at)); lastAt = Math.max(lastAt, ended ?? now); openEnd ||= ended == null; }
     const from = replay ? -Infinity : recent ? window.from : firstAt - (options.lead ?? 10) * 60000;
     const end = session ? Infinity : recent ? window.to : lastAt + (options.tail ?? 5) * 60000;
-    const lines = tail.records.filter((r, i) => r.type === 'custom-title' || recent && i >= window.initial || ms(r.timestamp) >= from && ms(r.timestamp) <= end);
-    const parsed = parseTranscriptLines(lines, { cwd: null, runIds: runs.map((r) => r.id), runsInScope: runs });
+    const accepts = (r, i) => r.type === 'custom-title' || recent && i >= window.initial || ms(r.timestamp) >= from && ms(r.timestamp) <= end;
+    const ctx = { cwd: null, runIds: runs.map((r) => r.id), runsInScope: runs };
+    let parsed, cost;
+    if (transcript) {
+      parsed = parseTranscriptLines(read.lines.filter(accepts), ctx);
+      cost = hostCost(parsed.events.filter((e) => e.k === 'usage'), options.prices);
+    } else {
+      const key = JSON.stringify([String(from), String(!session && !recent && openEnd && Number.isFinite(end) ? Infinity : end), recent ? window.initial : null, [...runs].sort((a, b) => Date.parse(a.meta.started_at) - Date.parse(b.meta.started_at)).map((r) => [r.id, r.dir, r.lane, ...['started_at', 'parent', 'participant', 'mode', 'plan', 'seat', 'agent', 'group'].map((k) => r.meta[k])])]);
+      let changed = false;
+      const add = (row, i) => {
+        if (accepts(row, i)) { tail.parser.write(row); changed = true; }
+        else if (!row.isSidechain && ['assistant', 'user'].includes(row.type) && ms(row.timestamp) >= from && ms(row.timestamp) > end) tail.futureAt = Math.min(tail.futureAt ?? Infinity, ms(row.timestamp));
+      };
+      // 开放窗口的键保持稳定；未来行进入实际截止时间或窗口收缩时才重新筛选。
+      if (tail.key !== key || end < tail.end || Number.isFinite(tail.futureAt) && tail.futureAt <= end) {
+        const before = { parser: tail.parser, futureAt: tail.futureAt };
+        tail.parser = createTranscriptParser(ctx); tail.key = key; tail.futureAt = Infinity;
+        // 不留原始行；换窗口或任务集合时从文件重建，保留尾读版本和活跃时间。
+        let complete = true;
+        if (initial) {
+          let i = 0;
+          // 只重建本轮尾读已确认的行，并发追加的行留给下一轮，避免重复计入。
+          const rebuilt = readLines(file, newTail(), (row) => { if (i < tail.count) add(row, i); i++; });
+          complete = !!rebuilt.tail.signature;
+        } else read.lines.forEach(add);
+        // 重建这一轮没读全（文件一时被占用）：接着用上一份结果，下一轮再重建，不能把空结果发出去让对话从看板上消失
+        if (complete) changed = true;
+        else Object.assign(tail, { parser: before.parser, key: null, futureAt: before.futureAt });
+      } else read.lines.forEach((row, i) => add(row, initial + i));
+      if (changed) {
+        tail.parsed = tail.parser.finish();
+        tail.cost = hostCost(tail.parsed.events.filter((e) => e.k === 'usage'), options.prices);
+      }
+      tail.end = end;
+      parsed = tail.parsed; cost = tail.cost;
+      transcripts.delete(file); transcripts.set(file, tail);
+      if (transcripts.size > 3) { const old = transcripts.keys().next().value; transcripts.delete(old); recentWindows.delete(old); }
+    }
     const m = parsed.meta;
     if (m.started_at == null) return data;
-    const cost = hostCost(parsed.events.filter((e) => e.k === 'usage'), options.prices);
     data.runs.push({ id: 'cc', lane: 'cc', kind: 'host', agent: 'claude code', agent_type: 'host', model: m.model, session: m.session || path.basename(file, '.jsonl'), title: m.title, cwd: m.cwd,
       status: params.replay != null || now - Math.max(m.latest_at, tail.appendedAt ?? -Infinity) < 90000 ? 'running' : 'idle', started_at: m.started_at, ended_at: null, usage: m.usage, ...costFields(cost, cost == null ? 'unknown' : 'api_price') });
     append(data.events, parsed.events); data.versions.cc = `${file}:${tail.version}`; data.revisions.cc = '';
     data.hostEnd = session ? m.latest_at : end; return data;
   };
-  let names = [], dirty = true, watcher = null;
-  const scan = () => {
+  let names = [], nameSet = new Set(), dirty = true, watcher = null, scannedAt = -Infinity;
+  const scan = (now = options.now?.() ?? Date.now()) => {
     if (!dirty) return;
-    try { names = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort().reverse(); dirty = false; }
+    try { names = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort().reverse(); nameSet = new Set(names); dirty = false; scannedAt = now; }
     catch (e) { if (!transient(e)) throw e; }
   };
   const update = (id, details = true) => {
@@ -443,14 +492,16 @@ export function createFeed(root, options = {}) {
       if (!enabled) { watcher?.close(); watcher = null; dirty = true; }
     },
     hasRunning(now) {
-      dirty = true; scan();
+      dirty = true; scan(now);
       return recentNames(now, 24).map((id) => update(id, false)).some((r) => r.meta?.status === 'running' && r.meta.participant !== 'host' && ms(r.meta.started_at) >= now - 86400000);
     },
     read(params, now = options.now?.() ?? Date.now()) {
-      if (!watcher) dirty = true;
-      scan();
+      // watch 可能漏掉根目录通知；有客户端时也至多十秒重列一次。
+      if (!watcher || now - scannedAt >= 10000) dirty = true;
+      scan(now);
       const recent = params.session == null && params.group == null && params.run == null && params.replay == null;
       const candidates = recent ? recentNames(now, 48) : names;
+      const candidateSet = recent ? new Set(candidates) : nameSet;
       for (const id of candidates) {
         let run = cache.get(id);
         // 未入前八的车道有活动时也要参与排序；只补查 watch 指出的目录。
@@ -461,7 +512,7 @@ export function createFeed(root, options = {}) {
           run.recentSeen = true; changed.delete(id);
         }
       }
-      let available = () => [...cache.values()].filter((r) => names.includes(r.id) && (!recent || candidates.includes(r.id)));
+      let available = () => [...cache.values()].filter((r) => nameSet.has(r.id) && (!recent || candidateSet.has(r.id)));
       let selected = selectScope(available(), params, now);
       const updated = new Set();
       for (const run of selected.runs) {
@@ -469,13 +520,13 @@ export function createFeed(root, options = {}) {
         updated.add(run.id);
         let parent = run.meta.parent;
         const seen = new Set([run.id]);
-        while (parent && names.includes(parent) && !seen.has(parent)) {
+        while (parent && nameSet.has(parent) && !seen.has(parent)) {
           seen.add(parent); const ancestor = update(parent, false); parent = ancestor.meta?.parent;
         }
       }
       // 最近范围的扫描限于 48 小时，已选车道的祖先按 parent 定点补读。
       const roots = new Set(selected.runs.map((r) => laneOf(r, cache)));
-      if (recent) available = () => [...cache.values()].filter((r) => names.includes(r.id) && (candidates.includes(r.id) || roots.has(laneOf(r, cache))));
+      if (recent) available = () => [...cache.values()].filter((r) => nameSet.has(r.id) && (candidateSet.has(r.id) || roots.has(laneOf(r, cache))));
       selected = selectScope(available(), params, now);
       for (const run of selected.runs) if (!updated.has(run.id)) update(run.id);
       return addClaude(dataOf(selected, now), selected.runs, params, now);

@@ -20,7 +20,7 @@ test('续接拒绝运行中和旧轮次，锁内阻止并行分叉，最新结�
   const script = h.write('race-resume.mjs', `import fs from 'node:fs';
 const read = fs.readFileSync;
 fs.readFileSync = (file, ...args) => {
-  if (file === ${JSON.stringify(lock)} || String(file).startsWith(${JSON.stringify(`${lock}.`)})) fs.writeFileSync(process.env.WAIT_MARKER, 'waiting');
+  if (file === ${JSON.stringify(lock)} || String(file).startsWith(${JSON.stringify(path.join(h.runs, '.locks', '.start.lock.'))})) fs.writeFileSync(process.env.WAIT_MARKER, 'waiting');
   return read(file, ...args);
 };
 await import(${JSON.stringify(pathToFileURL(BRIDGE).href)});`);

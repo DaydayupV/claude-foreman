@@ -474,7 +474,7 @@ async function executeCodex(ctx) {
   const files = ctx.reviewTarget === 'visual' ? readImages(o.file, cwd)
     : mode !== 'run' ? readAttachments(o.file, cwd, false) : [];
   const nativeReview = kind === 'review' && git && ctx.reviewTarget === 'diff' && !brief && !files.length;
-  const { id, dir, release } = await newRunDir();
+  const { id, dir, release } = await newRunDir(ctx);
   const last = path.join(dir, 'last-message.txt');
   let args, prompt;
   if (mode === 'run') {

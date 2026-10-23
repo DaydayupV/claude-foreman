@@ -317,6 +317,7 @@ const TEXTS = {
     replayEstimate: '席位速度为回放估算',
     replayLive: '回放是调试功能，这里显示的是实时画面。要回放，请运行 board --replay <对话、任务或组>',
     focusMissing: '这个地址指向的对话不在当前星图里（超出了时间窗口或显示上限），没法飞进去',
+    serverLost: '连不上看板服务了（它可能已经退出，或者换了新的地址）：在 Claude Code 里运行 /foreman:watch，或者让它重新给看板链接',
     conversation: (title) => title ? `当前对话 · ${title}` : '当前对话',
     plan: (module, cell, seats) => `派发计划 · ${module} ${cell} · ${seats} 席`,
     gateWaiting: '外部席准入 · 等 Claude Code 席先交报告',
@@ -356,6 +357,7 @@ const TEXTS = {
     replayEstimate: 'seat rates are replay estimates',
     replayLive: 'Replay is a debugging tool; this page shows live data. To replay, run board --replay <conversation, run or group>',
     focusMissing: "The conversation this link points to isn't on the current map (outside the time window or the display limit), so the page can't fly into it",
+    serverLost: 'Lost the connection to the board server (it may have exited or moved to a new address): run /foreman-en:watch in Claude Code, or ask it for the board link again',
     conversation: (title) => title ? `this conversation · ${title}` : 'this conversation',
     plan: (module, cell, seats) => `dispatch plan · ${module} ${cell} · ${seats} ${seats === 1 ? 'seat' : 'seats'}`,
     gateWaiting: 'external seats wait · Claude Code seat reports first',
@@ -480,6 +482,20 @@ function onEv(ev) {
   wake();
 }
 
+// 服务端从头重读了某个任务的记录（文件被替换、截短后重写）：先丢掉这个任务以前的事件，再收新的
+function onBacklog(b) {
+  if (b.reset) {
+    const keep = (ev) => ev.run !== b.run;
+    for (const lane of B.lanes) if (lane.events.some((ev) => !keep(ev))) {
+      lane.events = lane.events.filter(keep); lane.ver = (lane.ver || 0) + 1;
+      lane.last = lane.events.reduce((last, ev) => (!last || ev.ts >= last.ts ? ev : last), null);
+    }
+    B.feed = B.feed.filter(keep); B.life = B.life.filter(keep);
+    B.version++;
+  }
+  b.events.forEach(onEv);
+}
+
 // 直播里派发事件先到、目标任务后出现时，服务端补发一次 ev_link：给原来那条事件补上 target
 function onEvLink(l) {
   const lane = B.laneById.get(B.runs.get(l.run)?.lane || l.run), ev = lane?.events.find((e) => e.ts === l.ts && e.k === l.k);
@@ -527,7 +543,7 @@ function connect() {
   on('run', onRun);
   on('ev', onEv);
   on('ev_link', onEvLink);
-  on('backlog', (b) => b.events.forEach(onEv));
+  on('backlog', onBacklog);
   on('done', () => { B.done = true; B.version++; });
   es.onopen = () => { B.connected = true; B.error = null; };
   es.onerror = () => { B.connected = false; B.error = es.readyState === 2 ? 'closed' : 'reconnecting'; };
@@ -646,8 +662,9 @@ function connectUniverse() {
   on('project', uProject);
   on('agents', uAgents);
   on('done', () => { U.done = true; U.version++; });
-  es.onopen = () => { U.error = null; };
-  es.onerror = () => { U.error = es.readyState === 2 ? 'closed' : 'reconnecting'; };
+  es.onopen = () => { U.error = null; U.lostAt = null; U.lostNoticed = false; };
+  // 记下从什么时候开始连不上：服务退出了、或者被新服务接替（地址和口令都变了）时，浏览器会一直重连旧地址
+  es.onerror = () => { U.error = es.readyState === 2 ? 'closed' : 'reconnecting'; U.lostAt ??= performance.now(); };
 }
 
 // 对话按项目归组，组内按最后活动时间排，给布局和列表用
@@ -1118,8 +1135,9 @@ function outLook(life) {
 // - 有分段用量的：输出摊到上一份用量到这一份之间；同轮有分段时忽略整轮总量；
 // - 流式字数（pi、API）：最后一份用量之后的字数增量 ÷ 4 当作 token；
 // - 回放时还知道每个任务最后的总用量：没被上面两种算到的部分，摊到这个任务各个事件之间的空档上（"回放估算"）。
+// 已知的局限：直播的估速只在命令执行期间暂停；pi、opencode 读文件、搜索这类工具没有开始事件，执行期间仍按样本估（通常只有几百毫秒）。
 
-const WINDOW = 10000, SEG_MAX = 90000, CHARS_PER_TOKEN = 4;
+const WINDOW = 10000, SEG_MAX = 90000, GAP_MAX = 300000, CHARS_PER_TOKEN = 4;
 const FINAL = new Map(); // run id → 回放结束时的 run 消息（总用量）
 const FINAL_EV = new Map(); // 车道 id → 回放的全部事件（估算速度用，不随回放进度变化）
 const SEG_RUN = new WeakMap(); // 分段归属仅供直播采样，不增加对外字段
@@ -1191,13 +1209,15 @@ function segments(lane) {
   const commands = commandSpans(events);
   const counted = new Map(); // run id → 已经由分段用量或字数算到的 token
   const starts = new Map(lane.runs.map((r) => [r.id, r.started_at]));
-  // 按任务内事件的空档摊开，去掉命令时间后，单个空档最多算 60 秒。
+  // 按任务内事件的空档摊开，去掉命令时间后，单个空档最多算 GAP_MAX。
+  // 推理模型一次请求里可以长时间不出事件（只在想），按 60 秒截断会把生成时间算少、速度估高（实测一个 Codex 记录高 84%）；
+  // 命令时间已经单独扣掉，这里只防真正的空闲（比如排队、等人），所以放宽到 5 分钟
   const spread = (run, a, b, tokens, est) => {
     if (!(tokens > 0) || !(b > a)) return;
     counted.set(run, (counted.get(run) || 0) + tokens);
     const times = [a, ...events.filter((e) => e.run === run && e.k !== 'usage' && e.ts > a && e.ts < b).map((e) => e.ts), b];
     const gaps = [];
-    for (let i = 1; i < times.length; i++) if (times[i] > times[i - 1]) gaps.push({ b: times[i], w: Math.min(times[i] - times[i - 1], 60000) });
+    for (let i = 1; i < times.length; i++) if (times[i] > times[i - 1]) gaps.push({ b: times[i], w: Math.min(times[i] - times[i - 1], GAP_MAX) });
     let active = gaps.filter((g) => !(commands.get(run) || []).some((c) => c.a < g.b && c.b > g.b - g.w));
     if (!active.length) active = gaps; // 全被命令覆盖时仍保留原来的 token 摊分。
     const total = active.reduce((s, g) => s + g.w, 0);
@@ -4416,6 +4436,9 @@ function step() {
   if (nowMs - lastFrame < (moving ? FRAME_BUSY : FRAME_IDLE) - 3) { wake(); return; }
   lastFrame = nowMs;
   UV.fitCache = null; UV.frame++;
+  // 连不上看板服务超过 20 秒：多半是服务退出了或者换了新地址，重连旧地址没有用，提示去拿新链接（只说一次，连上后重置）。
+  // 每帧都查：飞进看板以后星图那一层不再画，也要能提示
+  if (U.lostAt != null && !U.lostNoticed && !U.done && nowMs - U.lostAt > 20000) { U.lostNoticed = true; showNotice(TEXT.serverLost); }
   if (U.on) {
     // 宇宙层：飞入飞出的过渡里两边都画，按各自占的份额淡入淡出
     stepFly();
@@ -4459,12 +4482,12 @@ function uniFrame(alone = true) {
     uniStarted = true;
     if (!(Q.get('focus') && uniFocus(L, Q.get('focus')))) uniFit(true);
   }
-  // ?s=<对话>：打开链接时先看一眼宇宙，再飞进这个对话；刷新页面时直接回到对话。回放时对话是陆续出现的，等它出现了再进去
   // 直播时星图到了两秒还找不到要飞进去的对话（超出时间窗口或显示上限）：说一声，不再等。回放里对话是陆续出现的，不算
   if (FLY.pending && FLY.mode === 'universe' && !U.sessions.has(FLY.pending) && U.clock.mode !== 'replay'
     && U.loadedAt != null && performance.now() - U.loadedAt > 2000) {
     FLY.pending = null; showNotice(TEXT.focusMissing);
   }
+  // ?s=<对话>：打开链接时先看一眼宇宙，再飞进这个对话；刷新页面时直接回到对话。回放时对话是陆续出现的，等它出现了再进去
   if (FLY.pending && FLY.mode === 'universe' && U.sessions.has(FLY.pending)) {
     const id = FLY.pending, ms = performance.now();
     if (RELOADED) { FLY.pending = null; flyIn(id, true); }

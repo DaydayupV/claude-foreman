@@ -290,7 +290,7 @@ test('图像任务沿用执行准入：同组写入范围和协作方并发上�
   const overlapping = await h.bridge(launch(p, ['--scope', 'out/parts']));
   assert.equal(overlapping.code, 2); assert.ok(overlapping.stderr.includes('out/parts')); assert.equal(h.calls().length, 0);
   c.agents.codex.max_parallel = 1; h.config(c);
-  failed(await h.bridge(launch(p, ['--scope', 'other'])), M.agentFull('codex', 1, 1, '20000101-active'));
+  failed(await h.bridge(launch(p, ['--scope', 'other', '--queue-timeout', '0'])), M.agentFull('codex', 1, 1, '20000101-active'));
 });
 
 test('矢量检查排除同组其他席位和范围外的 unknown SVG', async (t) => {

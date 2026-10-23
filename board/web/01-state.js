@@ -85,6 +85,20 @@ function onEv(ev) {
   wake();
 }
 
+// 服务端从头重读了某个任务的记录（文件被替换、截短后重写）：先丢掉这个任务以前的事件，再收新的
+function onBacklog(b) {
+  if (b.reset) {
+    const keep = (ev) => ev.run !== b.run;
+    for (const lane of B.lanes) if (lane.events.some((ev) => !keep(ev))) {
+      lane.events = lane.events.filter(keep); lane.ver = (lane.ver || 0) + 1;
+      lane.last = lane.events.reduce((last, ev) => (!last || ev.ts >= last.ts ? ev : last), null);
+    }
+    B.feed = B.feed.filter(keep); B.life = B.life.filter(keep);
+    B.version++;
+  }
+  b.events.forEach(onEv);
+}
+
 // 直播里派发事件先到、目标任务后出现时，服务端补发一次 ev_link：给原来那条事件补上 target
 function onEvLink(l) {
   const lane = B.laneById.get(B.runs.get(l.run)?.lane || l.run), ev = lane?.events.find((e) => e.ts === l.ts && e.k === l.k);
@@ -132,7 +146,7 @@ function connect() {
   on('run', onRun);
   on('ev', onEv);
   on('ev_link', onEvLink);
-  on('backlog', (b) => b.events.forEach(onEv));
+  on('backlog', onBacklog);
   on('done', () => { B.done = true; B.version++; });
   es.onopen = () => { B.connected = true; B.error = null; };
   es.onerror = () => { B.connected = false; B.error = es.readyState === 2 ? 'closed' : 'reconnecting'; };

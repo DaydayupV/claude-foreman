@@ -63,12 +63,12 @@ function addEntry(session, entry) {
   else if (entry.messageId) session.usage.delete(entry.messageId);
 }
 function readSession(session) {
-  // 文件被截短（重写）时从头再来；要在读之前判断，读的同时就在往 session 里累计
-  const st = stat(session.file);
-  if (st && session.tail.offset > st.size) session = { ...newSession(session.id, session.file, session.folder), tail: newTail(session.tail.version + 1) };
   // 未打开的对话只留累计值、用量去重键和未回答工具，不保留记录或消息正文；边读边累计，不攒成数组
-  const target = session;
-  session.tail = readLines(session.file, session.tail, (row) => { const entry = entryOf(row); if (entry) addEntry(target, entry); }).tail;
+  const read = readLines(session.file, session.tail, (row) => { const entry = entryOf(row); if (entry) addEntry(session, entry); }, (tail) => {
+    // 在新文件的第一行累计前清空旧状态，空文件也必须清空。
+    session = { ...newSession(session.id, session.file, session.folder), tail };
+  });
+  session.tail = read.tail;
   return session;
 }
 function queueOf(raw, state) {
@@ -186,15 +186,18 @@ export function createUniverse(options) {
   const hours = options.windowH ?? 24, sessions = new Map(), runs = new Map(), folders = new Map();
   const listings = new Map();
   let dirs = [], listedAt = -Infinity;
+  let runNames = new Set(), runsScannedAt = -Infinity;
   let config;
   try { config = JSON.parse(fs.readFileSync(options.config, 'utf8')); } catch { /* 读不到配置就视为没有 */ }
   config = Object.entries(config?.agents || {}).map(([id, value]) => ({ id, type: value.type ?? null, max_parallel: value.max_parallel ?? 4 }));
-  const readRuns = () => {
+  const readRuns = (now) => {
     const names = new Set(list(options.runs).filter((d) => d.isDirectory() && d.name !== 'plans').map((d) => d.name));
+    const full = now - runsScannedAt >= 30000 || names.size !== runNames.size || [...names].some((id) => !runNames.has(id));
+    if (full) { runNames = names; runsScannedAt = now; }
     for (const id of runs.keys()) if (!names.has(id)) runs.delete(id);
     for (const id of names) {
-      // 已经结束、结果也读到了的运行不会再变：之后的轮询不再逐个查它的文件（真实运行目录有几百上千个）
-      if (runs.get(id)?.settled) continue;
+      // 缺结果的结束任务也会冻结；目录变化或每三十秒补查一次，捡回迟到的结果。
+      if (runs.get(id)?.settled && (runs.get(id).result != null || !full)) continue;
       const run = runs.get(id) || { id, dir: path.join(options.runs, id), signatures: {}, tail: newTail() };
       for (const name of ['meta', 'result']) {
         const file = path.join(run.dir, `${name}.json`), st = stat(file), signature = st && `${st.size}:${st.mtimeMs}`;
@@ -210,7 +213,8 @@ export function createUniverse(options) {
         const read = readLines(path.join(run.dir, 'events.jsonl'), run.tail); run.tail = read.tail;
         for (const raw of read.lines) if (Number.isFinite(ms(raw.ts))) queueOf(raw, run.tail.state);
       } else run.tail.state.queued = false;
-      run.settled = run.meta.status !== 'running' && (run.result != null || run.meta.participant === 'host');
+      const ended = ms(run.meta.ended_at);
+      run.settled = run.meta.status !== 'running' && (run.result != null || run.meta.participant === 'host' || ended != null && now - ended > 300000);
       run.message = null;
       runs.set(id, run);
     }
@@ -268,7 +272,7 @@ export function createUniverse(options) {
       }
     }
     for (const id of sessions.keys()) if (!found.has(id)) sessions.delete(id);
-    const all = readRuns(), selected = [...sessions.values()].filter((s) => s.last_at != null && s.last_at >= cutoff).sort((a, b) => b.last_at - a.last_at || a.id.localeCompare(b.id)).slice(0, 200);
+    const all = readRuns(now), selected = [...sessions.values()].filter((s) => s.last_at != null && s.last_at >= cutoff).sort((a, b) => b.last_at - a.last_at || a.id.localeCompare(b.id)).slice(0, 200);
     const summaries = selected.map((s) => summaryOf(s, all, now, hours, options.prices));
     return { v: 3, now, window_h: hours, projects: projectsOf([...selected].sort((a, b) => b.cwdAt - a.cwdAt), older, folders), sessions: summaries, agents: agentSlots(config, all) };
   };

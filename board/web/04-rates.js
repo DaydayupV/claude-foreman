@@ -3,8 +3,9 @@
 // - 有分段用量的：输出摊到上一份用量到这一份之间；同轮有分段时忽略整轮总量；
 // - 流式字数（pi、API）：最后一份用量之后的字数增量 ÷ 4 当作 token；
 // - 回放时还知道每个任务最后的总用量：没被上面两种算到的部分，摊到这个任务各个事件之间的空档上（"回放估算"）。
+// 已知的局限：直播的估速只在命令执行期间暂停；pi、opencode 读文件、搜索这类工具没有开始事件，执行期间仍按样本估（通常只有几百毫秒）。
 
-const WINDOW = 10000, SEG_MAX = 90000, CHARS_PER_TOKEN = 4;
+const WINDOW = 10000, SEG_MAX = 90000, GAP_MAX = 300000, CHARS_PER_TOKEN = 4;
 const FINAL = new Map(); // run id → 回放结束时的 run 消息（总用量）
 const FINAL_EV = new Map(); // 车道 id → 回放的全部事件（估算速度用，不随回放进度变化）
 const SEG_RUN = new WeakMap(); // 分段归属仅供直播采样，不增加对外字段
@@ -76,13 +77,15 @@ function segments(lane) {
   const commands = commandSpans(events);
   const counted = new Map(); // run id → 已经由分段用量或字数算到的 token
   const starts = new Map(lane.runs.map((r) => [r.id, r.started_at]));
-  // 按任务内事件的空档摊开，去掉命令时间后，单个空档最多算 60 秒。
+  // 按任务内事件的空档摊开，去掉命令时间后，单个空档最多算 GAP_MAX。
+  // 推理模型一次请求里可以长时间不出事件（只在想），按 60 秒截断会把生成时间算少、速度估高（实测一个 Codex 记录高 84%）；
+  // 命令时间已经单独扣掉，这里只防真正的空闲（比如排队、等人），所以放宽到 5 分钟
   const spread = (run, a, b, tokens, est) => {
     if (!(tokens > 0) || !(b > a)) return;
     counted.set(run, (counted.get(run) || 0) + tokens);
     const times = [a, ...events.filter((e) => e.run === run && e.k !== 'usage' && e.ts > a && e.ts < b).map((e) => e.ts), b];
     const gaps = [];
-    for (let i = 1; i < times.length; i++) if (times[i] > times[i - 1]) gaps.push({ b: times[i], w: Math.min(times[i] - times[i - 1], 60000) });
+    for (let i = 1; i < times.length; i++) if (times[i] > times[i - 1]) gaps.push({ b: times[i], w: Math.min(times[i] - times[i - 1], GAP_MAX) });
     let active = gaps.filter((g) => !(commands.get(run) || []).some((c) => c.a < g.b && c.b > g.b - g.w));
     if (!active.length) active = gaps; // 全被命令覆盖时仍保留原来的 token 摊分。
     const total = active.reduce((s, g) => s + g.w, 0);

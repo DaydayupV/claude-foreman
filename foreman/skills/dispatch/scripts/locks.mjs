@@ -30,6 +30,7 @@ async function acquireLegacy(base, token, deadline, busy) {
     return owner?.pid ? !pidExists(owner.pid) : Date.now() - (stat(file)?.mtimeMs ?? Date.now()) > 10000;
   };
   const mine = (file) => ownerOf(file)?.token === token;
+  let delay = 25;
   for (;;) {
     const final = Date.now() >= deadline;
     try { retryBusy(() => fs.writeFileSync(base, content, { flag: 'wx' })); return; }
@@ -44,13 +45,14 @@ async function acquireLegacy(base, token, deadline, busy) {
           finally { retryBusy(() => fs.rmSync(reap, { force: true }), () => mine(reap)); }
         }
       }
-      await sleep(25);
+      await sleep(delay); delay = Math.min(200, delay * 2);
     }
   }
 }
 
 export async function acquireLock(base, { waitMs, busy, legacy = false }) {
   const dir = path.dirname(base), prefix = `${path.basename(base)}.`;
+  const legacyBase = typeof legacy === 'string' ? legacy : base;
   const linkDir = path.resolve(dir);
   const token = randomUUID(), deadline = Date.now() + waitMs;
   const content = JSON.stringify({ pid: process.pid, token, at: new Date().toISOString() });
@@ -62,20 +64,25 @@ export async function acquireLock(base, { waitMs, busy, legacy = false }) {
     return match ? [{ name, generation: BigInt(match[1]) }] : temp ? [{ name, pid: Number(temp[1]) }] : [];
   });
   const latest = (files) => files.reduce((g, entry) => entry.generation > g ? entry.generation : g, 0n);
-  // 代号锁读取失败也按占用处理，旧协议仍保留原来的读错误。
-  const generationOwner = (file) => { try { return ownerOf(file); } catch { return null; } };
+  // 读失败仍按占用处理；残缺 JSON 与读失败分开，才可回收 wx 写到一半的残留。
+  const generationOwner = (file) => { try { return ownerOf(file); } catch { return {}; } };
   const blocked = (file, owner = generationOwner(file)) => busy({ file, pid: owner?.pid ?? null });
+  let delay = 25;
   for (;;) {
     // 到期后仍准许这一轮创建一次，三个失败出口都直接报 busy。
     const final = Date.now() >= deadline;
-    const g = latest(entries()), current = `${base}.${g}`;
+    const listed = entries(), g = latest(listed), current = `${base}.${g}`;
     const owner = g > 0n ? generationOwner(current) : null;
+    // 内容残缺（没有硬链接时先建文件再写内容，写到一半）的锁，过了 10 秒、而且没有还活着的写入者（它的临时文件还在）才回收：
+    // 写入者只是卡住了，恢复后会写完，不能被抢
+    const writing = listed.some((entry) => entry.pid && pidExists(entry.pid));
     // 持有者还在（包括没权限探测的）就一直等；进程号被别的程序复用时也等到上限，由报错提示用户手工删锁，
     // 不拿墙钟时间去猜进程身份：时钟一跳就可能把活着的持有者误判成已复用。
-    const vacant = g === 0n || owner === undefined || stat(`${current}.done`) || owner?.pid && !pidExists(owner.pid);
+    const vacant = g === 0n || owner === undefined || stat(`${current}.done`) || owner?.pid && !pidExists(owner.pid)
+      || owner === null && !writing && Date.now() - (stat(current)?.mtimeMs ?? Date.now()) > 10000;
     if (!vacant) {
       if (final) blocked(current, owner);
-      await sleep(25);
+      await sleep(delay); delay = Math.min(200, delay * 2);
       continue;
     }
     const generation = g + 1n, file = `${base}.${generation}`;
@@ -96,7 +103,7 @@ export async function acquireLock(base, { waitMs, busy, legacy = false }) {
     } catch (error) {
       if (error.code !== 'EEXIST' && !LINK_BUSY.includes(error.code)) throw error;
     } finally { retryBusy(() => fs.rmSync(tmp, { force: true })); }
-    if (!created) { if (final) blocked(file); continue; }
+    if (!created) { if (final) blocked(file); await sleep(delay); delay = Math.min(200, delay * 2); continue; }
     const after = entries();
     if (latest(after) > generation) {
       retryBusy(() => fs.rmSync(file, { force: true }));
@@ -108,7 +115,7 @@ export async function acquireLock(base, { waitMs, busy, legacy = false }) {
       if (released) return;
       released = true;
       process.removeListener('exit', release);
-      try { if (legacy) retryBusy(() => fs.rmSync(base, { force: true }), () => ownerOf(base)?.token === token); }
+      try { if (legacy) retryBusy(() => fs.rmSync(legacyBase, { force: true }), () => ownerOf(legacyBase)?.token === token); }
       finally {
         try { retryBusy(() => fs.writeFileSync(`${file}.done`, '', { flag: 'wx' })); }
         catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -116,8 +123,11 @@ export async function acquireLock(base, { waitMs, busy, legacy = false }) {
     };
     process.once('exit', release);
     try {
-      for (const entry of after) if (entry.generation < generation || entry.pid && !pidExists(entry.pid)) retryBusy(() => fs.rmSync(path.join(dir, entry.name), { force: true }));
-      if (legacy) await acquireLegacy(base, token, deadline, busy);
+      // 清理旧代号和死进程的临时文件只是顺手做的：删不掉（Windows 上正被占用）就留给下一个拿锁的，不能让这次拿锁失败
+      for (const entry of after) if (entry.generation < generation || entry.pid && !pidExists(entry.pid)) {
+        try { retryBusy(() => fs.rmSync(path.join(dir, entry.name), { force: true })); } catch { /* 留给下一次 */ }
+      }
+      if (legacy) await acquireLegacy(legacyBase, token, deadline, busy);
       return { release, file };
     } catch (error) { release(); throw error; }
   }

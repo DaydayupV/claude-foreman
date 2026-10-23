@@ -46,7 +46,7 @@ const { cmdSubmit } = await import('./submissions.mjs');
 const load = (cwd) => loadConfig(cwd, adapters);
 const CONFIG = process.argv[2] === 'assets' ? null : load(null);
 if (CONFIG) records.initializeRecords(CONFIG);
-const { RUNS_ROOT, CLAUDE_SESSION, findRun, readMeta, listRuns, isRunning } = records; // 记录目录在 initializeRecords 之后才定下来
+const { RUNS_ROOT, CLAUDE_SESSION, findRun, isRunning } = records; // 记录目录在 initializeRecords 之后才定下来
 
 function parseArgs(argv) {
   const [cmd, ...rest] = argv;
@@ -121,10 +121,6 @@ async function cmdResume(o) {
   const parent = findRun(need(o, 'run'));
   if (parent.meta.participant === 'host') die(M.hostNoResume(parent.id));
   if (isRunning(parent.meta)) die(M.resumeParentRunning(parent.id));
-  const runs = listRuns().map((id) => ({ id, meta: readMeta(path.join(RUNS_ROOT, id)) }));
-  let latest = parent;
-  for (let next; (next = runs.find((run) => run.meta?.parent === latest.id));) latest = next;
-  if (latest.id !== parent.id) die(M.resumeNotLatest(parent.id, latest.id));
   if (o.group != null && o.group !== (parent.meta.group ?? null)) die(M.resumeGroupFixed(parent.meta.group ?? null));
   const addDirs = [...new Map([...(parent.meta.add_dir || []), ...o['add-dir'].map(resolveDir)].map((dir) => [pathKey(dir), dir])).values()];
   // 旧续接没记模块，沿祖先辨认任务类型。
@@ -414,6 +410,8 @@ async function cmdModels(o) {
 }
 
 const { cmd, opts } = parseArgs(process.argv.slice(2));
+// 上限一天：再大的数会让到期时刻超出 Date 的范围
+if (opts['queue-timeout'] !== undefined && (!Number.isFinite(Number(opts['queue-timeout'])) || Number(opts['queue-timeout']) < 0 || Number(opts['queue-timeout']) > 1440)) die(M.queueTimeoutInvalid);
 if (['config', 'check', 'models'].includes(cmd) && opts.format !== undefined && !['json', 'md'].includes(opts.format)) die(M.reportFormatInvalid);
 // 新建任务组时组名只用 ASCII：实时查看要把它写进终端命令，桌面版的终端面板只接受 ASCII 命令。
 if (['run', 'discuss', 'resume', 'review', 'image', 'plan'].includes(cmd) && opts.group != null && !/^[A-Za-z0-9._-]{1,64}$/.test(opts.group)) die(M.badGroupName(opts.group));

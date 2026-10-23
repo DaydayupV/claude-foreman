@@ -207,7 +207,7 @@ test('旧类型和旧代号在 status、watch、resume 及并发准入中继续�
   assert.equal(output(explicit).agent, 'renamed');
   assert.ok(explicit.stderr.includes(M.legacyAgentAlias('codex', 'renamed')));
   seedRun(h, '20000101-active', { agent: 'codex', agent_type: 'codex', status: 'running', pid: process.pid });
-  failed(await h.bridge(taskArgs(h, 'run', ['--no-snapshot'])), M.agentFull('renamed', 1, 1, '20000101-active'));
+  failed(await h.bridge(taskArgs(h, 'run', ['--no-snapshot', '--queue-timeout', '0'])), M.agentFull('renamed', 1, 1, '20000101-active'));
   const list = await h.bridge(['status']);
   assert.equal(list.code, 0, list.stderr);
   for (const channel of ['Codex CLI', 'opencode CLI', 'API']) assert.ok(list.stdout.includes(channel));

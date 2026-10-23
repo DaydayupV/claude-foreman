@@ -28,6 +28,9 @@ function step() {
   if (nowMs - lastFrame < (moving ? FRAME_BUSY : FRAME_IDLE) - 3) { wake(); return; }
   lastFrame = nowMs;
   UV.fitCache = null; UV.frame++;
+  // 连不上看板服务超过 20 秒：多半是服务退出了或者换了新地址，重连旧地址没有用，提示去拿新链接（只说一次，连上后重置）。
+  // 每帧都查：飞进看板以后星图那一层不再画，也要能提示
+  if (U.lostAt != null && !U.lostNoticed && !U.done && nowMs - U.lostAt > 20000) { U.lostNoticed = true; showNotice(TEXT.serverLost); }
   if (U.on) {
     // 宇宙层：飞入飞出的过渡里两边都画，按各自占的份额淡入淡出
     stepFly();
@@ -71,12 +74,12 @@ function uniFrame(alone = true) {
     uniStarted = true;
     if (!(Q.get('focus') && uniFocus(L, Q.get('focus')))) uniFit(true);
   }
-  // ?s=<对话>：打开链接时先看一眼宇宙，再飞进这个对话；刷新页面时直接回到对话。回放时对话是陆续出现的，等它出现了再进去
   // 直播时星图到了两秒还找不到要飞进去的对话（超出时间窗口或显示上限）：说一声，不再等。回放里对话是陆续出现的，不算
   if (FLY.pending && FLY.mode === 'universe' && !U.sessions.has(FLY.pending) && U.clock.mode !== 'replay'
     && U.loadedAt != null && performance.now() - U.loadedAt > 2000) {
     FLY.pending = null; showNotice(TEXT.focusMissing);
   }
+  // ?s=<对话>：打开链接时先看一眼宇宙，再飞进这个对话；刷新页面时直接回到对话。回放时对话是陆续出现的，等它出现了再进去
   if (FLY.pending && FLY.mode === 'universe' && U.sessions.has(FLY.pending)) {
     const id = FLY.pending, ms = performance.now();
     if (RELOADED) { FLY.pending = null; flyIn(id, true); }

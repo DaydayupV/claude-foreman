@@ -183,7 +183,7 @@ test('准入拒绝不消耗席位，旧代号的席位按当前代号启动', as
   p.seats[0].agent = 'old'; write(p.file, p); write(path.join(path.dirname(h.userConfig), 'agent-aliases.json'), { old: 'codex' });
   const dir = seedRun(h, '20000101-full', { status: 'running', pid: process.pid });
   const args = [...launch(p), '--scope', 'src', '--no-snapshot'];
-  failed(await h.bridge(args), M.agentFull('codex', 1, 1, '20000101-full'));
+  failed(await h.bridge([...args, '--queue-timeout', '0']), M.agentFull('codex', 1, 1, '20000101-full'));
   assert.equal(h.records().filter((m) => m.plan).length, 0);
   write(path.join(dir, 'meta.json'), { ...json(path.join(dir, 'meta.json')), status: 'done' });
   assert.equal(output(await h.bridge(args)).agent, 'codex');
@@ -276,6 +276,7 @@ test('status --group 计划行显示未启动及运行中的 gap seat not finish
   assert.deepEqual(status.gap_unfinished, [
     { seat: 2, agent: 'second', status: 'not_started' }, { seat: 3, agent: 'second', status: 'running' },
   ]);
+  assert.deepEqual(status.running, [{ seat: 3, agent: 'second' }]); // complete 时还在跑的非必选席单独列出
   const line = `Plan ${p.plan_id}: complete; gap seat not finished: second (seat 2, not started), second (seat 3, running)`;
   for (const lang of ['zh', 'en']) {
     const r = await h.bridge(['status', '--group', 'plan-group'], { env: { FOREMAN_LANG: lang } });

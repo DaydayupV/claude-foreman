@@ -155,12 +155,12 @@ const third = await acquireLock(base, options); third.release(); console.log(JSO
     [...ignored.map((suffix) => `number.lock${suffix}`), 'number.lock.21', 'number.lock.21.done'].sort());
 });
 
-test('残缺或读失败的锁不按年龄接管，目录快照中的本体被删后仍递增代号', async (t) => {
+test('残缺代号锁宽限 10 秒后回收，读失败不抢，目录快照中的本体被删后仍递增代号', async (t) => {
   const h = sandbox(t), base = path.join(h.cwd, 'partial.lock');
   const script = h.write('partial.mjs', `import fs from 'node:fs';
 import assert from 'node:assert/strict';
 const { acquireLock } = await import(${url('locks.mjs')});
-const base = ${JSON.stringify(base)}, mode = process.argv[2], read = fs.readFileSync, list = fs.readdirSync, link = fs.linkSync;
+const mode = process.argv[2], base = ${JSON.stringify(base)} + '.' + mode, read = fs.readFileSync, list = fs.readdirSync, link = fs.linkSync;
 let scans = 0, missing = true; const started = Date.now();
 fs.readdirSync = (...args) => { scans++; return list(...args); };
 fs.readFileSync = (file, ...args) => {
@@ -170,21 +170,44 @@ fs.readFileSync = (file, ...args) => {
   }
   return read(file, ...args);
 };
-fs.linkSync = (...args) => { assert.equal(mode, 'gone'); assert.equal(scans, 1); return link(...args); };
+fs.linkSync = (...args) => { assert.ok(['gone', 'old'].includes(mode)); assert.equal(scans, 1); return link(...args); };
 const lock = await acquireLock(base, { waitMs: 150, busy: (owner) => {
-  assert.ok(['young', 'old', 'io'].includes(mode)); assert.equal(owner.file, base + '.1'); assert.equal(owner.pid, null);
+  assert.ok(['young', 'io'].includes(mode)); assert.equal(owner.file, base + '.1'); assert.equal(owner.pid, null);
   assert.ok(Date.now() - started >= 150); console.log(JSON.stringify('busy')); process.exit(3);
 } });
 lock.release(); console.log(JSON.stringify(lock.file));`);
-  write(`${base}.1`, '{');
-  assert.equal(output(await h.start(script, ['young']).done, 3), 'busy');
-  assert.deepEqual(fs.readdirSync(h.cwd).filter((name) => name.startsWith('partial.lock.')), ['partial.lock.1']);
+  for (const mode of ['young', 'old', 'io', 'gone']) {
+    const prefix = `${base}.${mode}`;
+    write(`${prefix}.1`, '{');
+    if (['old', 'io'].includes(mode)) { const old = new Date(Date.now() - 11000); fs.utimesSync(`${prefix}.1`, old, old); }
+    const blocked = ['young', 'io'].includes(mode);
+    assert.equal(output(await h.start(script, [mode]).done, blocked ? 3 : 0), blocked ? 'busy' : `${prefix}.2`);
+    assert.deepEqual(fs.readdirSync(h.cwd).filter((name) => name.startsWith(`partial.lock.${mode}.`)),
+      blocked ? [`partial.lock.${mode}.1`] : [`partial.lock.${mode}.2`, `partial.lock.${mode}.2.done`]);
+    if (blocked) assert.equal(fs.readFileSync(`${prefix}.1`, 'utf8'), '{');
+  }
+});
+
+test('无硬链接的 wx 发布中途退出，残缺代号锁超过 10 秒后下一进程可接管', async (t) => {
+  const h = sandbox(t), base = path.join(h.cwd, 'partial-wx.lock');
+  const script = h.write('partial-wx.mjs', `import fs from 'node:fs';
+const { acquireLock } = await import(${url('locks.mjs')});
+const base = ${JSON.stringify(base)}, write = fs.writeFileSync;
+if (process.argv[2] === 'crash') {
+  fs.linkSync = () => { throw Object.assign(new Error('unsupported'), { code: 'ENOTSUP' }); };
+  fs.writeFileSync = (file, ...args) => { if (file === base + '.1') { write(file, '{', { flag: 'wx' }); process.exit(0); } return write(file, ...args); };
+}
+const lock = await acquireLock(base, { waitMs: 500, busy: () => process.exit(3) });
+lock.release(); console.log(JSON.stringify(lock.file));`);
+  assert.equal((await h.start(script, ['crash']).done).code, 0);
+  assert.equal(fs.readFileSync(`${base}.1`, 'utf8'), '{'); assert.equal(fs.existsSync(`${base}.1.done`), false);
   const old = new Date(Date.now() - 11000); fs.utimesSync(`${base}.1`, old, old);
-  assert.equal(output(await h.start(script, ['old']).done, 3), 'busy');
-  assert.equal(output(await h.start(script, ['io']).done, 3), 'busy');
-  assert.equal(fs.readFileSync(`${base}.1`, 'utf8'), '{');
-  assert.equal(output(await h.start(script, ['gone']).done), `${base}.2`);
-  assert.deepEqual(fs.readdirSync(h.cwd).filter((name) => name.startsWith('partial.lock.')), ['partial.lock.2', 'partial.lock.2.done']);
+  // 还活着的写入者（它的临时文件还在）只是卡住了，恢复后会写完：不能接管
+  const writer = write(`${base}.${process.pid}.writer.tmp`, '');
+  assert.equal((await h.start(script, ['recover']).done).code, 3);
+  fs.rmSync(writer);
+  assert.equal(output(await h.start(script, ['recover']).done), `${base}.2`);
+  assert.equal(fs.existsSync(`${base}.1`), false); assert.equal(fs.existsSync(`${base}.2.done`), true);
 });
 
 for (const mode of ['exit', 'kill']) test(`持有者 ${mode} 后下一进程能接管`, async (t) => {
@@ -211,6 +234,7 @@ lock.release(); console.log(JSON.stringify(lock.file));`);
 
 test('登记先等旧版活锁，持有者退出后接管并先释放旧路径', async (t) => {
   const h = sandbox(t), base = path.join(h.runs, '.start.lock'), waiting = path.join(h.cwd, 'waiting');
+  const generationBase = path.join(h.runs, '.locks', '.start.lock');
   write(base, { pid: process.pid, token: 'legacy' });
   const script = h.write('legacy.mjs', `import fs from 'node:fs';
 import assert from 'node:assert/strict';
@@ -220,21 +244,25 @@ fs.readFileSync = (file, ...args) => {
   return read(file, ...args);
 };
 fs.writeFileSync = (file, ...args) => {
-  if (file === base + '.1.done') assert.equal(fs.existsSync(base), false);
+  if (file === ${JSON.stringify(generationBase)} + '.1.done') assert.equal(fs.existsSync(base), false);
   return write(file, ...args);
 };
 const { initializeRecords, newRunDir } = await import(${url('records.mjs')});
 initializeRecords(${JSON.stringify(baseConfig())});
-const run = await newRunDir(); run.release(); console.log(JSON.stringify(run.id));`);
+const run = await newRunDir();
+assert.equal(fs.existsSync(base), true);
+assert.equal(fs.existsSync(${JSON.stringify(generationBase)} + '.1'), true);
+run.release(); console.log(JSON.stringify(run.id));`);
   const pending = h.start(script);
   await poll(() => fs.existsSync(waiting), '新版在旧版锁外等候');
   assert.equal(pending.child.exitCode, null); assert.equal(pending.stdout, '');
   assert.equal(json(base).token, 'legacy');
-  assert.equal(fs.existsSync(`${base}.1.done`), false);
+  assert.equal(fs.existsSync(`${generationBase}.1.done`), false);
   write(base, { pid: 2147483647, token: 'dead-legacy' });
   assert.match(output(await pending.done), /^\d{8}-\d{6}-/);
   assert.equal(fs.existsSync(base), false);
-  assert.deepEqual(fs.readdirSync(h.runs).filter((name) => name.startsWith('.start.lock')), ['.start.lock.1', '.start.lock.1.done']);
+  assert.deepEqual(fs.readdirSync(h.runs).filter((name) => name.startsWith('.start.lock')), []);
+  assert.deepEqual(fs.readdirSync(path.join(h.runs, '.locks')), ['.start.lock.1', '.start.lock.1.done']);
 });
 
 for (const name of ['.start.lock', 'verdict.json.lock']) test(`${name} 的 legacy 选项等待活锁和活清理锁，回收残留后退出按序释放`, async (t) => {

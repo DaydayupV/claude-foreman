@@ -25,7 +25,7 @@ export async function cmdSubmit(o, load) {
   const max = kind === 'discuss' ? load(plan.cwd).dispatch.discuss_max_rounds : 1;
   if (kind === 'review') validateReviewMaterial({ ...plan.review, cwd: plan.cwd }, plan);
   const report_sha256 = createHash('sha256').update(bytes).digest('hex');
-  const { id, dir, release } = await newRunDir();
+  const { id, dir, release } = await newRunDir({ plan: plan.plan_id });
   // 拒绝时删掉刚建的空记录目录，免得 status 把它算成读不出的记录。
   const refuse = (message) => { fs.rmSync(dir, { recursive: true, force: true }); die(message); };
   let result;

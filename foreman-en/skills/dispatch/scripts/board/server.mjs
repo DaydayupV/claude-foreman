@@ -195,13 +195,14 @@ async function main() {
       const events = data.events.filter((ev) => ev.run === run.id), version = data.versions[run.id];
       const keyOf = (ev) => ev.messageId || JSON.stringify({ ...ev, target: undefined });
       const links = run.id === 'cc' ? new Map(events.map((ev) => [keyOf(ev), ev.target])) : null;
-      if (!previous) send(client, 'backlog', { run: run.id, events: backlog(events) });
+      // 记录被从头重读了（文件被替换、截短后重写，版本变了）：整份重发并让页面先清掉这个任务的旧事件，不能把新旧两份叠在一起
+      if (!previous || previous.version !== version) send(client, 'backlog', { run: run.id, events: backlog(events), ...(previous ? { reset: true } : {}) });
       else if (links) for (const ev of events) {
         const key = keyOf(ev);
-        if (previous.version !== version || !previous.links.has(key)) send(client, 'ev', ev);
+        if (!previous.links.has(key)) send(client, 'ev', ev);
         else if (ev.target?.length && JSON.stringify(previous.links.get(key)) !== JSON.stringify(ev.target)) send(client, 'ev_link', { run: 'cc', ts: ev.ts, k: ev.k, target: ev.target });
       }
-      else for (const ev of events.slice(previous.version === version ? previous.count : 0)) send(client, 'ev', ev);
+      else for (const ev of events.slice(previous.count)) send(client, 'ev', ev);
       client.seen.set(run.id, { text, count: events.length, version, revision, links });
     }
   };

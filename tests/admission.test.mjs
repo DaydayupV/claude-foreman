@@ -45,12 +45,12 @@ for (const legacy of [false, true]) test(`活着的登记锁不按年龄被抢�
 });
 
 test('兼容登记锁和旧代文件正被删除时报 EPERM、EACCES、EBUSY 只是稍等再试，一直报错才抛出原错误', async (t) => {
-  const h = sandbox(t), lock = path.join(h.runs, '.start.lock'), previous = `${lock}.1`;
+  const h = sandbox(t), lock = path.join(h.runs, '.start.lock'), previous = path.join(h.runs, '.locks', '.start.lock.1');
   const script = h.write('lock-transient.mjs', `import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { initializeRecords, newRunDir } from ${JSON.stringify(url('records.mjs'))};
 initializeRecords(${JSON.stringify(baseConfig())});
-const lock = ${JSON.stringify(lock)}, previous = lock + '.1', mode = process.argv[2];
+const lock = ${JSON.stringify(lock)}, previous = ${JSON.stringify(previous)}, mode = process.argv[2];
 const errors = { writeFileSync: [['EPERM'], ['EBUSY']], readFileSync: [['EACCES'], ['EPERM']], rmSync: [['EBUSY'], ['EPERM']] };
 const calls = Object.fromEntries(Object.keys(errors).map((name) => [name, [0, 0]]));
 const originals = Object.fromEntries(Object.keys(errors).map((name) => [name, fs[name]]));
@@ -91,6 +91,8 @@ console.log(JSON.stringify({ dir: run.dir, calls, owner, release: [calls.readFil
   fs.mkdirSync(h.runs, { recursive: true });
   for (const mode of ['short', 'always', 'cleanup', 'replaced']) await t.test(mode, async () => {
     for (const name of fs.readdirSync(h.runs).filter((name) => name.startsWith('.start.lock'))) fs.rmSync(path.join(h.runs, name), { force: true });
+    fs.mkdirSync(path.join(h.runs, '.locks'), { recursive: true });
+    for (const name of fs.readdirSync(path.join(h.runs, '.locks'))) fs.rmSync(path.join(h.runs, '.locks', name), { force: true });
     if (mode !== 'always') write(lock, { pid: 2147483647, token: 'stale' });
     if (mode === 'short') write(previous, { pid: 2147483647, token: 'stale-generation' });
     const result = await h.start(script, [mode], { timeout: 15000 }).done;
@@ -128,7 +130,7 @@ for (const content of ['', '{}', 'garbage']) test(`读不出持有者的旧登�
 });
 
 test('活进程持有代际锁时不回收残留兼容锁，释放后任务登记', async (t) => {
-  const h = sandbox(t), lock = path.join(h.runs, '.start.lock'), previous = `${lock}.1`;
+  const h = sandbox(t), lock = path.join(h.runs, '.start.lock'), previous = path.join(h.runs, '.locks', '.start.lock.1');
   write(lock, { pid: 2147483647, token: 'stale' }); write(previous, { pid: process.pid });
   const handle = h.startBridge(taskArgs(h, 'run', ['--no-snapshot']));
   await pause(750);
@@ -141,10 +143,10 @@ test('活进程持有代际锁时不回收残留兼容锁，释放后任务登�
 });
 
 test('代际锁持有者退出后仍等旧清理锁，清理锁退出后接管并完成登记', async (t) => {
-  const h = sandbox(t), lock = path.join(h.runs, '.start.lock'), previous = `${lock}.1`, reap = `${lock}.reap`;
+  const h = sandbox(t), lock = path.join(h.runs, '.start.lock'), previous = path.join(h.runs, '.locks', '.start.lock.1'), reap = `${lock}.reap`;
   write(lock, { pid: 2147483647, token: 'stale' }); write(previous, { pid: 2147483647 }); write(reap, String(process.pid));
   const pending = h.startBridge(taskArgs(h, 'run', ['--no-snapshot']));
-  await poll(() => fs.existsSync(`${lock}.2`), '拿到新代后等旧清理锁');
+  await poll(() => fs.existsSync(path.join(h.runs, '.locks', '.start.lock.2')), '拿到新代后等旧清理锁');
   assert.equal(h.records().length, 0); assert.equal(pending.child.exitCode, null);
   assert.equal(json(lock).token, 'stale'); assert.equal(Number(fs.readFileSync(reap, 'utf8')), process.pid);
   write(reap, '2147483647');

@@ -178,7 +178,7 @@ async function executeOpencode(ctx) {
     ? `${brief}${focusFiles(files)}\n\n${M.resumeFooter}\n\n${M.opencodeRunResumeFooter}\n`
     : `${brief}\n\n${M.footer(cwd, ctx.addDirs || [])}\n\n${M.opencodeRunFooter(schemaText, agent.run_access)}\n`;
   else prompt = `${brief}${focusFiles(files)}\n\n${ctx.parent ? M.opencodeResumeFooter : M.opencodeDiscussFooter(cwd, schemaText)}\n`;
-  const { id, dir, release } = await newRunDir();
+  const { id, dir, release } = await newRunDir(ctx);
   const context = { ...ctx, ...(exec ? {} : { readonly: readonlyLevel(agent, ctx.kind) }), id, dir, release, prompt };
   if (exec) return execute(context, {
     capabilities, describe: () => ({ sandbox: null, modelShown: model, modelName: model }),

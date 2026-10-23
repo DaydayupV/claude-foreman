@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ENTRY, defaultRunsRoot, runsMovedNow, resolveAgentAlias, DEFAULT_AGENT_PARALLEL } from './config.mjs';
-import { M, die, pidAlive, processStartTimes, sleep, pathKey, clip, oneLine, plainCommand, retryBusy, replaceFile } from './util.mjs';
+import { M, die, notice, pidExists, processStartTimes, sleep, pathKey, clip, oneLine, plainCommand, retryBusy, replaceFile, PROFILE, profile } from './util.mjs';
 import { D } from './format.mjs';
 import { acquireLock } from './locks.mjs';
 
@@ -53,32 +53,119 @@ await import(pathToFileURL(candidates.find((p) => fs.existsSync(p)) ?? candidate
 }
 
 // 并发上限按协作方算，任何任务（分不分组、哪个会话）都要在锁内登记并做准入检查，调用方用完 release。
-async function newRunDir() {
-  fs.mkdirSync(RUNS_ROOT, { recursive: true });
-  // 进程身份在锁外预查，避免其他派活等 PowerShell；记下当时有哪些任务，准入时据此分辨新登记的。
-  const ids = listRuns();
-  listedBeforeLock = new Set(ids);
-  checkRunners(ids.map((id) => readMeta(path.join(RUNS_ROOT, id))));
-  // 登记和准入串行完成，避免随机后缀让后登记的任务排到前面。
-  const { release } = await acquireLock(path.join(RUNS_ROOT, '.start.lock'), {
-    waitMs: 60000, legacy: true, busy: ({ file, pid }) => die(M.startLockBusy(file, pid ?? '?', 60)),
-  });
-  const previous = listRuns().find((id) => /^\d{8}-\d{6}-/.test(id)) || '';
-  let id;
-  do {
-    if (id) await sleep(10);
-    let d = new Date();
-    const p = (n) => String(n).padStart(2, '0');
-    const time = () => `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
-    // 时钟回拨时沿最新记录往前一秒，免得拿着登记锁一直等。
-    if (time() < previous.slice(0, 15)) d = new Date(Number(previous.slice(0, 4)), Number(previous.slice(4, 6)) - 1,
-      Number(previous.slice(6, 8)), Number(previous.slice(9, 11)), Number(previous.slice(11, 13)), Number(previous.slice(13, 15)) + 1);
-    id = `${time()}-${Math.random().toString(36).slice(2, 6)}`;
-  } while (id <= previous);
+async function newRunDir(ctx) {
+  fs.mkdirSync(path.join(RUNS_ROOT, '.locks'), { recursive: true });
+  const candidate = ctx?.cfg ? { ...ctx, agent: ctx.agentName, group: ctx.opts.group ?? null, scope: ctx.opts.scope } : null;
+  const timeout = Number(ctx?.opts?.['queue-timeout'] ?? 60);
+  let ticket = null, position = null, queuedBegan = 0;
+  const cleanup = () => {
+    if (ticket) {
+      if (PROFILE) profile('queue-wait', queuedBegan);
+      retryBusy(() => fs.rmSync(ticket.file, { force: true })); ticket = null;
+    }
+    process.removeListener('exit', cleanup);
+    process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', terminate);
+  };
+  const interrupt = () => { cleanup(); process.exit(130); }, terminate = () => { cleanup(); process.exit(143); };
+  const expired = () => ticket && Date.now() - Date.parse(ticket.queued_at) >= timeout * 60000;
+  try {
+    for (;;) {
+      let began = PROFILE ? performance.now() : 0;
+      const state = activeState(), ids = state?.active ?? (ctx ? [] : listRuns());
+      listedBeforeLock = new Set(ids);
+      const metas = ids.map((id) => readMeta(path.join(RUNS_ROOT, id)));
+      const head = candidate && queueTickets(candidate.agent)[0];
+      if (PROFILE) profile('outside-scan', began);
+      // 只补查可能挡住自己的队首，和活动进程合并在锁外查询，不逐票起 PowerShell。
+      checkRunners(head && head.pid !== process.pid ? [...metas, ticketOwner(head)] : metas);
+      if (PROFILE) began = performance.now();
+      const { release: unlock } = await acquireLock(path.join(RUNS_ROOT, '.locks', '.start.lock'), {
+        waitMs: ticket ? Math.max(0, Math.min(60000, timeout * 60000 - (Date.now() - Date.parse(ticket.queued_at)))) : 60000,
+        legacy: path.join(RUNS_ROOT, '.start.lock'), busy: ({ file, pid }) => die(expired()
+          ? M.queueTimeout(candidate.agent, timeout) : M.startLockBusy(file, pid ?? '?', 60)),
+      });
+      if (PROFILE) profile('lock-wait', began);
+      const release = PROFILE ? () => { const at = performance.now(); unlock(); profile('lock-release', at); } : unlock;
+      let handedOff = false;
+      try {
+        if (expired()) { release(); cleanup(); die(M.queueTimeout(candidate.agent, timeout)); }
+        registrationContext = ctx;
+        if (ctx) {
+          if (PROFILE) began = performance.now();
+          const loaded = readRunsLocked(null, ctx);
+          const rejection = candidate ? admission(candidate, ctx.cfg, loaded, true) : loaded.unreadable.length && M.admissionUnreadable(M.list(loaded.unreadable));
+          if (PROFILE) profile('locked-admission', began);
+          if (typeof rejection === 'string') { release(); die(rejection); }
+          if (candidate) {
+            const waiting = queueTickets(candidate.agent, true);
+            // 自己的票据一时读不出时还在原位：只有文件确实没了（被回收）才算丢了
+            if (ticket && !waiting.some((q) => q.sequence === ticket.sequence && (q.unreadable || q.pid === process.pid)) && !fs.existsSync(ticket.file)) {
+              const message = expired() ? M.queueTimeout(candidate.agent, timeout) : M.queueLost(candidate.agent);
+              release(); cleanup(); die(message);
+            }
+            if (rejection || waiting.length) {
+              if (timeout === 0) { release(); die(rejection?.message ?? M.queueAhead(candidate.agent)); }
+              if (!ticket) {
+                const dir = queueDir(candidate.agent), sequenceFile = path.join(dir, '.sequence.json');
+                const sequence = Math.max(readSequence(sequenceFile), waiting.lastSequence ?? 0) + 1;
+                atomicJson(sequenceFile, sequence);
+                const now = Date.now();
+                ticket = { sequence, pid: process.pid, agent: candidate.agent, claude_session: CLAUDE_SESSION,
+                  group: candidate.group, plan: ctx.plan ?? null, seat: ctx.seat ?? null, title: ctx.title ?? null,
+                  queued_at: new Date(now).toISOString(), expires_at: new Date(now + timeout * 60000).toISOString(),
+                  pid_started_at: new Date(performance.timeOrigin).toISOString(), file: path.join(dir, `${sequence}.json`) };
+                atomicJson(ticket.file, ticket);
+                if (PROFILE) queuedBegan = performance.now();
+                process.once('exit', cleanup); process.once('SIGINT', interrupt); process.once('SIGTERM', terminate);
+                waiting.push(ticket);
+              }
+              const next = waiting.findIndex((q) => q.sequence === ticket.sequence) + 1;
+              if (rejection || next !== 1) {
+                const remaining = Math.max(1, Math.round((Date.parse(ticket.expires_at) - Date.now()) / 60000));
+                if (next !== position) notice(M.queuePosition(candidate.agent, ctx.cfg.agents[candidate.agent].max_parallel ?? DEFAULT_AGENT_PARALLEL, next, remaining));
+                position = next;
+                continue;
+              }
+            }
+          }
+        }
+        if (PROFILE) began = performance.now();
+        const previous = ctx ? latestDirectoryId : latestId(fs.readdirSync(RUNS_ROOT));
+        const { id, dir } = createRunDir(previous);
+        if (PROFILE) profile('locked-create', began);
+        handedOff = true;
+        return { id, dir, release: () => {
+          cleanup(); release();
+        } };
+      } finally {
+        if (!handedOff) release();
+        if (ticket && !handedOff) await sleep(Math.min(1000, Math.max(0, timeout * 60000 - (Date.now() - Date.parse(ticket.queued_at)))));
+      }
+    }
+  } catch (error) { cleanup(); throw error; }
+}
+
+const runId = (id) => /^\d{8}-\d{6}-[a-z0-9]{4}$/.test(id);
+const latestId = (ids) => ids.reduce((last, id) => runId(id) && id > last ? id : last, '');
+
+function createRunDir(previous) {
+  let d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  const time = () => `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+  let suffix = Math.random().toString(36).slice(2, 6).padEnd(4, '0');
+  // 同秒递增后缀，时钟回拨或后缀用尽时进一秒，不在锁内碰运气等随机数。
+  if (time() <= previous.slice(0, 15)) {
+    const next = time() < previous.slice(0, 15) ? 36 ** 4 : parseInt(previous.slice(16), 36) + 1;
+    d = new Date(Number(previous.slice(0, 4)), Number(previous.slice(4, 6)) - 1,
+      Number(previous.slice(6, 8)), Number(previous.slice(9, 11)), Number(previous.slice(11, 13)), Number(previous.slice(13, 15)));
+    if (next >= 36 ** 4) { d.setSeconds(d.getSeconds() + 1); suffix = '0000'; }
+    else suffix = next.toString(36).padStart(4, '0');
+  }
+  const id = `${time()}-${suffix}`;
   const dir = path.join(RUNS_ROOT, id);
   fs.mkdirSync(dir, { recursive: true });
   writeWatchLauncher();
-  return { id, dir, release };
+  return { id, dir };
 }
 
 function listRuns() {
@@ -240,6 +327,110 @@ function groupRuns(group, since = 0) {
 const absolute = (cwd, file) => pathKey(path.resolve(cwd, file.replace(/\\/g, '/')).replace(/\\/g, '/')).replace(/\/$/, '');
 const writesFiles = (meta) => meta?.kind === 'exec';
 
+let registrationContext, lockedState, latestDirectoryId;
+const stateFile = () => path.join(RUNS_ROOT, '.state', 'active.json');
+function atomicJson(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(value));
+  replaceFile(tmp, file);
+}
+
+function activeState() {
+  try {
+    const value = JSON.parse(fs.readFileSync(stateFile(), 'utf8'));
+    const ids = (v) => Array.isArray(v) && v.every((id) => typeof id === 'string' && id.length > 0 && path.basename(id) === id && id !== '.' && id !== '..');
+    const index = (v) => v && typeof v === 'object' && !Array.isArray(v) && Object.values(v).every(ids);
+    return value?.version === 2 && (value.high_water === '' || typeof value.high_water === 'string' && runId(value.high_water))
+      && ids(value.seen) && ids(value.active) && index(value.plans) && index(value.children) ? value : null;
+  } catch { return null; }
+}
+
+function remember(state, id, meta) {
+  const seat = meta.plan == null ? null : `${meta.plan}:${meta.participant === 'host' ? 0 : meta.seat}`;
+  for (const [index, key] of [[state.plans, seat], [state.children, meta.parent]]) {
+    if (key == null) continue;
+    const ids = index[key] ??= [];
+    if (!ids.includes(id)) ids.push(id);
+  }
+}
+
+export function registerRun(dir, meta, cfg) {
+  if (!saveMeta(dir, meta)) return metaWriteWarning(dir);
+  if (!registrationContext?.cfg) return checkAdmission(meta, cfg);
+  lockedState.active.push(meta.id);
+  lockedState.seen.push(meta.id);
+  lockedState.high_water = latestId([lockedState.high_water, meta.id]);
+  remember(lockedState, meta.id, meta);
+  atomicJson(stateFile(), lockedState);
+  return null;
+}
+
+const queueDir = (agent) => path.join(RUNS_ROOT, '.state', 'queue', encodeURIComponent(agent));
+const readSequence = (file) => {
+  try { const n = JSON.parse(fs.readFileSync(file, 'utf8')); return Number.isSafeInteger(n) && n >= 0 ? n : 0; }
+  catch { return 0; }
+};
+// Node 起点是系统进程启动时间的上界；沿用 runner 的“更晚启动才确认复用”，兼容 ps 的秒精度。
+const ticketOwner = (ticket) => ({ status: 'running', pid: ticket.pid, started_at: ticket.pid_started_at ?? ticket.queued_at, ticket: true });
+function queueTickets(agent, clean = false) {
+  const dir = queueDir(agent), tickets = [];
+  const now = Date.now();
+  let lastSequence = 0;
+  let names;
+  try { names = fs.readdirSync(dir); } catch (e) { if (e.code === 'ENOENT') return []; throw e; }
+  for (const name of names.filter((name) => /^\d+\.json$/.test(name))) {
+    const file = path.join(dir, name);
+    lastSequence = Math.max(lastSequence, Number(name.slice(0, -5)));
+    let ticket, text;
+    try { text = retryBusy(() => fs.readFileSync(file, 'utf8')); }
+    catch (e) {
+      if (e.code === 'ENOENT') continue; // 刚被主人或别的检查者删掉
+      // 一时读不出（被杀毒软件占用、没权限）：当作还在排队，占住位次，不删、也不让后面的人越过它
+      tickets.push({ sequence: Number(name.slice(0, -5)), file, unreadable: true });
+      continue;
+    }
+    try {
+      ticket = JSON.parse(text);
+      if (!ticket || !Number.isInteger(ticket.pid) || ticket.pid <= 0 || !Number.isFinite(Date.parse(ticket.queued_at))
+        || ticket.expires_at != null && !Number.isFinite(Date.parse(ticket.expires_at))
+        || ticket.pid_started_at != null && !Number.isFinite(Date.parse(ticket.pid_started_at))) throw new Error('not a ticket');
+    } catch {
+      // 原子发布失败或旧版半写的票据先跳过，老坏文件由持锁者清理。
+      let old = false;
+      try { old = now - fs.statSync(file).mtimeMs > 60000; } catch { /* 无法确认年龄就不删 */ }
+      if (clean && old) retryBusy(() => fs.rmSync(file, { force: true }));
+      continue;
+    }
+    const expires = Date.parse(ticket.expires_at);
+    if (!pidExists(ticket.pid) || now - expires > 60000) {
+      if (clean) retryBusy(() => fs.rmSync(file, { force: true }));
+      continue;
+    }
+    if (now >= expires) continue;
+    tickets.push({ ...ticket, file, sequence: Number(name.slice(0, -5)) });
+  }
+  tickets.sort((a, b) => a.sequence - b.sequence);
+  while (tickets.length && !tickets[0].unreadable && !isRunning(ticketOwner(tickets[0]), { query: false })) {
+    const dead = tickets.shift();
+    if (clean) retryBusy(() => fs.rmSync(dead.file, { force: true }));
+  }
+  return Object.assign(tickets, { lastSequence });
+}
+
+export function queuedRuns(group) {
+  const dir = path.join(RUNS_ROOT, '.state', 'queue');
+  let agents;
+  try { agents = fs.readdirSync(dir); } catch (e) { if (e.code === 'ENOENT') return []; throw e; }
+  const queues = agents.map((name) => queueTickets(decodeURIComponent(name)));
+  // status 是按需读取，一次批量核验展示项；派发等待循环只核验队首。
+  checkRunners(queues.flat().map(ticketOwner));
+  // 读不出的票据照样占位次，但没有标题可显示，只计进位次
+  return queues.flatMap((tickets) => tickets.filter((ticket) => ticket.unreadable || isRunning(ticketOwner(ticket), { query: false }))
+    .map((ticket, i) => ({ ...ticket, position: i + 1 })).filter((ticket) => !ticket.unreadable))
+    .filter((ticket) => group == null || ticket.group === group);
+}
+
 // 同组（同一个 Claude 会话）其他执行任务里，写入范围包含这个文件的那一个。归属未知的改动落在别人的范围里时，多半是那个任务改的。
 // 只算运行时间和这个任务有重叠的：区间是 [started_at, ended_at]，还在跑的算到现在，旧记录没有 ended_at 的按 runEnd 算。
 // 这个任务开始之前就已经结束的同组任务，改不了这段时间里的文件，不认领。
@@ -262,29 +453,61 @@ function groupScopeOwner(meta) {
 
 // 准入检查（在登记锁内）：同一协作方正在运行的任务不超过它的 max_parallel，所有组和会话都算，
 // 因为服务商的限流和额度是按账号的；同组的执行任务写入范围不能重叠。
-// 登记锁内读全部记录：一时读不出的（正被替换、被占用）合计最多重读约 1 秒，仍读不出的列进 unreadable，由调用方拒绝。
-function readRunsLocked(exceptId) {
+// 历史计划和续接关系留索引，避免结束任务移出活动集合后，席位与最新轮次的检查丢失。
+function readRunsLocked(exceptId, context = registrationContext) {
+  const cached = context ? activeState() : null;
+  const names = cached ? fs.readdirSync(RUNS_ROOT).filter((id) => !id.startsWith('.') && !['plans', 'watch.mjs'].includes(id)) : listRuns();
+  const state = cached ?? { version: 2, high_water: '', seen: [], active: [], plans: {}, children: {} };
+  const seen = new Set(state.seen);
+  const descendants = new Set(context?.parent ? [context.parent] : []);
+  for (const id of descendants) for (const child of state.children[id] ?? []) descendants.add(child);
+  const history = !context?.plan ? [] : context.cfg
+    ? [...(state.plans[`${context.plan}:0`] ?? []), ...(state.plans[`${context.plan}:${context.seat}`] ?? [])]
+    : Object.entries(state.plans).filter(([key]) => key.startsWith(`${context.plan}:`)).flatMap(([, ids]) => ids);
+  // 恢复的记录和旧版随机后缀都可能低于水位，只按是否见过目录发现新增项。
+  const ids = cached ? [...new Set([...state.active, ...names.filter((id) => !seen.has(id)),
+    ...history, ...descendants])] : names;
   const runs = [], unreadable = [], deadline = Date.now() + 1000;
-  for (const id of listRuns().filter((id) => id !== exceptId)) {
+  for (const id of ids.filter((id) => id !== exceptId)) {
     const dir = path.join(RUNS_ROOT, id), file = path.join(dir, 'meta.json');
     for (;;) {
       try {
         const meta = JSON.parse(fs.readFileSync(file, 'utf8'));
         // 内容是 null、数字这类合法 JSON 但不是记录的，和读不出一样处理。
-        if (!meta || typeof meta !== 'object') throw new Error('not a record');
+        if (!meta || typeof meta !== 'object' || Array.isArray(meta)) throw new Error('not a record');
         runs.push({ id, dir, meta: settleMeta(dir, meta) }); break;
       } catch (e) {
-        if (e.code === 'ENOENT') break;
+        if (e.code === 'ENOENT' || e.code === 'ENOTDIR') break;
         if (Date.now() >= deadline) { unreadable.push(file); break; }
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
       }
     }
   }
+  if (context && !unreadable.length) {
+    const active = new Set(state.active);
+    for (const { id, meta } of runs) {
+      remember(state, id, meta);
+      if (isRunning(meta, { query: false })) active.add(id); else active.delete(id);
+    }
+    const readIds = new Set(runs.map((r) => r.id));
+    for (const id of ids) if (id !== exceptId && !readIds.has(id)) active.delete(id);
+    latestDirectoryId = latestId([state.high_water, ...names]);
+    // 没读到 meta 的新目录暂不记入 seen，避免稍后登记的报告被永久漏掉。
+    state.seen = names.filter((id) => seen.has(id) || readIds.has(id));
+    state.active = [...active]; state.high_water = latestId([state.high_water, ...runs.map((r) => r.id)]);
+    lockedState = state;
+    atomicJson(stateFile(), state);
+  }
   return { runs, unreadable };
 }
 
 function checkAdmission(meta, cfg) {
-  const { runs, unreadable } = readRunsLocked(meta.id);
+  const began = PROFILE ? performance.now() : 0;
+  try { return admission(meta, cfg); }
+  finally { if (PROFILE) profile('locked-admission', began); }
+}
+
+function admission(meta, cfg, { runs, unreadable } = readRunsLocked(meta.id), queue = false) {
   if (unreadable.length) return M.admissionUnreadable(M.list(unreadable));
   if (['discuss', 'review'].includes(meta.kind) && meta.plan && meta.participant !== 'host') {
     // 不引入 plan.mjs，避免计划状态反过来引用记录时形成循环。计划文件被删了照样要查：这份计划提交过报告，就说明它有 Claude Code 席。
@@ -297,13 +520,21 @@ function checkAdmission(meta, cfg) {
     // 按轮次核对，不按份数：同一轮多出来的报告不能顶替下一轮的。
     if ((plan?.host || answers.length) && !answers.some((run) => (run.meta.round ?? 0) >= round)) return M.hostAnswerRequired(meta.plan, round);
   }
-  // 拿锁前还没有的任务是之后才登记的，都是刚启动的 runner，直接算在运行；拿锁前就有、当时没核对上的
-  // （元数据一时读不出、进程号刚被复用）很少见，才在锁内补查。
+  // 新发现的任务尚未核对进程身份，保守算运行中；锁外见过但没核对上的，才在锁内补查。
   const running = runs.filter((r) => isRunning(r.meta, { query: !listedBeforeLock || listedBeforeLock.has(r.id) }));
   if (meta.parent) {
     if (running.some((r) => r.id === meta.parent)) return M.resumeParentRunning(meta.parent);
-    const child = runs.find((r) => r.meta.parent === meta.parent);
-    if (child) return M.resumeNotLatest(meta.parent, child.id);
+    let child = runs.find((r) => r.meta.parent === meta.parent);
+    if (child) {
+      const seen = new Set([meta.parent]);
+      while (!seen.has(child.id)) {
+        seen.add(child.id);
+        const next = runs.find((r) => r.meta.parent === child.id);
+        if (!next) break;
+        child = next;
+      }
+      return M.resumeNotLatest(meta.parent, child.id);
+    }
   }
   if (meta.plan && meta.seat != null && !meta.parent) {
     const previous = runs.filter((r) => r.meta.plan === meta.plan && r.meta.seat === meta.seat)
@@ -317,11 +548,7 @@ function checkAdmission(meta, cfg) {
       return M.seatAlreadyStarted(meta.plan, meta.seat, latest.id);
     }
   }
-  const limit = cfg.agents[meta.agent].max_parallel ?? DEFAULT_AGENT_PARALLEL;
-  const same = running.filter((r) => resolveAgentAlias(r.meta.agent || 'codex', cfg) === meta.agent); // 旧记录没有 agent 字段，都是 Codex
-  if (same.length >= limit) return M.agentFull(meta.agent, same.length, limit, M.list(same.map((r) => r.id)));
-  if (meta.group == null || !writesFiles(meta)) return null;
-  for (const other of running) {
+  for (const other of meta.group != null && writesFiles(meta) ? running : []) {
     if (other.meta.group !== meta.group || !writesFiles(other.meta)) continue;
     // 比较用归一化的绝对路径，报错里显示派活时写的原样路径。
     const paths = meta.scope.filter((mine) => (other.meta.scope || []).some((file) => {
@@ -330,6 +557,12 @@ function checkAdmission(meta, cfg) {
       return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
     }));
     if (paths.length) return M.scopeOverlap(meta.group, other.id, paths);
+  }
+  const limit = cfg.agents[meta.agent].max_parallel ?? DEFAULT_AGENT_PARALLEL;
+  const same = running.filter((r) => resolveAgentAlias(r.meta.agent || 'codex', cfg) === meta.agent); // 旧记录没有 agent 字段，都是 Codex
+  if (same.length >= limit) {
+    const message = M.agentFull(meta.agent, same.length, limit, M.list(same.map((r) => r.id)));
+    return queue ? { message } : message;
   }
   return null;
 }
@@ -425,13 +658,18 @@ function checkRunners(metas) {
 
 function isRunning(m, { query = true } = {}) {
   if (m?.status !== 'running') return false;
-  if (!pidAlive(m.pid)) {
+  if (!pidExists(m.pid)) {
     // 已确认被复用的结论保留：原 runner 不会再回来，之后再查不到启动时间也不能把它算回运行中。
     if (runnerChecks.get(runnerKey(m))?.state !== 'other') runnerChecks.delete(runnerKey(m));
     return false;
   }
   if (query && !runnerCheck(m)) checkRunners([m]);
-  return runnerCheck(m) !== 'other';
+  const state = runnerCheck(m);
+  // 进程号还在、却核对不了身份（查不到启动时间，比如复用这个进程号的是没权限查看的进程）：保守算在运行，
+  // 但不能永远占着名额。任务开始超过 25 小时（比任何合理的 --timeout 都长）还核对不了，就当已经结束；票据有自己的到期时间，不走这条
+  if (state === 'unknown' && !m.ticket && Date.now() - Date.parse(m.started_at) > UNVERIFIED_LIMIT_MS) return false;
+  return state !== 'other';
 }
+const UNVERIFIED_LIMIT_MS = 25 * 3600000;
 
 export { RUNS_ROOT, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, saveMeta, metaWriteWarning, settleMeta, findRun, describeActivity, groupRuns, checkAdmission, readRunsLocked, runEnd, runOutcome, resultValid, groupTally, groupSummary, groupScopeOwner, absolute, readMeta, checkRunners, isRunning, writesFiles };

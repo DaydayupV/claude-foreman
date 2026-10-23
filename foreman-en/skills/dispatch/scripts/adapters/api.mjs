@@ -63,7 +63,7 @@ async function executeApi(ctx) {
     : M.materialsTooLarge(prompt.length, MAX_MATERIAL_CHARS, M.list(files.map((f) => `${f.shown}: ${f.chars}`))));
   if (ctx.parent) prompt += `\n\n${M.apiResumeFooter}`;
   history = [...history, { role: 'user', content: prompt }];
-  const { id, dir, release } = await newRunDir();
+  const { id, dir, release } = await newRunDir(ctx);
   const run = startRun({ ...ctx, readonly: readonlyLevel(agent, ctx.kind), id, dir, release, sessionId: null }, { modelShown });
   const { started, meta } = run;
   const { deadline, stallMin } = runLimits(ctx, started);
