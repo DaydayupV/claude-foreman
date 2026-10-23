@@ -88,5 +88,6 @@ function uniFrame(alone = true) {
 // 图片的原生拖动一律不要（CSS 管不到的浏览器靠这里）
 addEventListener('dragstart', (e) => { if (e.target instanceof HTMLImageElement) e.preventDefault(); });
 history.scrollRestoration = 'manual'; // 每次打开都停在星图和用量面板的位置
-U.on ? connectUniverse() : connect();
+connectUniverse();
+resolveLegacyFocus();
 wake();

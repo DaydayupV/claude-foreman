@@ -140,6 +140,8 @@ export function runMessage(run, lane, prices) {
   const m = run.meta, r = run.result, kind = m.module === 'image' ? 'image' : m.kind || (['discuss', 'review'].includes(m.mode) ? m.mode : 'exec');
   const message = { id: clip(run.id), lane: clip(lane), parent: clip(m.parent), kind, model: clip(m.model_shown || m.model) };
   for (const key of ['mode', 'agent', 'agent_type', 'level', 'effort', 'group', 'round', 'plan', 'seat', 'role', 'title', 'status']) message[key] = typeof m[key] === 'string' ? clip(m[key]) : m[key] ?? null;
+  // 派出它的 Claude Code 对话：页面拿老格式的地址（只给组或任务）找到要飞进去的对话
+  message.session = typeof m.claude_session === 'string' ? clip(m.claude_session) : null;
   if (m.participant === 'host') { message.kind = 'answer'; if (message.status === 'running') message.status = 'idle'; }
   const usage = r?.usage ? usageOf(r.usage) : null, cost = costOf({ ...m, ...r }, prices);
   const head = kind === 'discuss' ? r?.report?.position ?? first(r?.last_message) : kind === 'review' ? r?.report && `${r.report.verdict} · ${(r.report.findings || []).length} findings` : ['exec', 'image'].includes(kind) ? r?.report?.summary ?? first(r?.last_message) : null;

@@ -311,12 +311,12 @@ test('review 1: session rejects empty and traversal requests and transcript look
   assert.deepEqual(createFeed(f.options.runs, f.options).read({ session: '../../outside' }, at).events, []);
 });
 
-test('review 2: printed addresses select the universe by default and for replay all', { timeout: 10000 }, async (t) => {
+test('review 2: printed addresses always open the one front end (level=all); a group, run or replay scope is passed on so the page flies into that conversation', { timeout: 10000 }, async (t) => {
   const f = temp(t);
   const cases = [
     [[], { level: 'all' }],
     [['--replay', 'all', '--speed', '9', '--maxgap', '2'], { level: 'all', replay: 'all', speed: '9', maxgap: '2' }],
-    [['--group', 'g'], { group: 'g' }], [['--run', 'r'], { run: 'r' }], [['--replay', 's'], { replay: 's' }],
+    [['--group', 'g'], { level: 'all', group: 'g' }], [['--run', 'r'], { level: 'all', run: 'r' }], [['--replay', 's'], { level: 'all', replay: 's' }],
   ];
   for (const [args, expected] of cases) assert.deepEqual(Object.fromEntries((await startServer(t, f, args)).url.searchParams), expected);
 });

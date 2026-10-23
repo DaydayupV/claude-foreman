@@ -5,8 +5,19 @@
 //  飞出：看板先淡出，镜头从星系近处拉回飞入前的位置。
 //  Esc、顶栏路径里的"宇宙"、看板缩到最小后继续往外滚，都是飞出。地址栏记 ?s=<对话 id>，刷新后直接回到这个对话。
 
-const FLY = { mode: 'universe', id: null, t0: 0, from: null, to: null, back: null, out: 0, crumb: '', pending: Q.get('s') };
+const FLY = { mode: 'universe', id: null, t0: 0, from: null, to: null, back: null, out: 0, crumb: '', pending: Q.get('s') || Q.get('session') };
 const FLY_IN = 1.6, FLY_OUT = 1.4;
+// 老格式的地址（?group= / ?run= / ?replay=<组、任务或对话>，以前打开的是没有宇宙层的单个看板）：
+// 问一次服务这个范围里的任务是哪个对话派出的，打开后飞进那个对话
+function resolveLegacyFocus() {
+  const key = ['group', 'run', 'replay'].find((k) => Q.get(k) != null && Q.get(k) !== 'all');
+  if (!key || FLY.pending || U.demo) return;
+  const value = Q.get(key);
+  fetch(`snapshot?${new URLSearchParams({ [key]: value })}`).then((r) => (r.ok ? r.json() : null))
+    .then((s) => { const id = s?.runs?.find((r) => r.session)?.session || (key === 'replay' ? value : null); if (id && !FLY.pending && FLY.mode === 'universe') { FLY.pending = id; wake(); } })
+    .catch(() => {});
+}
+
 // 刷新页面时不再演一遍飞入
 const RELOADED = performance.getEntriesByType?.('navigation')[0]?.type === 'reload';
 // 打开链接后等自动飞入的那一小会儿里，用户点、滚、按键（包括按钮、侧栏、键盘缩放）都算自己在看了，不再自动飞入

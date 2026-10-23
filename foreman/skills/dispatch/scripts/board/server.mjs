@@ -134,8 +134,8 @@ async function main() {
   lockFile = path.join(root, 'board.lock.json');
   build = buildId(here);
   const reused = await claim();
-  const query = new URLSearchParams();
-  if (values.group == null && values.run == null && (values.replay == null || values.replay === 'all')) query.set('level', 'all');
+  // 只有一个总前端：地址总带 level=all；给了组、任务或回放范围时，页面打开后飞进那个对话
+  const query = new URLSearchParams({ level: 'all' });
   for (const key of ['group', 'run', 'replay', 'speed', 'maxgap']) if (values[key] != null) query.set(key, values[key]);
   const address = (lock) => `board: http://127.0.0.1:${lock.port}/${lock.token}/?${query}`;
   if (reused) { process.stdout.write(`${address(reused)} (reused pid ${reused.pid})\n`); return; }

@@ -546,7 +546,7 @@ function rng(seed) {
 // 只存数据和"什么时候变的"，画面每帧按 uNow() 从这里取；?demo=universe 时由 02-uni-demo.js 喂数据，不连服务。
 
 const U = {
-  on: Q.get('demo') === 'universe' || Q.get('level') === 'all',
+  on: true, // 只有一个总前端：页面总带宇宙层，单个对话的看板是飞进去以后的样子
   demo: Q.get('demo') === 'universe',
   page: { ...B.params },  // 打开页面时的参数（速度、回放、定格时刻）；飞进对话时 B.params 会被换掉，这里留一份
   hello: null,
@@ -612,7 +612,9 @@ function uAgents({ agents }) { U.agents = agents; U.version++; }
 function connectUniverse() {
   if (U.demo) return playDemo();
   const q = new URLSearchParams({ level: 'all' });
-  for (const k of ['replay', 'speed', 'maxgap']) if (B.params[k] != null) q.set(k, B.params[k]);
+  // 给了回放范围（不管是 all 还是某个组、任务、对话）都回放整个宇宙，看板飞进去以后接着同一个时钟
+  if (B.params.replay != null) q.set('replay', 'all');
+  for (const k of ['speed', 'maxgap']) if (B.params[k] != null) q.set(k, B.params[k]);
   if (B.params.t != null) {
     q.set('t', String(B.params.t));
     fetch(`sessions?${q}`).then((r) => r.json()).then((u) => { uHello({ v: 3, level: 'all', mode: 'live', now: u.now, replay: null }); U.clock.frozenAt = u.now; uUniverse(u); })
@@ -3821,8 +3823,19 @@ function drawUniverseOn(L) {
 //  飞出：看板先淡出，镜头从星系近处拉回飞入前的位置。
 //  Esc、顶栏路径里的"宇宙"、看板缩到最小后继续往外滚，都是飞出。地址栏记 ?s=<对话 id>，刷新后直接回到这个对话。
 
-const FLY = { mode: 'universe', id: null, t0: 0, from: null, to: null, back: null, out: 0, crumb: '', pending: Q.get('s') };
+const FLY = { mode: 'universe', id: null, t0: 0, from: null, to: null, back: null, out: 0, crumb: '', pending: Q.get('s') || Q.get('session') };
 const FLY_IN = 1.6, FLY_OUT = 1.4;
+// 老格式的地址（?group= / ?run= / ?replay=<组、任务或对话>，以前打开的是没有宇宙层的单个看板）：
+// 问一次服务这个范围里的任务是哪个对话派出的，打开后飞进那个对话
+function resolveLegacyFocus() {
+  const key = ['group', 'run', 'replay'].find((k) => Q.get(k) != null && Q.get(k) !== 'all');
+  if (!key || FLY.pending || U.demo) return;
+  const value = Q.get(key);
+  fetch(`snapshot?${new URLSearchParams({ [key]: value })}`).then((r) => (r.ok ? r.json() : null))
+    .then((s) => { const id = s?.runs?.find((r) => r.session)?.session || (key === 'replay' ? value : null); if (id && !FLY.pending && FLY.mode === 'universe') { FLY.pending = id; wake(); } })
+    .catch(() => {});
+}
+
 // 刷新页面时不再演一遍飞入
 const RELOADED = performance.getEntriesByType?.('navigation')[0]?.type === 'reload';
 // 打开链接后等自动飞入的那一小会儿里，用户点、滚、按键（包括按钮、侧栏、键盘缩放）都算自己在看了，不再自动飞入
@@ -4403,7 +4416,8 @@ function uniFrame(alone = true) {
 // 图片的原生拖动一律不要（CSS 管不到的浏览器靠这里）
 addEventListener('dragstart', (e) => { if (e.target instanceof HTMLImageElement) e.preventDefault(); });
 history.scrollRestoration = 'manual'; // 每次打开都停在星图和用量面板的位置
-U.on ? connectUniverse() : connect();
+connectUniverse();
+resolveLegacyFocus();
 wake();
 </script>
 </body>

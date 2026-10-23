@@ -3,7 +3,7 @@
 // 只存数据和"什么时候变的"，画面每帧按 uNow() 从这里取；?demo=universe 时由 02-uni-demo.js 喂数据，不连服务。
 
 const U = {
-  on: Q.get('demo') === 'universe' || Q.get('level') === 'all',
+  on: true, // 只有一个总前端：页面总带宇宙层，单个对话的看板是飞进去以后的样子
   demo: Q.get('demo') === 'universe',
   page: { ...B.params },  // 打开页面时的参数（速度、回放、定格时刻）；飞进对话时 B.params 会被换掉，这里留一份
   hello: null,
@@ -69,7 +69,9 @@ function uAgents({ agents }) { U.agents = agents; U.version++; }
 function connectUniverse() {
   if (U.demo) return playDemo();
   const q = new URLSearchParams({ level: 'all' });
-  for (const k of ['replay', 'speed', 'maxgap']) if (B.params[k] != null) q.set(k, B.params[k]);
+  // 给了回放范围（不管是 all 还是某个组、任务、对话）都回放整个宇宙，看板飞进去以后接着同一个时钟
+  if (B.params.replay != null) q.set('replay', 'all');
+  for (const k of ['speed', 'maxgap']) if (B.params[k] != null) q.set(k, B.params[k]);
   if (B.params.t != null) {
     q.set('t', String(B.params.t));
     fetch(`sessions?${q}`).then((r) => r.json()).then((u) => { uHello({ v: 3, level: 'all', mode: 'live', now: u.now, replay: null }); U.clock.frozenAt = u.now; uUniverse(u); })

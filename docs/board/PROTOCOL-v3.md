@@ -161,6 +161,7 @@ Only one detailed stream is expected per page. Opening another conversation clos
   - `ask`: an `AskUserQuestion` or `ExitPlanMode` `tool_use`. `t` is `input.questions[0].header`, else `计划审批` for ExitPlanMode, else the tool name.
   - `ask_done`: the `tool_result` that answers it, with the same `t`.
   - The board shows Claude Code as waiting for the user between the two.
+- `run` messages carry `session`: the Claude Code conversation that dispatched the run (`meta.claude_session`), or `null`. The page uses it to turn an old-style address (`?group=`, `?run=`, `?replay=<id>`) into "open the universe and fly into that conversation"; there is only one front end, and the server always prints its address with `level=all`.
 - `run` messages carry `scope`: up to 8 paths from `meta.scope` (each cut to 120 characters), `[]` when the run has none. These are the paths an exec run may write to.
 - `run` messages carry `images`: how many images the run produced (the absolute paths in `result.generated_images`, plus image files in its change list, relative to its working folder). Only png, jpg, jpeg, webp and gif count.
 - `GET /image?run=<run id>&n=<index>` returns one of those images. It takes only the run id (`yyyymmdd-hhmmss-xxxx`) and the index; the path always comes from that run's own records, never from the request. Files over 15 MB, missing files and other types get 404. The page CSP allows `img-src data: 'self'` for these thumbnails.

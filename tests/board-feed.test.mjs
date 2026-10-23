@@ -188,3 +188,10 @@ test('explicit session isolates runs and selects its transcript without runs, re
   const list = [{ id: 'a', meta: { claude_session: 's' } }, { id: 'b', meta: { claude_session: 'other', parent: 'a' } }];
   assert.deepEqual(selectScope(list, { session: 's' }, start).runs.map((r) => r.id), ['a']);
 });
+
+test('run messages carry the Claude Code conversation that dispatched them, so an old group or run link can fly into it', () => {
+  const feed = createFeed(fileURLToPath(new URL('./fixtures/board/runs/', import.meta.url)), {});
+  const runs = feed.read({ group: 'skills-roles-1018' }, Date.parse('2026-10-19T00:00:00Z')).runs.filter((r) => r.id !== 'cc');
+  assert.ok(runs.length > 0);
+  assert.ok(runs.every((r) => r.session === '00000000-0000-4000-8000-0000000d3e40'), JSON.stringify(runs.map((r) => r.session)));
+});
