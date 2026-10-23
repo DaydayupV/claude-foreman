@@ -181,8 +181,13 @@ async function cmdReview(o) {
 function cmdConfig(o) {
   const cfg = load(o.cwd ? resolveDir(o.cwd) : null);
   const { sources, closed_by_project, image_configured, ...effective } = cfg;
+  // opencode、pi 没写 run_access 时派不了执行任务：列出的能力和派发时的检查保持一致，免得按 modes 挑人挑到派不出去的
+  const capabilitiesOf = (agent) => {
+    const c = adapters[agent.type].capabilities;
+    return c.isolation === 'tools' && !agent.run_access ? { ...c, modes: c.modes.filter((mode) => mode !== 'run') } : c;
+  };
   const agents_status = Object.fromEntries(Object.entries(effective.agents).map(([name, agent]) => [name, {
-    type: agent.type, capabilities: adapters[agent.type].capabilities, model: agent.model || null, max_parallel: agent.max_parallel ?? DEFAULT_AGENT_PARALLEL,
+    type: agent.type, capabilities: capabilitiesOf(agent), model: agent.model || null, max_parallel: agent.max_parallel ?? DEFAULT_AGENT_PARALLEL,
     ...adapters[agent.type].status(agent),
   }]));
   const resolved = (entry) => ({ agent: entry.agent, model: entry.model || agents_status[entry.agent].model, effort: entry.effort ?? null, required: !!entry.required });
@@ -216,8 +221,42 @@ async function cmdBoard(o) {
     process.stdout.write(JSON.stringify({ enabled: false, message: M.boardOff }, null, 2) + '\n');
     return;
   }
+  const boardDir = path.join(HERE, 'board');
+  if (o.replay != null) {
+    const { createInterface } = await import('node:readline');
+    const args = [path.join(boardDir, 'server.mjs'), '--replay', o.replay, '--runs', RUNS_ROOT, '--config', USER_CONFIG, '--idle-min', '10'];
+    for (const key of ['speed', 'maxgap']) if (o[key] != null) args.push(`--${key}`, o[key]);
+    let child, reply;
+    try {
+      fs.mkdirSync(RUNS_ROOT, { recursive: true });
+      child = spawn(process.execPath, args, { cwd: boardDir, detached: true, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+      reply = await new Promise((resolve) => {
+        const lines = createInterface({ input: child.stdout });
+        const finish = (value) => { clearTimeout(timer); lines.close(); child.stdout.destroy(); child.unref(); resolve(value); };
+        const timer = setTimeout(() => finish({ error: 'timed out after 120 seconds' }), 120000);
+        child.once('error', (error) => finish({ error: error.message }));
+        child.once('close', (code) => finish({ error: `exit code ${code}` }));
+        lines.once('line', (line) => {
+          try { finish(JSON.parse(line)); } catch { finish({ error: 'invalid startup response' }); }
+        });
+      });
+    } catch (error) { child?.kill(); die(M.boardStartFailed(error.message)); }
+    if (reply.error) {
+      child.kill();
+      if (reply.code === 'NOT_FOUND') die(M.boardReplayNotFound(o.replay));
+      if (reply.code === 'REPLAY_TOO_LARGE') die(M.boardReplayTooLarge((reply.bytes / 1024 ** 2).toFixed(1), (reply.limit / 1024 ** 2).toFixed(1)));
+      die(M.boardStartFailed(reply.error));
+    }
+    try {
+      const response = await fetch(new URL('health', reply.url), { signal: AbortSignal.timeout(5000) });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      process.stdout.write(JSON.stringify({ enabled: true, url: reply.url, started: true, replay: { target: o.replay, sessions: data.sessions } }, null, 2) + '\n');
+    } catch (error) { child.kill(); die(M.boardStartFailed(error.message)); }
+    return;
+  }
   const [{ buildId }, { removeLock }] = await Promise.all([import('./board/build-id.mjs'), import('./board/lock.mjs')]);
-  const boardDir = path.join(HERE, 'board'), build = buildId(boardDir);
+  const build = buildId(boardDir);
   const lockFile = path.join(RUNS_ROOT, 'board.lock.json'), errFile = path.join(RUNS_ROOT, 'board.err');
   let reason = 'health check failed';
   // 只采信这次启动的子进程写下的 board.err（按 pid 认），别的尝试留下的不算

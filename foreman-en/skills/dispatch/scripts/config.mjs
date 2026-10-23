@@ -718,7 +718,8 @@ function resolveProfile(cfg, seat, o, adapters, fallbackModel = null, parentAgen
   if (cell.closed) {
     if (cell.closedByProject) die(M.cellClosedByProject(cell.key, o.agent != null));
     if (image) die(M.imageCellClosed(cell.key));
-    const name = requested || (seat.plan && seat.outside_cell ? selected : null);
+    // 上一轮是点名派出的（outside_cell）：续接沿用它，计划里的席位和单独派出的都一样，不用再写一遍 --agent
+    const name = requested || (seat.outside_cell ? selected : null);
     if (!name) die(seat.module === 'run' ? M.levelForClaude(level) : M.levelIsClaude(cell.key));
     const adapter = adapters[cfg.agents[name]?.type];
     entry = { agent: name, effort: adapter?.defaultEffort?.(level) ?? null };

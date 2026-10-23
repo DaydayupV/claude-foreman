@@ -7,6 +7,7 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
 import { createUniverse, universeAt, universeChanges, projectRoot } from '../foreman/skills/dispatch/scripts/board/universe.mjs';
 import { createFeed, selectScope, buildReplay } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
 import { loadPrices } from '../foreman/skills/dispatch/scripts/prices.mjs';
@@ -256,15 +257,25 @@ async function collect(url, stop, onFrame = () => {}) {
   return frames;
 }
 
-async function startServer(t, f, args = []) {
+async function startServer(t, f, args = [], env = {}) {
   const child = spawn(process.execPath, [path.join(here, '../foreman/skills/dispatch/scripts/board/server.mjs'), '--runs', f.options.runs, '--claude-dir', f.options.claudeDir, '--config', f.options.config,
-    '--prices', path.join(here, 'fixtures/board/prices-test.json'), ...args], { cwd: here, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-  t.after(async () => { if (child.exitCode == null) { child.kill(); await once(child, 'exit'); } });
-  const [ready] = await once(child.stdout, 'data'), url = new URL(String(ready).match(/board: (http:\/\/\S+)/)[1]);
-  return { url, address: `${url.origin}${url.pathname}` };
+    '--prices', path.join(here, 'fixtures/board/prices-test.json'), ...args], { cwd: here, env: { ...process.env, FOREMAN_LANG: 'zh', ...env }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const exited = once(child, 'exit'), closed = once(child, 'close');
+  t.after(async () => { if (child.exitCode == null && child.signalCode == null) child.kill(); await closed; });
+  let stderr = '';
+  child.stderr.setEncoding('utf8').on('data', (s) => { stderr += s; });
+  const ready = await new Promise((resolve, reject) => {
+    let buffer = '';
+    child.stdout.setEncoding('utf8').on('data', (s) => { buffer += s; if (buffer.includes('\n')) resolve(buffer.split('\n')[0]); });
+    child.once('close', () => reject(new Error(stderr || 'no startup response')));
+    child.once('error', reject);
+  });
+  const message = ready.startsWith('{') ? JSON.parse(ready) : { url: ready.match(/board: (http:\/\/\S+)/)[1] };
+  const url = message.url ? new URL(message.url) : null;
+  return { child, exited, message, url, address: url && `${url.origin}${url.pathname}` };
 }
 
-test('routes preserve guards, universe live order/removal, session snapshots and all-replay from scheduling', { timeout: 15000 }, async (t) => {
+test('live routes preserve guards and updates, reject replay/from; debug replay shares its clock and from scheduling', { timeout: 15000 }, async (t) => {
   const f = temp(t), liveNow = Date.now();
   f.session('s', [row('user', liveNow - 20000, 'first'), answer(liveNow - 10000)], 'demo', liveNow);
   f.session('other', [row('user', liveNow - 15000, 'other'), answer(liveNow - 5000)], 'demo', liveNow);
@@ -290,22 +301,27 @@ test('routes preserve guards, universe live order/removal, session snapshots and
   const snapshot = await (await fetch(`${address}snapshot?session=s`)).json();
   assert.deepEqual(snapshot.hello.scope, { kind: 'session', value: 's' });
   assert.ok(snapshot.events.some((e) => e.k === 'prompt' && e.t === 'first')); assert.ok(!snapshot.events.some((e) => e.t === 'other'));
-  const replay = await collect(`${address}stream?level=all&replay=all&maxgap=0.2`, (m) => m.event === 'done');
+  for (const route of ['stream', 'snapshot', 'sessions']) for (const query of ['replay=all', 'replay=', 'from=0', 'from=']) for (const method of ['GET', 'HEAD']) {
+    const response = await fetch(`${address}${route}?${query}`, { method });
+    assert.equal(response.status, 400, `${method} ${route}?${query}`); assert.equal(await response.text(), '');
+  }
+  const debug = await startServer(t, f, ['--replay', 'all', '--maxgap', '0.2']), replayAddress = debug.address;
+  const replay = await collect(`${replayAddress}stream?level=all&replay=all`, (m) => m.event === 'done');
   assert.deepEqual(replay.slice(0, 2).map((m) => m.event), ['hello', 'universe']);
-  const clock = replay[0].data.replay, all = await (await fetch(`${address}snapshot?session=s&replay=all&maxgap=0.2`)).json();
+  const clock = replay[0].data.replay, all = await (await fetch(`${replayAddress}snapshot?session=s&replay=all`)).json();
   assert.deepEqual(all.hello.replay, clock);
-  const everything = await collect(`${address}stream?session=s&replay=all&maxgap=0.2&from=${clock.end}`, (m) => m.event === 'done');
+  const everything = await collect(`${replayAddress}stream?session=s&replay=all&from=${clock.end}`, (m) => m.event === 'done');
   const messages = everything.filter((m) => ['run', 'ev'].includes(m.event));
   const expected = createUniverse(f.options).replay({ maxgap: 0.2 }, replay[0].data.now).detail('s').timeline;
   assert.deepEqual(messages.map(({ event, data }) => ({ event, data })), expected.map(({ event, data }) => ({ event, data })));
   const from = expected.at(-1).time - 150;
-  const detail = await collect(`${address}stream?session=s&replay=all&maxgap=0.2&from=${from}`, (m) => m.event === 'done');
+  const detail = await collect(`${replayAddress}stream?session=s&replay=all&from=${from}`, (m) => m.event === 'done');
   assert.deepEqual(detail[0].data.replay, clock);
   assert.deepEqual(detail.filter((m) => ['run', 'ev'].includes(m.event)).map(({ event, data }) => ({ event, data })), messages.map(({ event, data }) => ({ event, data })));
   const timed = detail.filter((m) => ['run', 'ev'].includes(m.event));
   assert.ok(timed.filter((_, i) => expected[i].time <= from).every((m) => m.elapsed < 100));
   assert.ok(timed.find((_, i) => expected[i].time > from).elapsed >= 100);
-  const startState = await (await fetch(`${address}sessions?replay=all&maxgap=0.2&t=0`)).json(); assert.equal(startState.sessions.length, 0);
+  const startState = await (await fetch(`${replayAddress}sessions?replay=all&t=0`)).json(); assert.equal(startState.sessions.length, 0);
 });
 
 test('review 1: session rejects empty and traversal requests and transcript lookup stays in its project', { timeout: 10000 }, async (t) => {
@@ -326,14 +342,190 @@ test('review 1: session rejects empty and traversal requests and transcript look
   assert.deepEqual(createFeed(f.options.runs, f.options).read({ session: '../../outside' }, at).events, []);
 });
 
-test('review 2: printed addresses always open the one front end (level=all); a group, run or replay scope is passed on so the page flies into that conversation', { timeout: 10000 }, async (t) => {
-  const f = temp(t);
+test('review 2: live addresses carry group/run; debug JSON addresses carry replay=all and only a single resolved session flies in', { timeout: 10000 }, async (t) => {
+  const f = temp(t), at = Date.now(), id = '20261023-120000-rep1';
+  f.session('s', [row('user', at - 1000, 's')], 'demo', at);
+  f.session('other', [row('user', at - 500, 'other')], 'demo', at);
+  f.run(id, { group: 'g', started_at: at - 1000, ended_at: at - 500 });
+  f.run('other', { claude_session: 'other', group: 'g', started_at: at - 500, ended_at: at });
   const cases = [
     [[], { level: 'all' }],
-    [['--replay', 'all', '--speed', '9', '--maxgap', '2'], { level: 'all', replay: 'all', speed: '9', maxgap: '2' }],
-    [['--group', 'g'], { level: 'all', group: 'g' }], [['--run', 'r'], { level: 'all', run: 'r' }], [['--replay', 's'], { level: 'all', replay: 's' }],
+    [['--replay', 'all', '--speed', '9', '--maxgap', '2'], { level: 'all', replay: 'all', lang: 'zh', speed: '9', maxgap: '2' }],
+    [['--group', 'g'], { level: 'all', group: 'g' }], [['--run', 'r'], { level: 'all', run: 'r' }],
+    [['--replay', 's'], { level: 'all', replay: 'all', lang: 'zh', s: 's' }],
+    [['--replay', id], { level: 'all', replay: 'all', lang: 'zh', s: 's' }],
+    [['--replay', 'g'], { level: 'all', replay: 'all', lang: 'zh' }],
   ];
   for (const [args, expected] of cases) assert.deepEqual(Object.fromEntries((await startServer(t, f, args)).url.searchParams), expected);
+});
+
+test('debug replay has no live lock/error files, injects its mode and enforces replay-only routes and security guards', { timeout: 10000 }, async (t) => {
+  const f = temp(t), at = Date.now();
+  f.session('s', [row('user', at - 1000, 's')], 'demo', at);
+  const { address, message, url } = await startServer(t, f, ['--replay', 's', '--speed', '1000']);
+  assert.deepEqual(Object.keys(message), ['url']);
+  assert.match(url.pathname, /^\/[a-f0-9]{32}\/$/);
+  for (const name of ['board.lock.json', 'board.err']) assert.equal(fs.existsSync(path.join(f.options.runs, name)), false);
+  const page = await fetch(`${address}?lang=en`), html = await page.text();
+  assert.ok(page.headers.get('content-security-policy').includes("connect-src 'self'"));
+  assert.ok(html.includes("window.__BOARD_MODE__ = 'replay';"));
+  assert.ok(!html.includes("window.__BOARD_MODE__ = 'live';"));
+  assert.ok(html.includes("window.__LANG__ = 'en';"));
+  assert.ok(html.includes('<div id="notice" role="status"></div>'));
+  for (const route of ['sessions', 'stream?level=all', 'snapshot?session=s']) for (const replay of ['', 'replay=s', 'replay=']) for (const method of ['GET', 'HEAD']) {
+    const response = await fetch(`${address}${route}${route.includes('?') ? '&' : '?'}${replay}`, { method });
+    assert.equal(response.status, 400, `${method} ${route} ${replay}`);
+  }
+  for (const route of ['stream', 'snapshot']) for (const method of ['GET', 'HEAD']) {
+    assert.equal((await fetch(`${address}${route}?session=missing&replay=all`, { method })).status, 404);
+    assert.equal((await fetch(`${address}${route}?replay=all`, { method })).status, 400);
+  }
+  assert.equal((await fetch(`${address}sessions?replay=all`, { method: 'POST' })).status, 405);
+  assert.equal((await fetch(`${new URL(address).origin}/wrong/health`)).status, 404);
+  const badHost = await new Promise((resolve, reject) => http.get(`${address}health`, { headers: { Host: 'invalid' } }, (res) => { res.resume(); resolve(res.statusCode); }).on('error', reject));
+  assert.equal(badHost, 403);
+  assert.equal((await fetch(`${address}health`)).status, 200);
+  const stream = await collect(`${address}stream?level=all&replay=all`, (m) => m.event === 'done');
+  assert.deepEqual(stream.slice(0, 2).map((m) => m.event), ['hello', 'universe']);
+  for (const name of ['board.lock.json', 'board.err']) f.write(path.join(f.options.runs, name), `live ${name}`);
+  await startServer(t, f, ['--replay', 's']);
+  for (const name of ['board.lock.json', 'board.err']) assert.equal(fs.readFileSync(path.join(f.options.runs, name), 'utf8'), `live ${name}`);
+});
+
+for (const [target, expected] of [['s', ['s']], ['20261023-120000-pick', ['s']], ['picked', ['other', 's']]]) {
+  test(`debug replay passes the resolved sessions to universe.replay (${target})`, { timeout: 10000 }, async (t) => {
+    const f = temp(t), at = Date.now();
+    for (const id of ['s', 'other', 'unrelated']) f.session(id, [row('user', at - 1000, id)], 'demo', at);
+    f.run('20261023-120000-pick', { group: 'picked', started_at: at - 1000, ended_at: at });
+    f.run('duplicate', { group: 'picked', started_at: at - 1000, ended_at: at });
+    f.run('other', { group: 'picked', claude_session: 'other', started_at: at - 1000, ended_at: at });
+    const { address } = await startServer(t, f, ['--replay', target]);
+    const data = await (await fetch(`${address}sessions?replay=all`)).json();
+    assert.deepEqual(data.sessions.map((s) => s.id).sort(), expected);
+    assert.equal((await fetch(`${address}snapshot?session=unrelated&replay=all`)).status, 404);
+  });
+}
+
+test('debug replay reports a missing target as one error JSON and exit code 1 without touching live files', { timeout: 10000 }, async (t) => {
+  const f = temp(t), { message, exited } = await startServer(t, f, ['--replay', 'missing']);
+  assert.equal((await exited)[0], 1);
+  assert.equal(message.code, 'NOT_FOUND'); assert.ok(message.error.includes('missing')); assert.equal(message.url, undefined);
+  for (const name of ['board.lock.json', 'board.err']) assert.equal(fs.existsSync(path.join(f.options.runs, name)), false);
+});
+
+// 演示页的明细按组回放：回放服务第一次请求时构建；范围里没有任务的 404；对话记录都删掉了的组算找不到
+test('debug replay serves a single group or run replay for the demo page, and skips conversations whose transcript is gone', { timeout: 10000 }, async (t) => {
+  const f = temp(t), at = Date.now();
+  f.session('s', [row('user', at - 1000, 's')], 'demo', at);
+  f.run('20261023-120000-grp1', { group: 'g', started_at: at - 1000, ended_at: at - 500 });
+  f.run('20261023-120000-gone', { group: 'orphans', claude_session: 'deleted', started_at: at - 1000, ended_at: at - 500 });
+  const { address } = await startServer(t, f, ['--replay', 'all', '--speed', '1000']);
+  const group = await collect(`${address}stream?replay=g&speed=1000`, (m) => m.event === 'done'); // 单个范围的回放按请求自己的速度放
+  assert.equal(group[0].event, 'hello'); assert.equal(group[0].data.mode, 'replay');
+  assert.ok(group.some((m) => m.event === 'run' && m.data.id === '20261023-120000-grp1'));
+  assert.equal((await fetch(`${address}snapshot?replay=g&t=0`)).status, 200);
+  assert.equal((await fetch(`${address}stream?replay=nothing-here`)).status, 404);
+  const gone = await startServer(t, f, ['--replay', 'orphans']);
+  assert.equal((await gone.exited)[0], 1); assert.equal(gone.message.code, 'NOT_FOUND');
+});
+
+test('debug replay forwards the test build limit to createUniverse and reports REPLAY_TOO_LARGE before listening', { timeout: 10000 }, async (t) => {
+  const f = temp(t), at = Date.now();
+  f.session('s', [row('user', at - 1000, 'large'.repeat(1000))], 'demo', at);
+  const { message, exited } = await startServer(t, f, ['--replay', 's', '--idle-min', '0.001'], { FOREMAN_TEST_REPLAY_LIMIT_BYTES: '100' });
+  assert.equal((await exited)[0], 1);
+  assert.equal(message.code, 'REPLAY_TOO_LARGE'); assert.equal(typeof message.error, 'string');
+  assert.ok(message.bytes > message.limit); assert.equal(message.limit, 100); assert.equal(message.url, undefined);
+  for (const name of ['board.lock.json', 'board.err']) assert.equal(fs.existsSync(path.join(f.options.runs, name)), false);
+});
+
+test('debug replay exits on idle even if nobody ever connected and an active run exists', { timeout: 10000 }, async (t) => {
+  const f = temp(t), at = Date.now();
+  f.session('s', [row('user', at - 1000, 's')], 'demo', at);
+  f.run('running', { status: 'running', started_at: at - 1000, ended_at: null });
+  const { exited } = await startServer(t, f, ['--replay', 's', '--idle-min', '0.02']);
+  const opened = performance.now();
+  assert.equal((await exited)[0], 0);
+  assert.ok(performance.now() - opened >= 1000);
+  assert.ok(performance.now() - opened < 4000);
+});
+
+test('page mode strips live replay/from before connecting, retains legacy fly-in, notice, demo and fixture behavior', async () => {
+  const fixture = { hello: { v: 3, mode: 'replay', now: 0, scope: { kind: 'run', value: 'r' }, replay: { start: 0, end: 1000, speed: 1, maxgap: 20 } },
+    runs: [{ id: 'r', lane: 'r', kind: 'exec', status: 'done', started_at: 0, ended_at: 1000 }], events: [] };
+  const sources = ['00-text.js', '01-state.js', '01-universe.js', '08-uni-fly.js'].map((name) => fs.readFileSync(path.join(here, '../board/web', name), 'utf8')).join('\n');
+  const main = fs.readFileSync(path.join(here, '../board/web/09-main.js'), 'utf8').split("history.scrollRestoration = 'manual';")[1];
+  for (const [query, mode, runSession, pending, route] of [
+    ['replay=20261023-120000-pick&from=123&lang=zh', 'live', 'assigned', 'assigned', 'snapshot?run=20261023-120000-pick'],
+    ['replay=group&from=0&s=&focus=here', 'live', 'assigned', 'assigned', 'snapshot?group=group'],
+    ['replay=orphan', 'live', null, 'orphan', 'snapshot?group=orphan'],
+    ['replay=all&from=0', 'live', null, null, null],
+    ['from=1&s=chosen', 'live', null, 'chosen', null],
+    ['replay=all&s=chosen', 'replay', null, 'chosen', null],
+    ['demo=universe&replay=all&from=0', 'live', null, null, null],
+    ['fixture=1&replay=all&from=0', 'live', null, null, null],
+  ]) {
+    const requests = [], streams = [], timers = [], classes = [], replacements = [], notice = { textContent: '', classList: { add: (name) => classes.push(name), remove() {} }, addEventListener() {} };
+    const exempt = query.includes('demo=') || query.includes('fixture='), showNotice = mode === 'live' && !exempt;
+    const context = vm.createContext({
+      URL, URLSearchParams, location: { search: `?${query}`, href: `http://127.0.0.1/token/?${query}` },
+      window: { __LANG__: 'zh', __BOARD_MODE__: mode, __BOARD_FIXTURE__: query.includes('fixture=') ? fixture : undefined },
+      history: { replaceState: (_a, _b, url) => replacements.push(String(url)) }, performance: { getEntriesByType: () => [], now: () => 0 },
+      $: () => notice, addEventListener() {}, wake() {}, playDemo() {},
+      setTimeout: (fn, ms) => timers.push({ fn, ms }), clearTimeout() {},
+      fetch: async (url) => { requests.push(url); return { ok: true, json: async () => ({ runs: runSession ? [{ session: runSession }] : [] }) }; },
+      EventSource: class { constructor(url) { streams.push(url); } addEventListener() {} },
+    });
+    vm.runInContext(sources + '\n' + main, context);
+    await new Promise(setImmediate);
+    assert.equal(vm.runInContext('FLY.pending', context), pending, query);
+    assert.deepEqual(requests, route ? [route] : [], query);
+    assert.equal(notice.textContent, showNotice ? '回放是调试功能，这里显示的是实时画面。要回放，请运行 board --replay <对话、任务或组>' : '', query);
+    assert.equal(timers.length, showNotice ? 1 : 0, query);
+    if (showNotice) {
+      assert.equal(timers[0].ms, 12000); timers[0].fn(); assert.deepEqual(classes, ['faded']);
+      const cleaned = new URL(replacements[0]); assert.equal(cleaned.searchParams.has('replay'), false); assert.equal(cleaned.searchParams.has('from'), false);
+      for (const [key, value] of new URLSearchParams(query)) if (!['replay', 'from'].includes(key)) assert.equal(cleaned.searchParams.get(key), value);
+      assert.deepEqual(streams, ['stream?level=all']);
+    } else if (query.includes('fixture=')) {
+      // 内嵌快照直接显示看板：不连任何服务，快照里的任务已经读进来
+      assert.deepEqual(streams, []); assert.equal(vm.runInContext('FLY.mode', context), 'board');
+      assert.equal(vm.runInContext('B.runs.size', context), 1);
+    } else if (!query.includes('demo=')) assert.deepEqual(streams, ['stream?level=all&replay=all']);
+  }
+});
+
+// 老地址找对话：任务取它自己的对话，组取最近派出的那一份；group=all 是合法组名；结果回来前用户动过页面就不飞；
+// 飞进去以后地址只记 s，老范围参数去掉（回放服务保留 replay=all）
+test('legacy links pick the right conversation, honour a touch before the answer and leave only s in the address', async () => {
+  const sources = ['00-text.js', '01-state.js', '01-universe.js', '08-uni-fly.js'].map((name) => fs.readFileSync(path.join(here, '../board/web', name), 'utf8')).join('\n');
+  const main = fs.readFileSync(path.join(here, '../board/web/09-main.js'), 'utf8').split("history.scrollRestoration = 'manual';")[1];
+  const runs = [{ id: '20261023-120000-root', session: 'first', started_at: 1 }, { id: '20261023-130000-next', session: 'second', started_at: 2 }];
+  const page = async (query, { mode = 'live', touch = false } = {}) => {
+    const requests = [], replacements = [], listeners = [];
+    const context = vm.createContext({
+      URL, URLSearchParams, location: { search: `?${query}`, href: `http://127.0.0.1/token/?${query}` },
+      window: { __LANG__: 'zh', __BOARD_MODE__: mode }, history: { replaceState: (_a, _b, url) => replacements.push(String(url)) },
+      performance: { getEntriesByType: () => [] }, $: () => ({ textContent: '', classList: { add() {}, remove() {}, contains: () => false }, addEventListener() {} }),
+      addEventListener: (type, fn) => listeners.push([type, fn]), wake() {}, playDemo() {}, setTimeout() {}, clearTimeout() {},
+      fetch: async (url) => { requests.push(url); if (touch) for (const [type, fn] of listeners) if (type === 'pointerdown') fn(); return { ok: true, json: async () => ({ runs }) }; },
+      EventSource: class { addEventListener() {} },
+    });
+    vm.runInContext(sources + '\n' + main, context);
+    await new Promise(setImmediate);
+    return { pending: vm.runInContext('FLY.pending', context), requests, replacements, context };
+  };
+  assert.equal((await page('run=20261023-120000-root')).pending, 'first'); // 不是车道里最新的 second
+  assert.equal((await page('group=g')).pending, 'second');
+  assert.deepEqual((await page('group=all')).requests, ['snapshot?group=all']);
+  assert.equal((await page('run=20261023-120000-root', { touch: true })).pending, null);
+  for (const [mode, kept] of [['live', null], ['replay', 'all']]) {
+    const p = await page('level=all&replay=all&group=g&run=r&session=x', { mode });
+    vm.runInContext("setUrl('chosen')", p.context);
+    const url = new URL(p.replacements.at(-1));
+    assert.equal(url.searchParams.get('s'), 'chosen'); assert.equal(url.searchParams.get('replay'), kept);
+    for (const key of ['group', 'run', 'session']) assert.equal(url.searchParams.has(key), false);
+  }
 });
 
 test('review 3: live session keeps current and appended activity beyond the run tail without changing group/run', (t) => {
@@ -379,25 +571,28 @@ test('review 5: transcript LRU retains three files across session/recent/group/r
   feed.read({ session: 'b' }, now); assert.deepEqual([...reads.values()], [1, 2, 1, 1]);
 });
 
-test('review 6: universe streams refresh replay while detail/sessions share the latest two-entry LRU', { timeout: 10000 }, async (t) => {
+test('review 6: debug replay freezes universe and detail once before listening and reuses them across streams and queries', { timeout: 10000 }, async (t) => {
   const f = temp(t), at = Date.now();
   f.session('s', [row('user', at - 20000, 'first')], 'demo', at);
-  const { address } = await startServer(t, f);
+  const { address } = await startServer(t, f, ['--replay', 'all', '--speed', '1000', '--maxgap', '1']);
   const snapshot = async (maxgap) => (await (await fetch(`${address}sessions?replay=all&speed=1000&maxgap=${maxgap}`)).json()).sessions.map((s) => s.id).sort();
   assert.deepEqual(await snapshot(1), ['s']);
   f.session('second', [row('user', at - 10000, 'second')], 'demo', at);
   assert.deepEqual(await snapshot(1), ['s']);
+  f.session('s', [row('user', at - 20000, 'changed after startup')], 'demo', at);
   const stream = await collect(`${address}stream?level=all&replay=all&speed=1000&maxgap=1`, (m) => m.event === 'done');
-  assert.ok(stream.some((m) => m.event === 'session' && m.data.id === 'second'));
-  assert.deepEqual(await snapshot(1), ['s', 'second']);
-  const detail = await collect(`${address}stream?session=second&replay=all&speed=1000&maxgap=1&from=${stream[0].data.replay.end}`, (m) => m.event === 'done');
-  assert.deepEqual(detail[0].data.replay, stream[0].data.replay); assert.ok(detail.some((m) => m.event === 'ev' && m.data.t === 'second'));
-  assert.deepEqual(await snapshot(2), ['s', 'second']);
+  assert.ok(stream.some((m) => m.event === 'session' && m.data.id === 's'));
+  assert.ok(!stream.some((m) => m.event === 'session' && m.data.id === 'second'));
+  assert.deepEqual(await snapshot(1), ['s']);
+  const detail = await collect(`${address}stream?session=s&replay=all&from=${stream[0].data.replay.end}`, (m) => m.event === 'done');
+  assert.deepEqual(detail[0].data.replay, stream[0].data.replay); assert.ok(detail.some((m) => m.event === 'ev' && m.data.t === 'first'));
+  assert.ok(!JSON.stringify(detail).includes('changed after startup'));
+  assert.deepEqual(await snapshot(2), ['s']);
   f.session('third', [row('user', at - 5000, 'third')], 'demo', at);
-  assert.deepEqual(await snapshot(1), ['s', 'second']);
-  assert.deepEqual(await snapshot(3), ['s', 'second', 'third']);
-  assert.deepEqual(await snapshot(1), ['s', 'second']);
-  assert.deepEqual(await snapshot(2), ['s', 'second', 'third']);
+  assert.deepEqual(await snapshot(1), ['s']);
+  assert.deepEqual(await snapshot(3), ['s']);
+  assert.deepEqual(await snapshot(1), ['s']);
+  assert.deepEqual(await snapshot(2), ['s']);
 });
 
 test('review 7: older-only projects read just the newest file header up to 64 KB and cache by file/mtime', (t) => {
@@ -455,7 +650,7 @@ test('review 9: replay ids without runs resolve to a full session while group/ru
   const runs = [{ id: 'r', meta: { group: 'g', claude_session: 'assigned' } }];
   for (const [value, kind] of [['g', 'group'], ['r', 'run'], ['assigned', 'session'], ['orphan', 'session']]) assert.equal(selectScope(runs, { replay: value }, at).scope.kind, kind);
   const { address } = await startServer(t, f, ['--replay', 'orphan']);
-  const snapshot = await (await fetch(`${address}snapshot?replay=orphan`)).json();
+  const snapshot = await (await fetch(`${address}snapshot?session=orphan&replay=all`)).json();
   assert.deepEqual(snapshot.hello.scope, data.scope); assert.ok(snapshot.events.some((e) => e.t === 'old orphan'));
 });
 
@@ -464,9 +659,10 @@ test('review 10: universe snapshots reject level all on snapshot and use session
   for (const query of ['level=all', 'level=all&replay=all']) for (const method of ['GET', 'HEAD']) {
     const response = await fetch(`${address}snapshot?${query}`, { method }); assert.equal(response.status, 400); assert.equal(await response.text(), '');
   }
-  for (const query of ['', '?replay=all&t=0']) {
-    const response = await fetch(`${address}sessions${query}`); assert.equal(response.status, 200); assert.equal((await response.json()).v, 3);
-  }
+  const response = await fetch(`${address}sessions`); assert.equal(response.status, 200); assert.equal((await response.json()).v, 3);
+  const debug = await startServer(t, f, ['--replay', 'all']);
+  const replay = await fetch(`${debug.address}sessions?replay=all&t=0`); assert.equal(replay.status, 200); assert.equal((await replay.json()).v, 3);
+  for (const method of ['GET', 'HEAD']) assert.equal((await fetch(`${debug.address}snapshot?level=all&replay=all`, { method })).status, 400);
 });
 
 test('review 11: invalid dates never enter replay clocks and nonfinite playback deadlines finish without spinning', { timeout: 10000 }, async (t) => {
@@ -482,8 +678,8 @@ test('review 11: invalid dates never enter replay clocks and nonfinite playback 
     assert.ok(replay.timeline.every((m) => Number.isFinite(m.time)));
     assert.ok(!replay.timeline.some((m) => m.data.id === 'bad-start' || m.data.run === 'bad-start' || m.data.runs?.some((r) => r.id === 'bad-start')));
   }
-  const { address } = await startServer(t, f);
-  const frames = await collect(`${address}stream?session=s&replay=s&speed=1e-320`, (m) => m.event === 'done');
+  const { address } = await startServer(t, f, ['--replay', 's', '--speed', '1e-320']);
+  const frames = await collect(`${address}stream?session=s&replay=all`, (m) => m.event === 'done');
   assert.deepEqual(frames.map((m) => m.event), ['hello', 'done']);
 });
 

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { normalize, laneOf, selectScope, buildReplay, snapshotAt, createFeed, runMessage } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
+import { normalize, laneOf, selectScope, buildReplay, snapshotAt, createFeed, runMessage, hostCost, usageTotals } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
 
 const start = Date.parse('2026-10-18T13:40:00Z');
 const run = { id: 'one', lane: 'root', meta: { cwd: 'C:\\work' } };
@@ -112,6 +112,24 @@ test('maxgap maps every clock and snapshotAt returns the state at elapsed replay
   assert.equal(snapshotAt(replay).runs[0].status, 'done'); assert.equal(data.runs[0].ended_at, start + 105000);
 });
 
+test('host replay usage prefixes retain nulls, zeroes, price changes and unknown pricing without mutating earlier frames', () => {
+  const prices = { models: [{ match: ['priced'], input: 2, cached: 0.1, cache_write: 2.5, output: 10 }] };
+  const events = [
+    { t: 'priced', u: { in: 1, cached: null, cache_write: 0, out: 2 } },
+    { t: 'priced', u: { in: null, cached: 5, cache_write: 3, out: 0 } },
+    { t: 'unknown', u: { in: 4, cached: 0, cache_write: null, out: null } },
+    { t: 'priced', u: { in: 0, cached: null, cache_write: 1, out: 3 } },
+  ].map((event, i) => ({ run: 'cc', lane: 'cc', ts: start + i * 1000, k: 'usage', ...event }));
+  const data = { scope: { kind: 'session', value: 's' }, prices, runs: [{ id: 'cc', kind: 'host', started_at: start }], events, hostEnd: start + 5000 };
+  const updates = buildReplay(data, {}, start).timeline.filter((m) => m.event === 'run' && m.data.usage).map((m) => m.data);
+  assert.equal(updates.length, 4);
+  updates.forEach((update, i) => {
+    const prefix = events.slice(0, i + 1), cost = hostCost(prefix, prices);
+    assert.deepEqual(update.usage, usageTotals(prefix)); assert.equal(update.cost_usd, cost);
+    assert.equal(update.cost_source, cost == null ? 'unknown' : 'api_price');
+  });
+});
+
 test('tailing retries partial JSON and busy reads, retains split UTF-8 and resets on truncation', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foreman-feed-')), id = '20261018-214000-test', dir = path.join(root, id);
   fs.mkdirSync(dir);
@@ -195,6 +213,17 @@ test('explicit session isolates runs and selects its transcript without runs, re
   assert.deepEqual(feed.read({ session: 's', replay: 's' }).scope, { kind: 'session', value: 's' });
   const list = [{ id: 'a', meta: { claude_session: 's' } }, { id: 'b', meta: { claude_session: 'other', parent: 'a' } }];
   assert.deepEqual(selectScope(list, { session: 's' }, start).runs.map((r) => r.id), ['a']);
+});
+
+test('a conversation of 200k lines opens without overflowing the stack (no push(...lines))', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'board-long-')), projects = path.join(root, 'claude', 'demo'), runs = path.join(root, 'runs');
+  fs.mkdirSync(projects, { recursive: true }); fs.mkdirSync(runs);
+  t.after(() => { assert.equal(path.dirname(root), os.tmpdir()); fs.rmSync(root, { recursive: true, force: true }); });
+  const lines = [];
+  for (let i = 0; i < 200000; i++) lines.push(JSON.stringify({ type: 'user', timestamp: new Date(start - 200000 + i).toISOString(), message: { content: 'x' } }));
+  fs.writeFileSync(path.join(projects, 'long.jsonl'), lines.join('\n') + '\n');
+  const data = createFeed(runs, { claudeDir: path.dirname(projects), now: () => start }).read({ session: 'long' });
+  assert.equal(data.runs[0].id, 'cc'); assert.equal(data.events.length, 200000);
 });
 
 test('run messages carry the Claude Code conversation that dispatched them, so an old group or run link can fly into it', () => {

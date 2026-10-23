@@ -25,6 +25,7 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
 ```
 
 - 校验都在发出任何请求之前做完：格子没关（不是 `"claude code"` 或 `null`）；每个席位都在这一格的候选里（旧代号会换成新代号）；必选都有席位；执行和手画（draw）席位能执行；`visual` 审查的席位能看图（`reads_images`）；出图（generate）席位能出图。
+- 3 级审查计划还检查补漏席（角色为 `补漏` 或 `gap`）的基础模型：要和其余每一席都不同，否则拒绝。同一个模型的各种写法算同一个：去掉 `提供方/` 前缀、Bedrock 的 `…anthropic.` 前缀，Claude 的小数版本号写成连字符（`claude-fable-5.1` 即 `claude-fable-5-1`），以及插件价格表 `prices.json` 的 `aliases` 里记下的官方别名（比如 `deepseek-v4.1-flash` 即 `deepseek-flash`）。`stats` 按同一套规则把同一个模型合成一行。
 - 讨论和审查计划另外检查外部席位数（3 级审查不算补漏席，也就是角色为 `补漏` 或 `gap` 的席位；其他模块和等级里这个角色名照常计数）：要等于 `min(这一级的 seats, 这一格能用的不同候选数)`，`visual` 审查只算能看图的候选。不一致时要带 `--count-why "<理由>"`，否则拒绝；`--count-why` 用在别的模块上也拒绝。计划里记 `seat_target`（上面算出的数，`outside_cell` 计划为 `null`，也不做这项检查）和 `count_why`（没写为 `null`）。这项检查只在建计划时做，启动席位时不再检查，配置改了以后已有的计划照样能启动。
 - 讨论和审查计划自带 Claude Code 席：计划顶层的 `host`（`seat` 为 0，`role` 来自 `--host-role`，没写为 `null`），外部席位仍在 `seats` 里、从 1 编号。`--host-role` 写在别的模块上会被拒绝。讨论和审查不带 `--plan` 时 `discuss`、`review` 直接报错。用户配置里写成 `"claude code"` 的讨论或审查格子也能建计划（用户点名派出时用）：计划标 `outside_cell: true`，`required` 为空，每席的协作方要支持这个模块，推理强度用内置默认值；项目配置关掉的格子仍然拒绝。没有 `host` 的旧计划照旧只数 `seats`，启动时也不要求提交报告。
 - 图像计划另外检查：

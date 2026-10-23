@@ -14,6 +14,8 @@ function loadFinals() {
   if (window.__BOARD_FIXTURE__ || B.clock.mode !== 'replay' || loadFinals.started) return;
   loadFinals.started = true;
   const gen = loadFinals.gen, q = scopeQuery();
+  // from 只对明细流有意义（从宇宙层当时的时刻接着放）；快照带上它会被回放服务拒绝
+  q.delete('from');
   q.set('t', '100000000');
   fetch(`snapshot?${q}`).then((r) => r.json()).then((s) => {
     if (gen !== loadFinals.gen) return; // 回来时已经换了对话：丢掉

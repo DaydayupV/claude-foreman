@@ -19,7 +19,8 @@ test('多个 Codex、无 Codex 和三类能力表及省略强度的配置', asyn
   c.modules = { run: { complex: { agent: 'second.1' } }, discuss: { normal: [{ agent: 'api' }, { agent: 'oc' }] } };
   h.config(c);
   const out = output(await h.bridge(['config']));
-  for (const [name, isolation, reads, native, supported] of [['codex', 'os', true, true, modes], ['oc', 'tools', true, false, modes], ['api', 'none', false, false, ['discuss', 'review']]]) {
+  // oc 没写 run_access：派不了执行任务，能力里也不列 run
+  for (const [name, isolation, reads, native, supported] of [['codex', 'os', true, true, modes], ['oc', 'tools', true, false, ['review', 'discuss']], ['api', 'none', false, false, ['discuss', 'review']]]) {
     assert.deepEqual(out.agents_status[name].capabilities, { modes: supported, isolation, reads_code: reads, reads_images: native, native_schema: native,
       native_review: native, images: native, resume: true, command_start_events: native });
   }

@@ -255,7 +255,8 @@ for (const [module, configured, target] of [['discuss', 3, 2], ['review', 1, 1]]
 });
 
 test('三级审查的补漏和 gap 大小写不敏感且不计入外部席位数', async (t) => {
-  const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex };
+  // 补漏席要换一个基础模型，second 用别的模型
+  const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex, model: 'other-model' };
   c.modules.review.complex = [{ agent: 'codex' }, { agent: 'second' }]; c.modules.review.seats = { complex: 1 }; h.config(c);
   const extra = ['--target', 'claims', '--file', h.write('claims.txt', '合成待审主张')];
   const p = output(await h.bridge([...planArgs(h, 'review', ['codex', 'second= 补漏 ', 'second= GaP ']), ...extra]));

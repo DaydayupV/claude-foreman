@@ -17,6 +17,8 @@ button:hover, button:focus-visible { color: var(--hi); border-color: var(--mid);
 #top .brand span { color: var(--dim); margin-left: 12px; }
 #clock { color: var(--mid); margin-left: 12px; overflow: hidden; text-overflow: ellipsis; }
 #progress { position: absolute; left: 0; bottom: -1px; height: 1px; width: 0; background: var(--mid); }
+#notice { position: fixed; top: calc(var(--top-h) + 8px); left: 50%; transform: translateX(-50%); z-index: 4; max-width: calc(100% - 28px); color: var(--dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; transition: opacity .8s; }
+#notice.faded { opacity: 0; }
 
 /* 主视图：画布和"世界"（卡片层）用同一个缩放平移 */
 #view { position: relative; margin-top: var(--top-h); height: calc(100vh - var(--top-h) - var(--table-h)); overflow: hidden; cursor: grab; touch-action: none; user-select: none; }

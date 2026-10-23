@@ -68,7 +68,8 @@ test('run_access 只校验 opencode，config 展示权限和执行能力', async
     c.modules.run.complex = value ? { agent: 'oc' } : 'claude code'; h.config(c);
     const r = output(await h.bridge(['config']));
     assert.equal(r.agents_status.oc.run_access, value ?? null);
-    assert.deepEqual(r.agents_status.oc.capabilities.modes, ['run', 'review', 'discuss']);
+    // 没写 run_access 时派不了执行任务，能力里也不列 run
+    assert.deepEqual(r.agents_status.oc.capabilities.modes, value ? ['run', 'review', 'discuss'] : ['review', 'discuss']);
     assert.equal(r.agents_status.codex.run_access, undefined);
   }
 });

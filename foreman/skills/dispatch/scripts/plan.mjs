@@ -6,6 +6,7 @@ import { RUNS_ROOT, CLAUDE_SESSION, listRuns, readMeta, checkRunners, runOutcome
 import { validateReviewMaterial } from './review-scope.mjs';
 import { M, die, need, resolveDir } from './util.mjs';
 import { D, outcomeStyle } from './format.mjs';
+import { modelIdentity } from './prices.mjs';
 
 // 读不到时返回 null，不退出进程：实时查看里计划文件被删了也要接着显示。
 function loadPlan(id) {
@@ -99,6 +100,13 @@ function cmdPlan(o, load, adapters) {
     const profile = resolveProfile(cfg, { ...seat, module: o.module, cell: o.cell, ...(plan.outside_cell ? { plan: true, outside_cell: true } : {}) }, {}, adapters);
     return { ...seat, model: profile.model ?? null, effort: profile.effort, required: cell.required.includes(seat.agent) };
   });
+  // 补漏席要找前面各席都没用过的基础模型：同一个模型的各种写法（提供方前缀、Bedrock 写法、小数版本号、官方别名）只算一个
+  if (o.module === 'review' && o.cell === 'complex') {
+    const isGap = (seat) => ['补漏', 'gap'].includes(seat.role?.trim().toLowerCase());
+    const base = (seat) => modelIdentity(seat.model ?? seat.agent);
+    const used = new Set(plan.seats.filter((seat) => !isGap(seat)).map(base));
+    for (const seat of plan.seats.filter(isGap)) if (used.has(base(seat))) die(M.gapSeatSameModel(seat.seat, base(seat)));
+  }
   if (o.module === 'image') plan.route_confirmation = routeConfirmation(CLAUDE_SESSION, plan.route);
   Object.assign(plan, { created_at: new Date().toISOString(), claude_session: CLAUDE_SESSION, cwd,
     level: o.module === 'image' ? null : o.cell, group, required: cell.required, why: o.why ?? null });

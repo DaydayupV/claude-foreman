@@ -2,6 +2,8 @@
 // 屏幕和按键在 watch-screen.mjs；都只读取统一记录。
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { RUNS_ROOT, requestCancel, listRuns, findRun, readMeta, checkRunners, isRunning } from './records.mjs';
 import { M, die, sleep, clip, oneLine, plainCommand, RECONNECT, modelOf, agentTypeOf, fitWidth, textWidth } from './util.mjs';
 import { D, C, termCols, termRows, shortModel, fullModel, modelLabel, taskLine, identityLine, clock, outcomeStyle, changedFor, usageLine, commandAction } from './format.mjs';
@@ -58,7 +60,8 @@ function verboseRenderer(meta, rel) {
       const re = RECONNECT.exec(ev.message || '');
       o('⚠', re ? D.watchReconnect(re[1], re[2]) : clip(oneLine(ev.message), 300));
     } else if (ev.type === 'turn.completed' && ev.usage) {
-      o('Σ', D.watchTokens(ev.usage));
+      // Codex 续接的那一轮报的是整个会话的累计用量，不是这一轮的：不显示，结尾的用量行按这一轮算
+      if (!meta.parent) o('Σ', D.watchTokens(ev.usage));
     } else if (ev.type === 'foreman.snapshot') {
       o('⋯', ev.phase === 'start' ? D.watchSnapshotStart : D.watchSnapshotDone(D.duration(ev.seconds ?? 0)));
     } else if (ev.type === 'image.generated') {
@@ -397,6 +400,13 @@ async function watchRun(o, loadCfg) {
 async function cmdWatch(o, loadCfg) {
   if (o.group != null) return watchGroup(o.group, o, loadCfg);
   return watchRun(o, loadCfg);
+}
+
+// 这个文件只给 cli.mjs 引用；有人照着文件名直接运行它时，不能一声不响地退出
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  // 直接运行时记录模块还没初始化（RUNS_ROOT 为空），按默认记录目录给路径
+  process.stderr.write(`${M.watchDirect(path.join(RUNS_ROOT ?? path.join(os.homedir(), '.claude', 'foreman', 'runs'), 'watch.mjs'))}\n`);
+  process.exitCode = 2;
 }
 
 export { cmdWatch };

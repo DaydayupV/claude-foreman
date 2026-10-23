@@ -15,6 +15,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 // 页面语言跟插件走（scripts/language.json：中文插件 zh、英文插件 en），测试时可用 FOREMAN_LANG 覆盖，和 util.mjs 一样
 const LANG = process.env.FOREMAN_LANG || (() => { try { return JSON.parse(fs.readFileSync(path.join(here, '..', 'language.json'), 'utf8')).language; } catch { return 'zh'; } })();
 const keys = ['runs', 'port', 'idle-min', 'group', 'run', 'replay', 'speed', 'maxgap', 'transcript', 'session', 'claude-dir', 'lead', 'tail', 'prices', 'window-h', 'config'];
+const replayMode = process.argv.slice(2).some((arg) => arg === '--replay' || arg.startsWith('--replay='));
 let lockFile, owner, ownerRaw, server, runsRoot, build;
 const short = (e) => String(e.message || e).replace(/\s+/g, ' ');
 function readLock() {
@@ -114,10 +115,29 @@ function scopeOptions(values) {
 const hello = (data, now) => ({ v: 3, mode: 'live', scope: data.scope, now, replay: null });
 const backlog = (events) => events.length <= 200 ? events : events.some((ev) => ev.k === 'start') ? [events.find((ev) => ev.k === 'start'), ...events.filter((ev) => ev.k !== 'start').slice(-199)] : events.slice(-200);
 
+function replaySessions(target, root, claudeDir) {
+  if (target === 'all') return undefined;
+  const list = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { if (e.code === 'ENOENT') return []; throw e; } };
+  // 解析范围只看元数据，避免为找一个组先展开全部任务记录。
+  const runs = list(root).filter((d) => d.isDirectory() && d.name !== 'plans').flatMap((d) => {
+    try { return [{ id: d.name, meta: JSON.parse(fs.readFileSync(path.join(root, d.name, 'meta.json'), 'utf8')) }]; } catch { return []; }
+  });
+  // 回放以对话记录为单位：记录文件已经删掉的对话放不出来，不算进去，免得地址里带一个永远不会出现的 s
+  const transcripts = new Set(list(claudeDir).filter((d) => d.isDirectory())
+    .flatMap((d) => list(path.join(claudeDir, d.name)).filter((f) => f.isFile() && f.name.endsWith('.jsonl')).map((f) => f.name.slice(0, -6))));
+  let ids;
+  if (/^\d{8}-\d{6}-[a-z0-9]{4}$/.test(target)) ids = runs.filter((r) => r.id === target).map((r) => r.meta.claude_session);
+  else if (runs.some((r) => r.meta.group === target)) ids = runs.filter((r) => r.meta.group === target).map((r) => r.meta.claude_session);
+  else ids = [target];
+  ids = [...new Set(ids.filter((id) => typeof id === 'string' && id && transcripts.has(id)))];
+  if (!ids.length) throw Object.assign(new Error(`nothing to replay for ${target}`), { code: 'NOT_FOUND' });
+  return ids;
+}
+
 async function main() {
   const { values } = parseArgs({ options: Object.fromEntries(keys.map((key) => [key, { type: 'string' }])) });
-  scopeOptions({ ...values, session: undefined });
-  const port = Number(values.port ?? 0), idleMs = Number(values['idle-min'] ?? 5) * 60000;
+  const timing = scopeOptions({ ...values, session: undefined });
+  const port = Number(values.port ?? 0), idleMs = Number(values['idle-min'] ?? (replayMode ? 10 : 5)) * 60000;
   const windowH = Number(values['window-h'] ?? 24), configFile = values.config || path.join(os.homedir(), '.claude', 'foreman', 'config.json');
   if (!Number.isFinite(windowH) || windowH < 0) throw new Error('invalid window');
   if (!Number.isInteger(port) || port < 0 || port > 65535 || !Number.isFinite(idleMs) || idleMs < 0) throw new Error('invalid port or idle timeout');
@@ -131,26 +151,42 @@ async function main() {
   let directory = false;
   try { directory = fs.statSync(root).isDirectory(); } catch { /* 统一报目录不存在 */ }
   if (!directory) throw new Error(`runs directory not found: ${root}`);
-  lockFile = path.join(root, 'board.lock.json');
   build = buildId(here);
-  const reused = await claim();
-  // 只有一个总前端：地址总带 level=all；给了组、任务或回放范围时，页面打开后飞进那个对话
+  let reused;
+  if (replayMode) owner = { pid: process.pid, port: 0, token: randomBytes(16).toString('hex') };
+  else { lockFile = path.join(root, 'board.lock.json'); reused = await claim(); }
+  // 直播地址只传飞入范围，回放地址由独立服务构建成功后输出。
   const query = new URLSearchParams({ level: 'all' });
-  for (const key of ['group', 'run', 'replay', 'speed', 'maxgap']) if (values[key] != null) query.set(key, values[key]);
+  for (const key of ['group', 'run']) if (values[key] != null) query.set(key, values[key]);
   const address = (lock) => `board: http://127.0.0.1:${lock.port}/${lock.token}/?${query}`;
   if (reused) { process.stdout.write(`${address(reused)} (reused pid ${reused.pid})\n`); return; }
 
   const options = { transcript: values.transcript, session: values.session, claudeDir: values['claude-dir'] || path.join(os.homedir(), '.claude', 'projects'),
     lead: Number(values.lead ?? 10), tail: Number(values.tail ?? 5), prices: loadPrices(values.prices || path.join(here, '../prices.json')) };
-  const feed = createFeed(root, options), universe = createUniverse({ ...options, runs: root, config: configFile, windowH }), clients = new Set(), replays = new Map();
-  const allReplay = (scope, now, refresh = false) => {
-    const key = `${scope.speed}:${scope.maxgap}`;
-    const replay = refresh || !replays.has(key) ? universe.replay(scope, now) : replays.get(key);
-    replays.delete(key); replays.set(key, replay);
-    if (replays.size > 2) replays.delete(replays.keys().next().value);
-    return replay;
+  // 与轮询间隔变量一样只供测试缩小上限，不作为用户配置。
+  const replayLimitBytes = process.env.FOREMAN_TEST_REPLAY_LIMIT_BYTES == null ? undefined : Number(process.env.FOREMAN_TEST_REPLAY_LIMIT_BYTES);
+  const feed = replayMode ? null : createFeed(root, options), universe = createUniverse({ ...options, runs: root, config: configFile, windowH, replayLimitBytes }), clients = new Set();
+  const sessions = replayMode ? replaySessions(values.replay, root, options.claudeDir) : undefined;
+  const sharedReplay = replayMode ? universe.replay({ speed: timing.speed, maxgap: timing.maxgap, sessions }, Date.now()) : null, details = new Map();
+  // 单个组或任务的回放：第一次请求时构建（现在只要几十毫秒），之后复用；范围里没有任务的记成 null（404）
+  const scopedReplays = new Map();
+  let scopeFeed = null;
+  const scopedReplay = (scope, now) => {
+    const key = JSON.stringify([scope.replay, scope.speed, scope.maxgap]);
+    if (!scopedReplays.has(key)) {
+      scopeFeed ??= createFeed(root, options);
+      const data = scopeFeed.read(scope, now);
+      scopedReplays.set(key, data.runs.length ? buildReplay(data, scope, now) : null);
+    }
+    return scopedReplays.get(key);
   };
-  let poll = null, idleSince = feed.hasRunning(Date.now()) ? null : Date.now();
+  // 明细也在监听前冻结；每次连接只播放同一份数据，不再读盘构建。
+  if (sharedReplay) {
+    const ids = new Set(sharedReplay.initial.sessions.map((s) => s.id));
+    for (const m of sharedReplay.timeline) if (m.event === 'session') ids.add(m.data.id);
+    for (const id of ids) details.set(id, sharedReplay.detail(id));
+  }
+  let poll = null, connections = 0, idleSince = feed?.hasRunning(Date.now()) ? null : Date.now();
   const send = (client, event, data) => client.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   const liveUpdate = (client, data) => {
     for (const run of data.runs) {
@@ -175,13 +211,13 @@ async function main() {
     client.universe = data;
   };
   const updatePolling = () => {
-    const needed = [...clients].some((c) => c.scope.replay == null);
-    feed.watch(needed);
+    const needed = !replayMode && clients.size > 0;
+    feed?.watch(needed);
     if (!needed && poll) { clearInterval(poll); poll = null; }
     if (needed && !poll) poll = setInterval(() => {
       try {
         const scopes = new Map(), now = Date.now();
-        for (const client of clients) if (client.scope.replay == null) {
+        for (const client of clients) {
           if (client.all) {
             if (!scopes.has('all')) scopes.set('all', universe.read(now));
             universeUpdate(client, scopes.get('all')); continue;
@@ -210,6 +246,10 @@ async function main() {
     next();
   };
   server = http.createServer((req, res) => {
+    if (replayMode) {
+      connections++; idleSince = null;
+      res.once('close', () => { if (!--connections) idleSince = Date.now(); });
+    }
     res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Referrer-Policy', 'no-referrer');
     const end = (status, type, body = '') => { res.writeHead(status, type ? { 'Content-Type': type } : {}); res.end(req.method === 'HEAD' ? undefined : body); };
     if (![`127.0.0.1:${owner.port}`, `localhost:${owner.port}`].includes(req.headers.host)) return end(403);
@@ -227,7 +267,8 @@ async function main() {
         catch (e) { if (e.code !== 'ENOENT') throw e; html = '<!doctype html><title>Foreman board</title><p>Board page is not built yet.</p>'; }
         const requested = url.searchParams.get('lang'), lang = ['zh', 'en'].includes(requested) ? requested : LANG;
         html = html.replace(/<html lang="(?:zh-CN|en)">/, `<html lang="${lang === 'en' ? 'en' : 'zh-CN'}">`)
-          .replace(/window\.__LANG__ = '(?:zh|en)';/, `window.__LANG__ = '${lang === 'en' ? 'en' : 'zh'}';`);
+          .replace(/window\.__LANG__ = '(?:zh|en)';/, `window.__LANG__ = '${lang === 'en' ? 'en' : 'zh'}';`)
+          .replace("window.__BOARD_MODE__ = 'live';", `window.__BOARD_MODE__ = '${replayMode ? 'replay' : 'live'}';`);
         return end(200, 'text/html; charset=utf-8', html);
       }
       if (route === 'health') {
@@ -237,7 +278,8 @@ async function main() {
           delete process.env.FOREMAN_TEST_BOARD_STALL_MS;
           Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
         }
-        return end(200, 'application/json', JSON.stringify({ ok: true, v: 1, pid: process.pid, build }));
+        // 回放末尾可能已有对话退出时间窗口，命令计数按启动时冻结的完整范围。
+        return end(200, 'application/json', JSON.stringify({ ok: true, v: 1, pid: process.pid, build, ...(replayMode ? { sessions: details.size } : {}) }));
       }
       // 出图任务的缩略图：只收任务 id 和序号，图片路径取自这个任务自己的记录（imagesOf），只给图片文件
       if (route === 'image') {
@@ -252,20 +294,24 @@ async function main() {
         return end(200, type, req.method === 'HEAD' ? '' : fs.readFileSync(file));
       }
       if (!['stream', 'snapshot', 'sessions'].includes(route)) return end(404);
+      if (!replayMode && (url.searchParams.has('replay') || url.searchParams.has('from'))) return end(400);
+      if (replayMode && url.searchParams.get('replay') == null) return end(400);
       let scope;
       try { scope = scopeOptions(Object.fromEntries(url.searchParams)); } catch { return end(400); }
       if (route === 'snapshot' && url.searchParams.get('level') === 'all') return end(400);
-      if (req.method === 'HEAD') return end(200, route === 'stream' ? 'text/event-stream' : 'application/json');
       const opened = Date.now(), all = route === 'sessions' || url.searchParams.get('level') === 'all';
-      if (all && scope.replay != null && scope.replay !== 'all') return end(400);
-      const shared = scope.replay === 'all' ? allReplay(scope, opened, route === 'stream' && all) : null;
-      const data = all ? null : shared ? null : feed.read(scope, opened);
-      const replay = shared ? all ? shared : shared.detail(scope.session) : scope.replay != null ? buildReplay(data, scope, opened) : null;
-      if (shared && !replay) return end(404);
+      // replay=<组或任务> 是 v2 的单个范围回放（演示页的明细用），只在回放服务上有
+      const scoped = replayMode && scope.replay !== 'all';
+      if (replayMode && (scoped ? all || scope.session != null : all ? scope.session != null : scope.session == null)) return end(400);
+      if (replayMode && scope.from != null && (all || route !== 'stream')) return end(400);
+      const replay = !replayMode ? null : scoped ? scopedReplay(scope, opened) : all ? sharedReplay : details.get(scope.session);
+      if (replayMode && !replay) return end(404);
+      if (req.method === 'HEAD') return end(200, route === 'stream' ? 'text/event-stream' : 'application/json');
+      const data = all || replay ? null : feed.read(scope, opened);
       if (route === 'sessions') {
         const t = url.searchParams.has('t') ? Number(url.searchParams.get('t')) : Infinity;
         if (t < 0 || !Number.isFinite(t) && t !== Infinity) return end(400);
-        return end(200, 'application/json', JSON.stringify(shared ? universeAt(shared, t) : universe.read(opened)));
+        return end(200, 'application/json', JSON.stringify(sharedReplay ? universeAt(sharedReplay, t) : universe.read(opened)));
       }
       if (route === 'snapshot') {
         const t = url.searchParams.has('t') ? Number(url.searchParams.get('t')) : Infinity;
@@ -287,34 +333,42 @@ async function main() {
       if (res.headersSent) res.destroy(); else end(500);
     }
   });
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(replayMode ? 0 : port, '127.0.0.1', resolve); });
   owner.port = server.address().port;
-  const raw = JSON.stringify(owner), temp = `${lockFile}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
-  // 认领后到这里通常只有几毫秒；卡了太久被别人接管时不能把别人的锁覆盖掉
-  if (!holdsLock()) quitLostLock();
-  try {
-    fs.writeFileSync(temp, raw, { flag: 'wx', mode: 0o600 });
-    retryFile(() => fs.renameSync(temp, lockFile));
-    ownerRaw = raw;
-  } finally { retryFile(() => fs.rmSync(temp, { force: true })); }
-  fs.rmSync(path.join(root, 'board.err'), { force: true });
-  process.stdout.write(`${address(owner)}\n`);
+  if (replayMode) {
+    const q = new URLSearchParams({ level: 'all', replay: 'all', lang: LANG });
+    if (sessions?.length === 1) q.set('s', sessions[0]);
+    for (const key of ['speed', 'maxgap']) if (values[key] != null) q.set(key, values[key]);
+    process.stdout.write(JSON.stringify({ url: `http://127.0.0.1:${owner.port}/${owner.token}/?${q}` }) + '\n');
+  } else {
+    const raw = JSON.stringify(owner), temp = `${lockFile}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+    // 认领后到这里通常只有几毫秒；卡了太久被别人接管时不能把别人的锁覆盖掉
+    if (!holdsLock()) quitLostLock();
+    try {
+      fs.writeFileSync(temp, raw, { flag: 'wx', mode: 0o600 });
+      retryFile(() => fs.renameSync(temp, lockFile));
+      ownerRaw = raw;
+    } finally { retryFile(() => fs.rmSync(temp, { force: true })); }
+    fs.rmSync(path.join(root, 'board.err'), { force: true });
+    process.stdout.write(`${address(owner)}\n`);
+  }
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => process.exit(0));
   setInterval(() => {
-    if (!holdsLock()) quitLostLock();
+    if (!replayMode && !holdsLock()) quitLostLock();
     const now = Date.now();
     for (const client of clients) client.res.write(': ping\n\n');
     try {
-      if (clients.size || feed.hasRunning(now)) idleSince = null;
+      if (replayMode ? connections > 0 : clients.size || feed.hasRunning(now)) idleSince = null;
       else if (idleSince == null) idleSince = now;
       else if (now - idleSince >= idleMs) process.exit(0);
     } catch (e) { process.stderr.write(`board: ${short(e)}\n`); }
-  }, Number(process.env.FOREMAN_TEST_BOARD_TICK_MS) || 15000); // 变量只给测试缩短自查间隔
+  }, Number(process.env.FOREMAN_TEST_BOARD_TICK_MS) || (replayMode ? Math.min(15000, Math.max(1, idleMs)) : 15000)); // 变量只给测试缩短自查间隔
 }
 
 main().catch((e) => {
   process.stderr.write(`board: ${short(e)}\n`);
-  if (runsRoot) {
+  if (replayMode) process.stdout.write(JSON.stringify({ error: String(e.message || e), code: e.code || 'START_FAILED', bytes: e.bytes, limit: e.limit }) + '\n');
+  else if (runsRoot) {
     // 带上 pid：board 子命令只采信自己启动的那个进程写的错误
     try { fs.writeFileSync(path.join(runsRoot, 'board.err'), JSON.stringify({ pid: process.pid, error: short(e) }) + '\n', { mode: 0o600 }); } catch { /* 记录目录不可写时保留 stderr */ }
   }

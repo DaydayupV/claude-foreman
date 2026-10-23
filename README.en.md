@@ -184,6 +184,10 @@ A second way to watch, alongside the terminal live view, off by default: set `di
   - One local process shared by every conversation on this computer, reachable only on 127.0.0.1 with a one-time token.
   - It only reads your conversation records and run records.
   - It exits after 30 minutes with nobody looking and nothing running.
+- **Replay (for debugging)**: every link the plugin gives is live. To play a finished conversation back in time to look into a problem, run `node <the plugin's scripts folder>/cli.mjs board --replay <conversation id, run id, group or all>` in a terminal. Add `--speed <N>` to speed it up and `--maxgap <sec>` to shorten idle gaps.
+  - It starts a separate, temporary replay server and prints a link. The server exits after ten minutes with no one watching, and leaves the live page alone.
+  - Records over 256 MB in total are refused, with the size given.
+  - Opening an old-style replay link on the live page shows live data, with a line at the top saying how to replay.
 - **Resources**: the server takes about 100–130 MB of memory, and the browser tab about 60–90 MB. On a computer low on memory (under 8 GB in total or under 2 GB available), `/foreman-en:setup` suggests keeping it off.
 - **Browser**: it needs a recent browser: Chrome or Edge 111, Firefox 113, Safari 16.2 or later.
 

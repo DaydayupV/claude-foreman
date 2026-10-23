@@ -244,13 +244,13 @@ test('stats 合并两种接入的基础模型，费用未知的外部任务都�
   seedRun(h, 'codex-2', { ...review, model: null, model_shown: 'GPT 6（来自 Codex 配置）' });
   seedRun(h, 'unknown', { ...review, model: null, started_at: '2026-10-10T00:00:00Z', ended_at: '2026-10-10T00:00:04Z' });
   const r = output(await h.bridge(['stats']));
-  assert.deepEqual(r.rows.map((row) => [row.model, row.seats]), [['deepseek-v4.1-flash', 3], ['deepseek-flash', 2], ['gpt-6', 2], ['unknown', 1]]);
-  const [flash, pi, codex, unknown] = r.rows;
-  assert.deepEqual(flash.tokens, { input: 100, cached_input: 20, output: 30, runs: 1, missing_runs: 2 });
-  assert.deepEqual(flash.cost_usd, { total: null, runs: 0, missing_runs: 3 });
-  assert.deepEqual(flash.duration_s, { total: 12, median_per_seat: 4, missing_runs: 0 });
+  // deepseek-v4.1-flash 是 deepseek-flash 的官方别名（价格表 aliases）：两种名字、三种接入合成一行
+  assert.deepEqual(r.rows.map((row) => [row.model, row.seats]), [['deepseek-flash', 5], ['gpt-6', 2], ['unknown', 1]]);
+  const [flash, codex, unknown] = r.rows;
+  assert.deepEqual(flash.tokens, { input: 100, cached_input: 20, output: 30, runs: 1, missing_runs: 4 });
+  assert.deepEqual(flash.cost_usd, { total: null, runs: 0, missing_runs: 5 });
+  assert.deepEqual(flash.duration_s, { total: 20, median_per_seat: 4, missing_runs: 0 });
   assert.equal(flash.findings_reported, 2);
-  assert.deepEqual(pi.cost_usd, { total: null, runs: 0, missing_runs: 2 });
   assert.deepEqual(codex.cost_usd, { total: null, runs: 0, missing_runs: 2 });
   assert.deepEqual(Object.keys(codex).filter((k) => k.startsWith('cost_')), ['cost_usd']);
   assert.equal(unknown.cost_usd.missing_runs, 1);

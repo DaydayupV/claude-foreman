@@ -20,15 +20,39 @@ export function modelKey(model) {
   return name;
 }
 
-export function priceFor(model, usage, prices) {
+// 同一个模型的不同写法归成一个身份（"不同的基础模型"按它比较，stats 按它分行）：modelKey 处理提供方前缀和版本写法，
+// 价格表的 aliases 只记官方说明是同一个模型的别名（同价不等于同一个模型，比如 Fable 和 Mythos 共用一条价格）
+export function modelIdentity(model, prices = loadPrices()) {
+  const key = modelKey(model);
+  return prices?.aliases?.[key] ?? key;
+}
+
+// 每张价格表只编译一次，模型名查到的价格也记住：看板每秒要给每条用量查价，每次重建匹配表会占掉大半 CPU
+const compiled = new WeakMap();
+function rateOf(model, prices) {
+  if (!prices?.models) return null;
+  let table = compiled.get(prices);
+  if (!table) {
+    table = { entries: prices.models.flatMap((rate) => rate.match.map((s) => ({ rate, match: s.toLowerCase() }))), names: new Map() };
+    compiled.set(prices, table);
+  }
   const name = modelKey(model);
-  const entries = prices?.models.flatMap((rate) => rate.match.map((s) => ({ rate, match: s.toLowerCase() }))) ?? [];
-  // 先精确匹配，版本后缀只认连字符边界，并优先最长模型名。
-  const rate = entries.find((p) => name === p.match)?.rate
-    ?? entries.filter((p) => name.startsWith(`${p.match}-`)).sort((a, b) => b.match.length - a.match.length)[0]?.rate;
+  if (!table.names.has(name)) {
+    // 先精确匹配，版本后缀只认连字符边界，并优先最长模型名。
+    table.names.set(name, table.entries.find((p) => name === p.match)?.rate
+      ?? table.entries.filter((p) => name.startsWith(`${p.match}-`)).sort((a, b) => b.match.length - a.match.length)[0]?.rate ?? null);
+  }
+  return table.names.get(name);
+}
+
+// 金额留到 1e-10 美元：浮点乘除的尾巴（0.43190959999999995）不写进记录
+const usd = (value) => Math.round(value * 1e10) / 1e10;
+
+export function priceFor(model, usage, prices) {
+  const rate = rateOf(model, prices);
   if (!rate || !usage) return null;
-  return ((usage.input ?? 0) * rate.input + (usage.cached ?? 0) * (rate.cached ?? rate.input)
-    + (usage.cache_write ?? 0) * (rate.cache_write ?? rate.input) + (usage.output ?? 0) * rate.output) / 1e6;
+  return usd(((usage.input ?? 0) * rate.input + (usage.cached ?? 0) * (rate.cached ?? rate.input)
+    + (usage.cache_write ?? 0) * (rate.cache_write ?? rate.input) + (usage.output ?? 0) * rate.output) / 1e6);
 }
 
 export function costOf(result, prices) {

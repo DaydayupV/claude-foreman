@@ -283,3 +283,18 @@ test('status --group 计划行显示未启动及运行中的 gap seat not finish
     assert.ok(r.stdout.split(/\r?\n/).includes(line), r.stdout);
   }
 });
+
+test('3 级审查的补漏席不能和其他审查席是同一个基础模型（去掉提供方前缀比较）', async (t) => {
+  const h = sandbox(t), c = baseConfig();
+  c.agents.codex.model = 'gpt-a'; c.agents.second = { ...c.agents.codex, model: 'provider/GPT-A' }; c.agents.third = { ...c.agents.codex, model: 'gpt-b' };
+  c.modules.review.complex = [{ agent: 'codex', required: true }, { agent: 'second' }, { agent: 'third' }]; c.modules.review.seats = { complex: 1 };
+  h.config(c); h.write('a.txt', 'x\n');
+  const args = (gap) => [...planArgs(h, 'review', ['codex', `${gap}=补漏`]), '--target', 'files', '--file', 'a.txt'];
+  failed(await h.bridge(args('second')), M.gapSeatSameModel(2, 'gpt-a'));
+  assert.equal(output(await h.bridge(args('third'))).seats[1].role, '补漏');
+  // 同一个模型的其他写法：Claude 的小数版本号和提供方前缀、价格表里记的官方别名
+  for (const [mine, theirs, identity] of [['claude-fable-5-1', 'anthropic/claude-fable-5.1', 'claude-fable-5-1'], ['deepseek/deepseek-flash', 'opencode-go/deepseek-v4.1-flash', 'deepseek-flash']]) {
+    c.agents.codex.model = mine; c.agents.second.model = theirs; h.config(c);
+    failed(await h.bridge(args('second')), M.gapSeatSameModel(2, identity));
+  }
+});

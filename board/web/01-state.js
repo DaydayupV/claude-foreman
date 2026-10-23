@@ -2,6 +2,13 @@
 // 数据和时钟：连服务（或读内嵌快照），把 run / ev 消息整理成车道；画面每帧按时钟从这里取数，不在这里画。
 
 const Q = new URLSearchParams(location.search);
+const BOARD_REPLAY = window.__BOARD_MODE__ === 'replay', LEGACY_REPLAY = Q.get('replay');
+const LIVE_REPLAY_LINK = !BOARD_REPLAY && !window.__BOARD_FIXTURE__ && Q.get('demo') !== 'universe' && (Q.has('replay') || Q.has('from'));
+if (LIVE_REPLAY_LINK) {
+  // 老链接保留飞入目标，但不能让直播连接带上回放参数。
+  Q.delete('replay'); Q.delete('from');
+  const url = new URL(location.href); url.search = Q.toString(); history.replaceState(null, '', url);
+}
 const B = {
   params: {
     group: Q.get('group'), run: Q.get('run'), replay: Q.get('replay'), speed: Q.get('speed'), maxgap: Q.get('maxgap'),

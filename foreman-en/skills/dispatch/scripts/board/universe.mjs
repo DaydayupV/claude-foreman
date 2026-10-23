@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { promptOf, toolsOf } from './claude-feed.mjs';
-import { ms, transient, stat, json, newTail, readLines, runMessage, laneOf, settleRun,
+import { ms, transient, stat, json, newTail, readLines, append, runMessage, laneOf, settleRun,
   usageTotals, hostCost, costFields, createFeed, buildReplay, replayClock } from './feed.mjs';
 
 const keyOf = (cwd) => cwd ? cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() : '?';
@@ -83,22 +83,60 @@ export function stateOf(session, runs, now) {
       || tools.some((t) => now - t.since < 600000) ? 'thinking' : 'idle';
   return { state, waiting };
 }
-function summaryOf(session, all, now, hours, prices) {
+function summaryOf(session, all, now, hours, prices, meter) {
   const cutoff = now - hours * 3600000, own = all.filter((r) => r.session === session.id && !r.host);
   const counted = own.filter((r) => r.started_at >= cutoff), counts = { running: 0, done: 0, failed: 0 };
   for (const run of counted) counts[run.status === 'running' ? 'running' : run.status === 'done' ? 'done' : 'failed']++;
   const runs = own.filter((r) => r.status === 'running' || r.ended_at >= now - 600000)
-    .sort((a, b) => b.started_at - a.started_at || a.id.localeCompare(b.id)).slice(0, 16).map(pickRun);
-  const usage = [...session.usage.values()].filter((u) => u.ts >= cutoff), costs = [...counted];
-  if (usage.length) { const cost = hostCost(usage, prices); costs.push(costFields(cost, cost == null ? 'unknown' : 'api_price')); }
+    .sort((a, b) => b.started_at - a.started_at || a.id.localeCompare(b.id)).slice(0, 16).map(meter?.pick ?? pickRun);
+  const usage = meter ? null : [...session.usage.values()].filter((u) => u.ts >= cutoff), costs = [...counted];
+  if (meter ? meter.count : usage.length) { const cost = meter ? meter.cost : hostCost(usage, prices); costs.push(costFields(cost, cost == null ? 'unknown' : 'api_price')); }
   const cost = costs.some((c) => c.cost_usd != null) ? costs.reduce((sum, c) => sum + (c.cost_usd ?? 0), 0) : null;
   const failure = own.filter((r) => r.status !== 'running' && r.status !== 'done' && r.ended_at != null && r.ended_at >= now - 1800000)
     .sort((a, b) => b.ended_at - a.ended_at)[0];
   const alert = failure && session.promptAt <= failure.ended_at ? { kind: failure.status, run: failure.id, model: failure.model, at: failure.ended_at } : null;
+  const state = stateOf(session, runs, now);
   return { id: session.id, project: keyOf(projectOf(session)), cwd: session.cwd, title: session.title ?? session.firstPrompt, model: session.model,
-    ...stateOf(session, runs, now), started_at: session.started_at, last_at: session.last_at, runs, counts,
+    state: state.state, waiting: state.waiting, started_at: session.started_at, last_at: session.last_at, runs, counts,
     // 还在跑的运行没有费用、有的模型不在价格表里：能算的照样加起来，另外标出不完整，不让整份变成未知
-    usage: usageTotals(usage), cost_usd: cost, cost_partial: costs.some((c) => c.cost_usd == null), alert };
+    usage: meter ? meter.totals : usageTotals(usage), cost_usd: cost, cost_partial: costs.some((c) => c.cost_usd == null), alert };
+}
+
+function equalReplay(a, b) {
+  if (typeof a === 'number' && !Number.isFinite(a)) a = null;
+  if (typeof b === 'number' && !Number.isFinite(b)) b = null;
+  if (a === b) return true;
+  if (a == null || b == null || typeof a !== 'object' || typeof b !== 'object') return false;
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((key) => equalReplay(a[key], b[key]));
+}
+function replayMeter(prices, pick) {
+  let totals = usageTotals([]), sum = 0, unknown = 0, count = 0, expires = Infinity, dirty = false;
+  const costs = new WeakMap(), fields = [['in', 'input'], ['cached', 'cached'], ['cache_write', 'cache_write'], ['out', 'output']];
+  const add = (usage) => {
+    for (const [key, name] of fields) {
+      if (usage.u[key] != null) totals[name] = (totals[name] ?? 0) + usage.u[key];
+    }
+    const cost = costs.get(usage); sum += cost ?? 0; unknown += cost == null ? 1 : 0; count++;
+    expires = Math.min(expires, usage.ts);
+  };
+  return {
+    entry(session, entry) {
+      const id = entry.usage?.id ?? entry.messageId;
+      if (id && session.usage.has(id)) dirty = true;
+      addEntry(session, entry);
+      if (entry.usage) { costs.set(entry.usage, hostCost([entry.usage], prices)); if (!dirty) add(entry.usage); }
+    },
+    at(session, cutoff) {
+      // 替换消息或窗口到期时按 Map 原序重加，避免减法改变原有浮点结果。
+      if (dirty || expires < cutoff) {
+        totals = usageTotals([]); sum = 0; unknown = 0; count = 0; expires = Infinity;
+        for (const usage of session.usage.values()) if (usage.ts >= cutoff) add(usage);
+        dirty = false;
+      }
+      return { totals: { ...totals }, cost: count && !unknown ? sum : null, count, pick };
+    },
+  };
 }
 export function agentSlots(config, runs) {
   const agents = new Map(config.map((agent) => [agent.id, { ...agent, running: [], queued: [] }]));
@@ -236,36 +274,75 @@ export function createUniverse(options) {
   };
   const hello = (now, replay = null) => ({ v: 3, level: 'all', mode: replay ? 'replay' : 'live', now, window_h: hours, replay });
   const replay = (params = {}, now = options.now?.() ?? Date.now()) => {
-    const indexed = read(now), sources = [], times = [], files = new Map(), runIds = new Map();
-    for (const summary of indexed.sessions) {
-      const session = sessions.get(summary.id); files.set(session.id, session.file);
+    // 回放在独立的调试进程里构建，慢一点不卡直播。真实的长对话常有一百多 MB：112 MB 的真实对话 2.1 秒、峰值 380 MB；
+    // 用量特别密的合成对话最慢，32 MiB 约十秒。256 MiB 覆盖现有的真实对话，又不至于把内存撑爆
+    const limit = options.replayLimitBytes ?? 256 * 1048576, cutoff = now - hours * 3600000;
+    const wanted = params.sessions == null ? null : new Set(params.sessions), files = new Map(), older = new Map(), knownFolders = new Map();
+    const indexed = new Map(), entries = new Map(), queues = new Map(), oldHeads = [];
+    let bytes = 0;
+    const check = () => { if (bytes > limit) throw Object.assign(new Error('replay too large'), { code: 'REPLAY_TOO_LARGE', bytes, limit }); };
+    for (const folder of list(options.claudeDir).filter((d) => d.isDirectory())) {
+      const dir = path.join(options.claudeDir, folder.name), old = [];
+      let active = false;
+      for (const name of list(dir).filter((d) => d.isFile() && d.name.endsWith('.jsonl'))) {
+        const id = name.name.slice(0, -6);
+        if (wanted && !wanted.has(id)) continue;
+        const file = path.join(dir, name.name), st = stat(file);
+        if (!st) continue;
+        if (!wanted && st.mtimeMs < cutoff) { older.set(dir, (older.get(dir) || 0) + 1); old.push({ file, at: st.mtimeMs }); continue; }
+        active = true; files.set(id, file); bytes += st.size;
+      }
+      if (!active && old.length) oldHeads.push([dir, old.sort((a, b) => b.at - a.at || a.file.localeCompare(b.file))[0].file]);
+    }
+    const dataById = createFeed(options.runs, options).replay(files, now, (runs) => {
+      // 构建时还会读裁决和派发计划：一起算进构建量，同一份计划只算一次
+      const plans = new Set();
+      for (const run of runs) {
+        for (const name of ['meta.json', 'result.json', 'events.jsonl', 'verdict.json']) bytes += stat(path.join(run.dir, name))?.size ?? 0;
+        if (typeof run.meta?.plan === 'string') plans.add(run.meta.plan);
+      }
+      for (const plan of plans) bytes += stat(path.join(options.runs, 'plans', `${plan}.json`))?.size ?? 0;
+      check();
+      for (const [dir, file] of oldHeads) knownFolders.set(dir, { cwd: readCwd(file), at: -Infinity });
+    }, (id, file, records) => {
+      const session = newSession(id, file, path.dirname(file)), own = [];
+      for (const row of records) { const entry = entryOf(row); if (entry) { addEntry(session, entry); own.push(entry); } }
+      const known = knownFolders.get(session.folder);
+      if (session.root && (!known || session.cwdAt >= known.at)) knownFolders.set(session.folder, { cwd: session.root, at: session.cwdAt });
+      if (!wanted && session.last_at != null && session.last_at < cutoff) older.set(session.folder, (older.get(session.folder) || 0) + 1);
+      if (session.last_at == null || !wanted && session.last_at < cutoff) return false;
+      indexed.set(id, session); entries.set(id, own); return true;
+    }, (run, raw) => {
+      if (!queues.has(run.id)) queues.set(run.id, { state: {}, sources: [] });
+      const queue = queues.get(run.id), before = { ...queue.state }; queueOf(raw, queue.state);
+      if (!equalReplay(before, queue.state) && Number.isFinite(ms(raw.ts))) queue.sources.push({ time: ms(raw.ts), queue: { id: run.id, ...queue.state } });
+    });
+    const selected = [...indexed.values()].sort((a, b) => b.last_at - a.last_at || a.id.localeCompare(b.id)).slice(0, wanted ? Infinity : 200);
+    const projects = projectsOf([...selected].sort((a, b) => b.cwdAt - a.cwdAt), older, knownFolders), sources = [], times = [];
+    for (const session of selected) {
       let prompted = false;
-      for (const row of readLines(session.file, newTail()).lines) {
-        const entry = entryOf(row);
-        if (!entry) continue;
-        entry.at ??= summary.started_at;
+      for (const entry of entries.get(session.id)) {
+        entry.at ??= session.started_at;
         if (!Number.isFinite(entry.at)) continue;
         if (prompted) delete entry.firstPrompt;
         prompted ||= entry.prompt;
-        sources.push({ time: entry.at, id: session.id, entry }); times.push(entry.at);
+        sources.push({ time: entry.at, id: session.id, entry });
       }
-      // 回放只临时展开一个对话来收集明细时刻，正文不会留进宇宙时间线。
-      const data = createFeed(options.runs, { ...options, transcript: session.file }).read({ session: session.id, replay: session.id }, now);
-      runIds.set(session.id, new Set(data.runs.filter((r) => r.id !== 'cc').map((r) => r.id)));
-      times.push(...buildReplay(data, { maxgap: Number.MAX_VALUE }, now).timeline.map((m) => m.time));
+      const data = dataById.get(session.id), invalid = new Set(data.runs.filter((r) => !Number.isFinite(r.started_at)).map((r) => r.id));
+      for (const run of data.runs) if (!invalid.has(run.id)) { times.push(run.started_at); times.push(run.kind === 'host' ? data.hostEnd : run.ended_at); }
+      for (const event of data.events) if (!invalid.has(event.run)) times.push(event.ts);
       for (const run of data.runs.filter((r) => r.id !== 'cc' && r.kind !== 'answer' && Number.isFinite(r.started_at))) {
         const final = { ...run, session: session.id, host: false, since: null };
-        sources.push({ time: run.started_at, run: { ...final, status: 'running', ended_at: null, usage: null, ...costFields(null, 'unknown'), queued: false } });
-        if (Number.isFinite(run.ended_at)) sources.push({ time: run.ended_at, run: final });
-        const state = {};
-        for (const raw of readLines(path.join(options.runs, run.id, 'events.jsonl'), newTail()).lines) {
-          const before = { ...state }; queueOf(raw, state);
-          if (!same(before, state) && Number.isFinite(ms(raw.ts))) sources.push({ time: ms(raw.ts), queue: { id: run.id, ...state } });
-        }
+        sources.push({ time: run.started_at, id: session.id, run: { ...final, status: 'running', ended_at: null, usage: null, ...costFields(null, 'unknown'), queued: false } });
+        if (Number.isFinite(run.ended_at)) sources.push({ time: run.ended_at, id: session.id, run: final });
+        for (const source of queues.get(run.id)?.sources || []) sources.push({ ...source, id: session.id });
       }
     }
-    times.push(...sources.map((s) => s.time));
-    const clock = replayClock(times, params, now), active = new Map(), running = new Map();
+    const selectedIds = new Set(selected.map((s) => s.id));
+    for (const id of dataById.keys()) if (!selectedIds.has(id)) dataById.delete(id);
+    for (const session of selected) session.usage.clear();
+    append(times, sources.map((s) => s.time));
+    const clock = replayClock(times, params, now), active = new Map(), running = new Map(), ownRuns = new Map(), meters = new Map();
     const steps = new Map();
     for (const source of sources) {
       const original = source.time;
@@ -277,35 +354,90 @@ export function createUniverse(options) {
       if (source.queue?.since != null) source.queue.since = clock.map(source.queue.since);
     }
     const initial = { v: 3, now: clock.replay.start, window_h: hours,
-      projects: indexed.projects.filter((p) => !indexed.sessions.some((s) => s.project === p.key)), sessions: [], agents: agentSlots(config, []) }, timeline = [];
-    const ticks = new Set();
-    for (const source of sources) for (const delay of [90000, 600000, 600001, 1800001, hours * 3600000 + 1]) if (source.time + delay <= clock.replay.end) ticks.add(source.time + delay);
-    const schedule = [...steps.values(), ...[...ticks].map((time) => ({ time, original: Infinity, sources: [] }))].sort((a, b) => a.time - b.time || a.original - b.original);
-    let previous = initial;
-    for (const step of schedule) {
-      const at = step.time;
-      for (const source of step.sources) {
-        if (source.entry) {
-          if (!active.has(source.id)) active.set(source.id, newSession(source.id));
-          addEntry(active.get(source.id), source.entry);
-        } else if (source.run) running.set(source.run.id, source.run);
-        else if (running.has(source.queue.id)) Object.assign(running.get(source.queue.id), { queued: !!source.queue.queued, since: source.queue.since });
-      }
-      const summaries = [...active.values()].filter((s) => s.last_at >= at - hours * 3600000)
-        .sort((a, b) => b.last_at - a.last_at || a.id.localeCompare(b.id)).map((s) => summaryOf(s, [...running.values()], at, hours, options.prices));
-      const next = { ...initial, now: at, projects: projectsOf([...active.values()].sort((a, b) => b.cwdAt - a.cwdAt), new Map(), new Map()).map((p) => ({ ...p,
-        older: (indexed.projects.find((old) => old.key === p.key)?.older ?? 0) + [...active.values()].filter((s) => keyOf(projectOf(s)) === p.key && s.last_at < at - hours * 3600000).length })),
-        sessions: summaries, agents: agentSlots(config, [...running.values()]) };
-      for (const message of universeChanges(previous, next)) timeline.push({ time: at, ...message });
-      previous = next;
+      projects: projects.filter((p) => !selected.some((s) => keyOf(projectOf(s)) === p.key)), sessions: [], agents: agentSlots(config, []) }, timeline = [];
+    const ticks = new Map();
+    for (const source of sources) for (const delay of [90000, 600000, 600001, 1800001, hours * 3600000 + 1]) if (source.time + delay <= clock.replay.end) {
+      const time = source.time + delay;
+      if (!ticks.has(time)) ticks.set(time, new Set());
+      ticks.get(time).add(source.id);
     }
+    const schedule = [...steps.values(), ...[...ticks].map(([time, dirty]) => ({ time, original: Infinity, sources: [], dirty }))].sort((a, b) => a.time - b.time || a.original - b.original);
+    const deadlines = schedule.filter((step) => step.dirty);
+    let expired = 0;
+    steps.clear(); ticks.clear(); entries.clear(); indexed.clear(); queues.clear(); sources.length = 0; times.length = 0;
+    const summaries = new Map(), projectState = new Map(initial.projects.map((p) => [p.key, p])), agentRuns = new Map();
+    // 摘要里的任务字段未变就共享，避免每条对话记录都复制同一组席位。
+    const picked = new WeakMap(), pick = (run) => { if (!picked.has(run)) picked.set(run, pickRun(run)); return picked.get(run); };
+    let agents = initial.agents;
+    const order = (a, b) => b.last_at - a.last_at || a.id.localeCompare(b.id);
+    for (const step of schedule) {
+      const at = step.time, dirty = new Set(step.dirty), dirtyAgents = new Set();
+      // 压缩时钟可能落在小数毫秒；严格大于阈值的失效要赶上下一步，不能等 +1 ms tick。
+      while (expired < deadlines.length && deadlines[expired].time - 1 < at) {
+        for (const id of deadlines[expired].dirty) dirty.add(id);
+        deadlines[expired++] = null;
+      }
+      let projectsDirty = false;
+      for (const source of step.sources) {
+        dirty.add(source.id);
+        if (source.entry) {
+          if (!active.has(source.id)) { active.set(source.id, newSession(source.id)); meters.set(source.id, replayMeter(options.prices, pick)); projectsDirty = true; }
+          const session = active.get(source.id), root = projectOf(session);
+          meters.get(source.id).entry(session, source.entry);
+          if (root !== projectOf(session) || projectState.get(keyOf(projectOf(session)))?.cwd !== projectOf(session)) projectsDirty = true;
+        } else {
+          let run = source.run ?? running.get(source.queue.id);
+          if (!run) continue;
+          if (!source.run) run = { ...run, queued: !!source.queue.queued, since: source.queue.since };
+          running.set(run.id, run);
+          if (!ownRuns.has(source.id)) ownRuns.set(source.id, new Map());
+          ownRuns.get(source.id).set(run.id, run);
+          if (run.agent) {
+            dirtyAgents.add(run.agent);
+            if (!agentRuns.has(run.agent)) agentRuns.set(run.agent, new Map());
+            agentRuns.get(run.agent).set(run.id, run);
+          }
+        }
+      }
+      const changed = [], gone = [];
+      for (const id of dirty) {
+        const session = active.get(id), before = summaries.get(id);
+        if (!session) continue;
+        if (session.last_at < at - hours * 3600000) { if (before) { gone.push(before); summaries.delete(id); projectsDirty = true; } continue; }
+        if (!before) projectsDirty = true;
+        const next = summaryOf(session, [...(ownRuns.get(id)?.values() || [])], at, hours, options.prices, meters.get(id).at(session, at - hours * 3600000));
+        if (before) for (const key of ['runs', 'counts', 'usage', 'waiting', 'alert']) if (equalReplay(before[key], next[key])) next[key] = before[key];
+        if (!equalReplay(before, next)) { summaries.set(id, next); changed.push(next); }
+      }
+      for (const session of gone.sort(order)) timeline.push({ time: at, event: 'session_gone', data: { id: session.id } });
+      if (projectsDirty) {
+        const next = projectsOf([...active.values()].sort((a, b) => b.cwdAt - a.cwdAt), new Map(), new Map());
+        for (const project of next) {
+          project.older = (projects.find((p) => p.key === project.key)?.older ?? 0) + [...active.values()].filter((s) => keyOf(projectOf(s)) === project.key && s.last_at < at - hours * 3600000).length;
+          if (!equalReplay(projectState.get(project.key), project)) timeline.push({ time: at, event: 'project', data: project });
+        }
+        projectState.clear(); for (const project of next) projectState.set(project.key, project);
+      }
+      for (const session of changed.sort(order)) timeline.push({ time: at, event: 'session', data: session });
+      if (dirtyAgents.size) {
+        const next = new Map(agents.map((a) => [a.id, a]));
+        for (const id of dirtyAgents) {
+          const configured = config.find((a) => a.id === id), own = [...agentRuns.get(id).values()].filter((r) => r.status === 'running');
+          if (!configured && !own.length) next.delete(id);
+          else next.set(id, agentSlots([configured ?? { id, type: null, max_parallel: 4 }], own)[0]);
+        }
+        const ordered = [...config.map((a) => next.get(a.id)), ...[...next.values()].filter((a) => !config.some((c) => c.id === a.id)).sort((a, b) => a.id.localeCompare(b.id))];
+        if (!equalReplay(agents, ordered)) { agents = ordered; timeline.push({ time: at, event: 'agents', data: { agents } }); }
+      }
+      // 已播放的来源不再需要，及时释放，避免和最终时间线同时占满内存。
+      step.sources.length = 0; step.dirty = null;
+    }
+    const details = new Map();
     const result = { hello: hello(now, clock.replay), initial, timeline, clock,
       detail(id) {
-        if (!files.has(id)) return null;
-        const data = createFeed(options.runs, { ...options, transcript: files.get(id) }).read({ session: id, replay: 'all' }, now);
-        data.runs = data.runs.filter((r) => r.id === 'cc' || runIds.get(id).has(r.id));
-        data.events = data.events.filter((e) => e.run === 'cc' || runIds.get(id).has(e.run));
-        return buildReplay(data, { clock }, now);
+        if (!dataById.has(id)) return null;
+        if (!details.has(id)) details.set(id, buildReplay(dataById.get(id), { clock }, now));
+        return details.get(id);
       } };
     return result;
   };

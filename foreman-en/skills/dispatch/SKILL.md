@@ -310,6 +310,7 @@ Whenever work goes to another model, that is, right after starting `run`, `image
   - `enabled` is `true`: send the user the `url` as a link, for example `[web board](<url>)`, saying it opens in their default browser, straight into this conversation's board; zooming out shows every conversation on this computer. **Don't open it with any browser tool** (neither the app's browser pane nor Claude in Chrome); the user clicks the link.
   - `enabled` is `false`: just say "The web board is off", optionally adding that `/foreman-en:setup` or setting `dispatch.web` to `true` in the config turns it on.
   - One board server is shared by every conversation on this computer: `board` reuses it when it's already running (`started` is `false`) and starts one in the background only when it isn't. If the command fails, pass on the error; the handed-off work isn't affected.
+  - The board is live only. When the user wants a finished conversation played back in time to look into a problem, use `board --replay <conversation id, run_id, group or all> [--speed <N>] [--maxgap <sec>]`. It starts a separate, temporary replay server; send its `url` as a link the same way. When the records are too large (over 256 MB) or the target isn't found, pass the error on as it is. Don't use it when handing off work.
 
 ### When an agent needs an answer
 Runs are unattended: nobody can answer an agent while it runs. The script makes sure no agent gets stuck waiting: Codex needs no approvals by default; opencode gets no question tool and no permissions that need confirming; pi has no question tool, and the guard extension foreman injects only allows the tools the task needs; a CLI added later that prints a "(y/n)"-style prompt and then goes quiet is stopped after 3 minutes with the status `needs_input`.
@@ -456,6 +457,7 @@ node "<script path>" plan   --cwd "<project dir>" --module image --cell <generat
 node "<script path>" image  --plan <plan_id> --seat <n> --brief "<brief.md>" --title "<short title>" --scope "<output dir>" [--scope …] [--track "<path>"] [--effort <effort>]
 node "<script path>" status [--run <run_id|last> | --group <name> | --plan <plan_id>] [--limit n]
 node "<script path>" watch  [--run <run_id|last> | --group <name>]
+node "<script path>" board  [--replay <conversation id|run_id|group|all> [--speed <N>] [--maxgap <sec>]] (without --replay: the live board)
 node "<script path>" config [--cwd "<project dir>"] [--format json|md]
 node "<script path>" check  [--agent <agent>] [--format json|md]
 node "<script path>" models [--format json|md]

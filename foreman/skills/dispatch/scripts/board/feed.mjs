@@ -172,10 +172,12 @@ export function buildReplay(data, { speed = 1, maxgap = 20, clock } = {}, now) {
     if (invalid.has(run.id)) continue;
     timeline.push({ time: run.started_at, event: 'run', data: { ...run, status: run.kind === 'answer' ? run.status : 'running', ended_at: null, duration_s: null, usage: null, ...costFields(null, 'unknown'), report_head: null, changed: [], review: null, files: [], queued: false } });
     if (run.kind === 'host') {
-      const usage = [];
+      let usage = usageTotals([]), cost = 0, unknown = false;
       for (const ev of data.events.filter((e) => e.run === 'cc' && e.k === 'usage' && Number.isFinite(e.ts))) {
-        usage.push(ev); const cost = hostCost(usage, data.prices);
-        timeline.push({ time: ev.ts, event: 'run', data: { ...run, model: ev.t, status: 'running', usage: usageTotals(usage), ...costFields(cost, cost == null ? 'unknown' : 'api_price') } });
+        // 解析器已经按消息末行去重；按原顺序累加，保留浮点求和和未知价格的语义。
+        usage = usageTotals([{ u: usage }, ev]);
+        const value = hostCost([ev], data.prices); unknown ||= value == null; cost += value ?? 0;
+        timeline.push({ time: ev.ts, event: 'run', data: { ...run, model: ev.t, status: 'running', usage, ...costFields(unknown ? null : cost, unknown ? 'unknown' : 'api_price') } });
       }
       timeline.push({ time: data.hostEnd, event: 'run', data: { ...run, status: 'idle' } });
     } else if (run.ended_at != null) timeline.push({ time: run.ended_at, event: 'run', data: run });
@@ -201,6 +203,12 @@ export function snapshotAt(replay, t = Infinity) {
     else events.push(message.data);
   }
   return { hello: replay.hello, runs: [...runs.values()], events };
+}
+
+// 逐条追加：push(...很长的数组) 会把每一项当成函数参数，几万行的对话记录就会栈溢出
+export function append(list, items) {
+  for (const item of items) list.push(item);
+  return list;
 }
 
 export function newTail(version = 0) { return { offset: 0, parts: [], decoder: new TextDecoder(), state: {}, events: [], signature: '', version }; }
@@ -244,12 +252,15 @@ export function readLines(file, tail, onLine) {
   }
   return { tail, lines };
 }
-function readTail(run, now) {
+function readTail(run, now, onRaw) {
   const read = readLines(path.join(run.dir, 'events.jsonl'), run.tail); run.tail = read.tail;
-  for (const raw of read.lines) if (typeof raw?.type === 'string' && Number.isFinite(ms(raw.ts))) {
-    run.tail.events.push(...normalize(raw, run, run.tail.state)); run.activity = run.tail.activity;
+  for (const raw of read.lines) {
+    onRaw?.(raw);
+    if (typeof raw?.type === 'string' && Number.isFinite(ms(raw.ts))) {
+      append(run.tail.events, normalize(raw, run, run.tail.state)); run.activity = run.tail.activity;
+    }
   }
-  run.tail.events.push(...flush(run.tail.state, now, run.meta.status !== 'running'));
+  append(run.tail.events, flush(run.tail.state, now, run.meta.status !== 'running'));
 }
 
 export function settleRun(run) {
@@ -294,21 +305,23 @@ export function createFeed(root, options = {}) {
     }
     return latest;
   };
-  const addClaude = (data, runs, params, now) => {
+  const addClaude = (data, runs, params, now, transcript) => {
     const session = data.scope.kind === 'session', recent = data.scope.kind === 'recent' || session && !runs.length;
-    const file = findTranscript(runs, recent, session ? data.scope.value : undefined);
+    const file = transcript?.file ?? findTranscript(runs, recent, session ? data.scope.value : undefined);
     if (!file || !recent && !session && !runs.length) return data;
-    const previous = transcripts.get(file), read = readLines(file, previous || newTail()), tail = read.tail;
+    const previous = transcript ? null : transcripts.get(file), read = transcript ? { tail: newTail(), lines: transcript.records } : readLines(file, previous || newTail()), tail = read.tail;
     if (previous && read.lines.some((r) => !r.isSidechain && ['user', 'assistant'].includes(r.type))) tail.appendedAt = now;
-    tail.records ??= []; tail.records.push(...read.lines);
-    transcripts.delete(file); transcripts.set(file, tail);
+    tail.records ??= []; append(tail.records, read.lines);
+    if (!transcript) { transcripts.delete(file); transcripts.set(file, tail); }
     if (transcripts.size > 3) { const old = transcripts.keys().next().value; transcripts.delete(old); recentWindows.delete(old); }
     let window = recentWindows.get(file);
     // 首次取最近半小时，此后保留追加记录，不让窗口滑动丢掉会话用量。
     if (recent && (!window || window.version !== tail.version)) { window = { from: now - 1800000, to: now, initial: tail.records.length, version: tail.version }; recentWindows.set(file, window); }
     const replay = session && params.replay != null;
-    const from = replay ? -Infinity : recent ? window.from : Math.min(...runs.map((r) => ms(r.meta.started_at))) - (options.lead ?? 10) * 60000;
-    const end = session ? Infinity : recent ? window.to : Math.max(...runs.map((r) => ms(r.meta.ended_at) ?? now)) + (options.tail ?? 5) * 60000;
+    let firstAt = Infinity, lastAt = -Infinity;
+    for (const run of runs) { firstAt = Math.min(firstAt, ms(run.meta.started_at)); lastAt = Math.max(lastAt, ms(run.meta.ended_at) ?? now); }
+    const from = replay ? -Infinity : recent ? window.from : firstAt - (options.lead ?? 10) * 60000;
+    const end = session ? Infinity : recent ? window.to : lastAt + (options.tail ?? 5) * 60000;
     const lines = tail.records.filter((r, i) => r.type === 'custom-title' || recent && i >= window.initial || ms(r.timestamp) >= from && ms(r.timestamp) <= end);
     const parsed = parseTranscriptLines(lines, { cwd: null, runIds: runs.map((r) => r.id), runsInScope: runs });
     const m = parsed.meta;
@@ -316,7 +329,7 @@ export function createFeed(root, options = {}) {
     const cost = hostCost(parsed.events.filter((e) => e.k === 'usage'), options.prices);
     data.runs.push({ id: 'cc', lane: 'cc', kind: 'host', agent: 'claude code', agent_type: 'host', model: m.model, session: m.session || path.basename(file, '.jsonl'), title: m.title, cwd: m.cwd,
       status: params.replay != null || now - Math.max(m.latest_at, tail.appendedAt ?? -Infinity) < 90000 ? 'running' : 'idle', started_at: m.started_at, ended_at: null, usage: m.usage, ...costFields(cost, cost == null ? 'unknown' : 'api_price') });
-    data.events.push(...parsed.events); data.versions.cc = `${file}:${tail.version}`; data.revisions.cc = '';
+    append(data.events, parsed.events); data.versions.cc = `${file}:${tail.version}`; data.revisions.cc = '';
     data.hostEnd = session ? m.latest_at : end; return data;
   };
   let names = [], dirty = true, watcher = null;
@@ -368,7 +381,53 @@ export function createFeed(root, options = {}) {
     const p = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/.exec(id);
     return p && new Date(+p[1], +p[2] - 1, +p[3], +p[4], +p[5], +p[6]).getTime() >= now - hours * 3600000;
   });
+  const dataOf = (selected, now, onEvent) => {
+    const runs = [], events = [], versions = {}, revisions = {};
+    for (const run of selected.runs) {
+      run.lane = laneOf(run, cache); readTail(run, now, onEvent && ((raw) => onEvent(run, raw)));
+      const message = runMessage(run, run.lane, options.prices); runs.push(message); versions[run.id] = run.tail.version;
+      revisions[run.id] = `${run.signatures.meta}:${run.signatures.result}`;
+      const history = [{ run: run.id, lane: run.lane, ts: message.started_at, k: 'start', t: clip(message.kind) }, ...run.tail.events.map((e) => ({ ...e, lane: run.lane }))];
+      if (message.ended_at != null) history.push({ run: run.id, lane: run.lane, ts: message.ended_at, k: 'end', t: clip(message.status) });
+      append(history, verdictEvents(run)); append(events, history);
+    }
+    for (const id of new Set(selected.runs.map((r) => r.meta.plan).filter(Boolean))) { const ev = planEvent(id); if (ev) events.push(ev); }
+    return { scope: selected.scope, runs, events, versions, revisions, prices: options.prices };
+  };
   return {
+    replay(files, now, beforeRead, onTranscript, onEvent) {
+      if (!files.size) { beforeRead([]); return new Map(); }
+      scan();
+      // 先只读归属元数据，体积检查通过后才打开正文、结果和事件流。
+      for (const id of names) {
+        const dir = path.join(root, id), file = path.join(dir, 'meta.json'), st = stat(file), meta = st && json(file);
+        if (meta) cache.set(id, { id, dir, meta, signatures: { meta: `${st.size}:${st.mtimeMs}` }, tail: newTail() });
+      }
+      const selected = [...cache.values()].filter((r) => files.has(r.meta.claude_session));
+      beforeRead(selected);
+      const bySession = new Map();
+      for (const run of selected) {
+        update(run.id);
+        const id = run.meta.claude_session;
+        if (!bySession.has(id)) bySession.set(id, []);
+        bySession.get(id).push(run);
+      }
+      const data = new Map();
+      for (const [id, file] of files) {
+        const records = readLines(file, newTail()).lines;
+        if (!onTranscript(id, file, records)) continue;
+        const available = [...(bySession.get(id) || [])], seen = new Set(available.map((r) => r.id));
+        // 祖先只为保持原来的车道归属补入，不为每个对话再遍历全部任务。
+        for (const run of available) {
+          const parent = cache.get(run.meta.parent);
+          if (parent && !seen.has(parent.id)) { seen.add(parent.id); available.push(parent); }
+        }
+        const params = { session: id, replay: id }, scope = selectScope(available, params, now);
+        data.set(id, addClaude(dataOf(scope, now, onEvent), scope.runs, params, now, { file, records }));
+        for (const run of scope.runs) delete run.activity;
+      }
+      return data;
+    },
     watch(enabled) {
       if (enabled && !watcher) {
         dirty = true;
@@ -418,19 +477,8 @@ export function createFeed(root, options = {}) {
       const roots = new Set(selected.runs.map((r) => laneOf(r, cache)));
       if (recent) available = () => [...cache.values()].filter((r) => names.includes(r.id) && (candidates.includes(r.id) || roots.has(laneOf(r, cache))));
       selected = selectScope(available(), params, now);
-      const runs = [], events = [], versions = {}, revisions = {};
-      for (const run of selected.runs) {
-        if (!updated.has(run.id)) update(run.id);
-        run.lane = laneOf(run, cache); readTail(run, now);
-        const message = runMessage(run, run.lane, options.prices); runs.push(message); versions[run.id] = run.tail.version;
-        revisions[run.id] = `${run.signatures.meta}:${run.signatures.result}`;
-        const history = [{ run: run.id, lane: run.lane, ts: message.started_at, k: 'start', t: clip(message.kind) }, ...run.tail.events.map((e) => ({ ...e, lane: run.lane }))];
-        if (message.ended_at != null) history.push({ run: run.id, lane: run.lane, ts: message.ended_at, k: 'end', t: clip(message.status) });
-        history.push(...verdictEvents(run));
-        events.push(...history);
-      }
-      for (const id of new Set(selected.runs.map((r) => r.meta.plan).filter(Boolean))) { const ev = planEvent(id); if (ev) events.push(ev); }
-      return addClaude({ scope: selected.scope, runs, events, versions, revisions, prices: options.prices }, selected.runs, params, now);
+      for (const run of selected.runs) if (!updated.has(run.id)) update(run.id);
+      return addClaude(dataOf(selected, now), selected.runs, params, now);
     },
   };
 }

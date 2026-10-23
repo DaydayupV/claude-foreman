@@ -20,7 +20,7 @@ for (const lang of ['zh', 'en']) test(`opencode 审查注入只读 foreman-revie
       { type: 'assistant', created: 'old', tokens: { input: 1000 }, cost: 1 }, { type: 'assistant' }] }); // 最后一条是出错、没有 tokens 的回复
   const c = output(await h.bridge(['config']));
   assert.equal(c.effective.modules.review.normal[0].agent, 'oc');
-  assert.deepEqual(c.agents_status.oc.capabilities.modes, ['run', 'review', 'discuss']);
+  assert.deepEqual(c.agents_status.oc.capabilities.modes, ['review', 'discuss']); // 没写 run_access，不列 run
   const r = output(await h.bridge(args(h, ['--brief', '-']), { env: { ...s.env, FOREMAN_LANG: lang }, input: '重点检查重复扣款' }));
   const calls = s.calls().filter((c) => c.operation === 'run'), call = calls[0];
   assert.equal(calls.length, 2); assert.equal(call.args[call.args.indexOf('--agent') + 1], 'foreman-review');

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { RUNS_ROOT, listRuns, findRun, readMeta, checkRunners, isRunning, runOutcome, resultValid } from './records.mjs';
 import { M, die, need, isObject, modelOf, agentTypeOf, replaceFile } from './util.mjs';
 import { acquireLock } from './locks.mjs';
-import { costOf, loadPrices } from './prices.mjs';
+import { costOf, loadPrices, modelIdentity } from './prices.mjs';
 
 const MODULES = ['discuss', 'review', 'run', 'image'];
 const VERDICTS = ['accept', 'partial', 'reject'];
@@ -26,9 +26,11 @@ function moduleOf(meta) {
   const parent = meta.mode === 'resume' && meta.parent && readMeta(path.join(RUNS_ROOT, meta.parent));
   return parent ? moduleOf(parent) : meta.mode;
 }
+// 同一个模型的各种写法（提供方前缀、小数版本号、官方别名）归成一行，规则和建计划时比较基础模型一致
 function baseModel(meta, result) {
-  return (meta.model || result?.model || meta.model_shown?.replace(/\s*(?:（[^）]*）|\([^)]*\))\s*$/, '') || 'unknown')
+  const name = (meta.model || result?.model || meta.model_shown?.replace(/\s*(?:（[^）]*）|\([^)]*\))\s*$/, '') || 'unknown')
     .split('/').at(-1).trim().toLowerCase().replace(/\s+/g, '-') || 'unknown';
+  return name === 'unknown' ? name : modelIdentity(name);
 }
 // 有计划时只按计划分组；旧记录还需同时对上任务组、Claude 会话和模块。
 function peerKey(meta, module) {

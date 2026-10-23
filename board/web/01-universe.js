@@ -40,6 +40,7 @@ function uUniverse(u) {
   for (const p of u.projects) U.projects.set(p.key, p);
   for (const s of u.sessions) uSession(s, true);
   U.agents = u.agents;
+  U.loadedAt ??= performance.now(); // 第一份完整星图到了：之后还找不到要飞进去的对话，就提示它不在图上
   U.version++;
 }
 

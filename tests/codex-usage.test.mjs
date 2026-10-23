@@ -25,8 +25,9 @@ function usageSession(t) {
     if (previousHome == null) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousHome;
   });
+  // 假 codex 跑在 TZ=UTC 的环境里（helpers.mjs），按它的日期找会话目录；用本地日期的话，UTC+8 的 0–8 点会差一天
   const startedAt = Date.now(), day = new Date(startedAt), pad = (n) => String(n).padStart(2, '0');
-  const file = path.join(h.env.CODEX_HOME, 'sessions', String(day.getFullYear()), pad(day.getMonth() + 1), pad(day.getDate()), `rollout-${sessionId}.jsonl`);
+  const file = path.join(h.env.CODEX_HOME, 'sessions', String(day.getUTCFullYear()), pad(day.getUTCMonth() + 1), pad(day.getUTCDate()), `rollout-${sessionId}.jsonl`);
   return {
     h, file, stats: () => codex.stats(sessionId, startedAt),
     write: (records) => write(file, records.map((r) => JSON.stringify(r)).join('\n') + '\n'),

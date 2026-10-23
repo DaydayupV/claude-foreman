@@ -72,6 +72,11 @@ function uniFrame(alone = true) {
     if (!(Q.get('focus') && uniFocus(L, Q.get('focus')))) uniFit(true);
   }
   // ?s=<对话>：打开链接时先看一眼宇宙，再飞进这个对话；刷新页面时直接回到对话。回放时对话是陆续出现的，等它出现了再进去
+  // 直播时星图到了两秒还找不到要飞进去的对话（超出时间窗口或显示上限）：说一声，不再等。回放里对话是陆续出现的，不算
+  if (FLY.pending && FLY.mode === 'universe' && !U.sessions.has(FLY.pending) && U.clock.mode !== 'replay'
+    && U.loadedAt != null && performance.now() - U.loadedAt > 2000) {
+    FLY.pending = null; showNotice(TEXT.focusMissing);
+  }
   if (FLY.pending && FLY.mode === 'universe' && U.sessions.has(FLY.pending)) {
     const id = FLY.pending, ms = performance.now();
     if (RELOADED) { FLY.pending = null; flyIn(id, true); }
@@ -88,6 +93,14 @@ function uniFrame(alone = true) {
 // 图片的原生拖动一律不要（CSS 管不到的浏览器靠这里）
 addEventListener('dragstart', (e) => { if (e.target instanceof HTMLImageElement) e.preventDefault(); });
 history.scrollRestoration = 'manual'; // 每次打开都停在星图和用量面板的位置
-connectUniverse();
-resolveLegacyFocus();
+// 页头下方的一行提示，12 秒后淡出
+function showNotice(text) {
+  const el = $('notice');
+  el.textContent = text; el.classList.remove('faded');
+  clearTimeout(showNotice.timer); showNotice.timer = setTimeout(() => el.classList.add('faded'), 12000);
+}
+if (LIVE_REPLAY_LINK) showNotice(TEXT.replayLive);
+// 内嵌快照（截图、测试用）：没有服务可连，直接显示快照里这个对话的看板，不走星图
+if (window.__BOARD_FIXTURE__) { FLY.mode = 'board'; connect(); }
+else { connectUniverse(); resolveLegacyFocus(); }
 wake();

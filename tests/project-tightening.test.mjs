@@ -96,6 +96,9 @@ test('用户的 Claude 格子可点名，项目关掉后点名和续接均拒绝
   const outside = output(await h.bridge(['run', '--cwd', h.cwd, '--level', 'simple', '--agent', 'codex', '--brief', '-', '--no-snapshot']));
   assert.equal(outside.outside_cell, true);
   assert.equal(json(path.join(h.runs, outside.run_id, 'meta.json')).outside_cell, true);
+  // 点名派出的任务续接时沿用上一轮的协作方，不用再写 --agent
+  const again = output(await h.bridge(['resume', '--run', outside.run_id, '--level', 'simple', '--brief', '-']));
+  assert.equal(again.agent, 'codex'); assert.equal(again.outside_cell, true);
   const first = output(await h.bridge(taskArgs(h, 'run', ['--no-snapshot'])));
   h.write('.claude/foreman.json', { modules: { run: { complex: 'claude code' } } });
   failed(await h.bridge(taskArgs(h, 'run', ['--agent', 'codex', '--no-snapshot'])), M.cellClosedByProject('modules.run.complex'));

@@ -10,18 +10,29 @@ const FLY_IN = 1.6, FLY_OUT = 1.4;
 // 老格式的地址（?group= / ?run= / ?replay=<组、任务或对话>，以前打开的是没有宇宙层的单个看板）：
 // 问一次服务这个范围里的任务是哪个对话派出的，打开后飞进那个对话
 function resolveLegacyFocus() {
-  const key = ['group', 'run', 'replay'].find((k) => Q.get(k) != null && Q.get(k) !== 'all');
+  const scopes = { group: Q.get('group'), run: Q.get('run'), replay: LEGACY_REPLAY };
+  // 只有回放的 all 是"全部"；group=all 是一个合法的组名
+  const key = ['group', 'run', 'replay'].find((k) => scopes[k] != null && !(k === 'replay' && scopes[k] === 'all'));
   if (!key || FLY.pending || U.demo) return;
-  const value = Q.get(key);
-  fetch(`snapshot?${new URLSearchParams({ [key]: value })}`).then((r) => (r.ok ? r.json() : null))
-    .then((s) => { const id = s?.runs?.find((r) => r.session)?.session || (key === 'replay' ? value : null); if (id && !FLY.pending && FLY.mode === 'universe') { FLY.pending = id; wake(); } })
+  const value = scopes[key], scope = LIVE_REPLAY_LINK && key === 'replay' ? (/^\d{8}-\d{6}-[a-z0-9]{4}$/.test(value) ? 'run' : 'group') : key;
+  fetch(`snapshot?${new URLSearchParams({ [scope]: value })}`).then((r) => (r.ok ? r.json() : null))
+    .then((s) => {
+      // 按地址点名的范围取对话：任务取它自己派出时所在的对话（跨对话续接的车道里，前面几轮可能在别的对话），
+      // 组取最近派出的那一份
+      const runs = (s?.runs || []).filter((r) => r.session);
+      const own = scope === 'run' ? runs.find((r) => r.id === value) : null;
+      const latest = runs.sort((a, b) => (b.started_at ?? 0) - (a.started_at ?? 0))[0];
+      const id = own?.session || latest?.session || (key === 'replay' ? value : null);
+      // 等结果的这一会儿用户已经自己动了页面，就不再自动飞进去
+      if (id && !FLY.touched && !FLY.pending && FLY.mode === 'universe') { FLY.pending = id; wake(); }
+    })
     .catch(() => {});
 }
 
 // 刷新页面时不再演一遍飞入
 const RELOADED = performance.getEntriesByType?.('navigation')[0]?.type === 'reload';
 // 打开链接后等自动飞入的那一小会儿里，用户点、滚、按键（包括按钮、侧栏、键盘缩放）都算自己在看了，不再自动飞入
-for (const type of ['pointerdown', 'wheel', 'keydown']) addEventListener(type, () => { if (FLY.mode === 'universe') FLY.pending = null; }, { capture: true, passive: true });
+for (const type of ['pointerdown', 'wheel', 'keydown']) addEventListener(type, () => { if (FLY.mode === 'universe') { FLY.pending = null; FLY.touched = true; } }, { capture: true, passive: true });
 const flyU = () => clamp01((performance.now() - FLY.t0) / 1000 / (FLY.mode === 'in' ? FLY_IN : FLY_OUT));
 
 // 切换的进度 v：0 在宇宙，1 在看板。飞入正着走，飞出（包括飞入途中退回）倒着走；缓动前后对称，所以退回时 v 不跳
@@ -92,6 +103,9 @@ function openBoardFor(s) {
 function setUrl(id) {
   const url = new URL(location.href);
   if (id) url.searchParams.set('s', id); else url.searchParams.delete('s');
+  // 老格式的范围参数只用来找第一次要飞进的对话，之后地址只记 s：不然飞出后一刷新又被它们带回那个对话
+  for (const key of ['group', 'run', 'session']) url.searchParams.delete(key);
+  if (!BOARD_REPLAY) url.searchParams.delete('replay');
   history.replaceState(null, '', url);
 }
 

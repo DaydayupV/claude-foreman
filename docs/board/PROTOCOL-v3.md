@@ -7,22 +7,37 @@ v2 shows one conversation. v3 adds a second level above it: a summary of every r
 ## 1. Starting
 
 ```
-node server.mjs [--runs <dir>] [--claude-dir <dir>] [--config <file>] [--window-h <hours>] [--port <n>] [--idle-min <m>] [--speed <N>] [--maxgap <sec>]
+node server.mjs [--runs <dir>] [--claude-dir <dir>] [--config <file>] [--window-h <hours>] [--port <n>] [--idle-min <m>]
+node server.mjs --replay <conversation | run id | group | all> [--speed <N>] [--maxgap <sec>] [--idle-min <m>] …
 ```
 
 - `--window-h`: how far back a conversation's last activity may be and still be listed. Default 24.
 - `--config`: foreman's config file, default `~/.claude/foreman/config.json`. Only `agents.<id>.type` and `agents.<id>.max_parallel` are read from it (see §6). Nothing else from that file, keys included, ever reaches the page.
-- The scope options of v1 (`--group`, `--run`, `--replay`) keep working for a single-conversation board. Without them the printed address opens the universe.
+- There is one front end: every printed address opens the universe (`level=all`). `--group` / `--run` only add a conversation to fly into once the page is open.
+- **Live server** (no `--replay`): the shared board, one per machine, holding `board.lock.json`. It is live only: `stream`, `snapshot` and `sessions` answer 400 to any `replay` or `from` parameter, so no request can make it build a replay.
+- **Debug replay server** (`--replay`, started by `board --replay`): a separate short-lived process. It never reads or writes `board.lock.json` or `board.err`, picks a random port and token, and exits after `--idle-min` minutes (default 10) without connections, also when nobody ever connected.
+  - The target resolves to conversations from run `meta.json`: a run id gives the conversation that dispatched it; a group gives every conversation with a run in that group; anything else is a conversation id. Only conversations whose transcript file still exists are kept (a replay is built from transcripts); none left is `NOT_FOUND`. `all` is every conversation within the window, up to the 200 limit of §3.
+  - It builds the replay once, before it listens: `universe.replay({ speed, maxgap, sessions })`, plus every conversation's detail. The size of everything the build will read is added up first: the transcripts, each selected run's `meta.json`, `result.json`, `events.jsonl` and `verdict.json`, and the plans those runs belong to. Above 256 MiB the build is refused (`REPLAY_TOO_LARGE`) before any transcript, result, event, verdict or plan file is opened; only run `meta.json` files and file sizes have been read by then.
+  - It also serves the v2 single-scope replays, `stream` / `snapshot` with `replay=<group or run id>` (and their own `speed`, `maxgap`), built on first request and cached; a scope with no runs is 404. The front-end demo uses these (§10).
+  - It then writes one JSON line to stdout: `{"url": "…?level=all&replay=all&lang=…[&s=<id>]"}`. `s` is added only when the target is a single conversation. A failure writes `{"error", "code", "bytes", "limit"}` instead and exits 1.
+  - It serves only `replay=all` requests (others 400), and 404 for conversations outside the replay.
+- The page learns which server it talks to from `window.__BOARD_MODE__` (`'live'` or `'replay'`), substituted into `index.html` like `__LANG__`.
+- Old links: on the live server, a `replay` / `from` in the address is dropped before connecting, and a one-line notice says replay is a debugging tool (`board --replay`).
+  - A `group`, `run` or `replay=<id>` value is resolved once through `snapshot?run=<id>` (values shaped like a run id) or `snapshot?group=<id>`, and the page flies into the matching conversation: the run's own conversation, or the latest run's conversation for a group.
+  - A value with no runs is taken as a conversation id; `replay=all` resolves nothing, while `group=all` is an ordinary group name.
+  - Any click, wheel or key before the answer arrives cancels the fly-in. After flying in, the address keeps only `s` (old scope parameters are removed, `replay=all` stays on the replay server).
+  - When the conversation is not on the map 2 s after the first universe arrives (outside the window or the 200 limit), a notice says so and the page stays on the universe.
 
 ## 2. Routes (all under `/<token>/`, security rules unchanged)
 
 | Route | Answer |
 |---|---|
-| `GET /sessions[?replay=all&t=<sec>]` | One JSON object, the universe: `{ "v": 3, "now", "window_h", "projects": [project…], "sessions": [summary…], "agents": [agent…] }`. With `replay=all`, the state at replay time `t` (§8). |
-| `GET /stream?level=all[&replay=all&speed=&maxgap=]` | Server-sent events for the universe (§7). |
-| `GET /stream?session=<id>[&replay=…]` | The detailed v2 stream for one conversation (§9). |
-| `GET /snapshot?session=<id>[&replay=…&t=]` | v1 snapshot, for the same scope. |
+| `GET /sessions[?replay=all&t=<sec>]` | One JSON object, the universe: `{ "v": 3, "now", "window_h", "projects": [project…], "sessions": [summary…], "agents": [agent…] }`. With `replay=all` (replay server only), the state at replay time `t` (§8). |
+| `GET /stream?level=all[&replay=all]` | Server-sent events for the universe (§7). `replay=all` only on the replay server. |
+| `GET /stream?session=<id>[&replay=all&from=]` | The detailed v2 stream for one conversation (§9). |
+| `GET /snapshot?session=<id>[&replay=all&t=]` | v1 snapshot, for the same scope. The live server also answers `snapshot?group=` / `snapshot?run=`, which the page uses once to resolve old links (§1). |
 | `GET /image?run=<run id>&n=<index>` | The `n`-th image of that run (§11). |
+| `GET /health` | `{ ok, v: 1, pid, build }`; the replay server adds `sessions`, the number of conversations in its replay. |
 
 ## 3. Conversation index
 
@@ -153,6 +168,7 @@ Only one detailed stream is expected per page. Opening another conversation clos
 
 `?demo=universe` makes the page play a built-in scenario (`web/02-uni-demo.js`) that produces the same `hello` / `universe` / `session` / `agents` messages as §7.
 - Summaries in the demo carry one extra field, `detail`: the v2 replay scope (for example `replay=skills-roles-1018`, from `fixtures/runs-multi`) that flying into that conversation opens. Real summaries don't have it.
+- The live server refuses every replay parameter, so the details only play when the page comes from a debug replay server over those fixture runs, for example `node server.mjs --replay all --runs <fixtures>/runs-multi --claude-dir <an empty folder>`, opened with `&demo=universe` added to its address. The empty `--claude-dir` keeps the universe replay from reading real transcripts.
 - `speed` applies, and the scenario loops every 210 s.
 - This exists so the universe can be built before §3–§8 are implemented. It is not a server feature, and its numbers are made up.
 

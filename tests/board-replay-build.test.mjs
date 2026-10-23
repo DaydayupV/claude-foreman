@@ -1,0 +1,155 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+import { createUniverse, universeAt } from '../foreman/skills/dispatch/scripts/board/universe.mjs';
+import { createFeed, buildReplay, snapshotAt } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
+import { loadPrices } from '../foreman/skills/dispatch/scripts/prices.mjs';
+
+const here = path.dirname(fileURLToPath(import.meta.url)), fixtures = path.join(here, 'fixtures/board');
+const now = Date.parse('2026-10-22T09:03:30Z'), prices = loadPrices(path.join(fixtures, 'prices-test.json'));
+const options = { runs: path.join(fixtures, 'universe/runs'), claudeDir: path.join(fixtures, 'universe/claude'), config: path.join(fixtures, 'universe/config.json'), prices };
+const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+
+function golden() {
+  const universe = createUniverse(options), indexed = universe.read(now), replay = universe.replay({ speed: 2, maxgap: 20 }, now);
+  const times = [];
+  for (const folder of fs.readdirSync(options.claudeDir)) {
+    const dir = path.join(options.claudeDir, folder);
+    if (!fs.statSync(dir).isDirectory()) continue;
+    for (const name of fs.readdirSync(dir).filter((name) => name.endsWith('.jsonl'))) {
+      for (const line of fs.readFileSync(path.join(dir, name), 'utf8').trim().split('\n')) {
+        try { times.push(Date.parse(JSON.parse(line).timestamp)); } catch { /* 样例中的坏行也保留原来的跳过语义。 */ }
+      }
+    }
+  }
+  const own = indexed.sessions.map(({ id }) => {
+    const data = createFeed(options.runs, { ...options, transcript: path.join(options.claudeDir, fs.readdirSync(options.claudeDir).find((dir) => fs.existsSync(path.join(options.claudeDir, dir, `${id}.jsonl`))), `${id}.jsonl`) }).read({ session: id, replay: id }, now);
+    return [id, buildReplay(data, { speed: 2, maxgap: 20 }, now)];
+  });
+  const runs = createFeed(path.join(fixtures, 'runs'), { prices }).read({ replay: 'skills-roles-1018' }, now);
+  const built = buildReplay(runs, { speed: 3, maxgap: 0.2 }, now);
+  return {
+    hello: hash(replay.hello), initial: hash(replay.initial), timeline: hash(replay.timeline),
+    clock: hash({ replay: replay.clock.replay, mapped: times.map((t) => [t, replay.clock.map(t)]) }),
+    detail: hash(indexed.sessions.map(({ id }) => [id, replay.detail(id)])),
+    buildReplay: hash({ own, runs: built }),
+    snapshots: hash({ universe: [0, 1, 20, 180, Infinity].map((t) => universeAt(replay, t)), runs: [0, 1, 20, Infinity].map((t) => snapshotAt(built, t)) }),
+  };
+}
+
+test('replay output matches SHA256 captured from the original fixture implementation', () => {
+  // 修改前以固定 now、价格表和两组原始 fixture 逐字段序列化取 SHA256。
+  assert.deepEqual(golden(), {
+    hello: '027f684c6918f02ca3628f3ca0fe41c9ba3204bd0845ab6775c654a0724e4b25',
+    initial: '616a456690c5e135fd70a2b9767f92f7d530100cccdb86e75e9693c1f7b0e236',
+    timeline: 'dd05a625e22f2694ae5b60f5e4c0803f7ac69a1d5db900f662be2cd87605a467',
+    clock: '894339a63063571c0eb39a67791ad95186278ce186ac0f01ad4a47bbcec7f7a5',
+    detail: '97fdacb19bec3ad255bab55f7094aa1dc29ef664b28d26a5a56e02c6183d5600',
+    buildReplay: 'b032f0169aa69d1a520fc0e9a686671bf03286c0610bd2c4ba980bd73c7c02a2',
+    snapshots: '413e3893826e4392ee7946a2bad889444d8f670e6dba3432b2a689b45b4db6ce',
+  });
+});
+
+function temp(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'board-replay-'));
+  const options = { runs: path.join(root, 'runs'), claudeDir: path.join(root, 'claude'), config: path.join(root, 'config.json'), prices };
+  fs.mkdirSync(options.runs); fs.mkdirSync(options.claudeDir); fs.writeFileSync(options.config, '{}');
+  t.after(() => { assert.equal(path.dirname(root), os.tmpdir()); fs.rmSync(root, { recursive: true, force: true }); });
+  const write = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value)); return file; };
+  const row = (at, text) => ({ type: 'user', timestamp: new Date(at).toISOString(), cwd: 'D:/demo', message: { content: text } });
+  const session = (id, rows = [row(now - 1000, id)], mtime = now) => {
+    const file = write(path.join(options.claudeDir, 'demo', `${id}.jsonl`), rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    fs.utimesSync(file, new Date(mtime), new Date(mtime)); return file;
+  };
+  const run = (id, session) => {
+    const dir = path.join(options.runs, id);
+    return [write(path.join(dir, 'meta.json'), { id, claude_session: session, kind: 'exec', agent: 'a', status: 'done', started_at: now - 10000, ended_at: now - 1000 }),
+      write(path.join(dir, 'result.json'), { status: 'done', last_message: id }),
+      write(path.join(dir, 'events.jsonl'), JSON.stringify({ type: 'api.queued', ts: now - 5000 }) + '\n')];
+  };
+  return { options, session, run, row };
+}
+
+test('sessions confines transcript/result/event reads and details reuse the frozen shared data', (t) => {
+  const f = temp(t), selected = [f.session('a'), ...f.run('task-a', 'a')], skipped = [f.session('b'), ...f.run('task-b', 'b')];
+  const reads = new Map(), read = fs.readFileSync, open = fs.openSync;
+  const record = (file) => { assert.ok(![skipped[0], ...skipped.slice(2)].includes(file), `unselected payload ${file}`); reads.set(file, (reads.get(file) || 0) + 1); };
+  t.mock.method(fs, 'readFileSync', function (file, ...args) { record(file); return read.call(this, file, ...args); });
+  t.mock.method(fs, 'openSync', function (file, ...args) { record(file); return open.call(this, file, ...args); });
+  const replay = createUniverse(f.options).replay({ sessions: ['a', 'a', 'missing'] }, now);
+  assert.deepEqual(universeAt(replay).sessions.map((s) => s.id), ['a']);
+  assert.equal(replay.detail('b'), null); assert.equal(replay.detail('missing'), null);
+  for (const file of selected) assert.equal(reads.get(file), 1, file);
+  const count = [...reads], detail = replay.detail('a');
+  assert.deepEqual([...reads], count);
+  assert.ok(detail.timeline.some((m) => m.data.run === 'task-a'));
+  fs.appendFileSync(selected[0], JSON.stringify(f.row(now, 'newly appended')) + '\n');
+  assert.deepEqual(replay.detail('a'), detail); assert.deepEqual([...reads], count);
+});
+
+test('shared replay opens each selected task meta/result/events once across conversations', (t) => {
+  const f = temp(t), files = [f.session('a'), f.session('b'), ...f.run('task-a', 'a'), ...f.run('task-b', 'b')];
+  const reads = new Map(), read = fs.readFileSync, open = fs.openSync;
+  const record = (file) => reads.set(file, (reads.get(file) || 0) + 1);
+  t.mock.method(fs, 'readFileSync', function (file, ...args) { record(file); return read.call(this, file, ...args); });
+  t.mock.method(fs, 'openSync', function (file, ...args) { record(file); return open.call(this, file, ...args); });
+  const replay = createUniverse(f.options).replay({}, now);
+  replay.detail('a'); replay.detail('b');
+  for (const file of files) assert.equal(reads.get(file), 1, file);
+});
+
+test('size preflight includes all selected files and rejects before opening any payload', (t) => {
+  const f = temp(t), files = [f.session('a'), ...f.run('task-a', 'a')], bytes = files.reduce((n, file) => n + fs.statSync(file).size, 0);
+  f.session('b', [f.row(now, 'x'.repeat(10000))]); f.run('task-b', 'b');
+  const read = fs.readFileSync, open = fs.openSync, payloads = new Set([files[0], ...files.slice(2)]);
+  const readMock = t.mock.method(fs, 'readFileSync', function (file, ...args) { assert.ok(!payloads.has(file)); return read.call(this, file, ...args); });
+  const openMock = t.mock.method(fs, 'openSync', function (file, ...args) { assert.ok(!payloads.has(file)); return open.call(this, file, ...args); });
+  assert.throws(() => createUniverse({ ...f.options, replayLimitBytes: bytes - 1 }).replay({ sessions: ['a'] }, now),
+    (err) => err.message === 'replay too large' && err.code === 'REPLAY_TOO_LARGE' && err.bytes === bytes && err.limit === bytes - 1);
+  readMock.mock.restore(); openMock.mock.restore();
+  assert.ok(createUniverse({ ...f.options, replayLimitBytes: bytes }).replay({ sessions: ['a'] }, now).detail('a'));
+  const universe = createUniverse({ ...f.options, replayLimitBytes: 1 });
+  t.mock.method(fs, 'readFileSync', function (file, ...args) { assert.ok(!payloads.has(file)); return read.call(this, file, ...args); });
+  t.mock.method(fs, 'openSync', function (file, ...args) { assert.ok(!payloads.has(file)); return open.call(this, file, ...args); });
+  assert.throws(() => universe.replay({ sessions: ['a'] }, now), (err) => err.code === 'REPLAY_TOO_LARGE' && err.bytes === bytes && err.limit === 1);
+  const empty = universe.replay({ sessions: [] }, now);
+  assert.equal(empty.timeline.length, 0); assert.equal(empty.detail('a'), null);
+});
+
+test('explicit sessions can name old files; omitted sessions preserve the live window', (t) => {
+  const f = temp(t), at = now - 2 * 86400000;
+  f.session('old', [f.row(at, 'old prompt')], at);
+  assert.equal(createUniverse(f.options).replay({}, now).detail('old'), null);
+  assert.ok(createUniverse(f.options).replay({ sessions: ['old'] }, now).detail('old').timeline.some((m) => m.data.t === 'old prompt'));
+});
+
+test('replay keeps message replacement/retraction, unpriced usage and expiry boundaries', (t) => {
+  const f = temp(t), base = now - 100000;
+  const answer = (dt, id, usage, model = 'claude-opus-5-5') => ({ type: 'assistant', timestamp: new Date(base + dt).toISOString(), cwd: 'D:/demo',
+    message: { id, model, content: [], stop_reason: 'end_turn', ...(usage ? { usage: { input_tokens: usage } } : {}) } });
+  f.session('s', [f.row(base, 'prompt'), answer(1000, 'same', 2), answer(2000, 'same', 5), answer(3000, 'same'), answer(4000, 'unknown', 1, 'unpriced'),
+    { ...answer(5000, 'tool'), message: { content: [{ type: 'tool_use', name: 'Read', id: 'read', input: {} }], stop_reason: 'end_turn' } }]);
+  f.session('later', [f.row(base + 2 * 3600000, 'later')]);
+  const replay = createUniverse({ ...f.options, windowH: 1 }).replay({ maxgap: Number.MAX_VALUE }, now);
+  const at = (dt) => universeAt(replay, (base + dt - replay.hello.replay.start) / 1000);
+  const s = (dt) => at(dt).sessions.find((s) => s.id === 's');
+  assert.equal(s(1000).usage.input, 2); assert.equal(s(2000).usage.input, 5); assert.equal(s(3000).usage.input, null);
+  assert.equal(s(4000).usage.input, 1); assert.equal(s(4000).cost_usd, null); assert.equal(s(4000).cost_partial, true);
+  assert.equal(s(604999).state, 'thinking'); assert.equal(s(605000).state, 'idle');
+  assert.equal(s(3604000).usage.input, 1); assert.equal(s(3604001).usage.input, null);
+  assert.ok(s(3605000)); assert.equal(s(3605001), undefined);
+  assert.equal(at(3605001).projects[0].older, 1);
+  assert.equal(replay.detail('s').timeline.filter((m) => m.event === 'ev' && m.data.k === 'usage').length, 1);
+});
+
+test('fractional clocks expire other sessions at the first existing step past a strict threshold', (t) => {
+  const f = temp(t), base = now - 10000;
+  f.session('a', [f.row(base, 'a')]);
+  f.session('b', [1000, 2000, 3000].map((dt) => f.row(base + dt, 'b')));
+  const replay = createUniverse({ ...f.options, windowH: 1 / 3600000 }).replay({ sessions: ['a', 'b'], maxgap: 0.0005 }, now);
+  assert.equal(replay.timeline.find((m) => m.event === 'session_gone' && m.data.id === 'a').time, base + 1.5);
+});

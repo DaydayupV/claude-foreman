@@ -32,7 +32,7 @@ Sent on connect, and again whenever its totals change. Live updates are coalesce
   "status": "running" | "idle",            // live: idle after 90 s without a new entry; replay: running until the window end
   "started_at": <first entry in the window>, "ended_at": null,
   "usage": { "input", "cached", "cache_write", "output" },   // sums over the window, see §3
-  "cost_usd": <number|null>, "cost_source": "api_equiv" | "unknown" }
+  "cost_usd": <number|null>, "cost_source": "api_price" | "unknown" }
 ```
 
 ### Events (`ev` with `lane: "cc"`, `run: "cc"`)
@@ -99,13 +99,12 @@ Runs with `meta.participant === 'host'`, which `submit` writes, belong to lane `
 
 `u.in` is input tokens that were not read from cache. `u.cached` is cache reads. `u.cache_write` is cache creation. `u.out` is output, reasoning included.
 - **Claude transcript:** `in = input_tokens`, `cached = cache_read_input_tokens`, `cache_write = cache_creation_input_tokens`, `out = output_tokens`.
-- **Codex / opencode / pi `result.json` `usage`:** `input_tokens` includes the cached part, so `in = input_tokens − cached_input_tokens`, `cached = cached_input_tokens`, `cache_write = null`, `out = output_tokens`.
+- **Codex / opencode / pi / API `result.json` `usage`:** `input_tokens` includes the cached reads and the cache writes, so `in = input_tokens − cached_input_tokens − cache_write_input_tokens`, `cached = cached_input_tokens`, `cache_write = cache_write_input_tokens` (opencode, pi and API runs record it when the provider reports cache writes; Codex records 0), `out = output_tokens`.
 
 The `run.usage` object uses the same four names (`input`, `cached`, `cache_write`, `output`) with the same meanings. This replaces v1's `{ input, cached, output }`.
 
 **Cost:**
-- `cost_usd` from `result.json`, when present, is kept with `cost_source: "reported"`.
-- Otherwise it is computed from `prices.json` with `cost_source: "api_equiv"`: `(in·input + cached·cached + cache_write·cache_write + out·output) / 1e6`, each rate in USD per million tokens. A missing `cache_write` rate falls back to `input`, and a missing `cached` rate falls back to `input`.
+- Every run is priced at the model's official API price from `prices.json` (`cost_source: "api_price"`), whatever the tool reported; a tool's own figure is kept only as `reported_cost_usd` in `result.json`. The price is `(in·input + cached·cached + cache_write·cache_write + out·output) / 1e6`, each rate in USD per million tokens. A missing `cache_write` rate falls back to `input`, and a missing `cached` rate falls back to `input`.
 - A model with no price entry: `cost_usd: null`, `cost_source: "unknown"`.
 
 `prices.json`:

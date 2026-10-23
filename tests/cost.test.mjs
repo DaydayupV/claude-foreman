@@ -255,3 +255,13 @@ test('各家对同一模型的写法都能匹配到价格，Claude 价格按官�
   ]) assert.equal(cached(model), price, model);
   for (const model of ['glm-5.3-flashx', 'minimax-m3.1-flash', 'other-claude-opus-5-5']) assert.equal(cached(model), null, model);
 });
+
+test('amounts carry no floating-point tail and repeated lookups reuse the compiled table', () => {
+  const table = { models: [{ match: ['m'], input: 1.1, cached: 0.11, output: 3.3 }] };
+  for (let i = 1; i <= 500; i++) {
+    const cost = priceFor('m', { input: i * 7, cached: i * 13, output: i * 3 }, table);
+    assert.ok(!/\.\d{11,}/.test(String(cost)), String(cost));
+  }
+  assert.equal(priceFor('provider/m-2026', { output: 1e6 }, table), 3.3);
+  assert.equal(priceFor('other', { output: 1 }, table), null);
+});
