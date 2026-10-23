@@ -243,6 +243,12 @@ async function piSession(run, schema, access) {
         if (block.type === 'thinking' && block.thinking) event({ type: 'item.completed', item: { type: 'reasoning', text: block.thinking } });
         if (block.type === 'text' && block.text) { last = block.text; event({ type: 'item.completed', item: { type: 'agent_message', text: block.text } }); }
       }
+      const u = ev.message.usage;
+      if (u) event({ type: 'step.usage', ...(ev.message.stopReason && ev.message.stopReason !== 'toolUse' ? { final: true } : {}), usage: {
+        input_tokens: (u.input || 0) + (u.cacheRead || 0) + (u.cacheWrite || 0), cached_input_tokens: u.cacheRead || 0,
+        ...(u.cacheWrite != null ? { cache_write_input_tokens: u.cacheWrite } : {}),
+        output_tokens: u.output || 0, reasoning_output_tokens: u.reasoning || 0,
+      } });
     } else if (ev.type === 'tool_execution_start') {
       const item = { id: `pi-${++items}`, tool: ev.toolName };
       started_tools.set(ev.toolCallId, { item, args: ev.args || {} });

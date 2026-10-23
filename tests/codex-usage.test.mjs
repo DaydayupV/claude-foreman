@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 import codex from '../foreman/skills/dispatch/scripts/adapters/codex-cli.mjs';
 import { sandbox, taskArgs, output, poll, write, MESSAGES } from './helpers.mjs';
@@ -27,10 +28,74 @@ function usageSession(t) {
   const startedAt = Date.now(), day = new Date(startedAt), pad = (n) => String(n).padStart(2, '0');
   const file = path.join(h.env.CODEX_HOME, 'sessions', String(day.getFullYear()), pad(day.getMonth() + 1), pad(day.getDate()), `rollout-${sessionId}.jsonl`);
   return {
-    h, stats: () => codex.stats(sessionId, startedAt),
+    h, file, stats: () => codex.stats(sessionId, startedAt),
     write: (records) => write(file, records.map((r) => JSON.stringify(r)).join('\n') + '\n'),
   };
 }
+
+test('运行中增量读请求用量，按 response_id 去重并过滤旧轮次，收尾读完 UTF-8 半行', async (t) => {
+  const s = usageSession(t), h = s.h;
+  const first = { input_tokens: 25459, cached_input_tokens: 24576, cache_write_input_tokens: 0, output_tokens: 561, reasoning_output_tokens: 282, total_tokens: 26020 };
+  const second = { input_tokens: 10, cached_input_tokens: 3, output_tokens: 20, reasoning_output_tokens: 5, total_tokens: 30 };
+  const third = { input_tokens: 10, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 7, reasoning_output_tokens: 2, total_tokens: 17 };
+  const sum = (...usages) => Object.fromEntries(Object.keys(first).map((key) => [key, usages.reduce((n, u) => n + (u[key] || 0), 0)]));
+  const record = (response_id, u, total = u, thread_id = sessionId) => ({ type: 'token_usage_record',
+    payload: { thread_id, response_id, usage: u, thread_token_usage: total, turn_token_usage: total } });
+  const scenario = h.scenario({ hold: true, session_id: sessionId, rollout: [
+    { ...record('resp_1', first), timestamp: '2000-01-01T00:00:00.000Z' },
+    record('resp_other', first, first, 'other-thread'), record(null, first),
+    record('resp_1', first), record('resp_1', first),
+  ] });
+  const running = h.startBridge(taskArgs(h, 'run', ['--no-snapshot']), { env: scenario.env }), meta = await h.running();
+  const steps = () => h.events(meta.id).filter((e) => e.type === 'step.usage');
+  await poll(() => steps().length, 'Codex 首次分段用量');
+  const { total_tokens, ...expected } = first;
+  assert.deepEqual(steps().map((e) => e.usage), [expected]);
+  assert.equal(h.records().find((m) => m.id === meta.id).status, 'running');
+  const timestamp = new Date().toISOString();
+  const tail = Buffer.from(JSON.stringify({ timestamp, ...record('resp_3', third, sum(first, second, third)), note: '合成' }));
+  const cut = tail.indexOf(Buffer.from('合')) + 1;
+  fs.appendFileSync(s.file, JSON.stringify({ timestamp, ...record('resp_1', first) }) + '\n'
+    + JSON.stringify({ timestamp, ...record('resp_2', second, sum(first, second), '') }) + '\n');
+  fs.appendFileSync(s.file, tail.subarray(0, cut));
+  await poll(() => steps().length === 2, 'Codex 第二次增量扫描');
+  fs.appendFileSync(s.file, tail.subarray(cut));
+  output(await h.bridge(['cancel', '--run', meta.id]));
+  const r = output(await running.done, 1);
+  assert.deepEqual(steps().map((e) => e.usage), [first, second, third].map(({ total_tokens, ...u }) => u));
+  assert.ok(steps().every((e) => Number.isFinite(Date.parse(e.ts))));
+  assert.deepEqual(r.usage, { input_tokens: 25479, cached_input_tokens: 24579, cache_write_input_tokens: 0, output_tokens: 588, reasoning_output_tokens: 289 });
+});
+
+test('快速结束时合并同次扫描的请求用量，再写 turn.completed 总量', async (t) => {
+  const h = sandbox(t), record = tokenUsageRecord(), next = tokenUsageRecord();
+  record.payload.response_id = 'resp_final';
+  next.payload.response_id = 'resp_second';
+  next.payload.usage = { input_tokens: 2, cached_input_tokens: 1, cache_write_input_tokens: 0, output_tokens: 3, reasoning_output_tokens: 1 };
+  const scenario = h.scenario({ session_id: sessionId, rollout: [record, next], rollout_no_newline: true, usage });
+  const r = output(await h.bridge(taskArgs(h, 'run', ['--no-snapshot']), { env: scenario.env }));
+  const events = h.events(r.run_id), index = events.findIndex((e) => e.type === 'step.usage');
+  assert.ok(index >= 0 && index < events.findIndex((e) => e.type === 'turn.completed'));
+  assert.deepEqual(events[index].usage, { input_tokens: 3, cached_input_tokens: 1, cache_write_input_tokens: 0, output_tokens: 4, reasoning_output_tokens: 1 });
+  assert.equal(events.filter((e) => e.type === 'step.usage').length, 1);
+  assert.deepEqual(r.usage, usage);
+});
+
+test('续接时跳过开工前的会话文件，只读新增请求用量', async (t) => {
+  const s = usageSession(t), h = s.h;
+  const initial = h.scenario({ session_id: sessionId, rollout: [tokenUsageRecord()] });
+  const parent = output(await h.bridge(taskArgs(h, 'run', ['--no-snapshot']), { env: initial.env }));
+  const old = tokenUsageRecord();
+  old.payload.response_id = 'resp_existing';
+  fs.appendFileSync(s.file, JSON.stringify({ timestamp: '2099-01-01T00:00:00.000Z', ...old }) + '\n');
+  const next = tokenUsageRecord(largerUsage);
+  next.payload.response_id = 'resp_new'; next.payload.usage = usage;
+  const scenario = h.scenario({ session_id: sessionId, append_rollout: true, rollout: [next] }, 'resume');
+  const r = output(await h.bridge(['resume', '--run', parent.run_id, '--level', 'complex', '--brief', '-'], { env: scenario.env }));
+  assert.deepEqual(h.events(r.run_id).filter((e) => e.type === 'step.usage').map((e) => e.usage), [usage]);
+  assert.equal(r.usage_scope, 'this_run');
+  assert.equal(r.usage.input_tokens, 120); assert.equal(r.usage.output_tokens, 40);
+});
 
 test('只有 token_count 时保留最新累计用量、最近请求和额度，没有用量记录时为 null', (t) => {
   const s = usageSession(t);

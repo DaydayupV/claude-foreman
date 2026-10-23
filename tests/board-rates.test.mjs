@@ -7,7 +7,7 @@ const source = readFileSync(new URL('../board/web/04-rates.js', import.meta.url)
 const stateSource = readFileSync(new URL('../board/web/01-state.js', import.meta.url), 'utf8');
 function board(mode = 'live') {
   const context = vm.createContext({ window: { __BOARD_FIXTURE__: true }, location: { search: '' }, URLSearchParams, wake: () => {} });
-  vm.runInContext(`${stateSource}\n${source}\nglobalThis.rates = { B, onRun, onEv, segments, rateAt, sparkline, laneStats, FINAL, FINAL_EV };`, context);
+  vm.runInContext(`${stateSource}\n${source}\nglobalThis.rates = { B, onRun, onEv, segments, rateSample, liveRate, rateAt, sparkline, laneStats, FINAL, FINAL_EV };`, context);
   context.rates.B.clock.mode = mode;
   return context.rates;
 }
@@ -57,6 +57,103 @@ test('pi character-only output and the segment cache stay unchanged', () => {
   near(b.laneStats(l, 10000).output, 80); near(b.laneStats(l, 10000).avg, 10);
 });
 
+test('turn totals defer to steps and reset per turn and run', () => {
+  const b = board('replay'), l = lane(b, 'steps', [[0, 'turn'],
+    [5000, 'usage', { u: { out: 40 } }], [10000, 'usage', { u: { out: 60 } }],
+    [15000, 'usage', { u: { out: 130 }, tot: 1 }], [16000, 'turn'],
+    [20000, 'usage', { u: { out: 50 } }], [25000, 'usage', { u: { out: 40 }, tot: 1 }],
+    [26000, 'turn'], [30000, 'usage', { u: { out: 70 }, tot: 1 }]]);
+  const segs = b.segments(l);
+  near(segs.filter((s) => s.a >= 10000 && s.b <= 15000).reduce((sum, s) => sum + s.tokens, 0), 0);
+  assert.ok(segs.every((s) => s.b !== 15000 && s.b !== 25000));
+  near(total(b, l), 220);
+  b.onRun({ id: 'resumed', lane: l.id, model: 'model-a', status: 'running', started_at: 31000 });
+  b.onEv({ run: 'resumed', ts: 35000, k: 'usage', u: { out: 100 }, tot: 1 });
+  near(total(b, l), 320);
+});
+
+test('resumed Codex cumulative totals do not add the parent output to this run', () => {
+  const b = board(), l = lane(b, 'parent', [[0, 'turn'], [10000, 'usage', { u: { out: 400 }, tot: 1 }]],
+    { status: 'done', ended_at: 10000, usage: { output: 400 } });
+  b.onRun({ id: 'resumed', lane: l.id, model: 'model-a', status: 'done', started_at: 20000, ended_at: 31000, usage: { output: 100 } });
+  for (const [ts, k, fields] of [[20000, 'turn'], [30000, 'usage', { u: { out: 100 } }], [31000, 'usage', { u: { out: 500 }, tot: 1 }]]) {
+    b.onEv({ run: 'resumed', ts, k, ...fields });
+  }
+  near(total(b, l), 500);
+  const sample = b.rateSample(l, l.runs, 40000);
+  near(sample.tokens, 500); near(sample.ms, 20000);
+});
+
+test('legacy totals use the final output cap and refresh when final usage arrives', () => {
+  for (const mode of ['live', 'replay']) {
+    const b = board(mode), l = lane(b, 'resumed', [[0, 'turn'],
+      [10000, 'usage', { u: { out: 900 }, tot: 1 }], [20000, 'usage', { u: { out: 1000 }, tot: 1 }]]);
+    near(total(b, l), 1000);
+    const cached = b.segments(l), final = { ended_at: 20000, usage: { output: 100 } };
+    if (mode === 'replay') b.FINAL.set(l.id, final);
+    else b.onRun({ ...b.B.runs.get(l.id), status: 'done', ...final });
+    near(total(b, l), 100); assert.notEqual(b.segments(l), cached);
+  }
+});
+
+test('a step arriving after a total replaces it without creating a millisecond sample', () => {
+  const b = board(), l = lane(b, 'late', [[0, 'turn'], [10000, 'usage', { u: { out: 900 }, tot: 1 }]]);
+  near(total(b, l), 900);
+  const cached = b.segments(l);
+  b.onEv({ run: l.id, ts: 10001, k: 'usage', u: { out: 100 } });
+  near(total(b, l), 100); assert.notEqual(b.segments(l), cached);
+  const sample = b.rateSample(l, l.runs, 20000);
+  near(sample.tokens, 100); near(sample.ms, 10001);
+});
+
+test('same-time and earlier usage merges into the preceding generation spans', () => {
+  for (const ts of [10000, 9000]) {
+    const b = board('replay'), l = lane(b, 'steps', []);
+    b.FINAL_EV.set(l.id, [[0, 'turn'], [1000, 'cmd'], [4000, 'cmd_done'],
+      [10000, 'usage', { u: { out: 70 } }], [ts, 'usage', { u: { out: 30 } }]]
+      .map(([ts, k, fields]) => ({ run: l.id, ts, k, ...fields })));
+    near(total(b, l), 100);
+    const sample = b.rateSample(l, l.runs, 10000);
+    near(sample.tokens, 100); near(sample.ms, 7000);
+    assert.ok(b.segments(l).every((s) => s.b <= 1000 || s.a >= 4000));
+  }
+  const b = board(), l = lane(b, 'empty', [[0, 'turn'],
+    [10000, 'usage', { u: { out: 0 } }], [10000, 'usage', { u: { out: 100 } }]]);
+  near(total(b, l), 100); near(b.rateSample(l, l.runs, 10000).ms, 10000);
+});
+
+test('end and total markers keep live estimates stopped even after late steps', () => {
+  for (const marker of ['end', 'tot']) {
+    const b = board(), l = lane(b, marker, [[0, 'turn'], [10000, 'usage', { u: { out: 100 } }],
+      [15000, 'usage', { u: { out: 100 }, [marker]: 1 }], [16000, 'usage', { u: { out: 20 } }]]);
+    assert.ok(b.rateSample(l, l.runs, 30000).tokens > 0);
+    near(b.liveRate(l, 30000), 0);
+    b.onEv({ run: l.id, ts: 31000, k: 'turn' });
+    assert.ok(b.liveRate(l, 50000) > 0);
+  }
+});
+
+test('live gaps resume after each step without overlapping usage, characters or commands', () => {
+  const b = board(), l = lane(b, 'steps', [[0, 'turn'], [1000, 'think', { n: 40 }],
+    [10000, 'usage', { u: { out: 100 } }]]);
+  near(b.rateAt(l, 15000), 10); assert.equal(b.laneStats(l, 15000).est, true);
+  near(total(b, l), 100); near(b.laneStats(l, 15000).output, 100);
+  b.onEv({ run: l.id, ts: 20000, k: 'usage', u: { out: 200 } });
+  near(b.rateAt(l, 15000), 15);
+  near(b.rateAt(l, 20000), 20);
+  near(b.rateAt(l, 25000), 17.5); near(total(b, l), 300);
+  b.onEv({ run: l.id, ts: 26000, k: 'cmd' });
+  near(b.rateAt(l, 40000), 0); assert.equal(b.laneStats(l, 40000).est, false);
+  b.onEv({ run: l.id, ts: 40000, k: 'cmd_done' });
+  near(b.rateAt(l, 50000), 15);
+  b.onEv({ run: l.id, ts: 51000, k: 'think', n: 0 });
+  near(b.rateAt(l, 52000), 0); assert.equal(b.laneStats(l, 52000).est, false);
+  const api = lane(b, 'api-gap', [[10000, 'usage', { u: { out: 100 } }]]);
+  near(b.rateAt(api, 30000), 0);
+  const cc = lane(b, 'cc', [[0, 'turn'], [10000, 'usage', { u: { out: 100 } }]]);
+  near(b.rateAt(cc, 30000), 0);
+});
+
 test('live Codex uses its own previous rounds without adding output or generation time', () => {
   const b = board(), l = lane(b, 'codex', rounds);
   lane(b, 'peer', [[10000, 'usage', { u: { out: 9999 } }]]);
@@ -94,7 +191,8 @@ test('replay, stopped runs, completed rounds and streaming rounds never use live
     { mode: 'replay', rows: rounds },
     { rows: rounds, fields: { status: 'done', ended_at: 35000, usage: { output: 500 } } },
     { rows: rounds, fields: { status: 'idle' } },
-    { rows: rounds.slice(0, -1) },
+    // 一轮结束看的是整轮总量（tot）；普通的分段用量之后模型还在生成，照样估
+    { rows: rounds.slice(0, -1).map(([ts, k, f]) => (k === 'usage' ? [ts, k, { ...f, tot: 1 }] : [ts, k, f])) },
     { rows: [...rounds, [40000, 'think', { n: 0 }], [45000, 'think', { n: 40 }]] },
   ];
   for (const { mode, rows, fields } of cases) {

@@ -5,6 +5,27 @@ import { ms, transient, stat, json, newTail, readLines, runMessage, laneOf, sett
   usageTotals, hostCost, costFields, createFeed, buildReplay, replayClock } from './feed.mjs';
 
 const keyOf = (cwd) => cwd ? cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() : '?';
+// git worktree 归到主仓库：Claude Code 自己开的 .claude/worktrees/<名字> 看路径就知道（删掉以后也认得）；
+// 别处的 worktree 看目录里的 .git 文件指向哪个仓库。每个目录只查一次
+const roots = new Map();
+export function projectRoot(cwd) {
+  if (!cwd) return null;
+  if (!roots.has(cwd)) {
+    // Windows 路径不分大小写，.CLAUDE\WORKTREES 也要认
+    let root = cwd.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]+(?:[\\/].*)?$/i)?.[1] ?? null;
+    // 网络路径（\\server\share）不去读：连不上时同步读会卡住整个看板服务
+    if (!root && !/^[\\/]{2}/.test(cwd)) {
+      try {
+        const gitdir = fs.readFileSync(path.join(cwd, '.git'), 'utf8').match(/^gitdir:\s*(.+?)\s*$/m)?.[1];
+        root = gitdir ? path.resolve(cwd, gitdir).match(/^(.*?)[\\/]\.git[\\/]worktrees[\\/][^\\/]+[\\/]?$/i)?.[1] ?? null : null;
+      } catch { /* .git 是目录（普通仓库）、不存在或读不了：就是这个目录本身 */ }
+    }
+    roots.set(cwd, root || cwd);
+  }
+  return roots.get(cwd);
+}
+// 对话的项目看它启动时的目录：之后 cd 到子目录或别的地方，记录里的 cwd 会跟着变，但对话还是那个项目的
+const projectOf = (session) => projectRoot(session.root ?? session.cwd);
 const list = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { if (!transient(e)) throw e; return []; } };
 const runKeys = ['id', 'lane', 'kind', 'agent', 'model', 'group', 'plan', 'seat', 'role', 'title', 'status', 'started_at', 'ended_at', 'queued'];
 const pickRun = (run) => Object.fromEntries(runKeys.map((key) => [key, run[key]]));
@@ -23,8 +44,8 @@ function entryOf(row) {
       u: { in: u.input_tokens ?? null, cached: u.cache_read_input_tokens ?? null, cache_write: u.cache_creation_input_tokens ?? null, out: u.output_tokens ?? null } } : null };
 }
 function newSession(id, file, folder) {
-  return { id, file, folder, tail: newTail(), title: null, firstPrompt: null, model: null, cwd: null,
-    started_at: null, last_at: null, last: null, promptAt: -Infinity, cwdAt: -Infinity, modelAt: -Infinity, tools: new Map(), usage: new Map() };
+  return { id, file, folder, tail: newTail(), title: null, firstPrompt: null, model: null, cwd: null, root: null,
+    started_at: null, last_at: null, last: null, promptAt: -Infinity, cwdAt: -Infinity, rootAt: Infinity, modelAt: -Infinity, tools: new Map(), usage: new Map() };
 }
 function addEntry(session, entry) {
   if (entry.title != null) session.title = entry.title;
@@ -33,6 +54,7 @@ function addEntry(session, entry) {
   session.started_at = Math.min(session.started_at ?? at, at);
   if (session.last_at == null || at >= session.last_at) { session.last_at = at; session.last = { type: entry.type, stop: entry.stop }; }
   if (entry.cwd && at >= session.cwdAt) { session.cwd = entry.cwd; session.cwdAt = at; }
+  if (entry.cwd && at < session.rootAt) { session.root = entry.cwd; session.rootAt = at; }
   if (entry.type === 'assistant' && entry.model && at >= session.modelAt) { session.model = entry.model; session.modelAt = at; }
   if (entry.prompt) { session.firstPrompt ??= entry.firstPrompt; session.promptAt = Math.max(session.promptAt, at); }
   for (const tool of entry.uses || []) session.tools.set(tool.id, { tool: tool.tool, since: at, header: tool.header });
@@ -73,7 +95,7 @@ function summaryOf(session, all, now, hours, prices) {
   const failure = own.filter((r) => r.status !== 'running' && r.status !== 'done' && r.ended_at != null && r.ended_at >= now - 1800000)
     .sort((a, b) => b.ended_at - a.ended_at)[0];
   const alert = failure && session.promptAt <= failure.ended_at ? { kind: failure.status, run: failure.id, model: failure.model, at: failure.ended_at } : null;
-  return { id: session.id, project: keyOf(session.cwd), cwd: session.cwd, title: session.title ?? session.firstPrompt, model: session.model,
+  return { id: session.id, project: keyOf(projectOf(session)), cwd: session.cwd, title: session.title ?? session.firstPrompt, model: session.model,
     ...stateOf(session, runs, now), started_at: session.started_at, last_at: session.last_at, runs, counts,
     // 还在跑的运行没有费用、有的模型不在价格表里：能算的照样加起来，另外标出不完整，不让整份变成未知
     usage: usageTotals(usage), cost_usd: cost, cost_partial: costs.some((c) => c.cost_usd == null), alert };
@@ -95,8 +117,8 @@ function projectsOf(sessions, older, folders) {
     if (!projects.has(key)) projects.set(key, { key, cwd, name: cwd ? cwd.replace(/\\/g, '/').replace(/\/+$/, '').split('/').at(-1) : '(unknown)', older: 0 });
     return projects.get(key);
   };
-  for (const session of sessions) put(session.cwd);
-  for (const [folder, count] of older) put(folders.get(folder)?.cwd ?? null).older += count;
+  for (const session of sessions) put(projectOf(session));
+  for (const [folder, count] of older) put(projectRoot(folders.get(folder)?.cwd ?? null)).older += count;
   return [...projects.values()];
 }
 function readCwd(file) {
@@ -192,7 +214,8 @@ export function createUniverse(options) {
         let session = sessions.get(id) || newSession(id, file, dir);
         session = readSession(session); sessions.set(id, session); found.add(id);
         const known = folders.get(dir);
-        if (session.cwd && (!known || session.cwdAt >= known.at)) folders.set(dir, { cwd: session.cwd, at: session.cwdAt });
+        // 文件夹按对话启动时的目录命名，旧对话的计数跟着启动目录走
+        if (session.root && (!known || session.cwdAt >= known.at)) folders.set(dir, { cwd: session.root, at: session.cwdAt });
         if (session.last_at != null && session.last_at < cutoff) older.set(dir, (older.get(dir) || 0) + 1);
         for (const [key, usage] of session.usage) if (usage.ts < cutoff) session.usage.delete(key);
       }
@@ -271,7 +294,7 @@ export function createUniverse(options) {
       const summaries = [...active.values()].filter((s) => s.last_at >= at - hours * 3600000)
         .sort((a, b) => b.last_at - a.last_at || a.id.localeCompare(b.id)).map((s) => summaryOf(s, [...running.values()], at, hours, options.prices));
       const next = { ...initial, now: at, projects: projectsOf([...active.values()].sort((a, b) => b.cwdAt - a.cwdAt), new Map(), new Map()).map((p) => ({ ...p,
-        older: (indexed.projects.find((old) => old.key === p.key)?.older ?? 0) + [...active.values()].filter((s) => keyOf(s.cwd) === p.key && s.last_at < at - hours * 3600000).length })),
+        older: (indexed.projects.find((old) => old.key === p.key)?.older ?? 0) + [...active.values()].filter((s) => keyOf(projectOf(s)) === p.key && s.last_at < at - hours * 3600000).length })),
         sessions: summaries, agents: agentSlots(config, [...running.values()]) };
       for (const message of universeChanges(previous, next)) timeline.push({ time: at, ...message });
       previous = next;

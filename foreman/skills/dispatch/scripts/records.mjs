@@ -190,6 +190,7 @@ function describeActivity(dir) {
   for (const l of lines) {
     let ev;
     try { ev = JSON.parse(l); } catch { continue; }
+    if (ev.type === 'step.usage') continue;
     last = ev;
     if (ev.item?.type !== 'command_execution') continue;
     if (ev.type === 'item.started') running.set(ev.item.id, ev.item.command);

@@ -5,8 +5,9 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { plannedSandbox as sandbox, baseConfig, piAgent, taskArgs, output, failed, read, seedRun, ROOT, PI, MESSAGES } from './helpers.mjs';
+import { plannedSandbox as sandbox, baseConfig, piAgent, taskArgs, output, failed, read, poll, seedRun, ROOT, PI, MESSAGES } from './helpers.mjs';
 import { report, discussion } from './fixtures/reports.mjs';
+import { normalize } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
 const M = MESSAGES.zh;
 const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
 const SCRIPTS = path.join(ROOT, 'foreman/skills/dispatch/scripts');
@@ -32,6 +33,29 @@ const tool = (name, args, { result = 'synthetic output', isError = false, files 
     { files, event: { type: 'tool_execution_end', toolCallId: id, toolName: name, result: { content: [{ type: 'text', text: result }] }, isError } }];
 };
 const policies = (file) => read(file).trim().split('\n').map((line) => JSON.parse(line));
+
+test('pi 只为带 usage 的 assistant message_end 写运行中分段用量', async (t) => {
+  const h = sandbox(t);
+  configure(h, {}, (c) => { c.modules.discuss.complex = [{ agent: 'pi' }]; });
+  const gate = path.join(h.cwd, 'release'), usage = { input: 3954, output: 37, cacheRead: 3, cacheWrite: 4, reasoning: 9, totalTokens: 3991 };
+  const s = h.scenario({ steps: [
+    { event: { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'working' }], usage, stopReason: 'toolUse' } } },
+    { event: { type: 'message_end', message: { role: 'user', content: [], usage } } },
+    { event: { type: 'message_end', message: { role: 'assistant', content: [] } } }, { wait_for: gate },
+  ] });
+  const running = h.startBridge(taskArgs(h, 'discuss', ['--agent', 'pi']), { env: s.env }), meta = await h.running();
+  const step = await poll(() => h.events(meta.id).find((e) => e.type === 'step.usage'), 'pi 分段用量');
+  assert.deepEqual(step.usage, { input_tokens: 3961, cached_input_tokens: 3, cache_write_input_tokens: 4, output_tokens: 37, reasoning_output_tokens: 9 });
+  assert.equal(step.final, undefined);
+  assert.ok(Number.isFinite(Date.parse(step.ts)));
+  assert.equal(output(await h.bridge(['status', '--run', meta.id])).activity.step, D.stepSaid('working'));
+  h.write('release', 'release');
+  const r = output(await running.done), steps = h.events(meta.id).filter((e) => e.type === 'step.usage');
+  assert.equal(steps.length, 2);
+  assert.equal(steps[1].final, true);
+  assert.equal(normalize(steps[1], { id: meta.id }, {})[0].end, 1);
+  assert.deepEqual(r.usage, { input_tokens: 3978, cached_input_tokens: 6, cache_write_input_tokens: 8, output_tokens: 42, reasoning_output_tokens: 11 });
+});
 
 test('配置：pi cli 的模型写法、run_access、推理强度和执行授权', async (t) => {
   const h = sandbox(t), c = configure(h, { model: 'nomodel' });
@@ -68,7 +92,7 @@ test('讨论：只读工具和守卫、隔离参数、事件翻译、用量和�
   assert.equal(r.session_id, 'synthetic-pi-session');
   assert.equal(r.changes.note, M.piNoChanges);
   const events = h.events(r.run_id);
-  assert.deepEqual(events.map((e) => e.item?.type ?? e.type), ['thread.started', 'command_execution', 'command_execution', 'reasoning', 'agent_message']);
+  assert.deepEqual(events.map((e) => e.item?.type ?? e.type), ['thread.started', 'command_execution', 'command_execution', 'reasoning', 'agent_message', 'step.usage']);
   assert.equal(events[1].item.command, 'read src/file.mjs');
   assert.equal(events[2].item.command, 'grep todo src');
   const logged = read(path.join(r.run_dir, 'pi.jsonl'));

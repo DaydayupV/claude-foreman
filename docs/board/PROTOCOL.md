@@ -99,7 +99,7 @@ Stream framing: `event: <name>\ndata: <one-line JSON>\n\n`. A comment line `: pi
 | `req` | `api.request` | `t`: model, `n`: attempt |
 | `queued` | `api.queued` | |
 | `retry` | `api.retry` | `t`: reason |
-| `usage` | `api.usage`, `turn.completed` with usage | `n`: total tokens, `t`: `<in>/<out>` |
+| `usage` | `api.usage`; `step.usage` (one model request: opencode `step_finish`, pi assistant `message_end`, Codex `token_usage_record` from its own session file, merged per 2 s scan); `turn.completed` with usage | `n`: total tokens, `t`: `<in>/<out>`, `u`: `{in, cached, cache_write, out}`; `tot: 1` on `turn.completed` (the turn's total, thread-cumulative on Codex resume: ignored when the turn has `step.usage`, else capped by the run's own output); `end: 1` when `step.usage` carries `final` (the request that ended the turn) |
 | `error` | `api.error`, `turn.failed`, `error`, `item.completed` / `error` | `t`: message |
 | `image` | `image.generated`, `image.viewed` | `t`: file name |
 

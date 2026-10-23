@@ -7,7 +7,7 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
-import { createUniverse, universeAt, universeChanges } from '../foreman/skills/dispatch/scripts/board/universe.mjs';
+import { createUniverse, universeAt, universeChanges, projectRoot } from '../foreman/skills/dispatch/scripts/board/universe.mjs';
 import { createFeed, selectScope, buildReplay } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
 import { loadPrices } from '../foreman/skills/dispatch/scripts/prices.mjs';
 
@@ -99,6 +99,21 @@ test('index limit, unknown projects, newest cwd, title fallback and timestamped 
   cwd.session('one', [row('user', now - 2, 'one'), { ...answer(now), cwd: undefined }]);
   cwd.session('two', [{ ...row('user', now - 1, 'two'), cwd: 'c:\\DEMO\\project\\' }]);
   assert.equal(createUniverse(cwd.options).read().projects[0].cwd, 'c:\\DEMO\\project\\');
+});
+
+test('projects follow where a conversation started (not later cd) and fold git worktrees into their repository', (t) => {
+  const f = temp(t), repo = path.join(f.root, 'repo'), other = path.join(f.root, 'elsewhere', 'wt');
+  f.write(path.join(other, '.git'), `gitdir: ${path.join(repo, '.git', 'worktrees', 'wt')}\n`);
+  f.session('cd', [{ ...row('user', now - 5, 'start'), cwd: repo }, { ...answer(now - 4), cwd: path.join(repo, 'board', 'web') }, { ...answer(now - 3), cwd: 'D:/Somewhere/Else' }]);
+  f.session('tree', [{ ...row('user', now - 2, 'tree'), cwd: path.join(repo, '.claude', 'worktrees', 'stress-a1') }], 'tree');
+  f.session('git', [{ ...row('user', now - 1, 'git'), cwd: other }], 'git');
+  f.session('old', [{ ...row('user', now - 2 * 86400000, 'old'), cwd: path.join(repo, '.claude', 'worktrees', 'gone') }], 'gone', now - 2 * 86400000);
+  f.session('upper', [{ ...row('user', now - 6, 'upper'), cwd: path.join(repo, '.CLAUDE', 'WORKTREES', 'deleted') }], 'upper');
+  const data = createUniverse(f.options).read(), key = repo.replace(/\\/g, '/').toLowerCase();
+  assert.deepEqual(data.sessions.map((s) => s.project), [key, key, key, key]);
+  assert.deepEqual(data.projects.map((p) => [p.name, p.older]), [['repo', 1]]);
+  // 网络路径不读 .git，原样当项目
+  assert.equal(projectRoot('\\\\offline-server\\share\\proj'), '\\\\offline-server\\share\\proj');
 });
 
 test('states follow waiting, dispatching, thinking, idle priority and injectable 90 s / 10 min limits', (t) => {

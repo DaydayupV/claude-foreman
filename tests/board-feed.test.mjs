@@ -71,6 +71,14 @@ test('streaming sources keep the latest count in each 400 ms window', () => {
   assert.ok(events.every((e, i) => !i || e.ts - events[i - 1].ts >= 400));
 });
 
+test('step usage matches API segments and only turn totals carry tot', () => {
+  const usage = { input_tokens: 100, cached_input_tokens: 20, cache_write_input_tokens: 30, output_tokens: 40, reasoning_output_tokens: 10 };
+  const api = normalize(raw('api.usage', { usage }), run, {})[0];
+  assert.deepEqual(normalize(raw('step.usage', { usage }), run, {}), [api]);
+  assert.deepEqual(normalize(raw('step.usage', { usage, final: true }), run, {}), [{ ...api, end: 1 }]);
+  assert.deepEqual(normalize(raw('turn.completed', { usage }), run, {}), [{ ...api, tot: 1 }]);
+});
+
 test('two discussion rounds share five root lanes; newest session and recent limits apply', () => {
   const root = new URL('./fixtures/board/runs/', import.meta.url);
   const runs = fs.readdirSync(root).filter((id) => /^\d{8}-\d{6}-/.test(id)).map((id) => ({ id, meta: JSON.parse(fs.readFileSync(new URL(`${id}/meta.json`, root), 'utf8')) }));

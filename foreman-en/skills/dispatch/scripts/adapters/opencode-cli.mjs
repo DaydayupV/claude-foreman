@@ -217,6 +217,14 @@ async function opencodeSession(run, schema, agentId) {
     if (ev.type === 'reasoning' || ev.type === 'text') {
       if (ev.type === 'text') last = ev.part?.text || '';
       event({ type: 'item.completed', item: { type: ev.type === 'reasoning' ? 'reasoning' : 'agent_message', text: ev.part?.text || '' } });
+    } else if (ev.type === 'step_finish' && ev.part?.tokens) {
+      const t = ev.part.tokens;
+      event({ type: 'step.usage', ...(ev.part.reason === 'stop' ? { final: true } : {}), usage: {
+        input_tokens: (t.input || 0) + (t.cache?.read || 0) + (t.cache?.write || 0),
+        cached_input_tokens: t.cache?.read || 0,
+        ...(t.cache?.write != null ? { cache_write_input_tokens: t.cache.write } : {}),
+        output_tokens: (t.output || 0) + (t.reasoning || 0), reasoning_output_tokens: t.reasoning || 0,
+      } });
     } else if (ev.type === 'tool_use') {
       const { tool, state = {} } = ev.part || {};
       const input = state.input || {};

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { sandbox, baseConfig, opencodeAgent, apiAgent, taskArgs, output, failed, json, read, write, poll, seedRun, ROOT, MESSAGES } from './helpers.mjs';
 import { report } from './fixtures/reports.mjs';
+import { normalize } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
 const M = MESSAGES.zh;
 const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
 const configure = (h, access = 'edit') => {
@@ -17,6 +18,42 @@ const runs = (s) => s.calls().filter((c) => c.operation === 'run');
 const tool = (name, input, files, status = 'completed') => ({ files,
   event: { type: 'tool_use', part: { tool: name, state: { status, input, output: 'synthetic output' } } } });
 const permissions = (access) => ({ '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow', edit: 'allow', ...(access === 'shell' ? { shell: 'allow' } : {}) });
+
+test('opencode step_finish 在运行中写分段用量，缺 tokens 时跳过并保留当前步骤', async (t) => {
+  const h = sandbox(t); configure(h); h.initGit();
+  const gate = path.join(h.cwd, 'release');
+  const s = h.scenario({ last_message: report, steps: [
+    { event: { type: 'text', part: { text: 'working' } } },
+    { event: { type: 'step_finish', part: { type: 'step-finish', reason: 'tool-calls', cost: 0.0037,
+      tokens: { input: 3005, output: 41, reasoning: 6421, cache: { read: 768, write: 0 } } } } },
+    { event: { type: 'step_finish', part: { reason: 'tool-calls' } } }, { wait_for: gate },
+  ], export_messages: [{ type: 'assistant', tokens: { input: 10, output: 5 }, cost: 0.125 }] });
+  const running = h.startBridge(taskArgs(h), { env: s.env }), meta = await h.running();
+  const step = await poll(() => h.events(meta.id).find((e) => e.type === 'step.usage'), 'opencode 分段用量');
+  assert.deepEqual(step.usage, { input_tokens: 3773, cached_input_tokens: 768, cache_write_input_tokens: 0, output_tokens: 6462, reasoning_output_tokens: 6421 });
+  assert.ok(Number.isFinite(Date.parse(step.ts)));
+  assert.equal(output(await h.bridge(['status', '--run', meta.id])).activity.step, D.stepSaid('working'));
+  write(gate, 'release');
+  const r = output(await running.done);
+  assert.equal(h.events(meta.id).filter((e) => e.type === 'step.usage').length, 1);
+  assert.deepEqual(r.usage, { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5, reasoning_output_tokens: 0 });
+  for (const flags of [[], ['--verbose']]) {
+    const watched = await h.bridge(['watch', '--run', meta.id, ...flags]);
+    assert.equal(watched.code, 0); assert.ok(!watched.stdout.includes('step.usage'));
+  }
+});
+
+test('opencode stop 用量标记 final 并归一化为 end', async (t) => {
+  const h = sandbox(t); configure(h); h.initGit();
+  for (const reason of ['stop', 'tool-calls']) {
+    const s = h.scenario({ last_message: report, step_finish: { reason, tokens: { input: 1, output: 2, reasoning: 3 } } }, reason);
+    const r = output(await h.bridge(taskArgs(h), { env: s.env }));
+    const step = h.events(r.run_id).find((e) => e.type === 'step.usage');
+    assert.deepEqual(step.usage, { input_tokens: 1, cached_input_tokens: 0, output_tokens: 5, reasoning_output_tokens: 3 });
+    assert.equal(step.final, reason === 'stop' ? true : undefined);
+    assert.equal(normalize(step, { id: r.run_id }, {})[0].end, reason === 'stop' ? 1 : undefined);
+  }
+});
 
 test('run_access 只校验 opencode，config 展示权限和执行能力', async (t) => {
   const h = sandbox(t), c = configure(h);

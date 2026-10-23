@@ -233,6 +233,7 @@ function createTimeline(meta, rel, { stream = false, write = (l) => process.stdo
   };
 
   const show = (ev) => {
+    if (ev.type === 'step.usage') return;
     if (ev.type?.startsWith('api.')) { showApi(ev); return; }
     // 开工前拍快照：大目录要几分钟，写出来免得画面一片空白
     // 组视图的正文只在拍的时候写这句，拍完就去掉，之后没有别的内容时写"进行中"；时间线里两句都留着

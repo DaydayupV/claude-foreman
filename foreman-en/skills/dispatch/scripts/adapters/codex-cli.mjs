@@ -158,8 +158,9 @@ function runCodex({ agent, args, cwd, prompt, runDir, timeoutMin, stallMin, sess
     const scanner = imageScanner({ images, previousSessionId: sessionId, emit: (ev) => { lastEventAt = Date.now(); event(ev); } });
     let viewedFile = sessionId && sessionFile(sessionId, startedAt), viewedCount = 0;
     const viewedState = { offset: 0 };
+    const usageState = { offset: 0, buffer: '', decoder: new TextDecoder('utf-8'), responses: new Set() };
     if (viewedFile) {
-      try { viewedState.offset = fs.statSync(viewedFile).size; } catch { /* 会话文件暂时读不到，稍后再扫 */ }
+      try { usageState.offset = viewedState.offset = fs.statSync(viewedFile).size; } catch { /* 会话文件暂时读不到，稍后再扫 */ }
     }
     const child = spawnCli(file, [...pre, ...args], {
       cwd, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32',
@@ -205,7 +206,11 @@ function runCodex({ agent, args, cwd, prompt, runDir, timeoutMin, stallMin, sess
     // 每个事件记下收到的时间，watch 回放时也能显示时间线
     const record = (line) => {
       const ev = handle(line);
-      if (ev) event(ev);
+      if (ev) {
+        // 最后一份请求用量可能还没轮到定时扫描，先写分段再写整轮总量。
+        if (ev.type === 'turn.completed') scanImages(true);
+        event(ev);
+      }
       else events.write(`${line}\n`);
     };
     child.stdout.setEncoding('utf8');
@@ -243,6 +248,11 @@ function runCodex({ agent, args, cwd, prompt, runDir, timeoutMin, stallMin, sess
         out.images = scanner.scan(sid);
         viewedFile ||= sessionFile(sid, startedAt);
         if (!viewedFile) return;
+        const usage = readStepUsage(viewedFile, startedAt, sid, usageState, final);
+        if (usage) {
+          lastEventAt = Date.now();
+          event({ type: 'step.usage', usage });
+        }
         const viewed = readViewedImages(viewedFile, startedAt, viewedState, final);
         for (const image of viewed.slice(viewedCount)) {
           lastEventAt = Date.now();
@@ -280,6 +290,42 @@ function runCodex({ agent, args, cwd, prompt, runDir, timeoutMin, stallMin, sess
     child.stdin.on('error', () => { /* codex 提前退出时忽略 EPIPE */ });
     child.stdin.end(prompt, 'utf8');
   });
+}
+
+// 会话里请求完成就有用量，独立保留偏移和半行，避免看图扫描漏掉或重读分段。
+function readStepUsage(file, since, sessionId, state, final) {
+  try {
+    const size = fs.statSync(file).size;
+    if (size > state.offset) {
+      const chunk = Buffer.alloc(Math.min(size - state.offset, 4 * 1024 * 1024)), fd = fs.openSync(file, 'r');
+      try {
+        for (let bytes; state.offset < size && (bytes = fs.readSync(fd, chunk, 0, Math.min(chunk.length, size - state.offset), state.offset)) > 0;) {
+          state.offset += bytes;
+          state.buffer += state.decoder.decode(chunk.subarray(0, bytes), { stream: true });
+        }
+      } finally { fs.closeSync(fd); }
+    }
+  } catch { /* 会话文件暂时读不到，下次扫描再试 */ }
+  const lines = state.buffer.split('\n');
+  state.buffer = lines.pop();
+  if (final && state.buffer) {
+    try { JSON.parse(state.buffer); lines.push(state.buffer); state.buffer = ''; } catch { /* 半行留待下次扫描 */ }
+  }
+  let usage = null;
+  for (const line of lines) {
+    let ev;
+    try { ev = JSON.parse(line); } catch { continue; }
+    const p = ev.payload;
+    if (ev.type !== 'token_usage_record' || !(Date.parse(ev.timestamp) >= since) || !p?.response_id || !p.usage
+      || (p.thread_id && p.thread_id !== sessionId) || state.responses.has(p.response_id)) continue;
+    state.responses.add(p.response_id);
+    const u = p.usage;
+    // 一次扫描可能收到多次请求，合成一份，避免毫秒级间隔抬高速度样本。
+    usage ??= { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 };
+    for (const key of ['input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens']) usage[key] += u[key] || 0;
+    if (u.cache_write_input_tokens != null) usage.cache_write_input_tokens = (usage.cache_write_input_tokens ?? 0) + u.cache_write_input_tokens;
+  }
+  return usage;
 }
 
 // Codex 的会话记录按开始日期放在 sessions/年/月/日 下；续接的会话还在最初那天的目录里，所以从开始日期往前找。

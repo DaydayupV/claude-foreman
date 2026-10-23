@@ -40,7 +40,8 @@ node server.mjs [--runs <dir>] [--claude-dir <dir>] [--config <file>] [--window-
 { "key", "cwd", "name", "older": <number of conversations of this project outside the window> }
 ```
 
-- `cwd`: the newest entry's `cwd` among the project's conversations. The same folder spelled with different case or slashes on Windows is one project.
+- A conversation belongs to the folder it started in: its earliest entry's `cwd`. Later entries follow the shell's `cd` and do not move it. A git worktree counts as its main repository: Claude Code's `<repo>/.claude/worktrees/<name>` is recognised from the path (any case, also after the worktree is deleted), other worktrees from the `gitdir:` line of their `.git` file. Network paths (`\\server\share`) are taken as they are, without reading `.git`.
+- `cwd`: that project folder, as spelled by the newest conversation in it. The same folder spelled with different case or slashes on Windows is one project.
 - `key`: that folder lower-cased, with `\` turned into `/` and no trailing slash.
 - `name`: the last path segment of `cwd`.
 - A conversation with no `cwd` at all goes into a project with key `?` and name `(unknown)`.

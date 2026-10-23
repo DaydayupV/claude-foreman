@@ -82,10 +82,11 @@ export function normalize(raw, run, state) {
   } else if (raw.type === 'api.request') emit('req', { t: raw.model, n: raw.attempt });
   else if (raw.type === 'api.queued') emit('queued');
   else if (raw.type === 'api.retry') emit('retry', { t: raw.reason });
-  else if (raw.type === 'api.usage' || raw.type === 'turn.completed' && raw.usage) {
+  else if (raw.type === 'api.usage' || raw.type === 'step.usage' || raw.type === 'turn.completed' && raw.usage) {
     const usage = raw.usage || {}, input = usage.input_tokens || 0, output = usage.output_tokens || 0;
     const u = usageOf(usage);
-    emit('usage', { n: input + output, t: `${input}/${output}`, u: { in: u.input, cached: u.cached, cache_write: u.cache_write, out: u.output } });
+    emit('usage', { n: input + output, t: `${input}/${output}`, u: { in: u.input, cached: u.cached, cache_write: u.cache_write, out: u.output },
+      ...(raw.type === 'turn.completed' ? { tot: 1 } : {}), ...(raw.type === 'step.usage' && raw.final ? { end: 1 } : {}) });
   } else if (['api.error', 'turn.failed', 'error'].includes(raw.type)) emit('error', { t: raw.message ?? raw.error?.message ?? '' });
   else if (raw.type === 'image.generated' || raw.type === 'image.viewed') emit('image', { t: path.win32.basename(raw.path || '') });
   return out;
