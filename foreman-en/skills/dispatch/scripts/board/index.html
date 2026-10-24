@@ -6200,7 +6200,7 @@ function wake() { if (!raf) raf = requestAnimationFrame(frame); }
 // 落地后先搭用量表，搭完了再搭终端区，两块不挤在同一帧里。
 // 用量表和终端区一次只新建约 12 毫秒的行（第一次搭、行一下多了很多时），没建完的下一帧接着建（again）。
 // 卡片没建完（world，06-cards.js 的 renderWorld 分帧建）时下一帧只接着建卡片，用量表和终端区不跟着重画
-const DOM = { version: -1, ui: -1, at: 0, deferred: false, again: false, world: false };
+const DOM = { version: -1, ui: -1, at: 0, deferred: false, again: false, world: false, warmed: false };
 function domStep(nowMs, landing) {
   if (!(UI.ver !== DOM.ui || B.version !== DOM.version && nowMs - DOM.at >= 250 || nowMs - DOM.at > 500 || DOM.again || DOM.deferred && !landing)) {
     return DOM.world ? { table: false, terms: false } : null;
@@ -6261,7 +6261,9 @@ function step() {
   if (!started) { started = true; VIEW.H = L.H; fitView(true); }
   const viewMoving = stepView(L.H);
   // 飞入落地以后镜头还在走的那一段也先不搭：第一次搭用量表和终端区要一两百毫秒，等画面停下再搭就看不出顿
-  const dom = domStep(nowMs, FLY.mode === 'in' || DOM.deferred === 'all' && viewMoving);
+  // 这一帧刚算了 Claude Code 车道的统计，面板就留到下一帧再刷新（连着最多留一次）
+  DOM.warmed = !DOM.warmed && warmBoard();
+  const dom = DOM.warmed ? null : domStep(nowMs, FLY.mode === 'in' || DOM.deferred === 'all' && viewMoving);
   if (dom) {
     loadFinals();
     renderTop(t);
@@ -6278,11 +6280,15 @@ function step() {
   wake();
 }
 
-// 飞入的前一段看板还没开始画、宇宙层一帧只要几毫秒：趁这时先把 Claude Code 车道的统计算好（长对话有两万条统计事件，
-// 第一次算要十几毫秒，之后有缓存），免得堆到看板第一帧里，和建卡片、第一次画画布挤在一起
+// 提前算好 Claude Code 车道的统计（长对话有两万条统计事件，每来一批新事件整段重算要十几毫秒，之后有缓存）：
+// 飞入的前一段看板还没开始画、宇宙层一帧只要几毫秒；平时是要刷新面板的那一帧之前，让两样不挤在同一帧。
+// 返回这一帧是不是算了
 function warmBoard() {
   const cc = B.laneById.get('cc');
-  if (cc?.rate_events.length) laneStats(cc, now());
+  // 分段缓存还是这一版的（04-rates.js 的 segments 用同样的版本号）就不用算；回放的版本号算法不同，不提前算
+  if (!cc?.rate_events.length || FINAL_EV.has('cc') || cc.segs && cc.segsAt === `${cc.ver || 0}|${cc.runs.length}`) return false;
+  laneStats(cc, now());
+  return true;
 }
 
 // 宇宙层：所有对话的星图（08-uni-*.js），飞进某个对话之前不画看板
