@@ -87,7 +87,7 @@ async function once() {
       }) : null;
       obs?.observe({ type: 'long-animation-frame' });
       const draw = drawFx; drawFx = (...a) => { if (landed == null) draws++; return draw(...a); };
-      // --breakdown：每帧里主要几步各花了多少（包一层计时），超过 50 ms 的帧记下来；--wrap a,b,c 换成只包这几个函数
+      // --breakdown：每帧里主要几步各花了多少（包一层计时），超过 50 ms 的帧记下来；--wrap a,b,c 换成只包这几个函数；--slow <毫秒> 改慢帧的门槛（默认 50）
       const parts = ${JSON.stringify(opt('wrap', '').split(',').filter(Boolean))}.length ? ${JSON.stringify(opt('wrap', '').split(',').filter(Boolean))} : ${has('breakdown')} ? ['stepFly', 'uniFrame', 'applyShare', 'smoothFrame', 'computeLayout', 'stepView', 'loadFinals', 'renderTop', 'renderWorld',
         'renderTable', 'renderTerms', 'placeWorld', 'drawFx', 'onRun', 'onEvents', 'onBacklog', 'replaceRateHistory',
         'step', 'stepReel', 'renderCrumb', 'flyFx', 'uniLayout', 'fitView', 'fitGoal', 'domStep', 'renderUniPanels', 'renderUniTop', 'drawUniverse', 'stepUni', 'drawFlyCore', 'burstOf'] : [];
@@ -99,7 +99,7 @@ async function once() {
       }
       const tick = (ts) => {
         frames.push([ts, ts - last]);
-        if (ts - last > 50) slow.push({ at: Math.round(ts - t0), gap: Math.round(ts - last), parts: Object.entries(spent).filter(([, ms]) => ms >= 2).sort((a, b) => b[1] - a[1]).map(([k, ms]) => k + ' ' + Math.round(ms)).join(', ') });
+        if (ts - last > ${Number(opt('slow', 50))}) slow.push({ at: Math.round(ts - t0), gap: Math.round(ts - last), parts: Object.entries(spent).filter(([, ms]) => ms >= 2).sort((a, b) => b[1] - a[1]).map(([k, ms]) => k + ' ' + Math.round(ms)).join(', ') });
         for (const k in spent) delete spent[k];
         last = ts; if (landed == null && FLY.mode === 'board') landed = ts; if (on) requestAnimationFrame(tick);
       };
@@ -108,11 +108,23 @@ async function once() {
       performance.mark('fly-start');
       flyIn(${JSON.stringify(session)});
       while (landed == null && performance.now() - t0 < 5000) await new Promise((r) => setTimeout(r, 50));
-      await new Promise((r) => setTimeout(r, 2000)); on = false; obs?.disconnect(); drawFx = draw;
+      await new Promise((r) => setTimeout(r, 2000));
+      // --steady <秒>：落地以后接着记这么多秒的平时帧（对话正在干活、事件不断到达时看有没有周期性的卡顿）
+      const st0 = performance.now(), steadyMs = ${Number(opt('steady', 0)) * 1000};
+      if (steadyMs) await new Promise((r) => setTimeout(r, steadyMs));
+      // --out：再飞回宇宙，记飞出过程和回到宇宙以后 1 秒
+      let out0 = null, back = null;
+      if (${has('out')}) {
+        out0 = performance.now(); flyOut();
+        while (FLY.mode !== 'universe' && performance.now() - out0 < 5000) await new Promise((r) => setTimeout(r, 50));
+        back = performance.now(); await new Promise((r) => setTimeout(r, 1000));
+      }
+      on = false; obs?.disconnect(); drawFx = draw;
       for (const [name, fn] of Object.entries(keep)) globalThis[name] = fn;
       const end = landed ?? Infinity, cut = (a, b) => frames.filter(([ts]) => ts > a && ts <= b).map(([, d]) => d);
+      const outFrames = out0 == null ? null : { fly: cut(out0, back), after: cut(back, back + 1000), ms: Math.round(back - out0) };
       const gl = document.createElement('canvas').getContext('webgl'), info = gl?.getExtension('WEBGL_debug_renderer_info');
-      return { fly: cut(t0, end), after: cut(end, end + 2000), flyMs: Math.round(end - t0), draws, slow, renderer: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : '?',
+      return { fly: cut(t0, end), after: cut(end, end + 2000), steady: steadyMs ? cut(st0, st0 + steadyMs) : null, out: outFrames, flyMs: Math.round(end - t0), draws, slow, renderer: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : '?',
         flyLoaf: loaf.filter((l) => l.at < end), afterLoaf: loaf.filter((l) => l.at >= end), lanes: B.lanes.length, runs: B.runs.size, mode: FLY.mode };
     })()`);
     if (has('profile')) {
@@ -137,17 +149,18 @@ async function once() {
   }
 }
 
-// --trace：从飞入开始的 4 秒里，页面主线程上超过 40 ms 的任务各由哪些事件组成（同名事件的时长加总，嵌套的会重复算），
+const STEADY_US = Number(opt('steady', 0)) * 1e6;
+// --trace：从飞入开始的 4 秒里（加上 --steady 的时长），页面主线程上超过 40 ms 的任务各由哪些事件组成（同名事件的时长加总，嵌套的会重复算），
 // 以及 GPU 进程主线程上的任务
 function traceSummary(events) {
   const names = new Map();
   for (const e of events) if (e.ph === 'M' && e.name === 'thread_name') names.set(`${e.pid}:${e.tid}`, e.args.name);
   const start = events.find((e) => e.name === 'fly-start')?.ts;
   if (start == null) return { error: 'no fly-start mark in the trace' };
-  const inWindow = events.filter((e) => e.ph === 'X' && e.ts >= start && e.ts < start + 4e6);
+  const inWindow = events.filter((e) => e.ph === 'X' && e.ts >= start && e.ts < start + 4e6 + STEADY_US);
   const byThread = (name) => { const count = new Map(); for (const e of inWindow) { const t = names.get(`${e.pid}:${e.tid}`); if (t === name) count.set(`${e.pid}:${e.tid}`, (count.get(`${e.pid}:${e.tid}`) || 0) + 1); } return [...count].sort((a, b) => b[1] - a[1])[0]?.[0]; };
   const main = byThread('CrRendererMain'), gpu = byThread('CrGpuMain'), on = (key) => inWindow.filter((e) => `${e.pid}:${e.tid}` === key);
-  const tasks = on(main).filter((e) => e.name === 'ThreadControllerImpl::RunTask' && e.dur > 40000);
+  const tasks = on(main).filter((e) => e.name === 'ThreadControllerImpl::RunTask' && e.dur > Number(opt('slow', 40)) * 1000);
   // V8 的采样（ProfileChunk）：页面主线程那份，算出每个样本的时刻，落在长任务里的按函数自身耗时合计
   const samples = [], pid = Number(main?.split(':')[0]), tid = Number(main?.split(':')[1]);
   const profile = events.find((e) => e.name === 'Profile' && e.pid === pid && e.tid === tid);
@@ -187,6 +200,8 @@ try {
     console.log(`#${i} ${r.lanes} lanes ${r.runs} runs → ${r.mode} after ${r.flyMs} ms; board canvas drawn ${r.draws} times during the fly; ${r.renderer}`);
     console.log(`   fly-in  ${JSON.stringify(fly)}  long frames ${r.flyLoaf.length}: ${scripts(r.flyLoaf).join(', ') || '—'}`);
     console.log(`   landed  ${JSON.stringify(after)}  long frames ${r.afterLoaf.length}: ${scripts(r.afterLoaf).join(', ') || '—'}`);
+    if (r.steady) { const g = r.steady; console.log(`   steady  ${JSON.stringify(stats(g))} over33 ${g.filter((x) => x > 33).length}`); }
+    if (r.out) { console.log(`   fly-out ${JSON.stringify(stats(r.out.fly))} in ${r.out.ms} ms`); console.log(`   back    ${JSON.stringify(stats(r.out.after))}`); }
     if (r.top) console.log(r.top.map(([k, ms]) => `   ${ms.toFixed(1).padStart(7)} ms  ${k}`).join('\n'));
     for (const s of r.slow) console.log(`   slow frame at +${s.at} ms (${s.gap} ms): ${s.parts || 'no wrapped step over 2 ms'}`);
     if (r.trace) { for (const line of r.trace.long || [r.trace.error]) console.log(`   main-thread task ${line}`); console.log(`   ${r.trace.gpu}`); }
