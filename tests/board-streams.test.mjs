@@ -35,7 +35,7 @@ function board({ search = '', replay = false, lang = 'zh', visibility = 'visible
     return elements.get(id);
   };
   const document = { visibilityState: visibility, documentElement: {}, querySelector: () => null,
-    addEventListener: (type, fn) => listeners.set(type, fn) };
+    addEventListener: (type, fn) => listeners.set(type, fn), body: { classList: { add() {}, remove() {}, toggle() {}, contains: () => false } } };
   const camera = () => ({ k: 1, tx: 0, ty: 0, auto: true });
   const context = vm.createContext({ window: { __LANG__: lang, __BOARD_MODE__: replay ? 'replay' : 'live' },
     location: new URL(`http://localhost/board/${search}`), history: { replaceState() {} }, URL, URLSearchParams, EventSource, document,
@@ -62,15 +62,15 @@ function board({ search = '', replay = false, lang = 'zh', visibility = 'visible
     UI: { cards: new Map(), outs: new Map(), heads: new Map(), tableRows: new Map(), open: new Set(), collapsed: new Set() },
     PANEL: { cols: new Map(), fold: new Map(), doneLines: new Map() }, UNI_ROWS: new Map(), REEL: { born: new Map() }, SMOOTH: { vals: new Map() },
     FINAL: new Map(), FINAL_EV: new Map(), SURGE: new Map(), loadFinals() {},
-    FX: { layout: null }, UV: camera(), VIEW: camera(),
+    FX: { layout: null, cv: el('fx'), ov: { cv: el('fxo') } }, UFX: { cv: el('ufx') }, UV: camera(), VIEW: camera(),
     viewEl: { getBoundingClientRect: () => ({ width: 1000, height: 800 }) },
     uniLayout: () => ({ galaxies: [...api.U.sessions.values()].map((s) => ({ s, x: 10, y: 20 })) }),
     computeLayout: () => ({ H: 1000, core: { cx: 100, cy: 100 } }), fitGoal: camera, uniFitGoal: camera,
     clamp01: (v) => Math.max(0, Math.min(1, v)), ease: (v) => v,
   });
-  vm.runInContext(`${source}\nglobalThis.api = { B, U, FLY, UI, TEXT, connect, disconnect, connectUniverse, disconnectUniverse, flyIn, flyOut, stepFly, uHello, uUniverse };`, context);
+  vm.runInContext(`${source}\nglobalThis.api = { B, U, FLY, UI, TEXT, connect, disconnect, connectUniverse, disconnectUniverse, flyIn, flyOut, stepFly, uHello, uUniverse, applyShare };`, context);
   api = context.api;
-  return { ...api, streams, workers, active, notices, requests, el, intervals, get channel() { return channel; }, get peak() { return peak; }, get demoStarts() { return demoStarts; },
+  return { ...api, streams, workers, active, notices, requests, el, intervals, UNI_ROWS: context.UNI_ROWS, get channel() { return channel; }, get peak() { return peak; }, get demoStarts() { return demoStarts; },
     seed() {
       api.uHello(replay ? { ...hello, mode: 'replay', replay: { start: 1000, end: 1000000, speed: 2 } } : hello);
       api.uUniverse(universe);
@@ -108,6 +108,30 @@ test('直播从飞入开始只留看板流，飞出开始就只留宇宙流，�
   const restored = b.U.es;
   b.advance(1400); b.stepFly();
   assert.equal(b.FLY.mode, 'universe'); assert.deepEqual(b.active(), [restored]); assert.equal(b.peak, 1);
+});
+
+test('底部表格在切换进度 0.3 处换内容：飞入时对话列表留着淡出，过了 0.3 才清掉；模型列表搭起后再淡入', () => {
+  const b = board(); b.seed();
+  const usage = b.el('usage');
+  usage.dataset.mode = 'uni'; b.UNI_ROWS.set(session.id, {});
+  b.flyIn(session.id);
+  assert.equal(usage.dataset.mode, 'uni'); assert.equal(b.UNI_ROWS.size, 1);
+  // 还在宇宙一侧：对话列表淡出（ease 在测试里是直线）
+  b.applyShare({ v: 0.21, uni: 1, fx: 0, rest: 0 });
+  assert.equal(usage.style.opacity, '0.500'); assert.equal(usage.dataset.mode, 'uni');
+  // 过了 0.3：对话列表清掉，模型列表还没搭时看不见
+  b.applyShare({ v: 0.5, uni: 0.6, fx: 1, rest: 0.5 });
+  assert.equal(usage.dataset.mode, undefined); assert.equal(b.UNI_ROWS.size, 0); assert.equal(usage.style.opacity, '0.000');
+  b.applyShare({ v: 1, uni: 0, fx: 1, rest: 1 });
+  assert.equal(usage.style.opacity, '0.000');
+  // 模型列表搭起以后 0.3 秒淡入
+  b.UI.tableAt = 0; b.advance(150);
+  b.applyShare({ v: 1, uni: 0, fx: 1, rest: 1 }); assert.equal(usage.style.opacity, '0.500');
+  b.advance(150);
+  b.applyShare({ v: 1, uni: 0, fx: 1, rest: 1 }); assert.equal(usage.style.opacity, '');
+  // 飞出到宇宙一侧时（v 不到 0.3）是对话列表淡入，不再套模型列表的淡入
+  usage.dataset.mode = 'uni';
+  b.applyShare({ v: 0.12, uni: 1, fx: 0, rest: 0 }); assert.equal(usage.style.opacity, '');
 });
 
 test('飞入中途退回也立即切回一条宇宙流', () => {
