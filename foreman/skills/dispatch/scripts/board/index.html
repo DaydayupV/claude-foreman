@@ -5588,7 +5588,11 @@ function applyShare(share) {
   const usage = $('usage');
   if (share.v >= 0.3 && usage.dataset.mode === 'uni') { usage.replaceChildren(); delete usage.dataset.mode; UNI_ROWS.clear(); }
   const built = usage.dataset.mode === 'uni' ? 1 : UI.tableAt == null ? 0 : ramp(performance.now() - UI.tableAt, 0, 300);
-  set(usage, share.v < 0.3 ? 1 - ramp(share.v, 0.12, 0.3) : share.rest * built);
+  const shown = share.v < 0.3 ? 1 - ramp(share.v, 0.12, 0.3) : share.rest * built;
+  set(usage, shown);
+  // "展开全部"按钮挂在表格外面（07-table.js 的 tableToggle），跟着表格一起淡出淡入
+  const tall = $('tall');
+  if (tall) set(tall, shown);
   // 完全看不见的那一层不参与合成
   const vis = (el, on) => { const v = on ? '' : 'hidden'; if (el.style.visibility !== v) el.style.visibility = v; };
   vis(UFX.cv, share.uni > 0); vis(FX.cv, share.fx > 0); vis(FX.ov.cv, share.rest > 0);
