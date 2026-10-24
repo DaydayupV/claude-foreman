@@ -136,16 +136,18 @@ export function reviewPatchText(scope, { budget, readsFiles }) {
   // 二进制文件只有几行补丁头，照旧放进来（和改动前一样）
   const patches = scope.parts.map((part) => (part.generated ? '' : part.patch));
   let omitted = 0;
-  if (readsFiles && rows.join('\n').length + patches.join('').length > budget) {
+  // 历史提交的新侧不是当前工作区，不能靠行号读回同一版本。
+  if (readsFiles && ['uncommitted', 'base'].includes(scope.kind) && rows.join('\n').length + patches.join('').length > budget) {
     const hints = scope.files.map((f, i) => {
       if (!patches[i] || f.binary || f.too_large) return '';
       if (f.status === 'D') return M.reviewFileDeletedOmitted;
       if (f.status === 'A') return M.reviewFileNewOmitted;
-      const ranges = [...patches[i].matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm)].map((m) => {
+      const ranges = [...patches[i].matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm)].filter((m) => Number(m[2] ?? 1) > 0).map((m) => {
         const start = Number(m[1]), count = Number(m[2] ?? 1);
         return count > 1 ? `${start}-${start + count - 1}` : `${start}`;
       });
-      return M.reviewFileRanges(ranges.slice(0, 20).join(', ') + (ranges.length > 20 ? (LANGUAGE === 'en' ? ' and more' : ' 等') : ''));
+      return ranges.length ? M.reviewFileRanges(ranges.slice(0, 20).join(', ') + (ranges.length > 20 ? (LANGUAGE === 'en' ? ' and more' : ' 等') : ''))
+        : M.reviewFileOmitted;
     });
     // 先给未放入的文件预留提示位置，免得后面的行号说明把已放补丁挤过上限。
     let chars = rows.join('\n').length + hints.join('').length;

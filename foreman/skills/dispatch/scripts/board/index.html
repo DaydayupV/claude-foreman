@@ -1079,7 +1079,7 @@ const TEXTS = {
     focusMissing: '这个地址指向的对话不在当前星图里（超出了时间窗口或显示上限），没法飞进去',
     legacyNotFound: (kind, value) => `记录里找不到这个地址里的${kind === 'run' ? '任务' : '组'}：${value}`,
     serverLost: '连不上看板服务了（它可能已经退出，或者换了新的地址）：在 Claude Code 里运行 /foreman:watch，或者让它重新给看板链接',
-    streamStuck: '连不上看板服务。同一个浏览器里开着很多看板标签页时会这样：关掉几个看板标签页，再刷新这一页',
+    streamStuck: '连不上看板服务：可能同一个浏览器里开着很多看板标签页（关掉几个，再刷新这一页），也可能看板服务已经退出（在 Claude Code 里运行 /foreman:watch，或者让它重新给看板链接）',
     plan: (module, cell, seats) => `派发计划 · ${module} ${cell} · ${seats} 席`,
     gateWaiting: '外部席准入 · 等 Claude Code 席先交报告',
     gateOpen: '已开闸',
@@ -1123,7 +1123,7 @@ const TEXTS = {
     focusMissing: "The conversation this link points to isn't on the current map (outside the time window or the display limit), so the page can't fly into it",
     legacyNotFound: (kind, value) => `No records were found for the ${kind === 'run' ? 'run' : 'group'} in this link: ${value}`,
     serverLost: 'Lost the connection to the board server (it may have exited or moved to a new address): run /foreman-en:watch in Claude Code, or ask it for the board link again',
-    streamStuck: "Can't reach the board service. This happens when many board tabs are open in the same browser: close a few board tabs, then reload this page",
+    streamStuck: "Can't reach the board service: too many board tabs may be open in this browser (close a few, then reload this page), or the board service may have exited (run /foreman-en:watch in Claude Code, or ask it for the board link again)",
     plan: (module, cell, seats) => `dispatch plan · ${module} ${cell} · ${seats} ${seats === 1 ? 'seat' : 'seats'}`,
     gateWaiting: 'external seats wait · Claude Code seat reports first',
     gateOpen: 'gate open',
@@ -1272,6 +1272,7 @@ function onBacklog(b) {
       lane.last = lane.events.reduce((last, ev) => (!last || ev.ts >= last.ts ? ev : last), null);
     }
     B.feed = B.feed.filter(keep); B.life = B.life.filter(keep);
+    if (b.run === 'cc') B.prompts = [];
     B.version++;
   }
   b.events.forEach((ev) => onEv(ev, !b.rate_events));
@@ -1318,18 +1319,20 @@ function scopeQuery() {
   return p;
 }
 
-const STREAM_STUCK_MS = 8000;
+const STREAM_STUCK_MS = 8000, STREAM_ASK_MS = 2000;
 let streamsReleased = false;
 // 同主机连接被别的标签页占满时不一定触发 error，初次连接和断线重连都要计时。
 function watchStream(state, es) {
   const wait = () => {
+    // 2 秒还没连上：多半是同一浏览器的连接被别的看板标签页占满了，请后台的那些让出来（09-main.js）
+    if (es.readyState === 0 && state.askTimer == null) state.askTimer = setTimeout(() => { state.askTimer = null; if (es.readyState === 0 && typeof askForStream === 'function') askForStream(); }, STREAM_ASK_MS);
     if (es.readyState !== 0 || state.stuckTimer != null || state.stuckNoticed) return;
     state.stuckTimer = setTimeout(() => {
       state.stuckTimer = null;
       if (es.readyState === 0) { state.stuckNoticed = true; showNotice(TEXT.streamStuck); }
     }, STREAM_STUCK_MS);
   };
-  es.addEventListener('open', () => { clearTimeout(state.stuckTimer); state.stuckTimer = null; state.stuckNoticed = false; });
+  es.addEventListener('open', () => { clearTimeout(state.stuckTimer); clearTimeout(state.askTimer); state.stuckTimer = state.askTimer = null; state.stuckNoticed = false; });
   es.addEventListener('error', wait);
   wait();
 }
@@ -2014,6 +2017,13 @@ function enteredAt(lane, t) {
 // Claude Code：用户每发一条消息、每建一份派发计划，算把这一段的产出交出去了（kind 记下是哪一种，动画不同）；
 // 实际输出 = 这一段里第一条给用户的话、第一次改文件或交 Claude Code 席报告
 const CC_OUT_KINDS = new Set(['msg', 'edit']);
+// Claude Code 的产出框没有人"读走"：这一轮安静 CC_QUIET（记录时间）以后就地收起（化成光点散开），下一轮有输出时再出现
+const CC_QUIET = 3 * 60000;
+// Claude Code 车道在 before 之前最后一次有动静的时刻
+function ccLastAct(cc, before) {
+  for (let i = cc.events.length - 1; i >= 0; i--) if (cc.events[i].ts < before) return cc.events[i].ts;
+  return -Infinity;
+}
 function ccLife(t) {
   const cc = B.laneById.get('cc');
   if (!cc || !latest(cc)) return { phase: 'none' };
@@ -2032,13 +2042,20 @@ function ccLife(t) {
     return O;
   };
   const last = bounds[bounds.length - 1], prev = bounds[bounds.length - 2];
-  // 刚交出去的上一段：有过输出就先播收起的动画
+  // 刚交出去的上一段：有过输出就先播收起的动画（上一段已经因为安静收起了就不再播）
   if (prev && last.kind) {
     const O = firstOut(prev.ts, last.ts), age = secSince(last.ts, t) - Math.max(0, OUT_MIN_SHOW - secSince(O, last.ts));
-    if (O < last.ts && age < OUT_COLLAPSE) return { phase: age < 0 ? 'show' : 'collapse', from: prev.ts, to: last.ts, age: age < 0 ? 9 : age, kind: last.kind };
+    const quietBefore = ccLastAct(cc, last.ts) + CC_QUIET < last.ts;
+    if (O < last.ts && !quietBefore && age < OUT_COLLAPSE) return { phase: age < 0 ? 'show' : 'collapse', from: prev.ts, to: last.ts, age: age < 0 ? 9 : age, kind: last.kind };
   }
   const O = firstOut(last.ts, t);
   if (O === Infinity) return laneActive(cc, t) ? { phase: 'gather', from: last.ts, grow: 1 - Math.exp(-(t - last.ts) / 60000) } : { phase: 'none', from: last.ts };
+  // 这一轮已经安静了一阵：框就地收起，收完就不再显示
+  const quietAt = ccLastAct(cc, t + 1) + CC_QUIET;
+  if (quietAt < t) {
+    const age = secSince(quietAt, t);
+    return age < OUT_COLLAPSE ? { phase: 'collapse', from: last.ts, to: t, age, kind: 'quiet' } : { phase: 'none', from: last.ts };
+  }
   return { phase: 'show', from: last.ts, age: secSince(O, t) };
 }
 
@@ -3227,7 +3244,8 @@ function doneLine(u, t) {
     runs = u.lane.runs.filter((x) => x.started_at <= t);
   }
   const cost = runs.reduce((n, r) => n + (r.cost_usd || 0), 0);
-  return `▸ ${[title, counts, when, cost ? `$${fmtUsd(cost)}` : null].filter(Boolean).join(' · ')}`;
+  const partial = runs.some((r) => r.cost_partial || (r.cost_usd == null && r.kind !== 'answer' && r.ended_at != null && r.ended_at <= t));
+  return `▸ ${[title, counts, when, cost ? fmtCost(cost, partial) : null].filter(Boolean).join(' · ')}`;
 }
 function renderDone(done, t, seen) {
   const box = $('termdone');
@@ -4757,7 +4775,8 @@ function drawOutLife(L, P, t) {
   else if (life.phase === 'show') drawUnfold(box, life.age, color);
   else if (life.phase === 'collapse') {
     const c = [box.x + box.w / 2, box.y + box.h / 2], top = (L.vis ? L.vis.top : 0) - 80;
-    drawCollapse(box, life.age, color, life.kind === 'plan' ? null : [c, [c[0], c[1] - 40], [c[0] + 30, top + 60], [c[0] + 40, top]]);
+    // 建计划时化成拉起席位的光、安静收起时就地散开；用户发下一条消息时往上飞走
+    drawCollapse(box, life.age, color, life.kind === 'plan' || life.kind === 'quiet' ? null : [c, [c[0], c[1] - 40], [c[0] + 30, top + 60], [c[0] + 40, top]]);
   }
   ctx.globalAlpha = 1;
 }
@@ -5819,19 +5838,32 @@ function showNotice(text) {
   clearTimeout(showNotice.timer); showNotice.timer = setTimeout(() => el.classList.add('faded'), 12000);
 }
 
-const HIDDEN_RELEASE_MS = 30000;
-let hiddenReleaseTimer = null;
+// 后台标签页让出数据流：浏览器对同一主机只开 6 条连接，看板标签页多了，前台的页面会连不上。
+// 平时在后台 10 分钟才让（让出以后再回来，较早的记录只剩最近 200 条，不能切一下窗口就让）；
+// 前台的页面连不上超过 2 秒时，通过同源广播请后台的看板标签页马上让出来。
+// 让出以后每分钟向服务报一次在，服务不会因为没有连接就当成没人看而退出
+const HIDDEN_RELEASE_MS = 600000, WATCHING_PING_MS = 60000;
+let hiddenReleaseTimer = null, watchingTimer = null;
+const STREAM_CHANNEL = typeof BroadcastChannel === 'function' ? new BroadcastChannel('foreman-board-streams') : null;
+const streamPaused = () => U.demo || window.__BOARD_FIXTURE__ || B.params.replay != null || B.params.t != null;
+function releaseStreams() {
+  clearTimeout(hiddenReleaseTimer); hiddenReleaseTimer = null;
+  if (streamsReleased || streamPaused()) return;
+  streamsReleased = true;
+  disconnectUniverse(); disconnect();
+  watchingTimer = setInterval(() => { fetch('health?watching=1').catch(() => {}); }, WATCHING_PING_MS);
+}
+// 前台页面的流迟迟连不上（01-state.js 的 watchStream 调用）：请其他看板标签页让出连接
+function askForStream() { if (STREAM_CHANNEL && document.visibilityState !== 'hidden') STREAM_CHANNEL.postMessage('release'); }
+if (STREAM_CHANNEL) STREAM_CHANNEL.onmessage = (e) => { if (e.data === 'release' && document.visibilityState === 'hidden') releaseStreams(); };
 function onVisibilityChange() {
   clearTimeout(hiddenReleaseTimer); hiddenReleaseTimer = null;
   // 回放重连会从头播放，不能暂停共用时钟；定格和演示沿用原来的取数方式。
-  if (U.demo || window.__BOARD_FIXTURE__ || B.params.replay != null || B.params.t != null) return;
-  if (document.visibilityState === 'hidden') {
-    hiddenReleaseTimer = setTimeout(() => {
-      streamsReleased = true;
-      disconnectUniverse(); disconnect();
-    }, HIDDEN_RELEASE_MS);
-  } else if (streamsReleased) {
+  if (streamPaused()) return;
+  if (document.visibilityState === 'hidden') hiddenReleaseTimer = setTimeout(releaseStreams, HIDDEN_RELEASE_MS);
+  else if (streamsReleased) {
     streamsReleased = false;
+    clearInterval(watchingTimer); watchingTimer = null;
     if (FLY.mode === 'in' || FLY.mode === 'board') connect();
     else connectUniverse(); // 飞出已经切回宇宙流，动画未结束时也接回同一层。
   }
