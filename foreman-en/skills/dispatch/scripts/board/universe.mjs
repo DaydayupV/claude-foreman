@@ -149,8 +149,16 @@ const zeroUsage = (u) => !!u && u.input === 0 && u.output === 0 && Object.values
 function summaryOf(session, all, now, hours, prices, meter, waiting = []) {
   const cutoff = now - hours * 3600000, own = all.filter((r) => r.session === session.id && !r.host);
   const queued = waiting.filter((q) => q.claude_session === session.id);
+  // 同一席后来又有了新一轮（同一条车道上续接的，或同一份计划同一席重新启动的；重启的任务不一定带 parent，车道会换）
+  const unitOf = (r) => r.group ?? r.plan ?? r.lane ?? r.id, laneOf = (r) => r.lane ?? r.id;
+  const sameSeat = (a, b) => laneOf(a) === laneOf(b) || a.plan != null && a.seat != null && a.plan === b.plan && a.seat === b.seat;
+  const superseded = (r) => own.some((x) => x !== r && x.started_at > r.started_at && sameSeat(x, r));
+  // 没做成、但已经续接或重启过的不算失败（和 status 的"已续接"一样），比如取消以后又续接成功的
   const counted = own.filter((r) => r.started_at >= cutoff), counts = { running: 0, done: 0, failed: 0 };
-  for (const run of counted) counts[run.status === 'running' ? 'running' : run.status === 'done' ? 'done' : 'failed']++;
+  for (const run of counted) {
+    const kind = run.status === 'running' ? 'running' : run.status === 'done' ? 'done' : superseded(run) ? null : 'failed';
+    if (kind) counts[kind]++;
+  }
   const runs = own.filter((r) => r.status === 'running' || r.ended_at >= now - 600000)
     .sort((a, b) => b.started_at - a.started_at || a.id.localeCompare(b.id)).slice(0, 16).map(meter?.pick ?? pickRun);
   const usage = meter ? null : [...session.usage.values()].filter((u) => u.ts >= cutoff), costs = [...counted];
@@ -161,14 +169,11 @@ function summaryOf(session, all, now, hours, prices, meter, waiting = []) {
     if (cost != null && (meter ? meter.partial : priced.partial)) costs.push(costFields(null, 'unknown'));
   }
   const cost = costs.some((c) => c.cost_usd != null) ? costs.reduce((sum, c) => sum + (c.cost_usd ?? 0), 0) : null;
-  const failure = own.filter((r) => r.status !== 'running' && r.status !== 'done' && r.ended_at != null && r.ended_at >= now - 1800000)
+  const failure = own.filter((r) => r.status !== 'running' && r.status !== 'done' && r.ended_at != null && r.ended_at >= now - 1800000 && !superseded(r))
     .sort((a, b) => b.ended_at - a.ended_at)[0];
   const alert = failure && session.promptAt <= failure.ended_at ? { kind: failure.status, run: failure.id, model: failure.model, at: failure.ended_at } : null;
   // 还在进行的组里出了问题的席位（超时、失败、被停止……），宇宙表的状态列每席画一个点；
-  // 后来又有了新一轮的不算：同一条车道上续接的，或同一份计划同一席重新启动的（重启的任务不一定带 parent，车道会换）。
-  // 整组都结束以后不再列
-  const unitOf = (r) => r.group ?? r.plan ?? r.lane ?? r.id, laneOf = (r) => r.lane ?? r.id;
-  const sameSeat = (a, b) => laneOf(a) === laneOf(b) || a.plan != null && a.seat != null && a.plan === b.plan && a.seat === b.seat;
+  // 后来又有了新一轮的不算（superseded）。整组都结束以后不再列
   const live = new Set(own.filter((r) => r.status === 'running' || queued.some((q) => q.group != null
     ? q.group === r.group : q.plan != null && q.plan === r.plan)).map(unitOf));
   // 每个还在进行的组现在这一批从哪里开始：从还在跑的任务和排队票往前接，前后相隔不超过 BATCH_GAP 的都算同一批。
@@ -185,7 +190,7 @@ function summaryOf(session, all, now, hours, prices, meter, waiting = []) {
   }
   // 超过 12 个时留最新的 12 个，仍按结束的先后排
   const issues = own.filter((r) => r.status !== 'running' && r.status !== 'done' && r.ended_at != null && r.ended_at >= (batchStart.get(unitOf(r)) ?? Infinity) && live.has(unitOf(r))
-    && !own.some((x) => x !== r && sameSeat(x, r) && x.started_at > r.started_at))
+    && !superseded(r))
     .sort((a, b) => b.ended_at - a.ended_at).slice(0, 12).reverse().map((r) => ({ status: r.status, run: r.id, model: r.model }));
   const state = stateOf(session, runs, now, queued);
   return { id: session.id, project: keyOf(projectOf(session)), cwd: session.cwd, title: session.title ?? session.firstPrompt, model: session.model,

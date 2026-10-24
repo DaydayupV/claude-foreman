@@ -158,7 +158,7 @@ function finishRun(run, result, code = result.exit_code, observed = {}) {
   result.questions = collectQuestions({ ...result, ...observed, last: observed.last ?? result.last_message ?? '' });
   const decisions = result.questions.filter(needsDecision).length;
   result.needs_decision = decisions > 0;
-  if (decisions) result.notes.push(M.needsDecisionNote(decisions));
+  if (decisions) result.notes.push(M.needsDecisionNote(decisions, run.meta.module ?? run.ctx.kind));
   // 先写临时文件再改名：调度进程被强行结束时，不会留下写了一半的结果。
   const resultFile = path.join(run.ctx.dir, 'result.json');
   fs.writeFileSync(`${resultFile}.tmp`, JSON.stringify(result, null, 2));

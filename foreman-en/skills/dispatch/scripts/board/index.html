@@ -209,6 +209,12 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 #table svg { width: 100%; height: 16px; display: block; }
 #table svg polyline { fill: none; stroke: var(--tint); stroke-width: 1.2; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 2px var(--tint)); }
 #table .total { border-top: 1px solid rgba(200,200,212,.14); color: var(--hi); }
+/* 单对话视图：用量面板行放不下时，合计行最右边（用时那一格本来是空的）放"展开全部"；展开后面板按全部行的高度排开，往下推开终端区 */
+#tall { position: absolute; right: 14px; bottom: 6px; height: 19px; padding: 0 8px; font-size: 10px; letter-spacing: .06em; z-index: 4; }
+/* 只对看板的用量表起作用：飞入飞出的过渡里 body 暂时没有 uni，#usage 里可能还是宇宙的对话表（data-mode="uni"） */
+#tall[hidden], body.uni #tall, #table:has(> #usage[data-mode="uni"]) #tall { display: none; }
+body.table-all #table:has(> #usage:not([data-mode="uni"])), body.table-all #usage:not([data-mode="uni"]) { height: auto; }
+body.table-all #usage:not([data-mode="uni"]) .tbody { overflow: visible; mask-image: none; }
 #status { position: absolute; right: 14px; top: calc(100vh - var(--table-h) - 22px); color: var(--dim); font-size: 11px; z-index: 3; }
 #status.bad { color: var(--bad); }
 
@@ -223,22 +229,21 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 /* 用量面板（右上角有往下看终端的提示）和下面的终端区 */
 #usage { display: grid; grid-template-rows: auto 1fr auto; height: 100%; min-height: 0; }
 #hud #more { width: auto; padding: 0 8px; letter-spacing: .08em; }
-#termsec { height: calc(100vh - var(--top-h) - 14px); margin-bottom: 8px; display: grid; grid-template-rows: auto 1fr auto; gap: 6px; }
+/* 终端区按内容伸长：运行中的一排占一屏高，下面已结束的一段接着往下排，用页面滚动看。
+   列宽不随内容撑开（minmax(0, 1fr)、min-width: 0），栏多时在各自那一排里横向滚动 */
+#termsec { --col-h: calc(100vh - var(--top-h) - 50px); height: auto; min-height: calc(100vh - var(--top-h) - 14px); margin-bottom: 8px; display: grid;
+  grid-template-columns: minmax(0, 1fr); grid-template-rows: auto var(--col-h) auto; align-content: start; gap: 6px; }
 /* 已结束的组：终端区下面一段。小标题缩进、不加粗，看得出是终端区里的一段，不和 TERMINAL 同级；
-   展开的组排成一排，栏的样子和上面运行中的一样（栏头可以点着收起）；折起来的一组一行，列在下面 */
-#termsec:has(#termdone:not([hidden])) { grid-template-rows: auto 1fr auto; }
-#termsec:has(#termdone .row > .tcol) { grid-template-rows: auto 1fr 1fr; }
-/* 上面一排没有正在运行的组时不占高度，结束的组用满整个终端区（不然展开的那组只剩半屏再被下面的列表挤矮） */
-#termsec:has(#terms:empty):has(#termdone:not([hidden])) { grid-template-rows: auto 0 1fr; }
-#termdone { display: flex; flex-direction: column; gap: 4px; min-height: 0; }
+   展开的组排成一排，栏的样子和高度都和上面运行中的一样（栏头可以点着收起）；折起来的一组一行，全部列在下面 */
+/* 上面一排没有正在运行的组时不占高度 */
+#termsec:has(#terms:empty) { grid-template-rows: auto 0 auto; }
+#termdone { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 #termdone[hidden] { display: none; }
 #termdone > .sub { flex: none; display: flex; align-items: center; gap: 8px; padding-left: 6px; color: var(--dim); font-size: 10px; }
 #termdone > .sub::after { content: ""; flex: 1; border-top: 1px dashed rgba(200,200,212,.12); }
-#termdone > .row { flex: 1 1 0; display: flex; gap: 8px; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
+#termdone > .row { flex: none; height: var(--col-h); display: flex; gap: 8px; min-width: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
 #termdone > .row:empty, #termdone > .lines:empty { display: none; }
-/* 展开的结束组至少留六成高度；折起来的列表在剩下的地方滚动 */
-#termdone > .row:not(:empty) { min-height: 60%; }
-#termdone > .lines { flex: 0 1 auto; min-height: 0; max-height: 30vh; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
+#termdone > .lines { flex: none; min-width: 0; }
 #termdone .dline { cursor: pointer; color: var(--mid); font-size: 10.5px; padding: 2px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #termdone .dline:hover { color: var(--text); background: rgba(255,255,255,.04); }
 .tcol.done-open > header { cursor: pointer; }
@@ -253,7 +258,7 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 #termsec > header span { color: var(--dim); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* 终端页：每个模型一栏，Claude Code 那栏宽一些；栏多时横向滚动 */
-#terms { display: flex; gap: 8px; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; }
+#terms { display: flex; gap: 8px; min-height: 0; min-width: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; }
 .tcol { flex: 1 0 260px; min-width: 260px; display: flex; flex-direction: column; min-height: 0; border: 1px solid rgba(170,170,182,.13); background: rgba(8,8,10,.55); }
 .tcol.cc { flex: 1.6 0 340px; }
 .tcol.running { border-color: color-mix(in srgb, var(--tint) 45%, transparent); box-shadow: inset 0 0 14px -10px var(--tint); }
@@ -336,8 +341,8 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
   #usage[data-mode="uni"] .tr { grid-template-columns: 18px 1.8fr .9fr .75fr 1fr; }
   #usage[data-mode="uni"] .tr > span:is(:nth-child(6), :nth-child(7), :nth-child(10)) { display: none; }
   #termsec { height: auto; min-height: calc(100vh - var(--top-h) - 14px); }
-  #terms, #termdone > .row { flex-direction: column; overflow: visible; }
-  #termsec:has(#termdone:not([hidden])), #termsec:has(#termdone .row > .tcol) { grid-template-rows: auto auto auto; }
+  #terms, #termdone > .row { flex-direction: column; overflow: visible; height: auto; }
+  #termsec, #termsec:has(#terms:empty) { grid-template-rows: auto auto auto; }
   .tcol, .tcol.cc, .tgroup { flex: none; min-width: 0; height: 70vh; }
 }
 
@@ -434,7 +439,7 @@ const D = {
   watchAnswerSubmitted: (round) => `report submitted (round ${round})`,
   watchReplayOne: (command) => `replay a seat: ${command}`,
   dashCancelConfirm: (models) => `Press x again to stop ${models}, or any other key to cancel`,
-  channel: { codex: 'Codex CLI', api: 'API', opencode: 'opencode CLI', pi: 'pi CLI' },
+  channel: { codex: 'Codex CLI', api: 'API', opencode: 'Opencode CLI', pi: 'Pi CLI' },
   modelLabel: (model, channel, effort, fromConfig) => `${model}${effort ? ` ${effort}` : ''} · ${channel}${fromConfig ? ' · model from Codex config' : ''}`,
   watchReview: {
     issues_found: (n, parts) => `${n} issue${n === 1 ? '' : 's'}${parts ? ` · ${parts}` : ''}`,
@@ -1109,6 +1114,9 @@ const TEXTS = {
     recentTitle: '这条车道全部时长的速度曲线（估算）：从第一轮开始画到最后一轮结束，结束后停住；40 个点，每个点是它之前约两格时长内的输出 token 除以这段时间；运行中可能借用实时估速',
     genAvgTitle: '本席各轮累计输出 ÷ 估算的生成时长；已扣掉能识别的跑命令时段，仍可能含等待和读文件的时间',
     usageUnattributed: '用量无法归属到本轮：缺少可信的续接累计基线',
+    tableAll: '展开全部 ▾',
+    tableLess: '收起 ▴',
+    tableAllTitle: '展开用量面板，列出这个对话里的全部模型；再点一下收起',
     emptyList: (h) => `最近 ${h} 小时没有派发过任务的对话。派发之后会出现在这里。`,
     slotsTitle: '同时运行',
     slotsHint: '每个协作方一行，一格是它能同时跑的一个任务（配置里的 max_parallel）。亮起的格子正被某个对话占着，闪烁的在服务商那边排队；点一格飞进那个对话',
@@ -1154,6 +1162,9 @@ const TEXTS = {
     recentTitle: "Speed over this lane's whole time (estimated): drawn from its first round's start to its last round's end, then it stays put; 40 points, each the output tokens in about two points' worth of time before it divided by that time; while running it may use the live estimate",
     genAvgTitle: "This seat's total output ÷ estimated generation time; command time that can be recognised is excluded, waiting and file reads may remain",
     usageUnattributed: 'Usage cannot be attributed to this run: a reliable continuation baseline is missing',
+    tableAll: 'Show all ▾',
+    tableLess: 'Collapse ▴',
+    tableAllTitle: 'Expand the usage panel to list every model in this conversation; click again to collapse',
     emptyList: (h) => `No conversation has dispatched work in the last ${h} hours. New ones show up here.`,
     slotsTitle: 'Running now',
     slotsHint: 'One row per agent; each cell is one run it can have going at once (max_parallel in the config). Lit cells are taken by a conversation, blinking ones wait in the provider queue; click a cell to fly into that conversation',
@@ -1858,16 +1869,24 @@ function liveState(lane, r, t) {
   if (!state.api.req && r.queued && !state.speech && !state.recent.length) state.api.queued = true;
   return state;
 }
+// 已经结束的任务，状态只随"后来有没有续接"变：直播时按任务对象缓存（任务记录一更新，页面就换成新对象）。
+// 正在跑的才需要扫这一轮的事件看是在排队、思考还是回答；结束了的不扫
+const SEAT_STATES = new WeakMap();
 function seatStatus(lane, r, t) {
   if (!r) return { style: Display.outcomeStyle({ status: 'not_started' }), right: ['not started'], kind: 'not_started' };
-  const run = Display.displayRun(r), ended = r.ended_at != null && r.ended_at <= t;
+  const ended = r.ended_at != null && r.ended_at <= t, resumed = ended && lane.runs.some((x) => x.parent === r.id && x.started_at <= t);
+  const cache = ended && B.clock.mode === 'live', hit = cache && SEAT_STATES.get(r);
+  if (hit && hit.resumed === resumed) return hit.state;
+  const run = Display.displayRun(r);
   const result = ended || r.kind === 'answer' ? run.result : { status: 'running' };
   const outcome = Display.resultOutcome(result, run.meta);
-  outcome.resumed = ended && lane.runs.some((x) => x.parent === r.id && x.started_at <= t);
+  outcome.resumed = resumed;
   const meta = { ...run.meta, started_at: r.original_started_at ?? Display.recordedTime(r.started_at, displayPoints()),
     ended_at: ended ? r.original_ended_at ?? Display.recordedTime(r.ended_at, displayPoints()) : null,
     submitted_at: r.submitted_at ?? r.original_started_at ?? run.meta.submitted_at };
-  return Display.seatState(meta, result, liveState(lane, r, t).api, Display.recordedTime(t, displayPoints()), undefined, outcome);
+  const state = Display.seatState(meta, result, outcome.running ? liveState(lane, r, t).api : {}, Display.recordedTime(t, displayPoints()), undefined, outcome);
+  if (cache) SEAT_STATES.set(r, { resumed, state });
+  return state;
 }
 
 // 用量保留在结尾，JSON 报告只在完成时显示，避免重复正文。
@@ -2628,13 +2647,15 @@ function stepReel(nowMs) {
   // 放得下时：滚出去的卡片在鼠标移开后自动回到竖直居中
   if (!REEL.overflow && !REEL.hover && !drag.on) { REEL.off *= Math.exp(-dt / 0.45); if (Math.abs(REEL.off) < 0.3) REEL.off = 0; }
 }
-// 鼠标在不在刻度带上（不论放大到多少，在刻度带上滚轮都是滚动卡片）
+// 鼠标在不在刻度带上（不论放大到多少，在刻度带上滚轮都是滚动卡片）。刻度带还没出现（没有席位卡片）时不算，那里照常缩放
 function reelZone(sx) {
+  if (!FX.layout?.rows.size) return false;
   const wx = (sx - VIEW.tx) / VIEW.k;
   return wx >= WL.bandX - 12 && wx <= WL.bandX + WL.bandW + 12;
 }
 // hot：鼠标停在用量表哪一行（车道 id），画面上突出这条车道、其余的压暗；只是看得清楚，不触发任何操作
-const UI = { open: new Set(), collapsed: new Set(), cards: new Map(), outs: new Map(), heads: new Map(), tableRows: new Map(), hot: null };
+// ver：界面操作（悬停、点开收起、折叠组）每次加一，主循环看到就马上重画；数据变了看 B.version，最快每 250 毫秒重画一次
+const UI = { open: new Set(), collapsed: new Set(), cards: new Map(), outs: new Map(), heads: new Map(), tableRows: new Map(), hot: null, ver: 0 };
 
 function laneStatus(lane, t) {
   const r = currentRun(lane, t);
@@ -2777,7 +2798,7 @@ function stepView(H) {
   worldEl.style.transform = `translate(${VIEW.tx}px, ${VIEW.ty}px) scale(${VIEW.k})`;
   // 显示档位看卡片在屏幕上有多高
   const px = WL.cardH * VIEW.k, lod = px < 150 ? 0 : px < 270 ? 1 : 2;
-  if (worldEl.dataset.lod !== String(lod)) { worldEl.dataset.lod = lod; worldEl.className = `lod${lod}`; B.version++; }
+  if (worldEl.dataset.lod !== String(lod)) { worldEl.dataset.lod = lod; worldEl.className = `lod${lod}`; UI.ver++; }
   setText($('zoom-val'), `${Math.round((VIEW.k / kFit()) * 100)}%`);
   return moving;
 }
@@ -2849,7 +2870,7 @@ function toggleGroup(key) {
   const g = FX.layout && FX.layout.groups.find((x) => x.key === key);
   if (g) REEL.anchor = { key, y: g.head.y };
   if (!UI.collapsed.delete(key)) UI.collapsed.add(key);
-  B.version++; wake();
+  UI.ver++; wake();
 }
 
 // 单击卡片时飞到这张卡片，放大到详情档位
@@ -2863,7 +2884,7 @@ function boxOf(id) {
 'use strict';
 // 世界里的 DOM：Claude Code 卡片、席位卡片、产出框、组头。按车道 id 复用元素，只改变了的文字和位置。
 
-const CHANNEL = { 'codex cli': 'Codex CLI', 'opencode cli': 'opencode', 'pi cli': 'pi', api: 'API', host: 'Claude Code' };
+const CHANNEL = { 'codex cli': 'Codex CLI', 'opencode cli': 'Opencode CLI', 'pi cli': 'Pi CLI', api: 'API', host: 'Claude Code' };
 // 用量表悬停时其余车道压暗的程度（卡片、产出框、光线共用）
 const dimOf = (id) => (UI.hot && id !== UI.hot ? 0.32 : 1);
 const place = (el, b) => { const s = el.style, x = `${b.x}px`, y = `${b.y}px`; if (s.left !== x) s.left = x; if (s.top !== y) s.top = y; };
@@ -3251,7 +3272,7 @@ function renderTable(t) {
     const body = table.querySelector('.tbody');
     body.addEventListener('scroll', (e) => markMore(e.target), { passive: true });
     // 鼠标停在某一行时突出画面上的这条车道（和宇宙表悬停星系一样），单击不做任何事
-    const hover = (id) => { if (UI.hot !== id) { UI.hot = id; B.version++; wake(); } };
+    const hover = (id) => { if (UI.hot !== id) { UI.hot = id; UI.ver++; wake(); } };
     body.addEventListener('pointerover', (e) => { if (table.dataset.mode !== 'uni') hover(e.target.closest('.tr[data-lane]')?.dataset.lane || null); });
     body.addEventListener('pointerleave', () => hover(null));
     for (const h of TABLE_HEAD) { const c = document.createElement('span'); c.textContent = h; table.firstChild.append(c); }
@@ -3260,11 +3281,18 @@ function renderTable(t) {
   const rows = tableRows(t), lanes = rows.filter((x) => x.lane).map((x) => x.lane);
   const body = table.querySelector('.tbody');
   const tot = { input: 0, cached: 0, output: 0, usage_unattributed: false, cost: null, partial: false, rate: 0 };
+  // 新建的行一次最多花约 12 毫秒（刚飞进长对话时有上百行），剩下的下一帧接着建；返回 false 表示还没建完。
+  // 每次至少新建 10 行：更新已有的行就用完预算时也往前走
+  const deadline = performance.now() + 12;
+  let done = true, created = 0;
   rows.forEach((row, i) => {
+    if (!done) return;
     if (row.head) { const tr = headRow(row); if (body.children[i] !== tr) body.insertBefore(tr, body.children[i] || null); return; }
     const lane = row.lane;
     let tr = UI.tableRows.get(lane.id);
+    if (!tr && created >= 10 && performance.now() > deadline) { done = false; return; }
     if (!tr) {
+      created++;
       tr = document.createElement('div');
       tr.className = 'tr';
       tr.innerHTML = '<span class="av"><img alt=""></span>' + '<span></span>'.repeat(TABLE_HEAD.length - 1);
@@ -3300,6 +3328,12 @@ function renderTable(t) {
   });
   while (body.children.length > rows.length) body.lastChild.remove();
   markMore(body);
+  // 行放不下时右下角出现"展开全部"；展开以后一直留着，好收起
+  if (document.body) {
+    const all = document.body.classList.contains('table-all'), toggle = tableToggle();
+    toggle.hidden = !all && body.scrollHeight <= body.clientHeight + 2;
+    setText(toggle, all ? TEXT.tableLess : TEXT.tableAll);
+  }
   const total = table.querySelector('.total');
   const sig = `${lanes.length}|${Math.round(tot.rate)}|${tot.input}|${tot.output}|${tot.usage_unattributed}|${fmtCost(tot.cost, tot.partial)}`;
   if (total.dataset.sig !== sig) {
@@ -3311,6 +3345,18 @@ function renderTable(t) {
     total.children[7].title = tot.usage_unattributed ? TEXT.usageUnattributed : '';
     total.children[6].title = tot.usage_unattributed ? TEXT.usageUnattributed : '';
   }
+  return done;
+}
+
+// 单对话视图里用量面板的"展开全部"按钮：点开以后面板按全部行的高度排开（往下推开终端区），再点一下收起
+function tableToggle() {
+  let btn = $('tall');
+  if (!btn) {
+    btn = document.createElement('button'); btn.id = 'tall'; btn.type = 'button'; btn.title = TEXT.tableAllTitle;
+    btn.addEventListener('click', () => { document.body.classList.toggle('table-all'); UI.ver++; wake(); });
+    $('table').append(btn);
+  }
+  return btn;
 }
 
 // 用量表的行：车道行 { lane }，组标题行 { head, id, text, counts }
@@ -3379,7 +3425,14 @@ function renderTop(t) {
 
 const PANEL = { cols: new Map(), open: new Set(), seen: false, numbers: new Map(), fold: new Map(), doneLines: new Map(), allDone: false };
 const groupPlans = (group, t) => [...new Map(B.life.filter((p) => p.k === 'fplan' && p.group === group && p.ts <= t).map((p) => [p.plan, p])).values()];
+// 同一帧里用量表和终端区会对每一组各问一次：按此刻和数据版本记一份（回放暂停时此刻不变，数据变了也要重算）
+const QUEUE_AT = { t: null, v: -1, list: null };
 function dispatchQueue(t) {
+  if (QUEUE_AT.t === t && QUEUE_AT.v === B.version) return QUEUE_AT.list;
+  QUEUE_AT.t = t; QUEUE_AT.v = B.version; QUEUE_AT.list = queueAt(t);
+  return QUEUE_AT.list;
+}
+function queueAt(t) {
   const snapshot = B.laneById.get('dispatch_queue')?.events.filter((e) => e.ts <= t).at(-1);
   const tickets = snapshot ? snapshot.tickets : [...B.runs.values()].filter((r) => r.started_at <= t).flatMap((r) => r.dispatch_queue || []);
   return [...new Map(tickets.map((q) => [`${q.agent}:${q.sequence ?? q.position}:${q.queued_at}`, q])).values()]
@@ -3389,19 +3442,19 @@ function dispatchQueue(t) {
 const termsNear = () => $('termsec').getBoundingClientRect().top < innerHeight + 200;
 addEventListener('scroll', () => {
   const near = termsNear();
-  if (near && !PANEL.seen) { B.version++; wake(); }
+  if (near && !PANEL.seen) { UI.ver++; wake(); }
   PANEL.seen = near;
 }, { passive: true });
 $('more').addEventListener('click', () => $('termsec').scrollIntoView({ behavior: 'smooth' }));
 $('termsec').addEventListener('click', (e) => {
   // 已结束的组：点折起来的那一行展开成栏；点展开的栏头收回成一行
   const line = e.target.closest('#termdone .dline'), head = e.target.closest('#termdone .tcol > header');
-  if (line || head) { PANEL.fold.set((line || head.parentNode).dataset.lane, !!line); B.version++; wake(); return; }
+  if (line || head) { PANEL.fold.set((line || head.parentNode).dataset.lane, !!line); UI.ver++; wake(); return; }
   const seat = e.target.closest('.seat');
   if (!seat) return;
   const id = seat.dataset.lane;
   if (!PANEL.open.delete(id)) PANEL.open.add(id);
-  B.version++; wake();
+  UI.ver++; wake();
 });
 
 // 动效离场的席位仍留在终端区，才能和终端组视图一样回看整组。
@@ -3458,7 +3511,22 @@ function lastPromptAt(t) {
 }
 const doneOpen = (u, t, since) => PANEL.fold.get(u.id) ?? unitEnd(u, t) >= since;
 // 折起来的一行：和展开后的栏头写法一样（标题、各状态个数），再加结束时间和这一组所有轮次的费用
+// 结束的组内容不再变：这一组各轮的记录都没换过就沿用上次的文字（每小时重算一次，跨天时日期写法会变）。
+// 任务的记录一有更新（迟到的结果、改写的报告），页面就换成新的对象，所以按对象记号比较，不挑字段
+const RUN_MARK = new WeakMap();
+let runMarks = 0;
+const runMark = (r) => { if (!RUN_MARK.has(r)) RUN_MARK.set(r, ++runMarks); return RUN_MARK.get(r); };
+const DONE_TEXT = new Map();
 function doneLine(u, t) {
+  const own = u.group ? [...B.runs.values()].filter((r) => r.group === u.group && r.started_at <= t) : u.lane.runs.filter((x) => x.started_at <= t);
+  const sig = `${own.map((r) => `${runMark(r)}:${FINAL.has(r.id)}`).join(',')}|${u.group ? groupPlans(u.group, t).length : 0}|${Math.floor(t / 3600000)}`;
+  const hit = DONE_TEXT.get(u.id);
+  if (hit?.sig === sig) return hit.text;
+  const text = doneText(u, t);
+  DONE_TEXT.set(u.id, { sig, text });
+  return text;
+}
+function doneText(u, t) {
   // 不是今天结束的写上月-日，免得跨天时看着像倒着排
   const at = (ms) => new Date(Display.recordedTime(ms, displayPoints())), end = unitEnd(u, t), e = at(end);
   const date = e.toDateString() === at(t).toDateString() ? '' : `${String(e.getMonth() + 1).padStart(2, '0')}-${String(e.getDate()).padStart(2, '0')} `;
@@ -3479,10 +3547,10 @@ function doneLine(u, t) {
     && !zeroUsage(r.usage || FINAL.get(r.id)?.usage)));
   return `▸ ${[title, counts, when, cost ? fmtCost(cost, partial) : null].filter(Boolean).join(' · ')}`;
 }
-function renderDone(done, t, seen) {
+function renderDone(done, t, seen, deadline) {
   const box = $('termdone');
   box.hidden = !done.length;
-  if (!done.length) return;
+  if (!done.length) return true;
   if (!box.firstChild) {
     const sub = document.createElement('div'), row = document.createElement('div'), lines = document.createElement('div');
     sub.className = 'sub'; row.className = 'row'; lines.className = 'lines';
@@ -3496,27 +3564,36 @@ function renderDone(done, t, seen) {
   // 刚收起的栏移出这一排（栏本身由 renderTerms 最后统一回收）
   const keep = new Set(open.map((u) => PANEL.cols.get(u.id)));
   for (const c of [...row.children]) if (!keep.has(c)) c.remove();
+  let built = true, created = 0;
   closed.forEach((u, i) => {
+    if (!built) return;
     let el = PANEL.doneLines.get(u.id);
+    // 新的折叠行一次只建到预算用完，剩下的下一帧接着建；每次至少建 10 行，前面的栏用完预算时也往前走
+    if (!el && created >= 10 && performance.now() > deadline) { built = false; return; }
+    if (!el) created++;
     if (!el) { el = document.createElement('div'); el.className = 'dline'; el.dataset.lane = u.id; PANEL.doneLines.set(u.id, el); }
     if (lines.children[i] !== el) lines.insertBefore(el, lines.children[i] || null);
     setText(el, doneLine(u, t));
   });
-  for (const [id, el] of PANEL.doneLines) if (!closed.some((u) => u.id === id)) { el.remove(); PANEL.doneLines.delete(id); }
+  for (const [id, el] of PANEL.doneLines) if (!closed.some((u) => u.id === id)) { el.remove(); PANEL.doneLines.delete(id); DONE_TEXT.delete(id); }
+  return built;
 }
 
+// 返回 false 表示这一帧没建完（已结束的组很多时折叠行分几帧建）
 function renderTerms(t, L) {
+  const deadline = performance.now() + 12;
   const cc = B.laneById.get('cc'), title = cc && latest(cc) ? latest(cc).title : null;
   setText($('conv'), Display.D.conversation(title));
-  if (!termsNear()) return;
+  if (!termsNear()) return true;
   const box = $('terms'), seen = new Set(), units = termUnits(t, L);
   const done = units.filter((u) => unitFinished(u, t)).sort((a, b) => unitEnd(b, t) - unitEnd(a, t));
   const live = units.filter((u) => !done.includes(u));
   fillRow(box, live, t, seen);
   // 回到上面一排的栏（又续接了）去掉"可收起"的样子
   for (const u of live) PANEL.cols.get(u.id)?.classList.remove('done-open');
-  renderDone(done, t, seen);
+  const built = renderDone(done, t, seen, deadline);
   for (const [id, col] of PANEL.cols) if (!seen.has(id)) { col.remove(); PANEL.cols.delete(id); }
+  return built;
 }
 
 // 填一段对话流，默认跟着贴在底部；往上翻看时不再跟随，翻回底部又恢复。
@@ -3572,8 +3649,15 @@ function groupColumn(id) {
   return col;
 }
 
-// 一组的席位块（Claude Code 席在前）和席位号，按号排好；终端栏和用量表的组共用，号码和顺序两边一样
+// 一组的席位块（Claude Code 席在前）和席位号，按号排好；终端栏和用量表的组共用，号码和顺序两边一样。
+// 同一帧里两边各要一次：按（此刻、数据版本、组）记一份，下一帧重算
+const SEATS_AT = { t: null, v: -1, groups: new Map() };
 function groupSeats(u, t) {
+  if (SEATS_AT.t !== t || SEATS_AT.v !== B.version) { SEATS_AT.t = t; SEATS_AT.v = B.version; SEATS_AT.groups.clear(); }
+  if (!SEATS_AT.groups.has(u.id)) SEATS_AT.groups.set(u.id, seatsOf(u, t));
+  return SEATS_AT.groups.get(u.id);
+}
+function seatsOf(u, t) {
   const history = [...B.runs.values()].filter((r) => r.group === u.group && r.started_at <= t).map(Display.displayRun);
   const chosen = new Set(Display.current(history).map((r) => r.id));
   const hosts = history.filter((r) => r.meta.participant === 'host' && chosen.has(r.id));
@@ -3594,7 +3678,9 @@ function groupSeats(u, t) {
 }
 
 function fillGroup(col, u, t) {
-  const { history, blocks, all, plans, numbers, queue, states } = groupSeats(u, t);
+  const seats = groupSeats(u, t), { history, blocks, plans, numbers, queue, states } = seats;
+  // 写上轮次用的是副本：groupSeats 的结果同一帧里用量表也在用
+  const all = seats.all.map((run) => ({ ...run, meta: { ...run.meta } }));
   for (const run of all) { const b = blocks.find((b) => (b.host || currentRun(b.lane, t)).id === run.id); if (b.lane) run.meta.round = roundOf(b.lane, t); }
   const head = Display.groupTask(all, plans, queue);
   setText(col.querySelector('header b'), head.text);
@@ -3974,10 +4060,14 @@ function recentlyBusy(lane, t) {
   for (let i = lane.events.length - 1; i >= 0; i--) { const e = lane.events[i]; if (e.ts <= t) return t - e.ts < 20000 && laneStatus(lane, t).running; }
   return false;
 }
+// 产出框在的时候（show），通道至少留最窄的一条、按最低的流速流动：结果还没被读走、席位已经停下时，也看得出卡片连着它的框
+const OUT_BASE_I = 0.06;
 function drawRibbon(lane, p, t, rate, pulses, live) {
-  const I = smooth(`rI|${lane.id}`, Math.max(glow(rate), recentlyBusy(lane, t) ? 0.22 : 0));
+  const life = outLife(lane, t), shown = life.phase === 'show' ? 1 : 0;
+  const I = smooth(`rI|${lane.id}`, Math.max(glow(rate), recentlyBusy(lane, t) ? 0.22 : 0, shown * OUT_BASE_I));
+  live = Math.max(live || 0, 0.6 * smooth(`box|${lane.id}`, shown));
   // 框还没出现时通道收进那团汇聚的光（08-outlife.js）
-  const tg = smoothTarget(lane.id, outTarget(p.outbox, outLife(lane, t)), p.outbox), c = p.card, x0 = c.x + c.w + 1, x1 = tg.x, mid = (x0 + x1) / 2, wf = 0.08 + 0.92 * Math.pow(I, 1.4);
+  const tg = smoothTarget(lane.id, outTarget(p.outbox, life), p.outbox), c = p.card, x0 = c.x + c.w + 1, x1 = tg.x, mid = (x0 + x1) / 2, wf = 0.08 + 0.92 * Math.pow(I, 1.4);
   const cy = c.y + c.h / 2, hc = (c.h / 2 - 3) * wf, oy = tg.y, ho = tg.box ? tg.half * (0.35 + 0.65 * wf) : tg.half;
   const E0 = [[x0, cy - hc], [mid, cy - hc], [mid, oy - ho], [x1, oy - ho]];
   const E1 = [[x0, cy + hc], [mid, cy + hc], [mid, oy + ho], [x1, oy + ho]];
@@ -3988,7 +4078,9 @@ function drawRibbon(lane, p, t, rate, pulses, live) {
 // Claude Code → 产出列最上面的框：从卡片顶边（宽）弯上去，收拢到框的左边（窄）
 // 和席位通道一样，输出越快越宽：卡片顶边上占的宽度、产出框一端的高度都按速度缩放
 function drawCCOut(cc, box, pulses, rate, live, t) {
-  const c = cc.card, tg = smoothTarget('cc', outTarget(box, ccLife(t)), box), I = smooth('rI|cc', glow(rate)), wf = 0.08 + 0.92 * Math.pow(I, 1.4);
+  const life = ccLife(t), shown = life.phase === 'show' ? 1 : 0;
+  live = Math.max(live || 0, 0.6 * smooth('box|cc', shown));
+  const c = cc.card, tg = smoothTarget('cc', outTarget(box, life), box), I = smooth('rI|cc', Math.max(glow(rate), shown * OUT_BASE_I)), wf = 0.08 + 0.92 * Math.pow(I, 1.4);
   const half = tg.box ? tg.half * (0.35 + 0.65 * wf) : tg.half;
   const edge = (f) => {
     const s = 0.5 + (f - 0.5) * wf, xa = c.x + 6 + (c.w - 12) * s, yb = tg.y + (f - 0.5) * 2 * half, lift = Math.max(60, c.y - box.y) * (0.75 + 0.25 * (1 - s));
@@ -5503,6 +5595,8 @@ function resetBoardView() {
   for (const m of [UI.cards, UI.outs, UI.heads, UI.tableRows]) m.clear();
   UI.open.clear(); UI.collapsed.clear(); UI.hot = null;
   for (const id of ['usage', 'terms', 'termdone']) { $(id).replaceChildren(); delete $(id).dataset.mode; }
+  // 用量面板的"展开全部"跟着对话走：换对话时收起
+  document.body?.classList.remove('table-all'); $('tall')?.remove();
   PANEL.allDone = false; PANEL.fold.clear(); PANEL.doneLines.clear();
   PANEL.cols.clear(); UNI_ROWS.clear();
   Object.assign(REEL, { s: 0, off: 0, anchor: null }); REEL.born.clear();
@@ -5525,7 +5619,7 @@ function openBoardFor(s) {
     else if (U.clock.mode === 'replay') { p.replay = 'all'; p.from = String(Math.round(uNow())); }
   }
   B.params = p;
-  started = false; drawnVersion = -1;
+  started = false; DOM.version = -1;
   connect();
 }
 
@@ -5973,9 +6067,30 @@ viewEl.addEventListener('dblclick', () => { if (inUniverse()) { uniFit(); wake()
 // 限帧：画面里的动作都很慢，静止时约 30 帧；拖动、缩放、镜头在走、飞入飞出时约 60 帧。
 // 不限的话会跟着显示器刷新率跑（144Hz 屏一秒重画 144 次），整页都卡。
 
-let raf = 0, drawnVersion = -1, tablesDeferred = false, lastDom = 0, lastFx = 0, started = false, lastFrame = 0, busyUntil = 0;
+let raf = 0, lastFx = 0, started = false, lastFrame = 0, busyUntil = 0;
 const FRAME_IDLE = 33, FRAME_BUSY = 16;
 function wake() { if (!raf) raf = requestAnimationFrame(frame); }
+
+// 这一帧要不要刷新卡片和面板，以及用量表、终端区画哪几块（返回 null 是这一帧不刷新）。
+// 数据一直在来的对话（正在干活的那个）事件很密：数据变了最快每 250 毫秒刷新一次；界面操作（UI.ver）马上刷新；没变也每半秒刷新一次。
+// 飞入动画进行中用量表和终端区在画面下方还没露出来，先不搭（一次要算整份统计、建整块 DOM），免得和动画抢同一帧；
+// 落地后先搭用量表，搭完了再搭终端区，两块不挤在同一帧里。
+// 用量表和终端区一次只新建约 12 毫秒的行（第一次搭、行一下多了很多时），没建完的下一帧接着建（again）
+const DOM = { version: -1, ui: -1, at: 0, deferred: false, again: false };
+function domStep(nowMs, landing) {
+  if (!(UI.ver !== DOM.ui || B.version !== DOM.version && nowMs - DOM.at >= 250 || nowMs - DOM.at > 500 || DOM.again || DOM.deferred && !landing)) return null;
+  DOM.version = B.version; DOM.ui = UI.ver; DOM.at = nowMs; DOM.again = false;
+  if (landing) { DOM.deferred = 'all'; return { table: false, terms: false }; }
+  if (DOM.deferred === 'all') return { table: true, terms: false };
+  if (DOM.deferred === 'terms') return { table: false, terms: true };
+  return { table: true, terms: true };
+}
+// 这一帧画了哪几块（dom，domStep 的返回）、画完没有：落地后的那一段按它往下走，没画完的下一帧再画
+function domDrawn(dom, table, terms) {
+  if (DOM.deferred === 'all') { if (dom.table) { if (table) DOM.deferred = 'terms'; else DOM.again = true; } return; }
+  if (DOM.deferred === 'terms') { if (dom.terms) { if (terms) DOM.deferred = false; else DOM.again = true; } return; }
+  if (dom.table && !table || dom.terms && !terms) DOM.again = true;
+}
 // 用户在操作：接下来一小段时间按忙时的帧率画
 function busy(ms = 400) { busyUntil = Math.max(busyUntil, performance.now() + ms); }
 for (const type of ['wheel', 'pointermove', 'pointerdown', 'keydown']) addEventListener(type, () => busy(), { passive: true, capture: true });
@@ -6018,16 +6133,14 @@ function step() {
   const L = computeLayout(t);
   if (!started) { started = true; VIEW.H = L.H; fitView(true); }
   const viewMoving = stepView(L.H);
-  // 飞入动画进行中：用量表和终端区在画面下方还没露出来，先不搭（一次要算整份统计、建整块 DOM），落地以后马上补上，免得和动画抢同一帧
-  const landing = FLY.mode === 'in';
-  if (B.version !== drawnVersion || nowMs - lastDom > 500 || tablesDeferred && !landing) {
-    drawnVersion = B.version;
-    lastDom = nowMs;
+  // 飞入落地以后镜头还在走的那一段也先不搭：第一次搭用量表和终端区要一两百毫秒，等画面停下再搭就看不出顿
+  const dom = domStep(nowMs, FLY.mode === 'in' || DOM.deferred === 'all' && viewMoving);
+  if (dom) {
     loadFinals();
     renderTop(t);
     renderWorld(t, L);
-    tablesDeferred = landing;
-    if (!landing) { renderTable(t); renderTerms(t, L); }
+    const table = dom.table ? renderTable(t) : true, terms = dom.terms ? renderTerms(t, L) : true;
+    domDrawn(dom, table, terms);
   }
   placeWorld(L, t);
   // 往下滚到终端、星图整个移出屏幕时不画画布

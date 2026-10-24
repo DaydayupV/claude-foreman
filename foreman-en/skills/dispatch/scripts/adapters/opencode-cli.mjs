@@ -1,4 +1,4 @@
-// opencode CLI：代理权限与环境、事件翻译、会话导出和检查项。
+// Opencode CLI：代理权限与环境、事件翻译、会话导出和检查项。
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
