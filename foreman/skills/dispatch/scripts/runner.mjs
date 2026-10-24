@@ -327,7 +327,9 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
       }
     }
 
-    const baseline = mode === 'resume' ? sessionStats(ctx.sessionId, meta.started_at)?.total_token_usage : {};
+    // 续接以开工前的会话累计用量为基线；会话里还没有一次请求完成时基线是 0，读不到会话记录时只能记会话累计
+    const prior = mode === 'resume' ? sessionStats(ctx.sessionId, meta.started_at) : null;
+    const baseline = mode === 'resume' ? (prior?.no_requests ? {} : prior?.total_token_usage) : {};
     const r = snapshotError ? { status: 'failed', code: 1, errors: [snapshotError], warnings: [], fileChanges: new Set(), images: [], commands: 0, usage: null, cost: null }
       : await runAgent({
         agent, args, cwd, prompt, runDir: dir,
