@@ -168,7 +168,7 @@ flowchart TD
 
 ### 网页看板
 
-终端实时查看之外的另一个入口，默认关闭：在配置里把 `dispatch.watch.web` 设成 `true`，或者运行 `/foreman:setup`（按本机内存决定开不开）。开着时派出任务只给看板链接，不再自动打开终端实时查看；想在终端里看时用 `/foreman:watch`。
+终端实时查看之外的另一个入口，默认关闭：在配置里把 `dispatch.watch.web` 设成 `true`，或者运行 `/foreman:setup`（按本机内存决定开不开）。开着时派出任务只给看板链接，不再自动打开终端实时查看；想在终端里看时用 `/foreman:watch`。插件的钩子会在每次派出时把看板链接直接显示在对话里（同一个对话 3 分钟内只显示一次），不靠 Claude Code 记得写。
 
 - **怎么打开**：开着时，每次派活都先在对话里给一个链接，再启动任务；`/foreman:watch` 也会给。点开会在你的默认浏览器里打开：先看到星图，随后自动飞进这个对话的看板（刷新页面时直接回到看板）；不会在 Claude 应用里打开。
 - **星图**：
@@ -527,7 +527,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 
 ## 开发
 
-两个插件的脚本是同一份：`skills/dispatch/scripts/` 下除 `language.json` 以外的全部文件（入口是 `cli.mjs`），以及 `hooks/` 下的两个钩子。只改 `foreman/` 里的那份，再运行同步工具复制到英文插件：
+两个插件的脚本是同一份：`skills/dispatch/scripts/` 下除 `language.json` 以外的全部文件（入口是 `cli.mjs`），以及 `hooks/` 下的钩子脚本。只改 `foreman/` 里的那份，再运行同步工具复制到英文插件：
 
 ```bash
 node tools/sync-shared.mjs

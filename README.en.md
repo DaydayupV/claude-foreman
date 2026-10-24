@@ -168,7 +168,7 @@ Prompt templates, command options and the checks are in [references/image-assets
 
 ### The web board
 
-Another way to watch besides the terminal live view, off by default: set `dispatch.watch.web` to `true` in the config, or run `/foreman-en:setup` (it decides from this computer's memory). While it's on, handoffs give the board link and no longer open the terminal live view by themselves; use `/foreman-en:watch` when you want the terminal view.
+Another way to watch besides the terminal live view, off by default: set `dispatch.watch.web` to `true` in the config, or run `/foreman-en:setup` (it decides from this computer's memory). While it's on, handoffs give the board link and no longer open the terminal live view by themselves; use `/foreman-en:watch` when you want the terminal view. A plugin hook shows the board link right in the conversation on every handoff (at most once every 3 minutes per conversation), without relying on Claude Code to write it.
 
 - **Opening it**: when it's on, every handoff first gives a link in the conversation, then starts the work; `/foreman-en:watch` gives one too. It opens in your default browser: you see the star map first, then fly into that conversation's board on your own (a reload goes straight back to the board); it never opens inside the Claude app.
 - **The star map**:
@@ -527,7 +527,7 @@ Install just one. Both share the same config file, preference files and run reco
 
 ## Development
 
-Both plugins use the same scripts: everything under `skills/dispatch/scripts/` except `language.json` (the entry point is `cli.mjs`), plus the two hooks under `hooks/`. Only edit the copy in `foreman/`, then run the sync tool to copy it into the English plugin:
+Both plugins use the same scripts: everything under `skills/dispatch/scripts/` except `language.json` (the entry point is `cli.mjs`), plus the hook scripts under `hooks/`. Only edit the copy in `foreman/`, then run the sync tool to copy it into the English plugin:
 
 ```bash
 node tools/sync-shared.mjs
