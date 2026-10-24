@@ -20,6 +20,7 @@ const B = {
   laneById: new Map(),
   feed: [],               // 所有车道的事件，按时间，最多 FEED_MAX 条
   life: [],               // 派发计划和裁决事件，单独留着不丢（流程动效要从计划建起一直看到裁决）
+  prompts: [],            // 用户每条消息的时刻（Claude Code 车道的 prompt 事件），单独留着不随车道事件裁掉：终端区按它分"最近一轮"
   total: 0,               // 收到的事件总数（含已丢掉的）
   connected: false,
   done: false,            // 回放已发完
@@ -39,7 +40,7 @@ function now() {
 }
 
 function reset() {
-  B.runs.clear(); B.lanes = []; B.laneById.clear(); B.feed = []; B.life = []; B.total = 0; B.done = false; B.version++;
+  B.runs.clear(); B.lanes = []; B.laneById.clear(); B.feed = []; B.life = []; B.prompts = []; B.total = 0; B.done = false; B.version++;
 }
 
 function onHello(h) {
@@ -88,6 +89,7 @@ function onEv(ev, stats = true) {
   // 同一份计划的事件可能再发（内容变了、重连）：按计划 id 只留最新一份
   if (ev.k === 'fplan') B.life = B.life.filter((x) => !(x.k === 'fplan' && x.plan === ev.plan));
   if (ev.k === 'fplan' || ev.k === 'verdict') insertByTs(B.life, ev, Infinity);
+  if (ev.k === 'prompt' && Number.isFinite(ev.ts) && !B.prompts.includes(ev.ts)) { B.prompts.push(ev.ts); B.prompts.sort((a, b) => a - b); }
   if (!lane.last || ev.ts >= lane.last.ts) lane.last = ev;
   B.version++;
   wake();
@@ -149,6 +151,22 @@ function scopeQuery() {
   return p;
 }
 
+const STREAM_STUCK_MS = 8000;
+let streamsReleased = false;
+// 同主机连接被别的标签页占满时不一定触发 error，初次连接和断线重连都要计时。
+function watchStream(state, es) {
+  const wait = () => {
+    if (es.readyState !== 0 || state.stuckTimer != null || state.stuckNoticed) return;
+    state.stuckTimer = setTimeout(() => {
+      state.stuckTimer = null;
+      if (es.readyState === 0) { state.stuckNoticed = true; showNotice(TEXT.streamStuck); }
+    }, STREAM_STUCK_MS);
+  };
+  es.addEventListener('open', () => { clearTimeout(state.stuckTimer); state.stuckTimer = null; state.stuckNoticed = false; });
+  es.addEventListener('error', wait);
+  wait();
+}
+
 function connect() {
   if (window.__BOARD_FIXTURE__) return loadSnapshot(window.__BOARD_FIXTURE__);
   const q = scopeQuery();
@@ -158,8 +176,10 @@ function connect() {
     fetch(`snapshot?${q}`).then((r) => r.json()).then(loadSnapshot).catch((e) => { B.error = String(e); });
     return;
   }
+  if (B.es || streamsReleased) return;
   const es = new EventSource(`stream?${q}`);
   B.es = es;
+  watchStream(B, es);
   const on = (name, fn) => es.addEventListener(name, (e) => fn(JSON.parse(e.data)));
   on('hello', onHello);
   on('run', onRun);
@@ -174,6 +194,7 @@ function connect() {
 // 换看的对话之前关掉原来的数据流（宇宙层同一时刻只挂一个完整看板）
 function disconnect() {
   if (B.es) { B.es.close(); B.es = null; }
+  clearTimeout(B.stuckTimer); B.stuckTimer = null; B.stuckNoticed = false;
   B.connected = false; B.error = null;
 }
 

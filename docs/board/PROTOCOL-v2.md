@@ -51,8 +51,8 @@ Read from transcript entries in file order:
 | `search` | `tool_use` Grep / Glob | `t`: `pattern` |
 | `web` | `tool_use` WebSearch (`t`: `query`) / WebFetch (`t`: `url` without the scheme) | |
 | `edit` | `tool_use` Edit / MultiEdit / NotebookEdit (`update`) / Write (`write`) | `t`: `<kind> <path>` |
-| `cmd` | `tool_use` Bash / PowerShell that is not a dispatch or collect (below) | `t`: the command, one line, via `plainCommand` |
-| `cmd_done` | `tool_result` answering a `cmd` (matched by `tool_use_id`) | `ok`: `!is_error` |
+| `cmd` | `tool_use` Bash / PowerShell that is not a dispatch or collect (below) | `t`: the command, one line, via `plainCommand`; `aid`: `tool_use.id` (string, when available) |
+| `cmd_done` | `tool_result` answering a `cmd` (matched by `tool_use_id`) | `ok`: `!is_error`; `aid`: the matching `cmd`'s `aid`, when available |
 | `dispatch` | Bash / PowerShell whose command runs foreman's `cli.mjs` with subcommand `run`, `discuss`, `review`, `resume`, `image`, `plan` or `submit` | `t`: `<subcommand> <title or plan/seat/run>`; `target` (see Linking) |
 | `collect` | Claude Code reading results: a Read whose path is inside the runs directory, or `cli.mjs status` / `watch` / `stats` / `judge` | `t`: short label; `target` (see Linking) |
 | `tool` | any other `tool_use` | `t`: tool name with a leading `mcp__<server>__` removed |
@@ -92,6 +92,7 @@ Runs with `meta.participant === 'host'`, which `submit` writes, belong to lane `
 
 ## 2. Event additions for every lane
 
+- `cmd` and `cmd_done` carry the same optional string `aid`, scoped to their `run`: the item's `id` for Codex and the adapted opencode/pi events, or `tool_use.id` for Claude Code. Paired `read`/`search` item events also retain it. Omit `aid` when no id is available; the page then keeps the legacy pairing with the most recent command.
 - `usage` events carry `u: { "in", "cached", "cache_write", "out" }` whenever the source has those numbers. See §3 for what they mean; a missing number is `null`.
 - `think` and `answer` events from streaming sources keep `n` as the running character total. The page turns it into an estimate at about 4 characters per token.
 

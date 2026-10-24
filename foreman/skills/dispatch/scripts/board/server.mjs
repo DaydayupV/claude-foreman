@@ -113,7 +113,14 @@ function scopeOptions(values) {
   return scope;
 }
 const hello = (data, now) => ({ v: 3, mode: 'live', scope: data.scope, now, replay: null });
-const backlog = (events) => events.length <= 200 ? events : events.some((ev) => ev.k === 'start') ? [events.find((ev) => ev.k === 'start'), ...events.filter((ev) => ev.k !== 'start').slice(-199)] : events.slice(-200);
+// 连上（或重连）时补发的事件只留最近 200 条；开头的 start 和最近一条用户消息（终端区按它分"最近一轮"）另外留着，不被挤掉
+const backlog = (events) => {
+  if (events.length <= 200) return events;
+  const start = events.find((ev) => ev.k === 'start'), prompt = events.findLast((ev) => ev.k === 'prompt');
+  const tail = new Set(events.filter((ev) => ev !== start && ev !== prompt).slice(-(200 - (start ? 1 : 0) - (prompt ? 1 : 0))));
+  // start 在最前（和原来一样），其余保持原来的先后
+  return [...(start ? [start] : []), ...events.filter((ev) => ev !== start && (ev === prompt || tail.has(ev)))];
+};
 const RATE_EVENTS_MAX = 20000;
 // 展示截断不能截掉统计分母；统计历史只发计算需要的字段，上限与页面一致。
 const rateHistory = (events) => events.slice(-RATE_EVENTS_MAX).map(({ run, ts, k, u, n, tot, end, usage_from, usage_to }) =>

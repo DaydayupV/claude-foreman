@@ -7,7 +7,7 @@
 //  - Claude Code 自己的对话流单独一栏，放在最前
 // 有新内容时自动滚到底，往上翻看时不打扰。以后做多对话，切换对话就是换一组车道（termUnits）重画，标题跟着换。
 
-const PANEL = { cols: new Map(), open: new Set(), seen: false, numbers: new Map(), allDone: false };
+const PANEL = { cols: new Map(), open: new Set(), seen: false, numbers: new Map(), fold: new Map(), doneLines: new Map(), allDone: false };
 const groupPlans = (group, t) => [...new Map(B.life.filter((p) => p.k === 'fplan' && p.group === group && p.ts <= t).map((p) => [p.plan, p])).values()];
 function dispatchQueue(t) {
   const snapshot = B.laneById.get('dispatch_queue')?.events.filter((e) => e.ts <= t).at(-1);
@@ -24,8 +24,9 @@ addEventListener('scroll', () => {
 }, { passive: true });
 $('more').addEventListener('click', () => $('termsec').scrollIntoView({ behavior: 'smooth' }));
 $('termsec').addEventListener('click', (e) => {
-  // 已结束的组多于 DONE_SHOWN 时，最后的按钮列出全部
-  if (e.target.closest('#termdone .more')) { PANEL.allDone = true; B.version++; wake(); return; }
+  // 已结束的组：点折起来的那一行展开成栏；点展开的栏头收回成一行
+  const line = e.target.closest('#termdone .dline'), head = e.target.closest('#termdone .tcol > header');
+  if (line || head) { PANEL.fold.set((line || head.parentNode).dataset.lane, !!line); B.version++; wake(); return; }
   const seat = e.target.closest('.seat');
   if (!seat) return;
   const id = seat.dataset.lane;
@@ -54,9 +55,11 @@ function termUnits(t, L) {
   return units;
 }
 
-// 正在跑的组和刚出结果的组在上面一排；全部结束一分钟以后挪到下面一排（"finished"），样子和上面完全一样、照样展开，
-// 和刻度带脱钩：结果被 Claude Code 读走、席位离开刻度带以后照样留着。最新结束的在最前，先列 DONE_SHOWN 组
-const DONE_AFTER = 60000, DONE_SHOWN = 20;
+// 正在跑的组和刚出结果的组在上面一排；全部结束一分钟以后挪到下面的"finished"一段，和刻度带脱钩：
+// 结果被 Claude Code 读走、席位离开刻度带以后照样留着。最新结束的在最前。
+// 最近一轮（用户最后一条消息之后）结束的组默认展开，样子和上面运行中的栏完全一样；更早轮次的默认折成一行，
+// 点一下展开；展开的点栏头收回。用户点过的按点的来（PANEL.fold：栏 id → 是否展开）
+const DONE_AFTER = 60000;
 const unitLanes = (u) => (u.group ? u.lanes : [u.lane]);
 const unitEnd = (u, t) => Math.max(0, ...unitLanes(u).map((l) => currentRun(l, t)?.ended_at ?? 0));
 function unitFinished(u, t) {
@@ -77,21 +80,56 @@ function fillRow(row, units, t, seen) {
     if (u.group) fillGroup(col, u, t); else fillColumn(col, u.lane, t);
   });
 }
+// 用户最后一条消息的时刻（B.prompts，不随车道事件裁掉）；没有记录时返回 -Infinity（全部算最近一轮）
+function lastPromptAt(t) {
+  let at = -Infinity;
+  for (const ts of B.prompts) if (ts <= t) at = ts;
+  return at;
+}
+const doneOpen = (u, t, since) => PANEL.fold.get(u.id) ?? unitEnd(u, t) >= since;
+// 折起来的一行：和展开后的栏头写法一样（标题、各状态个数），再加结束时间和这一组所有轮次的费用
+function doneLine(u, t) {
+  // 不是今天结束的写上月-日，免得跨天时看着像倒着排
+  const at = (ms) => new Date(Display.recordedTime(ms, displayPoints())), end = unitEnd(u, t), e = at(end);
+  const date = e.toDateString() === at(t).toDateString() ? '' : `${String(e.getMonth() + 1).padStart(2, '0')}-${String(e.getDate()).padStart(2, '0')} `;
+  const when = `ended ${date}${hhmm(e.getTime())}`;
+  let title, counts, runs;
+  if (u.group) {
+    const g = groupSeats(u, t);
+    title = Display.groupTask(g.all, g.plans, g.queue).text; counts = Display.countsText(g.states);
+    runs = [...B.runs.values()].filter((r) => r.group === u.group && r.started_at <= t);
+  } else {
+    const r = currentRun(u.lane, t), st = seatStatus(u.lane, r, t);
+    title = Display.taskLine(Display.displayRun(r).meta, { round: roundOf(u.lane, t) }); counts = `${st.style.mark} ${st.style.word}`;
+    runs = u.lane.runs.filter((x) => x.started_at <= t);
+  }
+  const cost = runs.reduce((n, r) => n + (r.cost_usd || 0), 0);
+  return `▸ ${[title, counts, when, cost ? `$${fmtUsd(cost)}` : null].filter(Boolean).join(' · ')}`;
+}
 function renderDone(done, t, seen) {
   const box = $('termdone');
   box.hidden = !done.length;
   if (!done.length) return;
-  if (!box.firstChild) box.innerHTML = '<div class="sub"></div><div class="row"></div>';
-  setText(box.firstChild, `finished · ${done.length}`);
-  const row = box.lastChild, shown = PANEL.allDone ? done : done.slice(0, DONE_SHOWN);
-  fillRow(row, shown, t, seen);
-  let more = row.querySelector(':scope > .more');
-  const rest = done.length - shown.length;
-  if (rest > 0) {
-    if (!more) { more = document.createElement('button'); more.type = 'button'; more.className = 'more'; }
-    setText(more, `show ${rest} more`);
-    if (row.lastChild !== more) row.append(more);
-  } else more?.remove();
+  if (!box.firstChild) {
+    const sub = document.createElement('div'), row = document.createElement('div'), lines = document.createElement('div');
+    sub.className = 'sub'; row.className = 'row'; lines.className = 'lines';
+    box.append(sub, row, lines);
+  }
+  const [sub, row, lines] = box.children, since = lastPromptAt(t);
+  const open = done.filter((u) => doneOpen(u, t, since)), closed = done.filter((u) => !open.includes(u));
+  setText(sub, `finished · ${done.length}`);
+  fillRow(row, open, t, seen);
+  for (const u of open) PANEL.cols.get(u.id).classList.add('done-open');
+  // 刚收起的栏移出这一排（栏本身由 renderTerms 最后统一回收）
+  const keep = new Set(open.map((u) => PANEL.cols.get(u.id)));
+  for (const c of [...row.children]) if (!keep.has(c)) c.remove();
+  closed.forEach((u, i) => {
+    let el = PANEL.doneLines.get(u.id);
+    if (!el) { el = document.createElement('div'); el.className = 'dline'; el.dataset.lane = u.id; PANEL.doneLines.set(u.id, el); }
+    if (lines.children[i] !== el) lines.insertBefore(el, lines.children[i] || null);
+    setText(el, doneLine(u, t));
+  });
+  for (const [id, el] of PANEL.doneLines) if (!closed.some((u) => u.id === id)) { el.remove(); PANEL.doneLines.delete(id); }
 }
 
 function renderTerms(t, L) {
@@ -100,7 +138,10 @@ function renderTerms(t, L) {
   if (!termsNear()) return;
   const box = $('terms'), seen = new Set(), units = termUnits(t, L);
   const done = units.filter((u) => unitFinished(u, t)).sort((a, b) => unitEnd(b, t) - unitEnd(a, t));
-  fillRow(box, units.filter((u) => !done.includes(u)), t, seen);
+  const live = units.filter((u) => !done.includes(u));
+  fillRow(box, live, t, seen);
+  // 回到上面一排的栏（又续接了）去掉"可收起"的样子
+  for (const u of live) PANEL.cols.get(u.id)?.classList.remove('done-open');
   renderDone(done, t, seen);
   for (const [id, col] of PANEL.cols) if (!seen.has(id)) { col.remove(); PANEL.cols.delete(id); }
 }
@@ -211,6 +252,9 @@ function fillGroup(col, u, t) {
     const el = col.seats.get(b.id);
     if (!PANEL.open.has(b.id)) fillFlow(el.querySelector('.term'), Display.collapseLines(el.fullLines, true, 'click to open').map((line) => typeof line === 'string' ? { cls: 'plain', text: line } : line));
   }
+  let finished = col.querySelector('.all-done');
+  if (!finished) { finished = document.createElement('div'); finished.className = 'all-done'; col.append(finished); }
+  setText(finished, states.length && !queue.length && !states.some((s) => s.running) ? `✔ ${Display.D.dashAllFinishedShort}` : '');
   let pending = col.querySelector('.dispatch-queue');
   if (!pending) { pending = document.createElement('div'); pending.className = 'dispatch-queue'; col.append(pending); }
   pending.replaceChildren();

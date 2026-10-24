@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { M, die, isGitRepo, readAttachments, readImages, relativePath } from './util.mjs';
+import { M, LANGUAGE, die, isGitRepo, readAttachments, readImages, relativePath } from './util.mjs';
 
 export const MAX_REVIEW_CHARS = 200000;
 export const REVIEW_TARGETS = ['diff', 'files', 'claims', 'visual'];
@@ -47,9 +47,9 @@ export function computeReviewMaterial({ cwd, target = 'diff', file = [], uncommi
 }
 
 export function computeReviewScope({ cwd, uncommitted, base, commit }) {
-  const git = (args, allowed = [0]) => {
+  const git = (args, allowed = [0], input = '') => {
     const r = spawnSync('git', ['-c', 'core.quotepath=false', '--literal-pathspecs', ...args], {
-      cwd, input: '', maxBuffer: 1 << 30, windowsHide: true,
+      cwd, input, maxBuffer: 1 << 30, windowsHide: true,
     });
     if (!allowed.includes(r.status)) throw new Error(r.error?.message || r.stderr.toString('utf8').trim());
     return r.stdout;
@@ -88,9 +88,16 @@ export function computeReviewScope({ cwd, uncommitted, base, commit }) {
     ? git(['ls-files', '--others', '--exclude-standard', '-z']).toString('utf8').split('\0').filter(Boolean) : []);
   for (const file of untracked) entries.push({ path: file, status: 'A', binary: false, too_large: false, old_path: null });
   entries.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  const attributes = git(['check-attr', '-z', '--stdin', 'linguist-generated'], [0],
+    entries.map((f) => `${f.path}\0`).join('')).toString('utf8').split('\0');
+  const generated = new Set();
+  for (let i = 0; attributes[i]; i += 3) {
+    if (attributes[i + 2] === 'set' || attributes[i + 2] === 'true') generated.add(attributes[i]);
+  }
+  const parts = entries.map((f) => ({ generated: generated.has(f.path), patch: '' }));
   let patch = '';
   const hashes = [];
-  for (const file of entries) {
+  for (const [i, file] of entries.entries()) {
     if (untracked.has(file.path) && fs.lstatSync(path.join(cwd, file.path)).size > MAX_UNTRACKED_BYTES) {
       file.too_large = true;
       const hash = createHash('sha256'), buffer = Buffer.alloc(64 * 1024), fd = fs.openSync(path.join(cwd, file.path), 'r');
@@ -111,10 +118,46 @@ export function computeReviewScope({ cwd, uncommitted, base, commit }) {
       const headerEnd = bytes.indexOf('\n--- ');
       text = headerEnd < 0 ? '' : bytes.subarray(0, headerEnd + 1).toString('utf8');
     } else file.binary = /^Binary files /m.test(text);
+    parts[i].patch = text;
     patch += text;
   }
+  // 指纹仍按全部文件和补丁算，生成文件变化也要使原审查材料失效。
   const hash = createHash('sha256').update(patch).update(JSON.stringify(entries));
   if (hashes.length) hash.update(JSON.stringify(hashes));
   const fingerprint = hash.digest('hex');
-  return { kind, description, base: baseSha, merge_base: mergeBase, commit: commitSha, files: entries, patch, fingerprint };
+  return { kind, description, base: baseSha, merge_base: mergeBase, commit: commitSha, files: entries, parts, patch, fingerprint };
+}
+
+export function reviewPatchText(scope, { budget, readsFiles }) {
+  const rows = scope.files.map((f, i) => `- ${f.status} ${f.old_path ? `${f.old_path} → ` : ''}${f.path}`
+    + (scope.parts[i].generated ? M.reviewFileGenerated : '')
+    + (f.binary ? M.reviewFileBinary : '') + (f.too_large ? M.reviewFileTooLarge : ''));
+  // 生成文件通常是构建产物或镜像，重复内容不占审查提示的补丁预算。
+  // 二进制文件只有几行补丁头，照旧放进来（和改动前一样）
+  const patches = scope.parts.map((part) => (part.generated ? '' : part.patch));
+  let omitted = 0;
+  if (readsFiles && rows.join('\n').length + patches.join('').length > budget) {
+    const hints = scope.files.map((f, i) => {
+      if (!patches[i] || f.binary || f.too_large) return '';
+      if (f.status === 'D') return M.reviewFileDeletedOmitted;
+      if (f.status === 'A') return M.reviewFileNewOmitted;
+      const ranges = [...patches[i].matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm)].map((m) => {
+        const start = Number(m[1]), count = Number(m[2] ?? 1);
+        return count > 1 ? `${start}-${start + count - 1}` : `${start}`;
+      });
+      return M.reviewFileRanges(ranges.slice(0, 20).join(', ') + (ranges.length > 20 ? (LANGUAGE === 'en' ? ' and more' : ' 等') : ''));
+    });
+    // 先给未放入的文件预留提示位置，免得后面的行号说明把已放补丁挤过上限。
+    let chars = rows.join('\n').length + hints.join('').length;
+    for (let i = 0; i < patches.length; i++) {
+      if (!patches[i]) continue;
+      if (chars + patches[i].length - hints[i].length <= budget) chars += patches[i].length - hints[i].length;
+      else { rows[i] += hints[i]; patches[i] = ''; omitted++; }
+    }
+  }
+  const fileList = rows.join('\n'), patch = patches.join(''), chars = fileList.length + patch.length;
+  const generated = scope.parts.filter((part) => part.generated).length;
+  const longest = (patch.match(/`+/g) || []).reduce((n, s) => Math.max(n, s.length), 2);
+  return { fileList, patch, fence: '`'.repeat(longest + 1), chars, tooLarge: chars > budget,
+    note: generated || omitted ? M.reviewMaterialNote(generated, omitted) : '' };
 }

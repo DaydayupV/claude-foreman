@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { RUNS_ROOT, UNFINISHED_STATUSES, requestCancel, listRuns, findRun, readMeta, checkRunners, isRunning, runEnd, runOutcome, resumedRuns, groupRuns, groupSummary, describeActivity, saveMeta, metaWriteWarning, queuedRuns } from './records.mjs';
 import { M, die, need, pidExists, processStartedAt, killTreeIfSame, sleep, modelOf, agentTypeOf, replaceFile } from './util.mjs';
-import { D, C, padWidth, visibleWidth, modelLabel, clock, took, outcomeStyle, usageLine, paintPlanWord } from './format.mjs';
+import { D, C, padWidth, visibleWidth, modelLabel, clock, took, outcomeStyle, usageLine, outsideCwdText, paintPlanWord } from './format.mjs';
 import { planStatus, describePlans } from './plan.mjs';
 import { costOf, loadPrices } from './prices.mjs';
 
@@ -70,10 +70,11 @@ function cmdStatus(o, sessionStats) {
       const last = sessionStats(m)?.last_request;
       detail = D.dots([D.statusActivity(a.idle_min ?? '-', a.step), last && D.lastRequestNow(last, D.tokenCount)]);
     } else detail = usageLine(r, m);
-    return [{ cells, tail, detail }];
+    const outside = !outcome.running && outsideCwdText(r, m);
+    return [{ cells, tail, detail, outside }];
   });
   const widths = records.reduce((w, { cells }) => cells.map((c, i) => Math.max(w[i] || 0, visibleWidth(c))), []);
-  const rows = records.map(({ cells, tail, detail }) => `${cells.map((c, i) => padWidth(c, widths[i])).join('  ')}  ${tail}${detail ? `\n    ${C.dim(`└ ${detail}`)}` : ''}`);
+  const rows = records.map(({ cells, tail, detail, outside }) => `${cells.map((c, i) => padWidth(c, widths[i])).join('  ')}  ${tail}${detail ? `\n    ${C.dim(`└ ${detail}`)}` : ''}${outside ? `\n    ${C.yellow(`⚠ ${outside}`)}` : ''}`);
   if (unreadable) rows.push(C.dim(D.statusUnreadable(unreadable)));
   // 额度是账号级的，取最近一次有记录的任务显示一行
   let quota = null;

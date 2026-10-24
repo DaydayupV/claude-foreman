@@ -5,6 +5,8 @@ const D = {
   watchImageHead: (mode, title, cell, mark) => `${mode} · ${title} · ${cell} · route ${mark}`,
   watchImageViewed: (file) => `Opened image ${file}`,
   watchStale: 'material changed during the review (stale)',
+  watchNoUsage: 'no usage reported by the provider for this round',
+  watchOutsideCwd: (shown, more) => `wrote outside the working directory: ${shown}${more ? ` and ${more} more` : ''}`,
   costUsd: (text) => `cost $${text}`,
   // 整轮平均速度包含命令和等待，与终端原有口径一致。
   outputSpeed: (n, partial) => `run avg ${n} tok/s${partial ? ' (partial usage)' : ''}`,
@@ -21,6 +23,7 @@ const D = {
   watchApiDropped: (duration) => `Dropped by the server after ${duration} in the queue (service busy)`,
   watchRound: (n) => `round ${n}`,
   groupModes: { panel: 'panel', roles: 'roles', split: 'split' },
+  dashKeysShort: (range, queued) => `${queued ? 'x stop · ' : ''}${range ? `${range} · ` : ''}↑↓ · q`,
   dashKeys: (range, queued, twoDigits = false) => `${queued ? 'x stop queued · ' : ''}${range ? `${range} open a seat${twoDigits ? ' (600ms for 2nd digit)' : ''} · ` : ''}↑↓ scroll · q quit`,
   statusResumed: 'resumed',
   dashAbove: (n) => `↑ ${n} more line${n === 1 ? '' : 's'} above`,
@@ -31,10 +34,10 @@ const D = {
   watchFinishedKeys: 'g top · ↑↓ scroll · q quit',
   watchFinishedNote: 'finished · q leaves and keeps the record in this tab',
   // 窄窗口先省略 run_id，保留跟随续接的按键提示。
-  watchContinued: (id) => `continued as ${id} · press n to follow`,
-  watchContinuedShort: 'continued · press n to follow',
-  watchContinuedTiny: 'continued · press n',
-  watchContinuedOut: (id) => `continued as ${id}`,
+  watchContinued: (id) => `↪ resumed as ${id} · press n to follow`,
+  watchContinuedShort: '↪ resumed · press n to follow',
+  watchContinuedTiny: '↪ resumed · press n',
+  watchContinuedOut: (id) => `↪ resumed as ${id}`,
   watchAnswerSubmitted: (round) => `report submitted (round ${round})`,
   watchReplayOne: (command) => `replay a seat: ${command}`,
   dashCancelConfirm: (models) => `Press x again to stop ${models}, or any other key to cancel`,
@@ -273,15 +276,36 @@ function changedText(c) {
 // 讨论和审查本来只读，只有真的改了文件才显示改动数（那是越界，要提醒）。
 const changedFor = (r, m) => (m?.kind === 'exec' || agentTotal(r?.changes) ? changedText(r?.changes) : null);
 
+function outsideCwdText(r, m) {
+  const files = m?.kind === 'exec' ? (r?.changes?.outside_cwd || []).filter((f) => f.in_scope === false) : [];
+  if (!files.length) return null;
+  // 网页也用这段纯显示逻辑，不能依赖 Node 的 path；保留上级目录和原有路径分隔符。
+  const cwd = m.cwd ?? r.cwd ?? '', windows = /^[A-Za-z]:|^\\\\/.test(cwd), sep = cwd.includes('\\') ? '\\' : '/';
+  const base = cwd ? cwd.replace(/\\/g, '/').replace(/\/$/, '').split('/') : [];
+  // 根（盘符，或网络共享的 //服务器/共享名）不同的不写成相对路径：../ 回不到另一个盘或另一台服务器
+  const rootOf = (p) => { const s = p.replace(/\\/g, '/'), unc = /^\/\/[^/]+\/[^/]+/.exec(s); return (unc ? unc[0] : /^[A-Za-z]:/.exec(s)?.[0] ?? (s.startsWith('/') ? '/' : '')).toLowerCase(); };
+  const relative = (file) => {
+    if (!cwd || rootOf(file) !== rootOf(cwd)) return file;
+    const parts = file.replace(/\\/g, '/').split('/');
+    let i = 0;
+    while (i < base.length && i < parts.length && (windows ? base[i].toLowerCase() === parts[i].toLowerCase() : base[i] === parts[i])) i++;
+    return i ? [...base.slice(i).map(() => '..'), ...parts.slice(i)].join(sep) : file;
+  };
+  return D.watchOutsideCwd(D.list(files.slice(0, 3).map((f) => relative(f.path))), Math.max(0, files.length - 3));
+}
+
 const formatUsd = (n) => (n === 0 ? '0' : n < 0.01 ? n.toPrecision(2) : n < 1 ? n.toFixed(3) : n.toFixed(2));
 function usageLine(result, meta) {
   if (meta?.participant === 'host') return D.watchHostNoUsage;
   const cost = result || {};
-  return [result?.usage ? D.tokenSummary(result.usage, result.last_request ?? result.context, D.tokenCount,
+  const parts = [result?.usage ? D.tokenSummary(result.usage, result.last_request ?? result.context, D.tokenCount,
     (result.usage_scope ?? (meta?.mode === 'resume' ? 'session_total' : 'this_run')) === 'session_total') : '',
   // 取消、超时、卡死的轮次只记到最后一次完成的请求，速度偏低，标出来
   result?.output_tokens_per_s != null ? D.outputSpeed(result.output_tokens_per_s, ['cancelled', 'timeout', 'stalled'].includes(result.status)) : '',
-  cost.cost_usd != null && cost.cost_source !== 'unknown' ? D.costUsd(formatUsd(cost.cost_usd)) : ''].filter(Boolean).join(' · ');
+  cost.cost_usd != null && cost.cost_source !== 'unknown' ? D.costUsd(formatUsd(cost.cost_usd)) : ''].filter(Boolean);
+  // 结束了却什么用量都没有（一次请求都没完成、厂商没报）：写明没报，结果的 notes 里有原因
+  if (!parts.length && result?.status && result.status !== 'running' && !result.usage_unattributed && !result.not_started) return D.watchNoUsage;
+  return parts.join(' · ');
 }
 
 function toolLabel(category, tool, { pattern, glob, path: where } = {}) {
@@ -365,9 +389,12 @@ function finalLines(run, r, ok, inner, C = unpainted) {
   if (moreAsked > 0) out.push(...marked('?', C.yellow, D.watchMoreQuestions(moreAsked)));
   const changed = run.meta.kind !== 'exec' && changedFor(r, run.meta); // 讨论和审查只有越界写了文件才有
   if (changed) out.push(...marked('⚠', C.yellow, changed));
+  const outside = outsideCwdText(r, run.meta);
+  if (outside) out.push(...marked('⚠', C.yellow, outside));
   if (r?.stale === true) out.push(...marked('⚠', C.yellow, D.watchStale));
   const [mark, color] = r?.status === 'needs_input' ? ['?', C.yellow] : ['✗', C.red];
-  for (const e of realErrors(r, ok)) out.push(...marked(mark, color, e));
+  const secondary = ['timeout', 'cancelled'].includes(r?.status);
+  realErrors(r, ok).forEach((e, i) => out.push(...(secondary && i > 0 ? marked('·', C.dim, e).map((l) => C.dim(l)) : marked(mark, color, e))));
   const moreErrors = (r?.errors_total ?? 0) - (r?.errors?.length ?? 0);
   if (moreErrors > 0) out.push(...marked(mark, color, D.watchMoreErrors(moreErrors)));
   return out;
@@ -589,10 +616,12 @@ const queuedStarted = (q, runs) => runs.some((r) => {
   return q.plan && m.plan === q.plan && m.seat === q.seat && timeOf(m.original_started_at ?? m.started_at) >= timeOf(q.queued_at);
 });
 const collapseLines = (lines, collapse, opener) => collapse && lines.length > 4
-  ? [...lines.slice(0, 4), `… ${lines.length - 4} more lines · ${opener}`] : lines;
-function dashFooter(left, keys, width, done = false) {
-  const room = width - textWidth(keys) - 2;
+  ? [...lines.slice(0, 4), `… ${lines.length - 4} more line${lines.length - 4 === 1 ? '' : 's'} · ${opener}`] : lines;
+function dashFooter(left, keys, width, done = false, shortKeys = null) {
+  let room = width - textWidth(keys) - 2;
   if (done && textWidth(left) > room) left = left.replace(D.dashAllFinished, D.dashAllFinishedShort);
+  // 还放不下就换短的按键说明，先保住左边（"下面还有 N 行"这类位置提示）
+  if (shortKeys && textWidth(left) > room) { keys = shortKeys; room = width - textWidth(keys) - 2; }
   if (room < 8 && left) return { left: fitWidth(left, width), keys: '', gap: '' };
   left = fitWidth(left, Math.max(0, room));
   keys = fitWidth(keys, width);
@@ -630,7 +659,7 @@ function elapsedOf(r, t, points, lastActivity) {
   return Math.max(0, ended && r.duration_s != null ? r.duration_s : (end - start) / 1000);
 }
 
-export { D, seatLine, shortModel, fullModel, modelLabel, agentTypeOf, moduleOf, taskLine, clock, took, shownStatus, outcomeStyle, agentTotal, changedText, changedFor,
+export { D, seatLine, shortModel, fullModel, modelLabel, agentTypeOf, moduleOf, taskLine, clock, took, shownStatus, outcomeStyle, agentTotal, changedText, changedFor, outsideCwdText,
   formatUsd, usageLine, toolLabel, commandAction, errorAction, foldText, thoughtLine, wrapAtDots, realErrors, durationOf, reviewFinding, reviewCounts, reviewConclusion, finalLines, liveLines,
   groupTask, current, planNotes, seatNumbers, roundOf, resultOutcome, liveStatus, seatState, toneOf, COUNT_MARKS, countParts, countsText, seatUsage, queuedLine, queuedStarted, collapseLines, dashFooter,
   displayRun, recordedTime, elapsedOf, textWidth, fitWidth, wrapWidth };

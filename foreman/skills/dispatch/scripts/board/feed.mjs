@@ -20,10 +20,13 @@ export const usageTotals = (events) => events.reduce((sum, e) => {
   for (const [key, value] of Object.entries(e.u)) if (value != null) { const name = key === 'in' ? 'input' : key === 'out' ? 'output' : key; sum[name] = (sum[name] ?? 0) + value; }
   return sum;
 }, { input: null, cached: null, cache_write: null, output: null });
-export function hostCost(events, prices) {
-  // 有未定价的消息时，不把部分花费当成会话总花费。
+// 能定价的消息照算；有的消息算不出价（模型不在价格表里）时 out.partial 为真，显示时在费用后面加 +。
+// 一条都算不出才返回 null
+export function hostCost(events, prices, out = {}) {
   const costs = events.map((e) => priceFor(e.t, { input: e.u.in, cached: e.u.cached, cache_write: e.u.cache_write, output: e.u.out }, prices));
-  return costs.length && costs.every((v) => v != null) ? costs.reduce((a, b) => a + b, 0) : null;
+  const priced = costs.filter((v) => v != null);
+  out.partial = priced.length < costs.length;
+  return priced.length ? priced.reduce((a, b) => a + b, 0) : null;
 }
 export const costFields = (cost, source) => ({ cost_usd: cost, cost_source: source });
 
@@ -55,15 +58,17 @@ export function normalize(raw, run, state) {
   } else if (raw.type === 'thread.started' || raw.type === 'turn.started') emit('turn');
   else if (it.type === 'command_execution' && ['item.started', 'item.completed'].includes(raw.type)) {
     const previous = state.commands.get(it.id), tool = { ...previous, ...it };
+    // 并行命令的完成顺序不固定，保留动作编号供页面配对。
+    const aid = it.id == null ? {} : { aid: String(it.id) };
     const category = tool.category, text = clip(tool.label ?? tool.command) || '';
     const label = tool.label != null ? text : tool.tool && text === tool.tool ? '.' : tool.tool && text.startsWith(`${tool.tool} `) ? text.slice(tool.tool.length + 1) : text;
     if (raw.type === 'item.started') {
       state.commands.set(it.id, tool);
-      if (category === 'read' || category === 'search') state.tools.set(it.id, ev(category, { t: label }));
-      else emit('cmd', { t: plainCommand(tool.command) });
+      if (category === 'read' || category === 'search') state.tools.set(it.id, ev(category, { t: label, ...aid }));
+      else emit('cmd', { t: plainCommand(tool.command), ...aid });
     } else {
-      if (category === 'read' || category === 'search') { state.tools.delete(it.id); emit(category, { t: label }); }
-      else { if (!previous) emit('cmd', { t: plainCommand(tool.command) }); emit('cmd_done', { ok: tool.exit_code === 0 || tool.exit_code == null }); }
+      if (category === 'read' || category === 'search') { state.tools.delete(it.id); emit(category, { t: label, ...aid }); }
+      else { if (!previous) emit('cmd', { t: plainCommand(tool.command), ...aid }); emit('cmd_done', { ok: tool.exit_code === 0 || tool.exit_code == null, ...aid }); }
       state.commands.delete(it.id);
     }
   } else if (raw.type === 'item.completed') {
@@ -72,7 +77,7 @@ export function normalize(raw, run, state) {
       let report = false;
       try { const value = JSON.parse(text); report = value !== null && typeof value === 'object' && !Array.isArray(value); } catch { /* 普通消息 */ }
       if (report) emit('report', { n: String(it.text).length });
-      else if (text) emit('msg', { t: first(text) });
+      else if (text) emit('msg', { t: text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).join(' ') });
     } else if (it.type === 'reasoning') emit('think', { t: first(it.text).replace(/\*\*/g, '') });
     else if (it.type === 'file_change') for (const change of it.changes || []) {
       const file = change.path || '', cwd = run.meta?.cwd;
@@ -229,7 +234,9 @@ export function runMessage(run, lane, prices, byId, { display: includeDisplay = 
     last_request: values(r.last_request ?? r.context, ['tokens', 'window']), output_tokens_per_s: r.output_tokens_per_s,
     ...costOf({ ...m, ...r }, prices), last_message: text(r.last_message), native_review: r.native_review, review_target: r.review_target,
     changes: changes ? { ...Object.fromEntries(['available', 'files_total', 'agent_total', 'codex_total', 'reported_total', 'unknown_total'].map((k) => [k, changes[k]])),
-      group_total: changes.group_total ?? [...(changes.files || []), ...(changes.large_files_changed || [])].filter((f) => f?.group_run).length } : null } : null;
+      group_total: changes.group_total ?? [...(changes.files || []), ...(changes.large_files_changed || [])].filter((f) => f?.group_run).length,
+      ...(changes.outside_cwd ? { outside_cwd: changes.outside_cwd.slice(0, 30).map((f) => ({ path: clip(f.path, 500), by: f.by, in_scope: f.in_scope })), outside_cwd_total: changes.outside_cwd_total } : {}) } : null,
+    ...(changes?.outside_cwd ? { cwd: m.cwd } : {}) } : null;
   return { ...message, started_at: ms(m.started_at), ended_at: ms(m.ended_at), duration_s: r?.duration_s ?? null,
     ...(includeDisplay ? { display: display && limitDisplay(JSON.parse(JSON.stringify(display))) } : {}), display_round: roundOf(m, byId ?? new Map()), module: m.module ?? (kind === 'exec' ? 'run' : kind),
     participant: m.participant ?? null, submitted_at: ms(m.submitted_at), author: !!m.author,
@@ -267,15 +274,17 @@ export function buildReplay(data, { speed = 1, maxgap = 20, clock } = {}, now) {
   const invalid = new Set(data.runs.filter((run) => !Number.isFinite(run.started_at)).map((run) => run.id));
   for (const run of data.runs) {
     if (invalid.has(run.id)) continue;
-    const { display, ...initial } = run;
+    // 回放从头开始：不带最终的 cost_partial（Claude Code 的费用标记按播到的消息重新算）
+    const { display, cost_partial: _final, ...initial } = run;
     timeline.push({ time: run.started_at, event: 'run', data: { ...initial, ...(run.kind === 'answer' ? { display } : {}), status: run.kind === 'answer' ? run.status : 'running', ended_at: null, duration_s: null, usage: null, ...costFields(null, 'unknown'), report_head: null, changed: [], review: null, files: [], queued: false } });
     if (run.kind === 'host') {
-      let usage = usageTotals([]), cost = 0, unknown = false;
+      let usage = usageTotals([]), cost = 0, unknown = false, priced = false;
       for (const ev of data.events.filter((e) => e.run === 'cc' && e.k === 'usage' && Number.isFinite(e.ts))) {
-        // 解析器已经按消息末行去重；按原顺序累加，保留浮点求和和未知价格的语义。
+        // 解析器已经按消息末行去重；按原顺序累加，保留浮点求和。和直播一样：能定价的照加，有算不出价的标 cost_partial
         usage = usageTotals([{ u: usage }, ev]);
-        const value = hostCost([ev], data.prices); unknown ||= value == null; cost += value ?? 0;
-        timeline.push({ time: ev.ts, event: 'run', data: { ...run, model: ev.t, status: 'running', usage, ...costFields(unknown ? null : cost, unknown ? 'unknown' : 'api_price') } });
+        const value = hostCost([ev], data.prices); unknown ||= value == null; priced ||= value != null; cost += value ?? 0;
+        timeline.push({ time: ev.ts, event: 'run', data: { ...initial, model: ev.t, status: 'running', usage, ...costFields(priced ? cost : null, priced ? 'api_price' : 'unknown'),
+          ...(priced && unknown ? { cost_partial: true } : {}) } });
       }
       timeline.push({ time: data.hostEnd, event: 'run', data: { ...run, status: 'idle' } });
     } else if (run.ended_at != null) timeline.push({ time: run.ended_at, event: 'run', data: run });
@@ -444,10 +453,11 @@ export function createFeed(root, options = {}) {
     const end = session ? Infinity : recent ? window.to : lastAt + (options.tail ?? 5) * 60000;
     const accepts = (r, i) => r.type === 'custom-title' || recent && i >= window.initial || ms(r.timestamp) >= from && ms(r.timestamp) <= end;
     const ctx = { cwd: null, runIds: runs.map((r) => r.id), runsInScope: runs };
-    let parsed, cost;
+    let parsed, cost, costPartial = false;
     if (transcript) {
       parsed = parseTranscriptLines(read.lines.filter(accepts), ctx);
-      cost = hostCost(parsed.events.filter((e) => e.k === 'usage'), options.prices);
+      const priced = {};
+      cost = hostCost(parsed.events.filter((e) => e.k === 'usage'), options.prices, priced); costPartial = priced.partial;
     } else {
       const key = JSON.stringify([String(from), String(!session && !recent && openEnd && Number.isFinite(end) ? Infinity : end), recent ? window.initial : null, [...runs].sort((a, b) => Date.parse(a.meta.started_at) - Date.parse(b.meta.started_at)).map((r) => [r.id, r.dir, r.lane, ...['started_at', 'parent', 'participant', 'mode', 'plan', 'seat', 'agent', 'group'].map((k) => r.meta[k])])]);
       let changed = false;
@@ -473,17 +483,18 @@ export function createFeed(root, options = {}) {
       } else read.lines.forEach((row, i) => add(row, initial + i));
       if (changed) {
         tail.parsed = tail.parser.finish();
-        tail.cost = hostCost(tail.parsed.events.filter((e) => e.k === 'usage'), options.prices);
+        const priced = {};
+        tail.cost = hostCost(tail.parsed.events.filter((e) => e.k === 'usage'), options.prices, priced); tail.costPartial = priced.partial;
       }
       tail.end = end;
-      parsed = tail.parsed; cost = tail.cost;
+      parsed = tail.parsed; cost = tail.cost; costPartial = !!tail.costPartial;
       transcripts.delete(file); transcripts.set(file, tail);
       if (transcripts.size > 3) { const old = transcripts.keys().next().value; transcripts.delete(old); recentWindows.delete(old); }
     }
     const m = parsed.meta;
     if (m.started_at == null) return data;
     data.runs.push({ id: 'cc', lane: 'cc', kind: 'host', agent: 'claude code', agent_type: 'host', model: m.model, session: m.session || path.basename(file, '.jsonl'), title: m.title, cwd: m.cwd,
-      status: params.replay != null || now - Math.max(m.latest_at, tail.appendedAt ?? -Infinity) < 90000 ? 'running' : 'idle', started_at: m.started_at, ended_at: null, usage: m.usage, ...costFields(cost, cost == null ? 'unknown' : 'api_price') });
+      status: params.replay != null || now - Math.max(m.latest_at, tail.appendedAt ?? -Infinity) < 90000 ? 'running' : 'idle', started_at: m.started_at, ended_at: null, usage: m.usage, ...costFields(cost, cost == null ? 'unknown' : 'api_price'), ...(costPartial && cost != null ? { cost_partial: true } : {}) });
     append(data.events, parsed.events); data.versions.cc = `${file}:${tail.version}`; data.revisions.cc = '';
     data.hostEnd = session ? m.latest_at : end; return data;
   };

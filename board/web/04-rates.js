@@ -273,6 +273,8 @@ function laneStats(lane, t) {
     if (c == null && r.kind !== 'answer' && (ended || (live && Object.values(r.usage || {}).some((v) => v)))) costPartial = true;
     // 费用一律按官方 API 价格（服务端算好），这里只是加起来
     if (c != null) { costKnown = true; cost += c; }
+    // Claude Code 车道有的消息算不出价：能算的照加，费用后面带 +
+    if (r.cost_partial) costPartial = true;
   }
   // 进行中的输出：分段里 t 之前的部分
   let liveOut = 0;

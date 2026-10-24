@@ -1,4 +1,5 @@
 // 实时画面的屏幕、按键和启动动画的判断：单任务和组视图共用。
+import { StringDecoder } from 'node:string_decoder';
 import { TEST_SCREEN, termCols, termRows, shortModel, modelLabel } from './format.mjs';
 import { isRunning } from './records.mjs';
 import { modelOf, agentTypeOf } from './util.mjs';
@@ -11,8 +12,17 @@ const liveCapable = () => (process.stdout.isTTY && process.env.TERM !== 'dumb') 
 const TEST_KEYS = !!process.env.FOREMAN_TEST_KEYS;
 const interactive = () => liveCapable() && (!!process.stdin.isTTY || TEST_KEYS);
 // 开始和停止读按键：终端切到原始模式，测试的管道输入照原样读（停下后不再拖着进程不退出）
-const listenKeys = (fn) => { if (process.stdin.isTTY) process.stdin.setRawMode(true); else process.stdin.ref?.(); process.stdin.resume(); process.stdin.on('data', fn); };
-const stopKeys = (fn) => { process.stdin.off('data', fn); fn.stop?.(); if (process.stdin.isTTY) process.stdin.setRawMode(false); else process.stdin.unref?.(); process.stdin.pause(); };
+const listenKeys = (fn) => {
+  if (process.stdin.isTTY) { process.stdin.setRawMode(true); if (process.stdout.isTTY) process.stdout.write('\x1b[?2004h'); }
+  else process.stdin.ref?.();
+  process.stdin.resume(); process.stdin.on('data', fn);
+};
+const stopKeys = (fn) => {
+  process.stdin.off('data', fn); fn.stop?.();
+  if (process.stdin.isTTY) { if (process.stdout.isTTY) process.stdout.write('\x1b[?2004l'); process.stdin.setRawMode(false); }
+  else process.stdin.unref?.();
+  process.stdin.pause();
+};
 
 // 在终端的备用屏幕里整屏重画。关闭自动换行，超出窗口的部分直接截掉，不会折到下一行把画面挤乱；
 // 每行先定位光标再写。窗口大小变化时清屏重画，停下来 0.2 秒后再补画一次：
@@ -59,24 +69,35 @@ function liveScreen(render) {
 // 把一段键盘输入拆成单个按键（方向键、翻页键是 ESC 开头的一串）
 const splitKeys = (s) => s.match(/\x1b\[[0-?]*[ -/]*[@-~]|\x1bO[@-~]|[\s\S]/gu) || [];
 
+const ESC_WAIT_MS = 150; // 等拆开的粘贴标记或转义序列补齐，兼顾单按 Esc 的响应。
+const PASTE_IDLE_MS = 3000; // 粘贴中途停顿时继续等结束标记，缺失时再恢复按键。
+const PASTE_FOLLOW_MS = 30; // Windows 每次最多读 1024 字节，紧随其后的短尾块仍算粘贴。
+
 function readKeys(fn) {
-  let pending = '', pasting = false, timer = null;
+  const decoder = new StringDecoder('utf8');
+  let pending = '', pasting = false, timer = null, followingPaste = false, followTimer = null;
   const read = (data) => {
     clearTimeout(timer);
-    const text = pending + data.toString('utf8');
+    clearTimeout(followTimer);
+    let text = pending + decoder.write(data);
+    // Esc 已等到超时发出时，下一块独立到达的起止标记也不能拆成快捷键。
+    if (/^\[20[01]~/u.test(text)) text = '\x1b' + text;
     // 留住块尾的半截转义序列，避免把鼠标参数或粘贴标记拆成快捷键。
     pending = text.match(/\x1b(?:\[[0-?]*[ -/]*|O)?$/u)?.[0] || '';
     const keys = [];
-    let ignore = pasting;
+    let ignore = pasting || followingPaste;
     for (const k of splitKeys(text.slice(0, text.length - pending.length))) {
       if (k === '\x1b[200~' || k === '\x1b[201~') { pasting = k === '\x1b[200~'; ignore = true; }
       else if (!pasting) keys.push(k);
     }
-    ignore ||= keys.filter((k) => /^[^\x00-\x1f\x7f-\x9f]$/u.test(k)).length >= 3;
-    // 单独按 Esc 也会像半截序列；只等 50 ms，粘贴中则留着等结束标记。
-    if (pending && !pasting) timer = setTimeout(() => { pending = ''; if (!ignore) fn(['\x1b']); }, 50);
-    // 终端只发了开始标记、结束标记一直没来时，1 秒没有新输入就当粘贴结束，免得之后的按键全被吞掉
-    else if (pasting) timer = setTimeout(() => { pasting = false; pending = ''; }, 1000);
+    const unmarkedPaste = keys.filter((k) => /^[^\x00-\x1f\x7f-\x9f]$/u.test(k)).length >= 3;
+    ignore ||= unmarkedPaste;
+    if (unmarkedPaste || followingPaste) {
+      followingPaste = true;
+      followTimer = setTimeout(() => { followingPaste = false; }, PASTE_FOLLOW_MS);
+    }
+    if (pending && !pasting) timer = setTimeout(() => { pending = ''; if (!ignore) fn(['\x1b']); }, ESC_WAIT_MS);
+    else if (pasting) timer = setTimeout(() => { pasting = false; pending = ''; }, PASTE_IDLE_MS);
     if (ignore) return;
     let sawX = false;
     const accepted = keys.filter((k) => {
@@ -88,7 +109,7 @@ function readKeys(fn) {
     });
     if (accepted.length) fn(accepted);
   };
-  read.stop = () => { clearTimeout(timer); pending = ''; pasting = false; };
+  read.stop = () => { clearTimeout(timer); clearTimeout(followTimer); pending = ''; pasting = followingPaste = false; decoder.end(); };
   return read;
 }
 

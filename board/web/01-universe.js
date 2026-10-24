@@ -79,7 +79,10 @@ function connectUniverse() {
       .catch((e) => { U.error = String(e); });
     return;
   }
+  if (U.es || streamsReleased) return;
   const es = new EventSource(`stream?${q}`);
+  U.es = es;
+  watchStream(U, es);
   const on = (name, fn) => es.addEventListener(name, (e) => fn(JSON.parse(e.data)));
   on('hello', uHello);
   on('universe', uUniverse);
@@ -91,6 +94,13 @@ function connectUniverse() {
   es.onopen = () => { U.error = null; U.lostAt = null; U.lostNoticed = false; };
   // 记下从什么时候开始连不上：服务退出了、或者被新服务接替（地址和口令都变了）时，浏览器会一直重连旧地址
   es.onerror = () => { U.error = es.readyState === 2 ? 'closed' : 'reconnecting'; U.lostAt ??= performance.now(); };
+}
+
+function disconnectUniverse() {
+  if (U.es) { U.es.close(); U.es = null; }
+  clearTimeout(U.stuckTimer); U.stuckTimer = null; U.stuckNoticed = false;
+  // 主动让出连接不算服务失联，飞进看板和后台暂停时都不能触发 serverLost。
+  U.error = null; U.lostAt = null; U.lostNoticed = false;
 }
 
 // 对话按项目归组，组内按最后活动时间排，给布局和列表用

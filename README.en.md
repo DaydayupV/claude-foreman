@@ -180,7 +180,7 @@ A second way to watch, alongside the terminal live view, off by default: set `di
   - cards for Claude Code and each seat, with light paths between the models;
   - animations for the dispatch plan, the cross-check and the verdict;
   - the usage table below (scroll on it when there are many rows), ordered like the terminal section: running groups first, each group under a line with its title and status counts; hovering a row brings that seat forward on the board and dims the rest;
-  - each seat's terminal (keep scrolling past the end of the usage table): running groups in the top row; a minute after a group ends it moves to the "finished" row below, looking the same and still open.
+  - each seat's terminal (keep scrolling past the end of the usage table): running groups in the top row; a minute after a group ends it moves to the "finished" part below: groups that ended after your latest message stay open and look the same, groups from earlier rounds fold into one line (title, counts, end time, the cost of all its rounds) that opens on click; click a column head to fold it again.
   - Status colors follow the same split as the terminal live view: running; done; partly done and questions returned; failed and timed out; resumed — one color each.
 - **Cost**: the usage table always prices each model at its official API price (hover over it to see this), to compare what the models cost; it may differ from what you're actually charged: Codex and Claude Code on a subscription aren't charged per token, and opencode and pi bill through their own accounts. Claude Code's reports in the conversation and `stats` use the same price table (the plugin's `prices.json`); models missing from it aren't counted, and the total gets a `+`.
 - **The board server**:

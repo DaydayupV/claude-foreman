@@ -26,6 +26,7 @@ function laneElapsed(lane, t, total = false) {
 }
 function liveState(lane, r, t) {
   const state = { speech: null, thought: null, recent: [], kinds: {}, api: {} };
+  const byAid = new Map();
   let seq = 0, command = null;
   for (const ev of lane.events) {
     if (ev.run !== r.id || ev.ts > t) continue;
@@ -36,13 +37,14 @@ function liveState(lane, r, t) {
       state.api.queued = false; state.api.answering = ev.k === 'answer';
       if (ev.t) state.thought = { text: Display.thoughtLine(ev.t), seq };
     } else if (ev.k === 'msg') state.speech = { text: ev.t, seq };
-    else if (ev.k === 'cmd_done') { if (command && ev.ok === false) command.tag = '✗ failed'; }
+    // 并行命令按编号配对；旧记录没有编号时仍挂到最近一条命令。
+    else if (ev.k === 'cmd_done') { const action = ev.aid != null ? byAid.get(ev.aid) : command; if (action && ev.ok === false) action.tag = '✗ failed'; }
     else {
       const line = lineOf(ev);
       if (!line || !line.cls.startsWith('act') || ['end', 'report'].includes(ev.k)) continue;
       const kind = ({ cmd: 'command', read: 'read', search: 'search', web: 'search', edit: 'edit', image: 'image' })[ev.k] || 'other';
       const action = { kind, text: line.text };
-      if (ev.k === 'cmd') command = action;
+      if (ev.k === 'cmd') { command = action; if (ev.aid != null) byAid.set(ev.aid, action); }
       state.recent.push(action); state.kinds[kind] = (state.kinds[kind] || 0) + 1;
     }
   }
@@ -90,23 +92,41 @@ const targets = (ev) => (ev.target && ev.target.length ? ` → ${ev.target.map(l
 
 // 对话流：到时刻 t 为止的行。open 为真时返回全部，否则只要最后 limit 行。
 function timeline(lane, t, { open = false, limit = 6 } = {}) {
+  const byAid = new Map(), entries = [];
+  let lastCmd = null;
+  // 并行命令按轮次和编号配对；旧记录没有编号时保留最近命令的老做法。
+  // 先配对再折叠，上一段折起后才收到的失败也能露出来。
+  for (const ev of lane.events) {
+    if (ev.ts > t) break;
+    if (ev.k === 'cmd_done') {
+      const command = ev.aid != null ? byAid.get(`${ev.run}:${ev.aid}`) : lastCmd;
+      if (command && ev.ok === false) { command.text += '  ✗ failed'; command.cls += ' bad'; }
+      continue;
+    }
+    const line = lineOf(ev);
+    if (line?.cmd) { lastCmd = line; if (ev.aid != null) byAid.set(`${ev.run}:${ev.aid}`, line); }
+    entries.push({ ev, line });
+  }
   const lines = [];
-  let block = [], lastCmd = null;
+  let block = [];
   const flush = (closed) => {
     if (block.length > MAX_ACTIONS) {
       // 已经过去的一段留前几条（和 watch 一样），正在进行的一段留最新几条
       const kept = closed ? block.slice(0, MAX_ACTIONS) : block.slice(-MAX_ACTIONS);
-      const folded = closed ? block.slice(MAX_ACTIONS) : block.slice(0, -MAX_ACTIONS), counts = {};
-      for (const line of folded) counts[line.kind || 'other'] = (counts[line.kind || 'other'] || 0) + 1;
-      const fold = { cls: 'act fold', text: Display.foldText(counts) };
-      lines.push(...(closed ? [...kept, fold] : [fold, ...kept]));
+      const folded = closed ? block.slice(MAX_ACTIONS) : block.slice(0, -MAX_ACTIONS), foldedLines = [];
+      let counts = {};
+      const pushFold = () => { if (Object.keys(counts).length) foldedLines.push({ cls: 'act fold', text: Display.foldText(counts) }); };
+      // 和终端一样，失败动作单独显示，前后的折叠各自计数。
+      for (const line of folded) {
+        if (line.cmd && line.cls.includes(' bad')) { pushFold(); foldedLines.push(line); counts = {}; }
+        else counts[line.kind || 'other'] = (counts[line.kind || 'other'] || 0) + 1;
+      }
+      pushFold();
+      lines.push(...(closed ? [...kept, ...foldedLines] : [...foldedLines, ...kept]));
     } else lines.push(...block);
     block = [];
   };
-  for (const ev of lane.events) {
-    if (ev.ts > t) break;
-    if (ev.k === 'cmd_done') { if (lastCmd && ev.ok === false) { lastCmd.text += '  ✗ failed'; lastCmd.cls += ' bad'; } continue; }
-    const line = lineOf(ev);
+  for (const { ev, line } of entries) {
     if (ev.k === 'end') {
       const r = lane.runs.find((r) => r.id === ev.run);
       if (r) {
@@ -121,7 +141,6 @@ function timeline(lane, t, { open = false, limit = 6 } = {}) {
     }
     if (!line) continue;
     line.ts = ev.original_ts ?? Display.recordedTime(ev.ts, displayPoints());
-    if (line.cmd) lastCmd = line;
     if (line.cls.startsWith('act')) block.push(line);
     else { flush(true); lines.push(line); }
   }

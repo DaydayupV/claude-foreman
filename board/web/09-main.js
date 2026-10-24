@@ -102,6 +102,26 @@ function showNotice(text) {
   el.textContent = text; el.classList.remove('faded');
   clearTimeout(showNotice.timer); showNotice.timer = setTimeout(() => el.classList.add('faded'), 12000);
 }
+
+const HIDDEN_RELEASE_MS = 30000;
+let hiddenReleaseTimer = null;
+function onVisibilityChange() {
+  clearTimeout(hiddenReleaseTimer); hiddenReleaseTimer = null;
+  // 回放重连会从头播放，不能暂停共用时钟；定格和演示沿用原来的取数方式。
+  if (U.demo || window.__BOARD_FIXTURE__ || B.params.replay != null || B.params.t != null) return;
+  if (document.visibilityState === 'hidden') {
+    hiddenReleaseTimer = setTimeout(() => {
+      streamsReleased = true;
+      disconnectUniverse(); disconnect();
+    }, HIDDEN_RELEASE_MS);
+  } else if (streamsReleased) {
+    streamsReleased = false;
+    if (FLY.mode === 'in' || FLY.mode === 'board') connect();
+    else connectUniverse(); // 飞出已经切回宇宙流，动画未结束时也接回同一层。
+  }
+}
+document.addEventListener('visibilitychange', onVisibilityChange);
+onVisibilityChange();
 if (LIVE_REPLAY_LINK) showNotice(TEXT.replayLive);
 // 内嵌快照（截图、测试用）：没有服务可连，直接显示快照里这个对话的看板，不走星图
 if (window.__BOARD_FIXTURE__) { FLY.mode = 'board'; connect(); }

@@ -31,7 +31,7 @@ function fillCard(el, lane, t) {
   setText(el.querySelector('.tl'), isCC ? [shortModel(r.model), r.title].filter(Boolean).join(' · ')
     : [r.kind, r.role ? `[${r.role}]` : null, r.title, r.level, round > 1 ? `round ${round}` : null].filter(Boolean).join(' · '));
   const rate = el.querySelector('.rate'), sig = `${Math.round(s.rate)}|${s.avg == null ? '—' : Math.round(s.avg)}|${s.output}`;
-  rate.title = s.usage_unattributed ? TEXT.usageUnattributed : '';
+  rate.title = s.usage_unattributed ? TEXT.usageUnattributed : `now ≈ ${Math.round(s.rate)} tok/s · gen avg ≈ ${s.avg != null ? Math.round(s.avg) : '—'} · out ${s.output == null ? '—' : fmtTok(s.output)}`;
   if (rate.dataset.sig !== sig) {
     rate.dataset.sig = sig;
     rate.innerHTML = '';
@@ -138,6 +138,8 @@ function renderWorld(t, L) {
   if (!ccOut) { ccOut = document.createElement('div'); ccOut.className = 'outbox cc'; worldEl.append(ccOut); UI.outs.set('cc', ccOut); }
   place(ccOut, L.ccOut);
   ccOut.style.setProperty('--tint', rgba('claude'));
+  // 悬停用量表的某一席时，Claude Code 的产出框和其余产出框一样压暗
+  ccOut.classList.toggle('dim', dimOf('cc') < 1);
   const span = ccLife(t), from = span.from ?? -Infinity, to = span.to ?? t;
   const ccFiles = ccLane ? ccLane.events.filter((e) => e.k === 'edit' && e.ts > from && e.ts <= to).map((e) => editParts(e.t)) : [];
   fillOut(ccOut, 'CLAUDE CODE · OUTPUT', dedupeFiles(ccFiles), '', ccLead(t, from, to));

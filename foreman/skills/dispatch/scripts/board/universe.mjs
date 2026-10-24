@@ -148,7 +148,12 @@ function summaryOf(session, all, now, hours, prices, meter) {
   const runs = own.filter((r) => r.status === 'running' || r.ended_at >= now - 600000)
     .sort((a, b) => b.started_at - a.started_at || a.id.localeCompare(b.id)).slice(0, 16).map(meter?.pick ?? pickRun);
   const usage = meter ? null : [...session.usage.values()].filter((u) => u.ts >= cutoff), costs = [...counted];
-  if (meter ? meter.count : usage.length) { const cost = meter ? meter.cost : hostCost(usage, prices); costs.push(costFields(cost, cost == null ? 'unknown' : 'api_price')); }
+  if (meter ? meter.count : usage.length) {
+    const priced = {}, cost = meter ? meter.cost : hostCost(usage, prices, priced);
+    costs.push(costFields(cost, cost == null ? 'unknown' : 'api_price'));
+    // 有的消息算不出价：能算的照算，另外记一笔未知，费用后面带 +
+    if (cost != null && (meter ? meter.partial : priced.partial)) costs.push(costFields(null, 'unknown'));
+  }
   const cost = costs.some((c) => c.cost_usd != null) ? costs.reduce((sum, c) => sum + (c.cost_usd ?? 0), 0) : null;
   const failure = own.filter((r) => r.status !== 'running' && r.status !== 'done' && r.ended_at != null && r.ended_at >= now - 1800000)
     .sort((a, b) => b.ended_at - a.ended_at)[0];
@@ -201,7 +206,7 @@ function replayMeter(prices, pick) {
         for (const usage of session.usage.values()) if (usage.ts >= cutoff) add(usage);
         dirty = false;
       }
-      return { totals: { ...totals }, cost: count && !unknown ? sum : null, count, pick };
+      return { totals: { ...totals }, cost: count && unknown < count ? sum : null, partial: unknown > 0, count, pick };
     },
   };
 }

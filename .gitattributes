@@ -1,3 +1,7 @@
 * text=auto eol=lf
 *.zip binary
 *.plugin binary
+foreman/skills/dispatch/scripts/board/index.html linguist-generated=true
+foreman-en/skills/dispatch/scripts/** linguist-generated=true
+foreman-en/skills/dispatch/scripts/**/language.json -linguist-generated
+foreman-en/hooks/*.mjs linguist-generated=true

@@ -6,6 +6,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { HERE, M, die, need, resolveDir, readBrief, isGitRepo, isAscii, agentTypeOf, closestMatches, pathKey, pidExists, sleep, LANGUAGE } from './util.mjs';
 
+// 只输出结果的子命令接到 head 这类提前关掉管道的命令上时，写 stdout 会抛 EPIPE：读的一方已经够了，安静退出，
+// 不打 Node 的堆栈。会派活、会改记录的子命令不这样处理（中途退出会丢掉收尾）
+if (['status', 'stats', 'result', 'config'].includes(process.argv[2])) {
+  process.on('uncaughtException', (e) => {
+    if (e?.code === 'EPIPE') process.exit(0);
+    console.error(e);
+    process.exit(1);
+  });
+  process.stdout.on('error', (e) => { if (e.code === 'EPIPE') process.exit(0); console.error(e); process.exit(1); });
+}
+
 // 不带值的选项；其余选项都把下一个参数当作它的值。
 const FLAGS = new Set(['uncommitted', 'no-snapshot', 'verbose', 'no-intro', 'snap', 'vector', 'allow-edge', 'author']);
 

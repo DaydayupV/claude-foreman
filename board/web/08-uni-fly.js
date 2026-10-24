@@ -82,7 +82,7 @@ function resetBoardView() {
   for (const m of [UI.cards, UI.outs, UI.heads, UI.tableRows]) m.clear();
   UI.open.clear(); UI.collapsed.clear(); UI.hot = null;
   for (const id of ['usage', 'terms', 'termdone']) { $(id).replaceChildren(); delete $(id).dataset.mode; }
-  PANEL.allDone = false;
+  PANEL.allDone = false; PANEL.fold.clear(); PANEL.doneLines.clear();
   PANEL.cols.clear(); UNI_ROWS.clear();
   Object.assign(REEL, { s: 0, off: 0, anchor: null }); REEL.born.clear();
   for (const key of [...SMOOTH.vals.keys()]) if (!key.startsWith('u')) SMOOTH.vals.delete(key);
@@ -124,6 +124,8 @@ function flyIn(id, instant = false) {
   FLY.back = { k: UV.k, tx: UV.tx, ty: UV.ty, auto: UV.auto };
   FLY.from = { k: UV.k, sx: g.x * UV.k + UV.tx, sy: g.y * UV.k + UV.ty };
   Object.assign(FLY, { id, mode: instant ? 'board' : 'in', mirror: false, t0: performance.now(), out: 0, pending: null });
+  // 直播只留当前层的一条流，免得多个标签页占满同主机连接；回放宇宙共用时钟，重连会从头播放。
+  if (!U.demo && B.params.replay == null && B.params.t == null) disconnectUniverse();
   UV.goal = null; UV.auto = false;
   openBoardFor(g.s);
   // 星系的亮核最后落在看板核心网（弧线区）的中心：它在那里炸开成弧线区（08-uni-burst.js）
@@ -154,6 +156,7 @@ function flyOut() {
   // 直接打开到看板（刷新进来）时没有飞入前的镜头，退回去就复位到全貌
   if (!mirror && (!FLY.back || FLY.back.auto)) { const g = uniFitGoal(); FLY.back = { ...g, auto: true }; }
   Object.assign(FLY, { mode: 'out', mirror, t0: performance.now() - back * FLY_OUT * 1000 });
+  if (!U.demo && B.params.replay == null && B.params.t == null) { disconnect(); connectUniverse(); }
   setUrl(null);
   wake();
 }

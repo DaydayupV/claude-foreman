@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { oneLine, plainCommand, needsDecision, textWidth, fitWidth, wrapWidth } from './util.mjs';
-import { D, C, termCols, visibleWidth, clock, outcomeStyle, changedFor, usageLine, commandAction, foldText, thoughtLine } from './format.mjs';
+import { D, C, termCols, visibleWidth, clock, outcomeStyle, changedFor, outsideCwdText, usageLine, commandAction, foldText, thoughtLine } from './format.mjs';
 import { reviewConclusion, resultOutcome, realErrors, durationOf, wrapAtDots, errorAction, moduleOf, liveStatus as displayLiveStatus } from './display.mjs';
 
 const TIME_W = 6; // "00:41 "
@@ -327,6 +327,9 @@ function createTimeline(meta, rel, { stream = false, write = (l) => process.stdo
       const { mark, color, word } = outcomeStyle(o);
       const sec = durationOf(r, m);
       ending(m?.ended_at, mark, color, word, [Number.isFinite(sec) ? clock(sec * 1000) : '', changedFor(r, m), r.stale === true && D.watchStale].filter(Boolean));
+      // 写到工作目录外（不在快照里）：结束行下面单独一行，和组视图、网页的 ⚠ 行一样
+      const outside = outsideCwdText(r, m);
+      if (outside) add((W) => wrapAtDots(`⚠ ${outside}`, Math.max(8, W - 1 - TIME_W - 2)).map((l) => ' '.repeat(TIME_W + 2) + C.yellow(l)));
     }
     const usage = usageLine(r, m);
     if (usage) add((W) => wrapAtDots(usage, Math.max(8, W - 1 - TIME_W - 2)).map((l) => ' '.repeat(TIME_W + 2) + C.dim(l)));

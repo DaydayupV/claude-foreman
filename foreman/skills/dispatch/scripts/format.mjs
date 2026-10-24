@@ -7,7 +7,7 @@ import { textWidth, fitWidth } from './util.mjs';
 import { costOf, loadPrices } from './prices.mjs';
 
 import { D as displayText, seatLine as displaySeatLine, shortModel, fullModel, modelLabel, moduleOf, taskLine, clock, took, shownStatus,
-  outcomeStyle as displayOutcomeStyle, agentTotal, changedText, changedFor, formatUsd, usageLine as displayUsageLine,
+  outcomeStyle as displayOutcomeStyle, agentTotal, changedText, changedFor, outsideCwdText, formatUsd, usageLine as displayUsageLine,
   toolLabel, commandAction, foldText, thoughtLine } from './display.mjs';
 const D = { ...MESSAGES.en, ...displayText };
 
@@ -63,4 +63,4 @@ const shellPath = (p) => (/[\s"'`$&|;<>()]/.test(p) ? `"${p}"` : p);
 const replayCommand = (runsRoot) => D.watchReplayOne(`node ${shellPath(path.join(runsRoot, 'watch.mjs'))} --run <run_id>`);
 
 export { D, TEST_SCREEN, termCols, termRows, useColor, C, plain, visibleWidth, padWidth, shortModel, fullModel, modelLabel, moduleOf, taskLine, seatLine, identityLine, clock, took,
-  shownStatus, outcomeStyle, agentTotal, changedText, changedFor, formatUsd, usageLine, toolLabel, commandAction, foldText, thoughtLine, paintPlanWord, replayCommand };
+  shownStatus, outcomeStyle, agentTotal, changedText, changedFor, outsideCwdText, formatUsd, usageLine, toolLabel, commandAction, foldText, thoughtLine, paintPlanWord, replayCommand };
