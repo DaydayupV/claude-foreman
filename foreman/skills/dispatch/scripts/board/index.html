@@ -1080,6 +1080,7 @@ const TEXTS = {
     legacyNotFound: (kind, value) => `记录里找不到这个地址里的${kind === 'run' ? '任务' : '组'}：${value}`,
     serverLost: '连不上看板服务了（它可能已经退出，或者换了新的地址）：在 Claude Code 里运行 /foreman:watch，或者让它重新给看板链接',
     streamStuck: '连不上看板服务：可能同一个浏览器里开着很多看板标签页（关掉几个，再刷新这一页），也可能看板服务已经退出（在 Claude Code 里运行 /foreman:watch，或者让它重新给看板链接）',
+    boardGone: '看板服务已经退出（没人看、也没有任务在跑 30 分钟后会自己退出，插件更新后也会退出）。在 Claude Code 里运行 /foreman:watch，或者让它重新给看板链接；新链接和这一页的不一样',
     plan: (module, cell, seats) => `派发计划 · ${module} ${cell} · ${seats} 席`,
     gateWaiting: '外部席准入 · 等 Claude Code 席先交报告',
     gateOpen: '已开闸',
@@ -1124,6 +1125,7 @@ const TEXTS = {
     legacyNotFound: (kind, value) => `No records were found for the ${kind === 'run' ? 'run' : 'group'} in this link: ${value}`,
     serverLost: 'Lost the connection to the board server (it may have exited or moved to a new address): run /foreman-en:watch in Claude Code, or ask it for the board link again',
     streamStuck: "Can't reach the board service: too many board tabs may be open in this browser (close a few, then reload this page), or the board service may have exited (run /foreman-en:watch in Claude Code, or ask it for the board link again)",
+    boardGone: "The board service has exited (it exits by itself after 30 minutes with nobody watching and no task running, and after a plugin update). Run /foreman-en:watch in Claude Code or ask it for the board link again; the new link is different from this page's",
     plan: (module, cell, seats) => `dispatch plan · ${module} ${cell} · ${seats} ${seats === 1 ? 'seat' : 'seats'}`,
     gateWaiting: 'external seats wait · Claude Code seat reports first',
     gateOpen: 'gate open',
@@ -1329,7 +1331,12 @@ function watchStream(state, es) {
     if (es.readyState !== 0 || state.stuckTimer != null || state.stuckNoticed) return;
     state.stuckTimer = setTimeout(() => {
       state.stuckTimer = null;
-      if (es.readyState === 0) { state.stuckNoticed = true; showNotice(TEXT.streamStuck); }
+      if (es.readyState !== 0) return;
+      state.stuckNoticed = true; showNotice(TEXT.streamStuck);
+      // 再问一下服务：直接被拒（网络错误）说明服务已经退出，换成一直留着的提示；超时多半是连接被别的标签页占满，原提示不变
+      if (typeof AbortSignal === 'function' && typeof AbortSignal.timeout === 'function') {
+        fetch('health', { signal: AbortSignal.timeout(3000) }).catch((e) => { if (e?.name === 'TypeError' && es.readyState === 0) showNotice(TEXT.boardGone, true); });
+      }
     }, STREAM_STUCK_MS);
   };
   es.addEventListener('open', () => { clearTimeout(state.stuckTimer); clearTimeout(state.askTimer); state.stuckTimer = state.askTimer = null; state.stuckNoticed = false; });
@@ -5831,19 +5838,20 @@ function uniFrame(alone = true) {
 // 图片的原生拖动一律不要（CSS 管不到的浏览器靠这里）
 addEventListener('dragstart', (e) => { if (e.target instanceof HTMLImageElement) e.preventDefault(); });
 history.scrollRestoration = 'manual'; // 每次打开都停在星图和用量面板的位置
-// 页头下方的一行提示，12 秒后淡出
-function showNotice(text) {
+// 页头下方的一行提示，12 秒后淡出；keep 为 true 时一直留着（看板服务已经退出）
+function showNotice(text, keep = false) {
   const el = $('notice');
   el.textContent = text; el.classList.remove('faded');
-  clearTimeout(showNotice.timer); showNotice.timer = setTimeout(() => el.classList.add('faded'), 12000);
+  clearTimeout(showNotice.timer); showNotice.timer = keep ? null : setTimeout(() => el.classList.add('faded'), 12000);
 }
 
 // 后台标签页让出数据流：浏览器对同一主机只开 6 条连接，看板标签页多了，前台的页面会连不上。
 // 平时在后台 10 分钟才让（让出以后再回来，较早的记录只剩最近 200 条，不能切一下窗口就让）；
 // 前台的页面连不上超过 2 秒时，通过同源广播请后台的看板标签页马上让出来。
-// 让出以后每分钟向服务报一次在，服务不会因为没有连接就当成没人看而退出
-const HIDDEN_RELEASE_MS = 600000, WATCHING_PING_MS = 60000;
-let hiddenReleaseTimer = null, watchingTimer = null;
+// 让出以后每分钟向服务报一次在，服务不会因为没有连接就当成没人看而退出；
+// 在后台放了 30 分钟以上就不再报，忘在后台的标签页不能让服务一直不退出
+const HIDDEN_RELEASE_MS = 600000, WATCHING_PING_MS = 60000, WATCHING_MAX_MS = 1800000;
+let hiddenReleaseTimer = null, watchingTimer = null, hiddenSince = null;
 const STREAM_CHANNEL = typeof BroadcastChannel === 'function' ? new BroadcastChannel('foreman-board-streams') : null;
 const streamPaused = () => U.demo || window.__BOARD_FIXTURE__ || B.params.replay != null || B.params.t != null;
 function releaseStreams() {
@@ -5851,7 +5859,10 @@ function releaseStreams() {
   if (streamsReleased || streamPaused()) return;
   streamsReleased = true;
   disconnectUniverse(); disconnect();
-  watchingTimer = setInterval(() => { fetch('health?watching=1').catch(() => {}); }, WATCHING_PING_MS);
+  watchingTimer = setInterval(() => {
+    if (hiddenSince != null && performance.now() - hiddenSince >= WATCHING_MAX_MS) { clearInterval(watchingTimer); watchingTimer = null; return; }
+    fetch('health?watching=1').catch(() => {});
+  }, WATCHING_PING_MS);
 }
 // 前台页面的流迟迟连不上（01-state.js 的 watchStream 调用）：请其他看板标签页让出连接
 function askForStream() { if (STREAM_CHANNEL && document.visibilityState !== 'hidden') STREAM_CHANNEL.postMessage('release'); }
@@ -5860,8 +5871,9 @@ function onVisibilityChange() {
   clearTimeout(hiddenReleaseTimer); hiddenReleaseTimer = null;
   // 回放重连会从头播放，不能暂停共用时钟；定格和演示沿用原来的取数方式。
   if (streamPaused()) return;
-  if (document.visibilityState === 'hidden') hiddenReleaseTimer = setTimeout(releaseStreams, HIDDEN_RELEASE_MS);
-  else if (streamsReleased) {
+  if (document.visibilityState === 'hidden') { hiddenSince = performance.now(); hiddenReleaseTimer = setTimeout(releaseStreams, HIDDEN_RELEASE_MS); return; }
+  hiddenSince = null;
+  if (streamsReleased) {
     streamsReleased = false;
     clearInterval(watchingTimer); watchingTimer = null;
     if (FLY.mode === 'in' || FLY.mode === 'board') connect();

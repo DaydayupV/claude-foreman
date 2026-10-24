@@ -18,7 +18,7 @@ if (['status', 'stats', 'result', 'config'].includes(process.argv[2])) {
 }
 
 // 不带值的选项；其余选项都把下一个参数当作它的值。
-const FLAGS = new Set(['uncommitted', 'no-snapshot', 'verbose', 'no-intro', 'snap', 'vector', 'allow-edge', 'author']);
+const FLAGS = new Set(['uncommitted', 'no-snapshot', 'verbose', 'no-intro', 'snap', 'vector', 'allow-edge', 'author', 'stop']);
 
 // --help（或 -h）只打印这一条子命令的用法（assets 可以带动作），退出码 0。和 parseArgs 一样走一遍参数，
 // 写在某个选项的值里的（比如 --title --help、--title -h）不算。
@@ -223,8 +223,10 @@ function cmdConfig(o) {
 
 async function cmdBoard(o) {
   if (o.session !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(o.session)) die(M.badArg(`--session ${o.session}`));
+  if (o.stop && o.replay != null) die(M.badArg('--replay'));
   const cfg = load(null);
-  if (!cfg.dispatch.web) {
+  // 关掉的时候不看 dispatch.web：服务可能是开着的时候启动的
+  if (!cfg.dispatch.web && !o.stop) {
     process.stdout.write(JSON.stringify({ enabled: false, message: M.boardOff }, null, 2) + '\n');
     return;
   }
@@ -236,7 +238,8 @@ async function cmdBoard(o) {
     let child, reply;
     try {
       fs.mkdirSync(RUNS_ROOT, { recursive: true });
-      child = spawn(process.execPath, args, { cwd: boardDir, detached: true, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+      // 工作目录放在记录目录：Windows 上进程的当前目录删不掉，放在插件目录里会卡住插件的卸载和更新
+      child = spawn(process.execPath, args, { cwd: RUNS_ROOT, detached: true, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
       reply = await new Promise((resolve) => {
         const lines = createInterface({ input: child.stdout });
         const finish = (value) => { clearTimeout(timer); lines.close(); child.stdout.destroy(); child.unref(); resolve(value); };
@@ -294,23 +297,51 @@ async function cmdBoard(o) {
     }
     return { state: 'wait', lock, raw };
   };
-  const existingDeadline = Date.now() + 15000;
-  let found = await liveBoard(5000);
-  while (found.state === 'wait' && Date.now() < existingDeadline) {
-    await sleep(100);
-    found = await liveBoard(Math.max(1, Math.min(1000, existingDeadline - Date.now())));
+  // 关掉 liveBoard 确认过的服务，等它退出后回收锁。先凭令牌请它自己退出（server.mjs 的 shutdown），
+  // 旧版服务没有这个接口、或者请求没成功时才按 pid 结束。成功返回 null；没关掉返回 { reason }：结束进程时的报错，等不到退出时为 null
+  const stopServer = async ({ lock: { pid, port, token }, raw }) => {
+    let kill = true;
+    try { kill = !(await fetch(`http://127.0.0.1:${port}/${token}/shutdown`, { method: 'POST', signal: AbortSignal.timeout(5000) })).ok; }
+    // 连接被拒说明服务已经退出，这个 pid 可能已经给了别的程序，不能再结束它；超时（服务正忙）照旧按 pid 结束
+    catch (error) { kill = error.cause?.code !== 'ECONNREFUSED'; }
+    if (kill) {
+      try { process.kill(pid); } catch (error) { if (error.code !== 'ESRCH') return { reason: error.message }; }
+    }
+    // POSIX 上旧服务正忙时信号要等同步读取结束才处理，和接管一样最多等 15 秒；
+    // Windows 上 kill 是强制结束，旧服务来不及自己删锁，所以只等进程退出，锁由这里回收
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline && pidExists(pid)) await sleep(100);
+    if (pidExists(pid)) return { reason: null };
+    reclaim(raw);
+    return null;
+  };
+  // 锁里的服务在但一时没回应（同步读大记录时会这样）：最多等 15 秒
+  const settle = async () => {
+    const deadline = Date.now() + 15000;
+    let found = await liveBoard(5000);
+    while (found.state === 'wait' && Date.now() < deadline) {
+      await sleep(100);
+      found = await liveBoard(Math.max(1, Math.min(1000, deadline - Date.now())));
+    }
+    return found;
+  };
+  if (o.stop) {
+    const found = await settle();
+    if (found.state === 'absent') { process.stdout.write(JSON.stringify({ stopped: false, message: M.boardNotRunning }, null, 2) + '\n'); return; }
+    // 进程在但健康检查对不上：可能是进程号被别的程序复用了，不能结束它
+    if (found.state === 'wait') die(M.boardStopUnverified(found.lock.pid));
+    const failure = await stopServer(found);
+    if (failure) die(M.boardStopFailed(found.lock.pid, failure.reason));
+    process.stdout.write(JSON.stringify({ stopped: true, pid: found.lock.pid }, null, 2) + '\n');
+    return;
   }
+  let found = await settle();
   // 等了 15 秒还没回应就接管；原来的服务恢复后发现锁不是自己的会自行退出
   if (found.state === 'wait') reclaim(found.raw);
   let lock = found.state === 'ready' ? found.lock : null;
   if (lock && found.build !== build) {
-    try { process.kill(lock.pid); } catch (error) { if (error.code !== 'ESRCH') fail(error.message); }
-    // POSIX 上旧服务正忙时信号要等同步读取结束才处理，和接管一样最多等 15 秒；
-    // Windows 上 kill 是强制结束，旧服务来不及自己删锁，所以只等进程退出，锁由下面回收
-    const deadline = Date.now() + 15000;
-    while (Date.now() < deadline && pidExists(lock.pid)) await sleep(100);
-    if (pidExists(lock.pid)) fail(`old board server (pid ${lock.pid}) did not exit`);
-    reclaim(found.raw);
+    const failure = await stopServer(found);
+    if (failure) fail(failure.reason ?? `old board server (pid ${lock.pid}) did not exit`);
     lock = null;
   }
   const started = !lock;
@@ -319,9 +350,9 @@ async function cmdBoard(o) {
     try {
       fs.mkdirSync(RUNS_ROOT, { recursive: true });
       fs.rmSync(errFile, { force: true });
-      // Windows 上必须脱离调用方控制台，否则后续命令的 Ctrl+C 会把看板一起停掉。
+      // Windows 上必须脱离调用方控制台，否则后续命令的 Ctrl+C 会把看板一起停掉。工作目录不放在插件目录里（同回放服务）。
       child = spawn(process.execPath, [path.join(boardDir, 'server.mjs'), '--runs', RUNS_ROOT, '--config', USER_CONFIG, '--idle-min', '30'], {
-        cwd: boardDir, detached: true, stdio: 'ignore', windowsHide: true,
+        cwd: RUNS_ROOT, detached: true, stdio: 'ignore', windowsHide: true,
       });
       child.once('error', (error) => { spawnError = error; });
       child.once('exit', (code) => { exited = `exit code ${code}`; });
