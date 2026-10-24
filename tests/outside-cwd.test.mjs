@@ -90,3 +90,16 @@ test('显示保留 Windows 的上级路径和其他盘绝对路径，只提示�
   assert.deepEqual(shown({ ...r, cwd: undefined }), [`⚠ ${D.watchOutsideCwd('O:\\projectan\\wrong.txt, C:\\other\\written.txt', 0)}`]);
   assert.deepEqual(shown({ ...r, kind: 'review' }), []);
 });
+
+test('补审修正：自称写到别处的路径按报告原文记录；说明文字里的路径最多列 30 条并写总数', async (t) => {
+  const h = sandbox(t), far = path.join(h.home, 'elsewhere', 'deep', 'x.txt');
+  const one = h.scenario({ last_message: changed([far]) });
+  const r1 = output(await h.bridge(taskArgs(h, 'run', ['--no-snapshot']), { env: one.env }));
+  assert.deepEqual(r1.changes.outside_cwd, [{ path: far, by: 'reported', in_scope: false }]);
+  const many = Array.from({ length: 35 }, (_, i) => path.join(h.home, 'many', `f${i}.txt`));
+  const s = h.scenario({ last_message: changed([]), steps: [{ event: event(many) }] });
+  const r = output(await h.bridge(taskArgs(h, 'run', ['--no-snapshot']), { env: s.env }));
+  assert.equal(r.changes.outside_cwd.length, 30); assert.equal(r.changes.outside_cwd_total, 35);
+  const warning = r.warnings.find((w) => w.includes('写到了工作目录之外'));
+  assert.ok(warning.includes('等 35 个。'), warning); assert.equal(warning.split('、').length, 30);
+});

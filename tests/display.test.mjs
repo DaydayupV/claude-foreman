@@ -428,7 +428,7 @@ function displayBoard(lang = 'zh') {
   const page = buildPage(), shared = page.slice(page.indexOf('const Display ='), page.indexOf('// ---- 00-text.js'));
   const names = ['00-text', '01-state', '03-timeline', '04-rates', '05-world', '06-states', '06-cards', '07-table', '07-terms'];
   const source = names.map((name) => fs.readFileSync(new URL(`../board/web/${name}.js`, import.meta.url), 'utf8')).join('\n');
-  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd };', context);
+  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd, onBacklog };', context);
   return { ...context.api, el, context };
 }
 
@@ -899,4 +899,18 @@ test('审查修正：网络共享的根不同就写绝对路径；用户消息�
   for (let i = 0; i < 700; i++) b.onEv({ lane: 'cc', run: 'cc', ts: 2000 + i, k: 'msg', t: `m${i}` });
   assert.equal(b.B.laneById.get('cc').events.some((e) => e.k === 'prompt'), false);
   assert.deepEqual([...b.B.prompts], [1000]);
+});
+
+test('补审修正：对话记录重置后用户消息的时刻按新记录重建；折起来那一行有没算全的费用时带 +', () => {
+  const b = displayBoard(), t = 300000;
+  b.onRun({ id: 'cc', lane: 'cc', kind: 'host', agent_type: 'host', model: 'opus', status: 'idle', started_at: 0 });
+  b.onEv({ lane: 'cc', run: 'cc', ts: 100, k: 'prompt', t: 'a' }); b.onEv({ lane: 'cc', run: 'cc', ts: 300, k: 'prompt', t: 'b' });
+  b.onBacklog({ run: 'cc', reset: true, events: [{ lane: 'cc', run: 'cc', ts: 100, k: 'prompt', t: 'a' }] });
+  assert.deepEqual([...b.B.prompts], [100]);
+  b.onRun({ id: 'x1', kind: 'exec', model: 'm', title: 'priced', group: 'g', status: 'done', started_at: 0, ended_at: 50, cost_usd: 0.1, display: { status: 'done', report: { status: 'completed' } } });
+  b.onRun({ id: 'x2', lane: 'x1', parent: 'x1', kind: 'exec', model: 'm', title: 'priced', group: 'g', status: 'done', started_at: 60, ended_at: 90, cost_usd: null, display: { status: 'done', report: { status: 'completed' } } });
+  const done = b.termUnits(t).filter((u) => b.unitFinished(u, t));
+  b.renderDone(done, t, new Set());
+  const [, , lines] = b.el('termdone').children;
+  assert.match(lines.children[0].textContent, /\$0\.10\+$/);
 });

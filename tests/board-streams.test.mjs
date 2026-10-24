@@ -10,8 +10,8 @@ const session = { id: 'conversation', project: 'project', title: 'test', state: 
 const universe = { projects: [{ key: 'project', name: 'test' }], sessions: [session], agents: [] };
 
 function board({ search = '', replay = false, lang = 'zh', visibility = 'visible' } = {}) {
-  let time = 0, timerId = 0, peak = 0, demoStarts = 0, api;
-  const timers = new Map(), streams = [], notices = [], requests = [], listeners = new Map(), elements = new Map();
+  let time = 0, timerId = 0, peak = 0, demoStarts = 0, api, channel = null;
+  const timers = new Map(), intervals = new Map(), streams = [], notices = [], requests = [], listeners = new Map(), elements = new Map();
   const active = () => streams.filter((es) => es.readyState !== 2);
   class EventSource {
     readyState = 0; listeners = new Map();
@@ -40,6 +40,9 @@ function board({ search = '', replay = false, lang = 'zh', visibility = 'visible
     performance: { now: () => time, getEntriesByType: () => [] }, addEventListener() {}, requestAnimationFrame: () => 1,
     setTimeout: (fn, ms) => { const id = ++timerId; timers.set(id, { fn, at: time + ms }); return id; },
     clearTimeout: (id) => timers.delete(id),
+    // 后台让出连接后每分钟报到一次：测试里只记下有没有在报到
+    setInterval: (fn, ms) => { const id = ++timerId; intervals.set(id, { fn, ms }); return id; }, clearInterval: (id) => intervals.delete(id),
+    BroadcastChannel: class { constructor() { channel = this; this.sent = []; } postMessage(m) { this.sent.push(m); } },
     fetch: async (url) => { requests.push(url); return { json: async () => url.startsWith('sessions?') ? universe : { hello, runs: [], events: [] } }; },
     playDemo: () => { demoStarts++; }, $: el, worldEl: el('world'),
     UI: { cards: new Map(), outs: new Map(), heads: new Map(), tableRows: new Map(), open: new Set(), collapsed: new Set() },
@@ -53,7 +56,7 @@ function board({ search = '', replay = false, lang = 'zh', visibility = 'visible
   });
   vm.runInContext(`${source}\nglobalThis.api = { B, U, FLY, UI, TEXT, connect, disconnect, connectUniverse, disconnectUniverse, flyIn, flyOut, stepFly, uHello, uUniverse };`, context);
   api = context.api;
-  return { ...api, streams, active, notices, requests, el, get peak() { return peak; }, get demoStarts() { return demoStarts; },
+  return { ...api, streams, active, notices, requests, el, intervals, get channel() { return channel; }, get peak() { return peak; }, get demoStarts() { return demoStarts; },
     seed() {
       api.uHello(replay ? { ...hello, mode: 'replay', replay: { start: 1000, end: 1000000, speed: 2 } } : hello);
       api.uUniverse(universe);
@@ -105,21 +108,21 @@ test('回放飞入保留两条流，后台不关闭、不重置共用时钟', ()
   b.flyIn(session.id);
   const detail = b.B.es; first.emit('open'); detail.emit('open');
   assert.deepEqual(b.active(), [first, detail]); assert.equal(b.B.params.replay, 'all');
-  b.visibility('hidden'); b.advance(31000); b.visibility('visible');
+  b.visibility('hidden'); b.advance(601000); b.visibility('visible');
   assert.deepEqual(b.active(), [first, detail]); assert.equal(b.streams.length, 2); assert.equal(b.U.clock.perf0, perf0);
   b.stepFly(); b.flyOut(); assert.deepEqual(b.active(), [first, detail]);
   b.advance(1400); b.stepFly(); assert.deepEqual(b.active(), [first]);
 });
 
-for (const mode of ['universe', 'in', 'board', 'out']) test(`后台释放和恢复按 ${mode} 模式选一条流，29 秒内回来不重连`, () => {
+for (const mode of ['universe', 'in', 'board', 'out']) test(`后台释放和恢复按 ${mode} 模式选一条流，10 分钟内回来不重连`, () => {
   const b = board(); b.seed();
   if (mode !== 'universe') b.flyIn(session.id, mode !== 'in');
   if (mode === 'out') b.flyOut();
   const first = b.active()[0]; first.emit('open');
   const count = b.streams.length;
-  b.visibility('hidden'); b.advance(29000); b.visibility('visible'); b.advance(2000);
+  b.visibility('hidden'); b.advance(599000); b.visibility('visible'); b.advance(2000);
   assert.deepEqual(b.active(), [first]); assert.equal(b.streams.length, count);
-  b.visibility('hidden'); b.advance(31000);
+  b.visibility('hidden'); b.advance(601000);
   assert.equal(b.active().length, 0); assert.equal(first.readyState, 2); assert.equal(b.U.lostAt, null);
   b.connect(); b.connectUniverse(); assert.equal(b.active().length, 0);
   b.visibility('visible');
@@ -130,7 +133,7 @@ for (const mode of ['universe', 'in', 'board', 'out']) test(`后台释放和恢�
 
 test('初始在后台打开的页面也会让出连接', () => {
   const b = board({ visibility: 'hidden' });
-  b.advance(31000); assert.equal(b.active().length, 0);
+  b.advance(601000); assert.equal(b.active().length, 0);
   b.visibility('visible'); assert.deepEqual(b.active(), [b.U.es]); assert.equal(b.peak, 1);
 });
 
@@ -146,7 +149,7 @@ test('看板后台重连沿用对话参数，hello 后重发 run/backlog 不重�
     }
   };
   fill(b.B.es); b.UI.open.add('seat');
-  b.visibility('hidden'); b.advance(31000);
+  b.visibility('hidden'); b.advance(601000);
   assert.equal(b.B.lanes.length, 1); assert.equal(b.B.feed.length, 2);
   b.visibility('visible');
   assert.equal(b.B.params, params); assert.equal(b.B.es.url, url); assert.equal(b.FLY.id, session.id);
@@ -161,10 +164,10 @@ test('定格只取快照，演示不打开宇宙流，后台切换不重复取�
   const frozen = board({ search: '?t=5' });
   await new Promise(setImmediate); frozen.flyIn(session.id, true); await new Promise(setImmediate);
   assert.equal(frozen.streams.length, 0); assert.equal(frozen.requests.length, 2);
-  frozen.visibility('hidden'); frozen.advance(31000); frozen.visibility('visible'); frozen.flyOut();
+  frozen.visibility('hidden'); frozen.advance(601000); frozen.visibility('visible'); frozen.flyOut();
   assert.equal(frozen.streams.length, 0); assert.equal(frozen.requests.length, 2);
   const demo = board({ search: '?demo=universe' });
-  demo.visibility('hidden'); demo.advance(31000); demo.visibility('visible');
+  demo.visibility('hidden'); demo.advance(601000); demo.visibility('visible');
   assert.equal(demo.streams.length, 0); assert.equal(demo.demoStarts, 1);
 });
 
@@ -175,8 +178,7 @@ for (const lang of ['zh', 'en']) for (const mode of ['universe', 'board']) test(
   b.advance(3000); es.emit('error'); b.advance(3000); es.emit('error'); b.advance(1999);
   assert.deepEqual(b.notices, []);
   b.advance(1);
-  const text = lang === 'zh' ? '连不上看板服务。同一个浏览器里开着很多看板标签页时会这样：关掉几个看板标签页，再刷新这一页'
-    : "Can't reach the board service. This happens when many board tabs are open in the same browser: close a few board tabs, then reload this page";
+  const text = b.TEXT.streamStuck;
   assert.deepEqual(b.notices, [text]);
   es.emit('error'); b.advance(16000); assert.deepEqual(b.notices, [text]);
   es.emit('open'); b.advance(8000); assert.deepEqual(b.notices, [text]);
@@ -185,4 +187,16 @@ for (const lang of ['zh', 'en']) for (const mode of ['universe', 'board']) test(
   es.emit('open'); es.emit('error');
   if (mode === 'board') b.disconnect(); else b.disconnectUniverse();
   b.advance(8000); assert.equal(b.notices.length, 2);
+});
+
+test('前台页面连不上 2 秒就广播，后台的看板页收到后马上让出连接，并每分钟向服务报到', () => {
+  const b = board(); b.seed();
+  assert.equal(b.active().length, 1);
+  b.visibility('hidden');
+  b.channel.onmessage({ data: 'release' });
+  assert.equal(b.active().length, 0); assert.equal(b.intervals.size, 1); assert.equal([...b.intervals.values()][0].ms, 60000);
+  b.visibility('visible'); assert.equal(b.active().length, 1); assert.equal(b.intervals.size, 0);
+  // 前台页面自己连不上：2 秒后请别的标签页让出连接
+  const front = board(); front.seed(); front.advance(2000);
+  assert.deepEqual(front.channel.sent, ['release']);
 });
