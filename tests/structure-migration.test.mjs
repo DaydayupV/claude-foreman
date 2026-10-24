@@ -198,7 +198,7 @@ test('旧类型和旧代号在 status、watch、resume 及并发准入中继续�
     assert.equal(output(await h.bridge(['status', '--run', id])).agent_type, type);
     const watch = await h.bridge(['watch', '--run', id, '--verbose']);
     assert.equal(watch.code, 0, watch.stderr);
-    assert.ok(watch.stdout.includes(type === 'opencode' ? 'opencode CLI' : type === 'openai-compatible' ? 'API' : 'Codex CLI'));
+    assert.ok(watch.stdout.includes(type === 'opencode' ? 'Opencode CLI' : type === 'openai-compatible' ? 'API' : 'Codex CLI'));
     const r = output(await h.bridge(['resume', '--run', id, '--level', 'complex', '--brief', '-', ...(kind === 'exec' ? ['--reason', 'recover'] : []), '--no-snapshot']));
     assert.equal(r.agent, name === 'oc' ? 'model' : name === 'api' ? 'remote' : 'renamed');
     assert.equal(r.agent_type, type === 'opencode' ? 'opencode cli' : type === 'openai-compatible' ? 'api' : 'codex cli');
@@ -210,5 +210,5 @@ test('旧类型和旧代号在 status、watch、resume 及并发准入中继续�
   failed(await h.bridge(taskArgs(h, 'run', ['--no-snapshot', '--queue-timeout', '0'])), M.agentFull('renamed', 1, 1, '20000101-active'));
   const list = await h.bridge(['status']);
   assert.equal(list.code, 0, list.stderr);
-  for (const channel of ['Codex CLI', 'opencode CLI', 'API']) assert.ok(list.stdout.includes(channel));
+  for (const channel of ['Codex CLI', 'Opencode CLI', 'API']) assert.ok(list.stdout.includes(channel));
 });

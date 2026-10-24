@@ -74,7 +74,8 @@ for (const tool of ['codex', 'oc', 'api']) {
     assert.equal(r.report, null);
     assert.deepEqual(r.questions, [question('final_question', answer.slice(0, 2000))]);
     assert.equal(r.needs_decision, true);
-    assert.deepEqual(r.notes, [M.needsDecisionNote(1)]);
+    // 讨论的续接不写 --reason，提示也不带
+    assert.deepEqual(r.notes, [M.needsDecisionNote(1, 'discuss')]); assert.ok(!r.notes[0].includes('--reason answer'));
     assert.equal(api ? api.requests.length : s.calls().filter((c) => c.operation !== 'export').length, 1);
     assert.ok(!h.events(r.run_id).some((e) => e.type === 'api.repair'));
   });
@@ -115,7 +116,7 @@ test('opencode 收集权限拒绝并跨 stderr 去重，项目内路径相对、
   assert.ok(permissions[2].question.includes('bash'));
   assert.ok(!JSON.stringify(permissions[1]).includes(h.home));
   assert.equal(r.needs_decision, true);
-  assert.ok(r.notes.includes(M.needsDecisionNote(3)));
+  assert.ok(r.notes.includes(M.needsDecisionNote(3, 'discuss')));
   const permission = JSON.parse(s.calls()[0].env.OPENCODE_CONFIG_CONTENT).agent['foreman-discuss'].permission;
   assert.equal(permission.question ?? permission['*'], 'deny');
   assert.ok(!Object.entries(permission).some(([name, value]) => name === 'question' && value === 'allow'));

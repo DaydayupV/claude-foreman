@@ -881,3 +881,15 @@ test('问题点按这一批算：进行中用户又发了消息，这一批还�
   const s = createUniverse(f.options).read(now).sessions.find((x) => x.id === 'mid');
   assert.equal(s.state, 'dispatching'); assert.deepEqual(s.issues.map((r) => r.run), ['mid-failed']);
 });
+
+test('取消以后又续接成功的那一轮不算失败，也不再提醒；没续接的失败照算', (t) => {
+  const f = temp(t);
+  f.session('s', [row('user', now - 300000, 'go'), answer(now - 290000)]);
+  f.run('cut', { status: 'cancelled', started_at: now - 200000, ended_at: now - 190000 });
+  f.run('cut-2', { parent: 'cut', status: 'done', started_at: now - 180000, ended_at: now - 100000 });
+  let s = createUniverse(f.options).read(now).sessions.find((x) => x.id === 's');
+  assert.deepEqual(s.counts, { running: 0, done: 1, failed: 0 }); assert.equal(s.alert, null);
+  f.run('lost', { status: 'failed', started_at: now - 90000, ended_at: now - 80000 });
+  s = createUniverse(f.options).read(now).sessions.find((x) => x.id === 's');
+  assert.deepEqual(s.counts, { running: 0, done: 1, failed: 1 }); assert.equal(s.alert.run, 'lost');
+});

@@ -4,5 +4,5 @@
     └ no usage reported by the provider for this round
 20000101-b  run      ✗ failed              complex  fake-codex high · Codex CLI             took 3s      合成任务  @ <CWD>
     └ no usage reported by the provider for this round
-20000101-a  discuss  ✔ done                complex  deepseek-v4.1-flash max · opencode CLI  took 9m 32s  合成讨论  @ <CWD>
+20000101-a  discuss  ✔ done                complex  deepseek-v4.1-flash max · Opencode CLI  took 9m 32s  合成讨论  @ <CWD>
     └ tokens: in 585k (cached 86%) · out 19k · last request 81k / window 486k · cost $0.066

@@ -61,8 +61,8 @@ test('64 列先保留状态词和时钟，再截模型标签；身份行不写�
   const heads = frame.filter((line) => seatHead('●').test(line));
   assert.equal(heads.length, 4);
   assert.match(heads[0], /^1 ● gpt-6-astra max · Codex CLI +running <CLOCK>$/);
-  assert.match(heads[1], /^2 ● deepseek-v4\.1-flash max · opencode CLI +running <CLOCK>$/);
-  assert.match(heads[2], /^3 ● mimo-v2\.6-pro high · pi CLI +running <CLOCK>$/);
+  assert.match(heads[1], /^2 ● deepseek-v4\.1-flash max · Opencode CLI +running <CLOCK>$/);
+  assert.match(heads[2], /^3 ● mimo-v2\.6-pro high · Pi CLI +running <CLOCK>$/);
   assert.match(heads[3], /^4 ● kimi-k2\.6 · API +thinking <CLOCK>$/);
 });
 
@@ -290,7 +290,7 @@ test('单任务的实时画面：顶部固定身份行和任务行，读文件�
   const h = sandbox(t);
   const { seats } = liveGroup(h, process.pid);
   const pi = steadyClock(await frameOf(h, ['watch', '--run', seats[2].id, '--no-intro'], { FOREMAN_TEST_SCREEN: '120x16' }));
-  assert.match(pi[0], /^● mimo-v2\.6-pro high · pi CLI +running <CLOCK>$/);
+  assert.match(pi[0], /^● mimo-v2\.6-pro high · Pi CLI +running <CLOCK>$/);
   assert.equal(pi[1], '  discuss · 合成讨论：登记锁原地重试 · complex');
   assert.ok(pi.includes('      │   read foreman/skills/dispatch/scripts/records.mjs'));
   assert.ok(pi.includes('      │   search ls tests'));
@@ -320,7 +320,7 @@ test('status 表：状态词和用时写英文，中英两个插件一样；模�
   // 终端里只给状态记号和状态词上色，模型和标题加粗，用时和用量用暗色
   const colored = await h.bridge(['status'], { env: { FOREMAN_TEST_SCREEN: '100x30', NO_COLOR: '' } });
   assert.ok(colored.stdout.includes('\x1b[32m✔ done\x1b[0m'), colored.stdout);
-  assert.ok(colored.stdout.includes('\x1b[1mdeepseek-v4.1-flash max · opencode CLI\x1b[0m'));
+  assert.ok(colored.stdout.includes('\x1b[1mdeepseek-v4.1-flash max · Opencode CLI\x1b[0m'));
   assert.ok(colored.stdout.includes('\x1b[2mtook 9m 32s\x1b[0m'));
 });
 

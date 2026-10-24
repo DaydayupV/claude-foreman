@@ -30,11 +30,11 @@ class Element {
   }
   addEventListener() {}
 }
-function board(lang = 'zh') {
+function board(lang = 'zh', clock = () => 0) {
   const table = new Element(), card = new Element();
   let api;
   const context = vm.createContext({ Display, window: { __BOARD_FIXTURE__: true, __LANG__: lang }, location: { search: '' },
-    URLSearchParams, performance: { now: () => 0 }, wake() {}, worldEl: { dataset: { lod: 0 } },
+    URLSearchParams, performance: { now: () => clock() }, wake() {}, worldEl: { dataset: { lod: 0 } },
     document: { createElement: () => new Element(), documentElement: {}, querySelector: () => null },
     latest: (l) => l.runs.at(-1), avatarFor: () => 'model', rgba: () => '', avatarSrc: () => '', look: () => ({ name: 'model' }),
     laneStatus: () => ({ running: false, word: 'done' }), shortModel: (m) => m, verdictCounts: () => null,
@@ -172,4 +172,14 @@ for (const lang of ['zh', 'en']) test(`${lang} cards, headers and tooltips show 
   assert.equal(b.table.children[1].children[0].children[6].title, b.TEXT.usageUnattributed);
   assert.equal(b.table.children[2].children[6].textContent, '—');
   assert.equal(b.table.children[2].children[6].title, b.TEXT.usageUnattributed);
+});
+
+test('用量表一帧新建不完的行下一帧接着建：预算一开始就用完时每次也至少建 10 行', () => {
+  let ms = 0;
+  const b = board('zh', () => (ms += 100));
+  for (let i = 0; i < 25; i++) b.onRun(run({ id: `seat${i}`, status: 'done', started_at: i, ended_at: 10000 + i }));
+  const rows = () => b.table.children[1].children.length;
+  assert.equal(b.renderTable(20000), false); assert.equal(rows(), 10);
+  assert.equal(b.renderTable(20000), false); assert.equal(rows(), 20);
+  assert.equal(b.renderTable(20000), true); assert.equal(rows(), 25);
 });

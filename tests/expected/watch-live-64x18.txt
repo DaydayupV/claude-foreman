@@ -4,12 +4,12 @@ discuss · panel · 合成讨论：登记锁原地重试 · complex         ●4
     ◆ 先看一下登记锁现在怎么加锁、怎么回收残留锁，再对照 Windo…
     … +5 commands · $ rg -n retryBusy foreman/skills/dispatch/…
 ───────────────────────────────────────────────────────────────
-2 ● deepseek-v4.1-flash max · opencode CLI         running <CLOCK>
+2 ● deepseek-v4.1-flash max · Opencode CLI         running <CLOCK>
     … +2 reads, +1 search
     search **/*.lock
     read tests/admission.test.mjs
 ───────────────────────────────────────────────────────────────
-3 ● mimo-v2.6-pro high · pi CLI                    running <CLOCK>
+3 ● mimo-v2.6-pro high · Pi CLI                    running <CLOCK>
     ◆ 我先读登记锁的代码，再看测试。
     thinking: 删除挂起时 openSync 会报 EPERM，要确认重试的上限…
     … +1 read · search ls tests

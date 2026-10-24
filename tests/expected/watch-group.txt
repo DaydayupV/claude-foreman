@@ -12,7 +12,7 @@ run · split · 合成a / 合成b / 合成c / 合成d · complex                
   先建立回归测试，再拆模块
   tokens: in 120 (cached 25%) · out 40                                                            b
 ───────────────────────────────────────────────────────────────────────────────────────────────────
-✔ model high · opencode CLI                                                               done 0:03
+✔ model high · Opencode CLI                                                               done 0:03
   合成c · complex
   先建立回归测试，再拆模块
   tokens: in 120 (cached 25%) · out 40                                                            c

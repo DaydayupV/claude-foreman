@@ -1,5 +1,5 @@
 
-✔ model high · opencode CLI                                                               done 0:03
+✔ model high · Opencode CLI                                                               done 0:03
   discuss · 合成c · complex
 ───────────────────────────────────────────────────────────────────────────────────────────────────
       │   read source.txt

@@ -29,7 +29,7 @@ function board({ search = '', replay = false, lang = 'zh', visibility = 'visible
     close() { this.readyState = 2; }
   }
   const el = (id) => {
-    if (!elements.has(id)) elements.set(id, { dataset: {}, style: {}, addEventListener() {}, replaceChildren() {},
+    if (!elements.has(id)) elements.set(id, { dataset: {}, style: {}, addEventListener() {}, replaceChildren() {}, remove() {},
       classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
       set textContent(value) { if (id === 'notice') notices.push(value); } });
     return elements.get(id);
