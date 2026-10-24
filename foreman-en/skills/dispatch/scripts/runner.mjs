@@ -398,6 +398,29 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
     changes.unknown_total = tracked.length - changes.agent_total - changes.reported_total;
     const otherRuns = tracked.some((f) => f.by === 'unknown') ? concurrentExecRuns(meta, concurrentAtStart) : [];
     const ownRoots = [...opts.scope, ...track].map((root) => absolute(cwd, root));
+    // 工作目录外的文件本来就不在快照里，不能归为“快照没看到”；工具事件优先于自报。
+    // 存储和比较都用原始路径解析出的绝对路径：先算相对路径再拼回去，跨网络共享（\\server\a → \\server\b）时会拼错
+    const outsideCwd = new Map();
+    const rootOf = (p) => pathKey(path.parse(p).root.replace(/\\/g, '/'));
+    const shownPath = (p) => (rootOf(p) === rootOf(path.resolve(cwd)) ? relativePath(cwd, p) : p.replace(/\\/g, '/'));
+    if (kind === 'exec') {
+      for (const [by, files] of [['agent', r.fileChanges], ['reported', reported]]) for (const file of files) {
+        const rel = relativePath(cwd, file), full = path.resolve(cwd, file.replace(/\\/g, '/')), key = absolute(cwd, file);
+        if ((rel === '..' || rel.startsWith('../') || path.isAbsolute(rel)) && !outsideCwd.has(key)) {
+          outsideCwd.set(key, { path: full, by, in_scope: ownRoots.some((root) => key === root || key.startsWith(`${root}/`)) });
+        }
+      }
+      if (outsideCwd.size) {
+        // 先列越界的，免得 30 条上限把唯一需要提醒的路径截掉。
+        const files = [...outsideCwd.values()].sort((a, b) => Number(a.in_scope) - Number(b.in_scope));
+        changes.outside_cwd = files.slice(0, 30);
+        changes.outside_cwd_total = files.length;
+        const outsideScope = files.filter((f) => !f.in_scope).map((f) => shownPath(f.path));
+        const inScope = files.filter((f) => f.in_scope).map((f) => shownPath(f.path));
+        if (outsideScope.length) warnings.push(M.wroteOutsideCwd(modelShown, M.list(outsideScope)));
+        if (inScope.length) notes.push(M.outsideCwdInScope(modelShown, M.list(inScope)));
+      }
+    }
     const ambiguous = [];
     // 同一席的几轮（续接、同一计划同一席重启）算一个任务：原轮和续接轮的范围一样，不能因为"有两个任务都覆盖"就判成分不清
     // 一次收尾里别的任务是固定的：按 run id 记下链头，文件多时不用一遍遍读同一批 meta.json
@@ -436,7 +459,7 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
     }
     // 自称改过、却没追踪到的：文件看它本身，目录看前缀下有没有被追踪的文件；工作目录本身不算一条自称的改动
     const trackedKeys = tracked.map((f) => pathKey(relativePath(cwd, f.path)));
-    const untracked = [...new Map(claims.filter((c) => !c.root && !trackedKeys.includes(c.key) && !(c.dir && trackedKeys.some((k) => k.startsWith(`${c.key}/`))))
+    const untracked = [...new Map(claims.filter((c) => !c.root && !outsideCwd.has(absolute(cwd, c.rel)) && !trackedKeys.includes(c.key) && !(c.dir && trackedKeys.some((k) => k.startsWith(`${c.key}/`))))
       .map((c) => [c.key, c.rel])).values()];
     // 没有快照（--no-snapshot、拍快照失败）时谈不上"两次快照之间没变"，换一种说法
     if (untracked.length) notes.push(changes.available ? M.reportedNotTracked(modelShown, untracked) : M.reportedNoSnapshot(modelShown, untracked));

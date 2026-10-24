@@ -91,7 +91,10 @@ function seatBlock(run, feed, rows, width, no, split, collapse = false) {
   let body = feed.state.running ? liveLines(feed.tl.state, rows, inner) : feed.final(inner);
   if (feed.state.running && !body.length && rows > 0 && !feed.tl.state.api.req) body = [C.dim(D.watchWorking)];
   const shown = collapse ? collapseLines(body, true, `press ${no} to open`) : body.slice(0, rows);
-  if (!collapse && body.length > rows && rows > 0) shown[rows - 1] = `${fitWidth(shown[rows - 1].replace(/\x1b\[[0-9;]*m/g, ''), inner - 1)}${C.dim('…')}`;
+  if (!collapse && body.length > rows && rows > 0) {
+    const last = shown[rows - 1].replace(/\x1b\[[0-9;]*m/g, ''), cut = fitWidth(last, inner - 1);
+    shown[rows - 1] = cut.endsWith('…') ? cut : `${cut}${C.dim('…')}`;
+  }
   return { lines: [...out, ...[...shown, ...seatUsage(run, feed, inner, no == null)].map((l) => lead + l)], state: st };
 }
 
@@ -151,7 +154,13 @@ async function watchGroup(group, o, loadCfg) {
   const earlyKeys = readKeys((keys) => keysHandler(keys));
   const listenEarly = interactive();
   let settlingShown = false;
-  if (listenEarly) listenKeys(earlyKeys);
+  if (listenEarly) {
+    // 等待登记时就已进入 raw 模式，异常或信号退出也要关闭括号粘贴模式。
+    process.on('exit', () => stopKeys(earlyKeys));
+    process.on('SIGINT', () => { early = 130; });
+    process.on('SIGTERM', () => process.exit(143));
+    listenKeys(earlyKeys);
+  }
   for (let waited = 0; ; waited += 500) {
     runs = recentRuns();
     // 找到的一批都已结束时多等几秒：可能是别的会话用过的同名组，新派出的任务还没登记
@@ -324,7 +333,7 @@ async function watchGroup(group, o, loadCfg) {
         : where ? { text: where, paint: C.yellow } : allDone ? { text: `✔ ${D.dashAllFinished}`, paint: done } : null;
       const keys = D.dashKeys(range, queued.length > 0, seats.some((n) => n >= 10));
       const paintKeys = queued.length ? C.yellow : C.dim;
-      const parts = dashFooter(left?.text || '', keys, width, allDone);
+      const parts = dashFooter(left?.text || '', keys, width, allDone, D.dashKeysShort(range, queued.length > 0));
       foot = (left ? left.paint(parts.left) : '') + parts.gap + paintKeys(parts.keys);
     }
     return [...top, ...shown, foot];

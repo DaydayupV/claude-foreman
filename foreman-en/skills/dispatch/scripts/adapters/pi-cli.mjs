@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA } from '../config.mjs';
-import { MAX_REVIEW_CHARS } from '../review-scope.mjs';
+import { MAX_REVIEW_CHARS, reviewPatchText } from '../review-scope.mjs';
 import { newRunDir, isCancelled, cancelSource } from '../records.mjs';
 import { startRun, finishDiscussion, execute, eventWriter, runLimits, reportWithRepair, spawnCli, validateSchema } from '../runner.mjs';
 import { M, die, isObject, binCommand, pathCommand, npmEntry, killTree, readAttachments, focusFiles, relativePath, closestMatches } from '../util.mjs';
@@ -183,12 +183,8 @@ async function executePi(ctx) {
     if (brief) parts.push(brief);
     if (files.length) parts.push(focusFiles(files).trim());
     if (scope?.target === 'diff') {
-      const fileList = scope.files.map((f) => `- ${f.status} ${f.old_path ? `${f.old_path} → ` : ''}${f.path}`
-        + (f.binary ? M.reviewFileBinary : '') + (f.too_large ? M.reviewFileTooLarge : '')).join('\n');
-      const chars = fileList.length + scope.patch.length;
-      if (chars > MAX_REVIEW_CHARS) die(M.reviewTooLarge(chars, MAX_REVIEW_CHARS));
-      const longest = (scope.patch.match(/`+/g) || []).reduce((n, s) => Math.max(n, s.length), 2);
-      parts.push(M.reviewMaterial(fileList, scope.patch, '`'.repeat(longest + 1)));
+      const material = reviewPatchText(scope, { budget: MAX_REVIEW_CHARS, readsFiles: true });
+      parts.push(M.reviewMaterial(material.fileList, material.patch, material.fence, material.note));
     }
     prompt = [...parts, M.reviewFooter, M.reviewSchemaFooter(schemaText)].join('\n\n') + '\n';
   } else if (exec) prompt = ctx.parent

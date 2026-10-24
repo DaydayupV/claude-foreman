@@ -6,7 +6,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { RUNS_ROOT, requestCancel, listRuns, findRun, readMeta, checkRunners, isRunning } from './records.mjs';
 import { M, die, sleep, clip, oneLine, plainCommand, RECONNECT, modelOf, agentTypeOf, fitWidth, textWidth } from './util.mjs';
-import { D, C, termCols, termRows, shortModel, fullModel, modelLabel, taskLine, identityLine, clock, outcomeStyle, changedFor, usageLine, commandAction } from './format.mjs';
+import { D, C, termCols, termRows, shortModel, fullModel, modelLabel, taskLine, identityLine, clock, outcomeStyle, changedFor, outsideCwdText, usageLine, commandAction } from './format.mjs';
 import { liveCapable, interactive, listenKeys, stopKeys, liveScreen, readKeys, scroller, LEAVE_SCREEN, kindOf, introWanted, introOf } from './watch-screen.mjs';
 import { createTimeline, reviewConclusion, resultOutcome, durationOf, finishedParts, liveStatus, eventReader, hhmm } from './watch-timeline.mjs';
 import { introScene, playIntro } from './watch-intro.mjs';
@@ -105,6 +105,8 @@ function verboseRenderer(meta, rel) {
     if (r) {
       const f = finishedParts(resultOutcome(r), durationOf(r, m), changedFor(r, m), r.stale === true);
       out(f.color(f.mark), f.color(f.word) + f.rest, m?.ended_at);
+      const outside = outsideCwdText(r, m);
+      if (outside) out(C.yellow('⚠'), C.yellow(outside), m?.ended_at);
     } else out(C.red('✗'), m?.status === 'running' ? D.watchInterrupted : D.watchEnded(m?.status), m?.ended_at);
     const usage = usageLine(r, m);
     if (usage) out('Σ', usage, m?.ended_at);
@@ -272,11 +274,12 @@ function singleView(meta, tl, dir, latest) {
     if (started) return;
     started = true;
     check();
+    process.on('SIGINT', () => quit(130));
+    process.on('SIGTERM', () => process.exit(143));
+    process.on('exit', () => { screen.stop(); if (interactive()) stopKeys(onKeys); });
     screen.start();
     if (!ended) tickOn();
     if (interactive()) listenKeys(onKeys);
-    process.on('SIGINT', () => quit(130));
-    process.on('exit', () => screen.stop());
   };
   return {
     start,

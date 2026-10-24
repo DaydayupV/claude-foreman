@@ -139,6 +139,8 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 #world.lod0 .card .av { left: 5px; top: 13px; height: 70px; }
 #world.lod0 .card .hd { left: 69px; top: 16px; font-size: 8.5px; line-height: 1.55; }
 #world.lod0 .card .hd .model { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+/* 默认缩放下速度行放不下一行：折成最多三行（now、gen avg、out），不再把平均速度和输出量裁掉 */
+#world.lod0 .card .hd .rate { white-space: normal; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
 #world.lod0 .card .tl, #world.lod0 .card .term, #world.lod0 .card .think { display: none; }
 
 #world.lod1 .card .av { left: 4px; top: 4px; height: 42px; }
@@ -219,14 +221,26 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 #usage { display: grid; grid-template-rows: auto 1fr auto; height: 100%; min-height: 0; }
 #hud #more { width: auto; padding: 0 8px; letter-spacing: .08em; }
 #termsec { height: calc(100vh - var(--top-h) - 14px); margin-bottom: 8px; display: grid; grid-template-rows: auto 1fr auto; gap: 6px; }
-/* 已结束的组：终端区下面一排，栏的样子和上面运行中的一样；小标题缩进、不加粗，看得出是终端区里的一段，不和 TERMINAL 同级 */
-#termsec:has(#termdone:not([hidden])) { grid-template-rows: auto 1fr 1fr; }
-#termdone { display: grid; grid-template-rows: auto 1fr; gap: 4px; min-height: 0; }
+/* 已结束的组：终端区下面一段。小标题缩进、不加粗，看得出是终端区里的一段，不和 TERMINAL 同级；
+   展开的组排成一排，栏的样子和上面运行中的一样（栏头可以点着收起）；折起来的一组一行，列在下面 */
+#termsec:has(#termdone:not([hidden])) { grid-template-rows: auto 1fr auto; }
+#termsec:has(#termdone .row > .tcol) { grid-template-rows: auto 1fr 1fr; }
+#termdone { display: flex; flex-direction: column; gap: 4px; min-height: 0; }
 #termdone[hidden] { display: none; }
-#termdone > .sub { display: flex; align-items: center; gap: 8px; padding-left: 6px; color: var(--dim); font-size: 10px; }
+#termdone > .sub { flex: none; display: flex; align-items: center; gap: 8px; padding-left: 6px; color: var(--dim); font-size: 10px; }
 #termdone > .sub::after { content: ""; flex: 1; border-top: 1px dashed rgba(200,200,212,.12); }
-#termdone > .row { display: flex; gap: 8px; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
-#termdone .more { flex: none; align-self: center; padding: 2px 10px; font-size: 10px; }
+#termdone > .row { flex: 1; display: flex; gap: 8px; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
+#termdone > .row:empty, #termdone > .lines:empty { display: none; }
+#termdone > .lines { flex: none; max-height: 30vh; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
+#termdone .dline { cursor: pointer; color: var(--mid); font-size: 10.5px; padding: 2px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#termdone .dline:hover { color: var(--text); background: rgba(255,255,255,.04); }
+.tcol.done-open > header { cursor: pointer; }
+.tcol.done-open > header > b::before { content: "▾ "; color: var(--dim); font-weight: 400; }
+.tcol.done-open > header:hover { background: rgba(255,255,255,.04); }
+/* 组栏全部结束时底部一行，和终端分组查看的"✔ all finished"一样 */
+.tgroup .all-done { flex: none; padding: 2px 6px; font-size: 10px; color: var(--dim); }
+.tgroup .all-done:empty { display: none; }
+.tgroup .all-done::first-letter { color: var(--tone-ok); }
 #termsec > header { display: flex; align-items: baseline; gap: 12px; height: 18px; border-bottom: 1px solid rgba(200,200,212,.14); }
 #termsec > header b { color: var(--hi); font-size: 10px; letter-spacing: .16em; }
 #termsec > header span { color: var(--dim); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -301,6 +315,8 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
   #top .brand { display: flex; align-items: center; min-width: 0; overflow: hidden; }
   #scope { display: none; }
   #crumb { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  /* 路径是 flex 容器，省略号要加在里面放不下的那一段（通常是对话标题）上 */
+  #crumb > :is(span, b) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #clock { font-size: 10px; flex: none; }
   #uslots { width: 132px; }
   #uslots .rows { display: none; }
@@ -314,7 +330,7 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
   #usage[data-mode="uni"] .tr > span:is(:nth-child(6), :nth-child(7), :nth-child(10)) { display: none; }
   #termsec { height: auto; min-height: calc(100vh - var(--top-h) - 14px); }
   #terms, #termdone > .row { flex-direction: column; overflow: visible; }
-  #termsec:has(#termdone:not([hidden])) { grid-template-rows: auto auto auto; }
+  #termsec:has(#termdone:not([hidden])), #termsec:has(#termdone .row > .tcol) { grid-template-rows: auto auto auto; }
   .tcol, .tcol.cc, .tgroup { flex: none; min-width: 0; height: 70vh; }
 }
 
@@ -375,6 +391,8 @@ const D = {
   watchImageHead: (mode, title, cell, mark) => `${mode} · ${title} · ${cell} · route ${mark}`,
   watchImageViewed: (file) => `Opened image ${file}`,
   watchStale: 'material changed during the review (stale)',
+  watchNoUsage: 'no usage reported by the provider for this round',
+  watchOutsideCwd: (shown, more) => `wrote outside the working directory: ${shown}${more ? ` and ${more} more` : ''}`,
   costUsd: (text) => `cost $${text}`,
   // 整轮平均速度包含命令和等待，与终端原有口径一致。
   outputSpeed: (n, partial) => `run avg ${n} tok/s${partial ? ' (partial usage)' : ''}`,
@@ -391,6 +409,7 @@ const D = {
   watchApiDropped: (duration) => `Dropped by the server after ${duration} in the queue (service busy)`,
   watchRound: (n) => `round ${n}`,
   groupModes: { panel: 'panel', roles: 'roles', split: 'split' },
+  dashKeysShort: (range, queued) => `${queued ? 'x stop · ' : ''}${range ? `${range} · ` : ''}↑↓ · q`,
   dashKeys: (range, queued, twoDigits = false) => `${queued ? 'x stop queued · ' : ''}${range ? `${range} open a seat${twoDigits ? ' (600ms for 2nd digit)' : ''} · ` : ''}↑↓ scroll · q quit`,
   statusResumed: 'resumed',
   dashAbove: (n) => `↑ ${n} more line${n === 1 ? '' : 's'} above`,
@@ -401,10 +420,10 @@ const D = {
   watchFinishedKeys: 'g top · ↑↓ scroll · q quit',
   watchFinishedNote: 'finished · q leaves and keeps the record in this tab',
   // 窄窗口先省略 run_id，保留跟随续接的按键提示。
-  watchContinued: (id) => `continued as ${id} · press n to follow`,
-  watchContinuedShort: 'continued · press n to follow',
-  watchContinuedTiny: 'continued · press n',
-  watchContinuedOut: (id) => `continued as ${id}`,
+  watchContinued: (id) => `↪ resumed as ${id} · press n to follow`,
+  watchContinuedShort: '↪ resumed · press n to follow',
+  watchContinuedTiny: '↪ resumed · press n',
+  watchContinuedOut: (id) => `↪ resumed as ${id}`,
   watchAnswerSubmitted: (round) => `report submitted (round ${round})`,
   watchReplayOne: (command) => `replay a seat: ${command}`,
   dashCancelConfirm: (models) => `Press x again to stop ${models}, or any other key to cancel`,
@@ -643,15 +662,36 @@ function changedText(c) {
 // 讨论和审查本来只读，只有真的改了文件才显示改动数（那是越界，要提醒）。
 const changedFor = (r, m) => (m?.kind === 'exec' || agentTotal(r?.changes) ? changedText(r?.changes) : null);
 
+function outsideCwdText(r, m) {
+  const files = m?.kind === 'exec' ? (r?.changes?.outside_cwd || []).filter((f) => f.in_scope === false) : [];
+  if (!files.length) return null;
+  // 网页也用这段纯显示逻辑，不能依赖 Node 的 path；保留上级目录和原有路径分隔符。
+  const cwd = m.cwd ?? r.cwd ?? '', windows = /^[A-Za-z]:|^\\\\/.test(cwd), sep = cwd.includes('\\') ? '\\' : '/';
+  const base = cwd ? cwd.replace(/\\/g, '/').replace(/\/$/, '').split('/') : [];
+  // 根（盘符，或网络共享的 //服务器/共享名）不同的不写成相对路径：../ 回不到另一个盘或另一台服务器
+  const rootOf = (p) => { const s = p.replace(/\\/g, '/'), unc = /^\/\/[^/]+\/[^/]+/.exec(s); return (unc ? unc[0] : /^[A-Za-z]:/.exec(s)?.[0] ?? (s.startsWith('/') ? '/' : '')).toLowerCase(); };
+  const relative = (file) => {
+    if (!cwd || rootOf(file) !== rootOf(cwd)) return file;
+    const parts = file.replace(/\\/g, '/').split('/');
+    let i = 0;
+    while (i < base.length && i < parts.length && (windows ? base[i].toLowerCase() === parts[i].toLowerCase() : base[i] === parts[i])) i++;
+    return i ? [...base.slice(i).map(() => '..'), ...parts.slice(i)].join(sep) : file;
+  };
+  return D.watchOutsideCwd(D.list(files.slice(0, 3).map((f) => relative(f.path))), Math.max(0, files.length - 3));
+}
+
 const formatUsd = (n) => (n === 0 ? '0' : n < 0.01 ? n.toPrecision(2) : n < 1 ? n.toFixed(3) : n.toFixed(2));
 function usageLine(result, meta) {
   if (meta?.participant === 'host') return D.watchHostNoUsage;
   const cost = result || {};
-  return [result?.usage ? D.tokenSummary(result.usage, result.last_request ?? result.context, D.tokenCount,
+  const parts = [result?.usage ? D.tokenSummary(result.usage, result.last_request ?? result.context, D.tokenCount,
     (result.usage_scope ?? (meta?.mode === 'resume' ? 'session_total' : 'this_run')) === 'session_total') : '',
   // 取消、超时、卡死的轮次只记到最后一次完成的请求，速度偏低，标出来
   result?.output_tokens_per_s != null ? D.outputSpeed(result.output_tokens_per_s, ['cancelled', 'timeout', 'stalled'].includes(result.status)) : '',
-  cost.cost_usd != null && cost.cost_source !== 'unknown' ? D.costUsd(formatUsd(cost.cost_usd)) : ''].filter(Boolean).join(' · ');
+  cost.cost_usd != null && cost.cost_source !== 'unknown' ? D.costUsd(formatUsd(cost.cost_usd)) : ''].filter(Boolean);
+  // 结束了却什么用量都没有（一次请求都没完成、厂商没报）：写明没报，结果的 notes 里有原因
+  if (!parts.length && result?.status && result.status !== 'running' && !result.usage_unattributed && !result.not_started) return D.watchNoUsage;
+  return parts.join(' · ');
 }
 
 function toolLabel(category, tool, { pattern, glob, path: where } = {}) {
@@ -735,9 +775,12 @@ function finalLines(run, r, ok, inner, C = unpainted) {
   if (moreAsked > 0) out.push(...marked('?', C.yellow, D.watchMoreQuestions(moreAsked)));
   const changed = run.meta.kind !== 'exec' && changedFor(r, run.meta); // 讨论和审查只有越界写了文件才有
   if (changed) out.push(...marked('⚠', C.yellow, changed));
+  const outside = outsideCwdText(r, run.meta);
+  if (outside) out.push(...marked('⚠', C.yellow, outside));
   if (r?.stale === true) out.push(...marked('⚠', C.yellow, D.watchStale));
   const [mark, color] = r?.status === 'needs_input' ? ['?', C.yellow] : ['✗', C.red];
-  for (const e of realErrors(r, ok)) out.push(...marked(mark, color, e));
+  const secondary = ['timeout', 'cancelled'].includes(r?.status);
+  realErrors(r, ok).forEach((e, i) => out.push(...(secondary && i > 0 ? marked('·', C.dim, e).map((l) => C.dim(l)) : marked(mark, color, e))));
   const moreErrors = (r?.errors_total ?? 0) - (r?.errors?.length ?? 0);
   if (moreErrors > 0) out.push(...marked(mark, color, D.watchMoreErrors(moreErrors)));
   return out;
@@ -959,10 +1002,12 @@ const queuedStarted = (q, runs) => runs.some((r) => {
   return q.plan && m.plan === q.plan && m.seat === q.seat && timeOf(m.original_started_at ?? m.started_at) >= timeOf(q.queued_at);
 });
 const collapseLines = (lines, collapse, opener) => collapse && lines.length > 4
-  ? [...lines.slice(0, 4), `… ${lines.length - 4} more lines · ${opener}`] : lines;
-function dashFooter(left, keys, width, done = false) {
-  const room = width - textWidth(keys) - 2;
+  ? [...lines.slice(0, 4), `… ${lines.length - 4} more line${lines.length - 4 === 1 ? '' : 's'} · ${opener}`] : lines;
+function dashFooter(left, keys, width, done = false, shortKeys = null) {
+  let room = width - textWidth(keys) - 2;
   if (done && textWidth(left) > room) left = left.replace(D.dashAllFinished, D.dashAllFinishedShort);
+  // 还放不下就换短的按键说明，先保住左边（"下面还有 N 行"这类位置提示）
+  if (shortKeys && textWidth(left) > room) { keys = shortKeys; room = width - textWidth(keys) - 2; }
   if (room < 8 && left) return { left: fitWidth(left, width), keys: '', gap: '' };
   left = fitWidth(left, Math.max(0, room));
   keys = fitWidth(keys, width);
@@ -1003,7 +1048,7 @@ function elapsedOf(r, t, points, lastActivity) {
 
 
 
-return { D, seatLine, shortModel, fullModel, modelLabel, agentTypeOf, moduleOf, taskLine, clock, took, shownStatus, outcomeStyle, agentTotal, changedText, changedFor,
+return { D, seatLine, shortModel, fullModel, modelLabel, agentTypeOf, moduleOf, taskLine, clock, took, shownStatus, outcomeStyle, agentTotal, changedText, changedFor, outsideCwdText,
   formatUsd, usageLine, toolLabel, commandAction, errorAction, foldText, thoughtLine, wrapAtDots, realErrors, durationOf, reviewFinding, reviewCounts, reviewConclusion, finalLines, liveLines,
   groupTask, current, planNotes, seatNumbers, roundOf, resultOutcome, liveStatus, seatState, toneOf, COUNT_MARKS, countParts, countsText, seatUsage, queuedLine, queuedStarted, collapseLines, dashFooter,
   displayRun, recordedTime, elapsedOf, textWidth, fitWidth, wrapWidth };
@@ -1034,6 +1079,7 @@ const TEXTS = {
     focusMissing: '这个地址指向的对话不在当前星图里（超出了时间窗口或显示上限），没法飞进去',
     legacyNotFound: (kind, value) => `记录里找不到这个地址里的${kind === 'run' ? '任务' : '组'}：${value}`,
     serverLost: '连不上看板服务了（它可能已经退出，或者换了新的地址）：在 Claude Code 里运行 /foreman:watch，或者让它重新给看板链接',
+    streamStuck: '连不上看板服务。同一个浏览器里开着很多看板标签页时会这样：关掉几个看板标签页，再刷新这一页',
     plan: (module, cell, seats) => `派发计划 · ${module} ${cell} · ${seats} 席`,
     gateWaiting: '外部席准入 · 等 Claude Code 席先交报告',
     gateOpen: '已开闸',
@@ -1077,6 +1123,7 @@ const TEXTS = {
     focusMissing: "The conversation this link points to isn't on the current map (outside the time window or the display limit), so the page can't fly into it",
     legacyNotFound: (kind, value) => `No records were found for the ${kind === 'run' ? 'run' : 'group'} in this link: ${value}`,
     serverLost: 'Lost the connection to the board server (it may have exited or moved to a new address): run /foreman-en:watch in Claude Code, or ask it for the board link again',
+    streamStuck: "Can't reach the board service. This happens when many board tabs are open in the same browser: close a few board tabs, then reload this page",
     plan: (module, cell, seats) => `dispatch plan · ${module} ${cell} · ${seats} ${seats === 1 ? 'seat' : 'seats'}`,
     gateWaiting: 'external seats wait · Claude Code seat reports first',
     gateOpen: 'gate open',
@@ -1140,6 +1187,7 @@ const B = {
   laneById: new Map(),
   feed: [],               // 所有车道的事件，按时间，最多 FEED_MAX 条
   life: [],               // 派发计划和裁决事件，单独留着不丢（流程动效要从计划建起一直看到裁决）
+  prompts: [],            // 用户每条消息的时刻（Claude Code 车道的 prompt 事件），单独留着不随车道事件裁掉：终端区按它分"最近一轮"
   total: 0,               // 收到的事件总数（含已丢掉的）
   connected: false,
   done: false,            // 回放已发完
@@ -1159,7 +1207,7 @@ function now() {
 }
 
 function reset() {
-  B.runs.clear(); B.lanes = []; B.laneById.clear(); B.feed = []; B.life = []; B.total = 0; B.done = false; B.version++;
+  B.runs.clear(); B.lanes = []; B.laneById.clear(); B.feed = []; B.life = []; B.prompts = []; B.total = 0; B.done = false; B.version++;
 }
 
 function onHello(h) {
@@ -1208,6 +1256,7 @@ function onEv(ev, stats = true) {
   // 同一份计划的事件可能再发（内容变了、重连）：按计划 id 只留最新一份
   if (ev.k === 'fplan') B.life = B.life.filter((x) => !(x.k === 'fplan' && x.plan === ev.plan));
   if (ev.k === 'fplan' || ev.k === 'verdict') insertByTs(B.life, ev, Infinity);
+  if (ev.k === 'prompt' && Number.isFinite(ev.ts) && !B.prompts.includes(ev.ts)) { B.prompts.push(ev.ts); B.prompts.sort((a, b) => a - b); }
   if (!lane.last || ev.ts >= lane.last.ts) lane.last = ev;
   B.version++;
   wake();
@@ -1269,6 +1318,22 @@ function scopeQuery() {
   return p;
 }
 
+const STREAM_STUCK_MS = 8000;
+let streamsReleased = false;
+// 同主机连接被别的标签页占满时不一定触发 error，初次连接和断线重连都要计时。
+function watchStream(state, es) {
+  const wait = () => {
+    if (es.readyState !== 0 || state.stuckTimer != null || state.stuckNoticed) return;
+    state.stuckTimer = setTimeout(() => {
+      state.stuckTimer = null;
+      if (es.readyState === 0) { state.stuckNoticed = true; showNotice(TEXT.streamStuck); }
+    }, STREAM_STUCK_MS);
+  };
+  es.addEventListener('open', () => { clearTimeout(state.stuckTimer); state.stuckTimer = null; state.stuckNoticed = false; });
+  es.addEventListener('error', wait);
+  wait();
+}
+
 function connect() {
   if (window.__BOARD_FIXTURE__) return loadSnapshot(window.__BOARD_FIXTURE__);
   const q = scopeQuery();
@@ -1278,8 +1343,10 @@ function connect() {
     fetch(`snapshot?${q}`).then((r) => r.json()).then(loadSnapshot).catch((e) => { B.error = String(e); });
     return;
   }
+  if (B.es || streamsReleased) return;
   const es = new EventSource(`stream?${q}`);
   B.es = es;
+  watchStream(B, es);
   const on = (name, fn) => es.addEventListener(name, (e) => fn(JSON.parse(e.data)));
   on('hello', onHello);
   on('run', onRun);
@@ -1294,6 +1361,7 @@ function connect() {
 // 换看的对话之前关掉原来的数据流（宇宙层同一时刻只挂一个完整看板）
 function disconnect() {
   if (B.es) { B.es.close(); B.es = null; }
+  clearTimeout(B.stuckTimer); B.stuckTimer = null; B.stuckNoticed = false;
   B.connected = false; B.error = null;
 }
 
@@ -1395,7 +1463,10 @@ function connectUniverse() {
       .catch((e) => { U.error = String(e); });
     return;
   }
+  if (U.es || streamsReleased) return;
   const es = new EventSource(`stream?${q}`);
+  U.es = es;
+  watchStream(U, es);
   const on = (name, fn) => es.addEventListener(name, (e) => fn(JSON.parse(e.data)));
   on('hello', uHello);
   on('universe', uUniverse);
@@ -1407,6 +1478,13 @@ function connectUniverse() {
   es.onopen = () => { U.error = null; U.lostAt = null; U.lostNoticed = false; };
   // 记下从什么时候开始连不上：服务退出了、或者被新服务接替（地址和口令都变了）时，浏览器会一直重连旧地址
   es.onerror = () => { U.error = es.readyState === 2 ? 'closed' : 'reconnecting'; U.lostAt ??= performance.now(); };
+}
+
+function disconnectUniverse() {
+  if (U.es) { U.es.close(); U.es = null; }
+  clearTimeout(U.stuckTimer); U.stuckTimer = null; U.stuckNoticed = false;
+  // 主动让出连接不算服务失联，飞进看板和后台暂停时都不能触发 serverLost。
+  U.error = null; U.lostAt = null; U.lostNoticed = false;
 }
 
 // 对话按项目归组，组内按最后活动时间排，给布局和列表用
@@ -1632,6 +1710,7 @@ function laneElapsed(lane, t, total = false) {
 }
 function liveState(lane, r, t) {
   const state = { speech: null, thought: null, recent: [], kinds: {}, api: {} };
+  const byAid = new Map();
   let seq = 0, command = null;
   for (const ev of lane.events) {
     if (ev.run !== r.id || ev.ts > t) continue;
@@ -1642,13 +1721,14 @@ function liveState(lane, r, t) {
       state.api.queued = false; state.api.answering = ev.k === 'answer';
       if (ev.t) state.thought = { text: Display.thoughtLine(ev.t), seq };
     } else if (ev.k === 'msg') state.speech = { text: ev.t, seq };
-    else if (ev.k === 'cmd_done') { if (command && ev.ok === false) command.tag = '✗ failed'; }
+    // 并行命令按编号配对；旧记录没有编号时仍挂到最近一条命令。
+    else if (ev.k === 'cmd_done') { const action = ev.aid != null ? byAid.get(ev.aid) : command; if (action && ev.ok === false) action.tag = '✗ failed'; }
     else {
       const line = lineOf(ev);
       if (!line || !line.cls.startsWith('act') || ['end', 'report'].includes(ev.k)) continue;
       const kind = ({ cmd: 'command', read: 'read', search: 'search', web: 'search', edit: 'edit', image: 'image' })[ev.k] || 'other';
       const action = { kind, text: line.text };
-      if (ev.k === 'cmd') command = action;
+      if (ev.k === 'cmd') { command = action; if (ev.aid != null) byAid.set(ev.aid, action); }
       state.recent.push(action); state.kinds[kind] = (state.kinds[kind] || 0) + 1;
     }
   }
@@ -1696,23 +1776,41 @@ const targets = (ev) => (ev.target && ev.target.length ? ` → ${ev.target.map(l
 
 // 对话流：到时刻 t 为止的行。open 为真时返回全部，否则只要最后 limit 行。
 function timeline(lane, t, { open = false, limit = 6 } = {}) {
+  const byAid = new Map(), entries = [];
+  let lastCmd = null;
+  // 并行命令按轮次和编号配对；旧记录没有编号时保留最近命令的老做法。
+  // 先配对再折叠，上一段折起后才收到的失败也能露出来。
+  for (const ev of lane.events) {
+    if (ev.ts > t) break;
+    if (ev.k === 'cmd_done') {
+      const command = ev.aid != null ? byAid.get(`${ev.run}:${ev.aid}`) : lastCmd;
+      if (command && ev.ok === false) { command.text += '  ✗ failed'; command.cls += ' bad'; }
+      continue;
+    }
+    const line = lineOf(ev);
+    if (line?.cmd) { lastCmd = line; if (ev.aid != null) byAid.set(`${ev.run}:${ev.aid}`, line); }
+    entries.push({ ev, line });
+  }
   const lines = [];
-  let block = [], lastCmd = null;
+  let block = [];
   const flush = (closed) => {
     if (block.length > MAX_ACTIONS) {
       // 已经过去的一段留前几条（和 watch 一样），正在进行的一段留最新几条
       const kept = closed ? block.slice(0, MAX_ACTIONS) : block.slice(-MAX_ACTIONS);
-      const folded = closed ? block.slice(MAX_ACTIONS) : block.slice(0, -MAX_ACTIONS), counts = {};
-      for (const line of folded) counts[line.kind || 'other'] = (counts[line.kind || 'other'] || 0) + 1;
-      const fold = { cls: 'act fold', text: Display.foldText(counts) };
-      lines.push(...(closed ? [...kept, fold] : [fold, ...kept]));
+      const folded = closed ? block.slice(MAX_ACTIONS) : block.slice(0, -MAX_ACTIONS), foldedLines = [];
+      let counts = {};
+      const pushFold = () => { if (Object.keys(counts).length) foldedLines.push({ cls: 'act fold', text: Display.foldText(counts) }); };
+      // 和终端一样，失败动作单独显示，前后的折叠各自计数。
+      for (const line of folded) {
+        if (line.cmd && line.cls.includes(' bad')) { pushFold(); foldedLines.push(line); counts = {}; }
+        else counts[line.kind || 'other'] = (counts[line.kind || 'other'] || 0) + 1;
+      }
+      pushFold();
+      lines.push(...(closed ? [...kept, ...foldedLines] : [...foldedLines, ...kept]));
     } else lines.push(...block);
     block = [];
   };
-  for (const ev of lane.events) {
-    if (ev.ts > t) break;
-    if (ev.k === 'cmd_done') { if (lastCmd && ev.ok === false) { lastCmd.text += '  ✗ failed'; lastCmd.cls += ' bad'; } continue; }
-    const line = lineOf(ev);
+  for (const { ev, line } of entries) {
     if (ev.k === 'end') {
       const r = lane.runs.find((r) => r.id === ev.run);
       if (r) {
@@ -1727,7 +1825,6 @@ function timeline(lane, t, { open = false, limit = 6 } = {}) {
     }
     if (!line) continue;
     line.ts = ev.original_ts ?? Display.recordedTime(ev.ts, displayPoints());
-    if (line.cmd) lastCmd = line;
     if (line.cls.startsWith('act')) block.push(line);
     else { flush(true); lines.push(line); }
   }
@@ -2228,6 +2325,8 @@ function laneStats(lane, t) {
     if (c == null && r.kind !== 'answer' && (ended || (live && Object.values(r.usage || {}).some((v) => v)))) costPartial = true;
     // 费用一律按官方 API 价格（服务端算好），这里只是加起来
     if (c != null) { costKnown = true; cost += c; }
+    // Claude Code 车道有的消息算不出价：能算的照加，费用后面带 +
+    if (r.cost_partial) costPartial = true;
   }
   // 进行中的输出：分段里 t 之前的部分
   let liveOut = 0;
@@ -2568,7 +2667,7 @@ function fillCard(el, lane, t) {
   setText(el.querySelector('.tl'), isCC ? [shortModel(r.model), r.title].filter(Boolean).join(' · ')
     : [r.kind, r.role ? `[${r.role}]` : null, r.title, r.level, round > 1 ? `round ${round}` : null].filter(Boolean).join(' · '));
   const rate = el.querySelector('.rate'), sig = `${Math.round(s.rate)}|${s.avg == null ? '—' : Math.round(s.avg)}|${s.output}`;
-  rate.title = s.usage_unattributed ? TEXT.usageUnattributed : '';
+  rate.title = s.usage_unattributed ? TEXT.usageUnattributed : `now ≈ ${Math.round(s.rate)} tok/s · gen avg ≈ ${s.avg != null ? Math.round(s.avg) : '—'} · out ${s.output == null ? '—' : fmtTok(s.output)}`;
   if (rate.dataset.sig !== sig) {
     rate.dataset.sig = sig;
     rate.innerHTML = '';
@@ -2675,6 +2774,8 @@ function renderWorld(t, L) {
   if (!ccOut) { ccOut = document.createElement('div'); ccOut.className = 'outbox cc'; worldEl.append(ccOut); UI.outs.set('cc', ccOut); }
   place(ccOut, L.ccOut);
   ccOut.style.setProperty('--tint', rgba('claude'));
+  // 悬停用量表的某一席时，Claude Code 的产出框和其余产出框一样压暗
+  ccOut.classList.toggle('dim', dimOf('cc') < 1);
   const span = ccLife(t), from = span.from ?? -Infinity, to = span.to ?? t;
   const ccFiles = ccLane ? ccLane.events.filter((e) => e.k === 'edit' && e.ts > from && e.ts <= to).map((e) => editParts(e.t)) : [];
   fillOut(ccOut, 'CLAUDE CODE · OUTPUT', dedupeFiles(ccFiles), '', ccLead(t, from, to));
@@ -3029,7 +3130,7 @@ function renderTop(t) {
 //  - Claude Code 自己的对话流单独一栏，放在最前
 // 有新内容时自动滚到底，往上翻看时不打扰。以后做多对话，切换对话就是换一组车道（termUnits）重画，标题跟着换。
 
-const PANEL = { cols: new Map(), open: new Set(), seen: false, numbers: new Map(), allDone: false };
+const PANEL = { cols: new Map(), open: new Set(), seen: false, numbers: new Map(), fold: new Map(), doneLines: new Map(), allDone: false };
 const groupPlans = (group, t) => [...new Map(B.life.filter((p) => p.k === 'fplan' && p.group === group && p.ts <= t).map((p) => [p.plan, p])).values()];
 function dispatchQueue(t) {
   const snapshot = B.laneById.get('dispatch_queue')?.events.filter((e) => e.ts <= t).at(-1);
@@ -3046,8 +3147,9 @@ addEventListener('scroll', () => {
 }, { passive: true });
 $('more').addEventListener('click', () => $('termsec').scrollIntoView({ behavior: 'smooth' }));
 $('termsec').addEventListener('click', (e) => {
-  // 已结束的组多于 DONE_SHOWN 时，最后的按钮列出全部
-  if (e.target.closest('#termdone .more')) { PANEL.allDone = true; B.version++; wake(); return; }
+  // 已结束的组：点折起来的那一行展开成栏；点展开的栏头收回成一行
+  const line = e.target.closest('#termdone .dline'), head = e.target.closest('#termdone .tcol > header');
+  if (line || head) { PANEL.fold.set((line || head.parentNode).dataset.lane, !!line); B.version++; wake(); return; }
   const seat = e.target.closest('.seat');
   if (!seat) return;
   const id = seat.dataset.lane;
@@ -3076,9 +3178,11 @@ function termUnits(t, L) {
   return units;
 }
 
-// 正在跑的组和刚出结果的组在上面一排；全部结束一分钟以后挪到下面一排（"finished"），样子和上面完全一样、照样展开，
-// 和刻度带脱钩：结果被 Claude Code 读走、席位离开刻度带以后照样留着。最新结束的在最前，先列 DONE_SHOWN 组
-const DONE_AFTER = 60000, DONE_SHOWN = 20;
+// 正在跑的组和刚出结果的组在上面一排；全部结束一分钟以后挪到下面的"finished"一段，和刻度带脱钩：
+// 结果被 Claude Code 读走、席位离开刻度带以后照样留着。最新结束的在最前。
+// 最近一轮（用户最后一条消息之后）结束的组默认展开，样子和上面运行中的栏完全一样；更早轮次的默认折成一行，
+// 点一下展开；展开的点栏头收回。用户点过的按点的来（PANEL.fold：栏 id → 是否展开）
+const DONE_AFTER = 60000;
 const unitLanes = (u) => (u.group ? u.lanes : [u.lane]);
 const unitEnd = (u, t) => Math.max(0, ...unitLanes(u).map((l) => currentRun(l, t)?.ended_at ?? 0));
 function unitFinished(u, t) {
@@ -3099,21 +3203,56 @@ function fillRow(row, units, t, seen) {
     if (u.group) fillGroup(col, u, t); else fillColumn(col, u.lane, t);
   });
 }
+// 用户最后一条消息的时刻（B.prompts，不随车道事件裁掉）；没有记录时返回 -Infinity（全部算最近一轮）
+function lastPromptAt(t) {
+  let at = -Infinity;
+  for (const ts of B.prompts) if (ts <= t) at = ts;
+  return at;
+}
+const doneOpen = (u, t, since) => PANEL.fold.get(u.id) ?? unitEnd(u, t) >= since;
+// 折起来的一行：和展开后的栏头写法一样（标题、各状态个数），再加结束时间和这一组所有轮次的费用
+function doneLine(u, t) {
+  // 不是今天结束的写上月-日，免得跨天时看着像倒着排
+  const at = (ms) => new Date(Display.recordedTime(ms, displayPoints())), end = unitEnd(u, t), e = at(end);
+  const date = e.toDateString() === at(t).toDateString() ? '' : `${String(e.getMonth() + 1).padStart(2, '0')}-${String(e.getDate()).padStart(2, '0')} `;
+  const when = `ended ${date}${hhmm(e.getTime())}`;
+  let title, counts, runs;
+  if (u.group) {
+    const g = groupSeats(u, t);
+    title = Display.groupTask(g.all, g.plans, g.queue).text; counts = Display.countsText(g.states);
+    runs = [...B.runs.values()].filter((r) => r.group === u.group && r.started_at <= t);
+  } else {
+    const r = currentRun(u.lane, t), st = seatStatus(u.lane, r, t);
+    title = Display.taskLine(Display.displayRun(r).meta, { round: roundOf(u.lane, t) }); counts = `${st.style.mark} ${st.style.word}`;
+    runs = u.lane.runs.filter((x) => x.started_at <= t);
+  }
+  const cost = runs.reduce((n, r) => n + (r.cost_usd || 0), 0);
+  return `▸ ${[title, counts, when, cost ? `$${fmtUsd(cost)}` : null].filter(Boolean).join(' · ')}`;
+}
 function renderDone(done, t, seen) {
   const box = $('termdone');
   box.hidden = !done.length;
   if (!done.length) return;
-  if (!box.firstChild) box.innerHTML = '<div class="sub"></div><div class="row"></div>';
-  setText(box.firstChild, `finished · ${done.length}`);
-  const row = box.lastChild, shown = PANEL.allDone ? done : done.slice(0, DONE_SHOWN);
-  fillRow(row, shown, t, seen);
-  let more = row.querySelector(':scope > .more');
-  const rest = done.length - shown.length;
-  if (rest > 0) {
-    if (!more) { more = document.createElement('button'); more.type = 'button'; more.className = 'more'; }
-    setText(more, `show ${rest} more`);
-    if (row.lastChild !== more) row.append(more);
-  } else more?.remove();
+  if (!box.firstChild) {
+    const sub = document.createElement('div'), row = document.createElement('div'), lines = document.createElement('div');
+    sub.className = 'sub'; row.className = 'row'; lines.className = 'lines';
+    box.append(sub, row, lines);
+  }
+  const [sub, row, lines] = box.children, since = lastPromptAt(t);
+  const open = done.filter((u) => doneOpen(u, t, since)), closed = done.filter((u) => !open.includes(u));
+  setText(sub, `finished · ${done.length}`);
+  fillRow(row, open, t, seen);
+  for (const u of open) PANEL.cols.get(u.id).classList.add('done-open');
+  // 刚收起的栏移出这一排（栏本身由 renderTerms 最后统一回收）
+  const keep = new Set(open.map((u) => PANEL.cols.get(u.id)));
+  for (const c of [...row.children]) if (!keep.has(c)) c.remove();
+  closed.forEach((u, i) => {
+    let el = PANEL.doneLines.get(u.id);
+    if (!el) { el = document.createElement('div'); el.className = 'dline'; el.dataset.lane = u.id; PANEL.doneLines.set(u.id, el); }
+    if (lines.children[i] !== el) lines.insertBefore(el, lines.children[i] || null);
+    setText(el, doneLine(u, t));
+  });
+  for (const [id, el] of PANEL.doneLines) if (!closed.some((u) => u.id === id)) { el.remove(); PANEL.doneLines.delete(id); }
 }
 
 function renderTerms(t, L) {
@@ -3122,7 +3261,10 @@ function renderTerms(t, L) {
   if (!termsNear()) return;
   const box = $('terms'), seen = new Set(), units = termUnits(t, L);
   const done = units.filter((u) => unitFinished(u, t)).sort((a, b) => unitEnd(b, t) - unitEnd(a, t));
-  fillRow(box, units.filter((u) => !done.includes(u)), t, seen);
+  const live = units.filter((u) => !done.includes(u));
+  fillRow(box, live, t, seen);
+  // 回到上面一排的栏（又续接了）去掉"可收起"的样子
+  for (const u of live) PANEL.cols.get(u.id)?.classList.remove('done-open');
   renderDone(done, t, seen);
   for (const [id, col] of PANEL.cols) if (!seen.has(id)) { col.remove(); PANEL.cols.delete(id); }
 }
@@ -3233,6 +3375,9 @@ function fillGroup(col, u, t) {
     const el = col.seats.get(b.id);
     if (!PANEL.open.has(b.id)) fillFlow(el.querySelector('.term'), Display.collapseLines(el.fullLines, true, 'click to open').map((line) => typeof line === 'string' ? { cls: 'plain', text: line } : line));
   }
+  let finished = col.querySelector('.all-done');
+  if (!finished) { finished = document.createElement('div'); finished.className = 'all-done'; col.append(finished); }
+  setText(finished, states.length && !queue.length && !states.some((s) => s.running) ? `✔ ${Display.D.dashAllFinishedShort}` : '');
   let pending = col.querySelector('.dispatch-queue');
   if (!pending) { pending = document.createElement('div'); pending.className = 'dispatch-queue'; col.append(pending); }
   pending.replaceChildren();
@@ -3314,9 +3459,11 @@ function markOf(id, a = 1) {
 const byState = (a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || b.last_at - a.last_at;
 // 在跑的席位数用不截断的计数（runs 摘要最多 16 条，会漏）
 const runningOf = (s) => s.counts?.running ?? s.runs.filter((r) => r.status === 'running').length;
-// 协作方代号去掉接入方式的后缀，名额带上更短
-const agentName = (id) => id.replace(/-(codex|opencode|pi)-cli$|-api$|-contributor$/, '');
-const agentVia = (id) => (/-(codex|opencode|pi)-cli$/.exec(id) || /-(api)$/.exec(id) || [])[1] || '';
+// 协作方代号去掉末尾表示接入方式的几段（-codex-cli、-opencode-cli-ocgo、-pi-cli-api 这类），名额带上更短；
+// 接入方式按配置里的 type 写（代号后缀是用户自己起的，猜不准：pi 接的 API 模型常以 -api 结尾）
+const agentName = (id) => { let s = id, prev; do { prev = s; s = s.replace(/-(codex|opencode|pi|cli|api|ocgo|contributor)$/, ''); } while (s !== prev && s); return s || id; };
+const VIA = { 'codex cli': 'codex', 'opencode cli': 'opencode', 'pi cli': 'pi', api: 'api' };
+const agentVia = (a) => VIA[a.type] || '';
 
 function renderSlots() {
   const el = $('uslots');
@@ -3334,7 +3481,7 @@ function renderSlots() {
     row.style.setProperty('--tint', rgba(avatarFor(a.id)));
     row.innerHTML = '<i class="dot"></i><span class="nm"></span><span class="cells"></span>';
     row.querySelector('.nm').textContent = agentName(a.id);
-    if (agentVia(a.id)) { const via = document.createElement('small'); via.textContent = agentVia(a.id); row.querySelector('.nm').append(' ', via); }
+    if (agentVia(a)) { const via = document.createElement('small'); via.textContent = agentVia(a); row.querySelector('.nm').append(' ', via); }
     row.title = `${a.id} · ${a.running.length}/${a.max_parallel}`;
     const cells = row.querySelector('.cells');
     for (let i = 0; i < Math.max(a.max_parallel, a.running.length); i++) {
@@ -5102,7 +5249,7 @@ function resetBoardView() {
   for (const m of [UI.cards, UI.outs, UI.heads, UI.tableRows]) m.clear();
   UI.open.clear(); UI.collapsed.clear(); UI.hot = null;
   for (const id of ['usage', 'terms', 'termdone']) { $(id).replaceChildren(); delete $(id).dataset.mode; }
-  PANEL.allDone = false;
+  PANEL.allDone = false; PANEL.fold.clear(); PANEL.doneLines.clear();
   PANEL.cols.clear(); UNI_ROWS.clear();
   Object.assign(REEL, { s: 0, off: 0, anchor: null }); REEL.born.clear();
   for (const key of [...SMOOTH.vals.keys()]) if (!key.startsWith('u')) SMOOTH.vals.delete(key);
@@ -5144,6 +5291,8 @@ function flyIn(id, instant = false) {
   FLY.back = { k: UV.k, tx: UV.tx, ty: UV.ty, auto: UV.auto };
   FLY.from = { k: UV.k, sx: g.x * UV.k + UV.tx, sy: g.y * UV.k + UV.ty };
   Object.assign(FLY, { id, mode: instant ? 'board' : 'in', mirror: false, t0: performance.now(), out: 0, pending: null });
+  // 直播只留当前层的一条流，免得多个标签页占满同主机连接；回放宇宙共用时钟，重连会从头播放。
+  if (!U.demo && B.params.replay == null && B.params.t == null) disconnectUniverse();
   UV.goal = null; UV.auto = false;
   openBoardFor(g.s);
   // 星系的亮核最后落在看板核心网（弧线区）的中心：它在那里炸开成弧线区（08-uni-burst.js）
@@ -5174,6 +5323,7 @@ function flyOut() {
   // 直接打开到看板（刷新进来）时没有飞入前的镜头，退回去就复位到全貌
   if (!mirror && (!FLY.back || FLY.back.auto)) { const g = uniFitGoal(); FLY.back = { ...g, auto: true }; }
   Object.assign(FLY, { mode: 'out', mirror, t0: performance.now() - back * FLY_OUT * 1000 });
+  if (!U.demo && B.params.replay == null && B.params.t == null) { disconnect(); connectUniverse(); }
   setUrl(null);
   wake();
 }
@@ -5668,6 +5818,26 @@ function showNotice(text) {
   el.textContent = text; el.classList.remove('faded');
   clearTimeout(showNotice.timer); showNotice.timer = setTimeout(() => el.classList.add('faded'), 12000);
 }
+
+const HIDDEN_RELEASE_MS = 30000;
+let hiddenReleaseTimer = null;
+function onVisibilityChange() {
+  clearTimeout(hiddenReleaseTimer); hiddenReleaseTimer = null;
+  // 回放重连会从头播放，不能暂停共用时钟；定格和演示沿用原来的取数方式。
+  if (U.demo || window.__BOARD_FIXTURE__ || B.params.replay != null || B.params.t != null) return;
+  if (document.visibilityState === 'hidden') {
+    hiddenReleaseTimer = setTimeout(() => {
+      streamsReleased = true;
+      disconnectUniverse(); disconnect();
+    }, HIDDEN_RELEASE_MS);
+  } else if (streamsReleased) {
+    streamsReleased = false;
+    if (FLY.mode === 'in' || FLY.mode === 'board') connect();
+    else connectUniverse(); // 飞出已经切回宇宙流，动画未结束时也接回同一层。
+  }
+}
+document.addEventListener('visibilitychange', onVisibilityChange);
+onVisibilityChange();
 if (LIVE_REPLAY_LINK) showNotice(TEXT.replayLive);
 // 内嵌快照（截图、测试用）：没有服务可连，直接显示快照里这个对话的看板，不走星图
 if (window.__BOARD_FIXTURE__) { FLY.mode = 'board'; connect(); }

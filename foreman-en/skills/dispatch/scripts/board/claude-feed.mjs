@@ -92,7 +92,7 @@ export function createTranscriptParser(ctx) {
       for (const block of blocks.filter((b) => b.type === 'tool_result')) {
         const tool = tools.get(block.tool_use_id), taskId = /running in background with ID: (\w+)/.exec(text(block.content))?.[1];
         if (tool?.k === 'dispatch' && taskId) tasks[taskId] = tool.target || [];
-        if (tool?.k === 'cmd') emit('cmd_done', { ok: !block.is_error });
+        if (tool?.k === 'cmd') emit('cmd_done', { ok: !block.is_error, ...(tool.aid == null ? {} : { aid: tool.aid }) });
         // 弹窗被回答（或被取消）：看板上"等你确认"的光环收掉
         if (tool?.k === 'ask') emit('ask_done', { t: tool.t });
       }
@@ -129,7 +129,7 @@ export function createTranscriptParser(ctx) {
           else if (['Grep', 'Glob'].includes(b.name)) ev = emit('search', { t: input.pattern });
           else if (['WebSearch', 'WebFetch'].includes(b.name)) ev = emit('web', { t: input.query ?? input.url?.replace(/^\w+:\/\//, '') });
           else if (['Edit', 'MultiEdit', 'NotebookEdit', 'Write'].includes(b.name)) ev = emitPath('edit', file, {}, `${b.name === 'Write' ? 'write' : 'update'} `);
-          else if (['Bash', 'PowerShell'].includes(b.name)) ev = emit('cmd', { t: plainCommand(command) });
+          else if (['Bash', 'PowerShell'].includes(b.name)) ev = emit('cmd', { t: plainCommand(command), ...(b.id == null ? {} : { aid: String(b.id) }) });
           // 向用户弹窗确认（角色分配、图像路线、计划审批）：t 是弹窗标题，没有就写工具名
           else if (['AskUserQuestion', 'ExitPlanMode'].includes(b.name)) ev = emit('ask', { t: input.questions?.[0]?.header || (b.name === 'ExitPlanMode' ? '计划审批' : b.name) });
           else ev = emit('tool', { t: b.name.replace(/^mcp__.*?__/, '') });

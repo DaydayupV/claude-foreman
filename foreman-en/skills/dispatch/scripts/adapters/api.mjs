@@ -6,6 +6,7 @@ import { ENTRY, DISCUSS_SCHEMA, REVIEW_SCHEMA } from '../config.mjs';
 import { newRunDir, cancelSource } from '../records.mjs';
 import { startRun, finishDiscussion, eventWriter, runLimits, watchCancellation, reportWithRepair, validateSchema } from '../runner.mjs';
 import { M, die, isObject, readAttachments, MAX_MATERIAL_CHARS, modelOf } from '../util.mjs';
+import { reviewPatchText } from '../review-scope.mjs';
 import { D, modelLabel } from '../format.mjs';
 
 // 回答和报错里出现 key 时打码。key 太短时不替换，否则会把正文里的普通字母也换掉，弄坏 JSON 报告。
@@ -44,14 +45,12 @@ async function executeApi(ctx) {
     history = JSON.parse(fs.readFileSync(file, 'utf8'));
   }
   const files = readAttachments(opts.file, cwd, true);
-  let prompt = brief;
+  let prompt = brief, material;
   if (review) {
     prompt = `${target === 'diff' && !scope ? M.reviewPromptPlain(cwd) : M.apiReviewPrompt[target](scope?.description)}\n\n${brief}`;
     if (scope?.target === 'diff') {
-      const fileList = scope.files.map((f) => `- ${f.status} ${f.old_path ? `${f.old_path} → ` : ''}${f.path}`
-        + (f.binary ? M.reviewFileBinary : '') + (f.too_large ? M.reviewFileTooLarge : '')).join('\n');
-      const longest = (scope.patch.match(/`+/g) || []).reduce((n, s) => Math.max(n, s.length), 2);
-      prompt += `\n\n${M.reviewMaterial(fileList, scope.patch, '`'.repeat(longest + 1))}`;
+      material = reviewPatchText(scope, { budget: MAX_MATERIAL_CHARS, readsFiles: false });
+      prompt += `\n\n${M.reviewMaterial(material.fileList, material.patch, material.fence, material.note)}`;
     }
   }
   if (!ctx.parent || files.length) {
@@ -59,7 +58,7 @@ async function executeApi(ctx) {
     const list = git.status === 0 ? git.stdout.split('\0').filter(Boolean) : [];
     if (list.length || files.length) prompt +=`\n\n${M.apiMaterials(list.slice(0, 300).join('\n'), list.length, files)}`;
   }
-  if (prompt.length > MAX_MATERIAL_CHARS) die(review && target === 'diff' ? M.reviewTooLarge(prompt.length, MAX_MATERIAL_CHARS)
+  if (material?.tooLarge || prompt.length > MAX_MATERIAL_CHARS) die(review && target === 'diff' ? M.reviewTooLarge(prompt.length, MAX_MATERIAL_CHARS)
     : M.materialsTooLarge(prompt.length, MAX_MATERIAL_CHARS, M.list(files.map((f) => `${f.shown}: ${f.chars}`))));
   if (ctx.parent) prompt += `\n\n${M.apiResumeFooter}`;
   history = [...history, { role: 'user', content: prompt }];
