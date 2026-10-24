@@ -70,7 +70,8 @@ function drawOutLife(L, P, t) {
   else if (life.phase === 'show') drawUnfold(box, life.age, color);
   else if (life.phase === 'collapse') {
     const c = [box.x + box.w / 2, box.y + box.h / 2], top = (L.vis ? L.vis.top : 0) - 80;
-    drawCollapse(box, life.age, color, life.kind === 'plan' ? null : [c, [c[0], c[1] - 40], [c[0] + 30, top + 60], [c[0] + 40, top]]);
+    // 建计划时化成拉起席位的光、安静收起时就地散开；用户发下一条消息时往上飞走
+    drawCollapse(box, life.age, color, life.kind === 'plan' || life.kind === 'quiet' ? null : [c, [c[0], c[1] - 40], [c[0] + 30, top + 60], [c[0] + 40, top]]);
   }
   ctx.globalAlpha = 1;
 }

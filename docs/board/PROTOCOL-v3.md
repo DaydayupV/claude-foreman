@@ -37,7 +37,7 @@ node server.mjs --replay <conversation | run id | group | all> [--speed <N>] [--
 | `GET /stream?session=<id>[&replay=all&from=]` | The detailed v2 stream for one conversation (§9). |
 | `GET /snapshot?session=<id>[&replay=all&t=]` | v1 snapshot, for the same scope. The live server also answers `snapshot?group=` / `snapshot?run=`, which the page uses once to resolve old links (§1). |
 | `GET /image?run=<run id>&n=<index>` | The `n`-th image of that run (§11). |
-| `GET /health` | `{ ok, v: 1, pid, build }`; the replay server adds `sessions`, the number of conversations in its replay. |
+| `GET /health` | `{ ok, v: 1, pid, build }`; the replay server adds `sessions`, the number of conversations in its replay. With `?watching=1` (live server only) it also counts as someone watching for two minutes: a board tab that gave up its stream while in the background calls it once a minute, so the server does not take the missing stream as nobody watching and exit. |
 
 ## 3. Conversation index
 

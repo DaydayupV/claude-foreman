@@ -199,7 +199,7 @@ async function main() {
     for (const m of sharedReplay.timeline) if (m.event === 'session') ids.add(m.data.id);
     for (const id of ids) details.set(id, sharedReplay.detail(id));
   }
-  let poll = null, connections = 0, idleSince = feed?.hasRunning(Date.now()) ? null : Date.now();
+  let poll = null, connections = 0, idleSince = feed?.hasRunning(Date.now()) ? null : Date.now(), watchedAt = -Infinity;
   const send = (client, event, data) => client.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   const liveUpdate = (client, data) => {
     const queue = data.events.find((ev) => ev.k === 'dispatch_queue'), queueText = JSON.stringify(queue?.tickets);
@@ -302,6 +302,8 @@ async function main() {
         return end(200, 'text/html; charset=utf-8', html);
       }
       if (route === 'health') {
+        // 后台标签页为了不占浏览器的连接数让出了数据流，但还开着：报到一次就算有人在看
+        if (!replayMode && url.searchParams.get('watching') === '1') watchedAt = Date.now();
         // 只供测试：模拟同步读记录阻塞第一次健康检查。
         if (process.env.FOREMAN_TEST_BOARD_STALL_MS) {
           const ms = Number(process.env.FOREMAN_TEST_BOARD_STALL_MS);
@@ -390,7 +392,7 @@ async function main() {
     const now = Date.now();
     for (const client of clients) client.res.write(': ping\n\n');
     try {
-      if (replayMode ? connections > 0 : clients.size || feed.hasRunning(now)) idleSince = null;
+      if (replayMode ? connections > 0 : clients.size || feed.hasRunning(now) || now - watchedAt < 120000) idleSince = null;
       else if (idleSince == null) idleSince = now;
       else if (now - idleSince >= idleMs) process.exit(0);
     } catch (e) { process.stderr.write(`board: ${short(e)}\n`); }

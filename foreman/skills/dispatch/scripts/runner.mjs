@@ -5,7 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { RUNS_ROOT, CLAUDE_SESSION, registerRun, concurrentExecRuns, absolute, isCancelled, cancelSource, saveMeta, metaWriteWarning, readMeta } from './records.mjs';
 import { makeTracker } from './tracker.mjs';
 import { computeReviewMaterial } from './review-scope.mjs';
-import { M, die, notice, relativePath, pathKey, modelOf, replaceFile, killTree, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision } from './util.mjs';
+import { M, LANGUAGE, die, notice, relativePath, pathKey, modelOf, replaceFile, killTree, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision } from './util.mjs';
 import { D, modelLabel } from './format.mjs';
 import { costOf, loadPrices } from './prices.mjs';
 
@@ -404,7 +404,8 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
     const rootOf = (p) => pathKey(path.parse(p).root.replace(/\\/g, '/'));
     const shownPath = (p) => (rootOf(p) === rootOf(path.resolve(cwd)) ? relativePath(cwd, p) : p.replace(/\\/g, '/'));
     if (kind === 'exec') {
-      for (const [by, files] of [['agent', r.fileChanges], ['reported', reported]]) for (const file of files) {
+      const reportedRaw = (Array.isArray(claimed) ? claimed : []).filter((c) => typeof c?.path === 'string').map((c) => c.path);
+      for (const [by, files] of [['agent', r.fileChanges], ['reported', reportedRaw]]) for (const file of files) {
         const rel = relativePath(cwd, file), full = path.resolve(cwd, file.replace(/\\/g, '/')), key = absolute(cwd, file);
         if ((rel === '..' || rel.startsWith('../') || path.isAbsolute(rel)) && !outsideCwd.has(key)) {
           outsideCwd.set(key, { path: full, by, in_scope: ownRoots.some((root) => key === root || key.startsWith(`${root}/`)) });
@@ -415,10 +416,10 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
         const files = [...outsideCwd.values()].sort((a, b) => Number(a.in_scope) - Number(b.in_scope));
         changes.outside_cwd = files.slice(0, 30);
         changes.outside_cwd_total = files.length;
-        const outsideScope = files.filter((f) => !f.in_scope).map((f) => shownPath(f.path));
-        const inScope = files.filter((f) => f.in_scope).map((f) => shownPath(f.path));
-        if (outsideScope.length) warnings.push(M.wroteOutsideCwd(modelShown, M.list(outsideScope)));
-        if (inScope.length) notes.push(M.outsideCwdInScope(modelShown, M.list(inScope)));
+        const listed = (list) => M.list(list.slice(0, 30).map(shownPath)) + (list.length > 30 ? (LANGUAGE === 'en' ? ` and ${list.length - 30} more` : ` 等 ${list.length} 个`) : '');
+        const outsideScope = files.filter((f) => !f.in_scope).map((f) => f.path), inScope = files.filter((f) => f.in_scope).map((f) => f.path);
+        if (outsideScope.length) warnings.push(M.wroteOutsideCwd(modelShown, listed(outsideScope)));
+        if (inScope.length) notes.push(M.outsideCwdInScope(modelShown, listed(inScope)));
       }
     }
     const ambiguous = [];

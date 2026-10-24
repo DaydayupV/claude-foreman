@@ -104,7 +104,8 @@ function doneLine(u, t) {
     runs = u.lane.runs.filter((x) => x.started_at <= t);
   }
   const cost = runs.reduce((n, r) => n + (r.cost_usd || 0), 0);
-  return `▸ ${[title, counts, when, cost ? `$${fmtUsd(cost)}` : null].filter(Boolean).join(' · ')}`;
+  const partial = runs.some((r) => r.cost_partial || (r.cost_usd == null && r.kind !== 'answer' && r.ended_at != null && r.ended_at <= t));
+  return `▸ ${[title, counts, when, cost ? fmtCost(cost, partial) : null].filter(Boolean).join(' · ')}`;
 }
 function renderDone(done, t, seen) {
   const box = $('termdone');

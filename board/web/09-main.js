@@ -103,19 +103,32 @@ function showNotice(text) {
   clearTimeout(showNotice.timer); showNotice.timer = setTimeout(() => el.classList.add('faded'), 12000);
 }
 
-const HIDDEN_RELEASE_MS = 30000;
-let hiddenReleaseTimer = null;
+// 后台标签页让出数据流：浏览器对同一主机只开 6 条连接，看板标签页多了，前台的页面会连不上。
+// 平时在后台 10 分钟才让（让出以后再回来，较早的记录只剩最近 200 条，不能切一下窗口就让）；
+// 前台的页面连不上超过 2 秒时，通过同源广播请后台的看板标签页马上让出来。
+// 让出以后每分钟向服务报一次在，服务不会因为没有连接就当成没人看而退出
+const HIDDEN_RELEASE_MS = 600000, WATCHING_PING_MS = 60000;
+let hiddenReleaseTimer = null, watchingTimer = null;
+const STREAM_CHANNEL = typeof BroadcastChannel === 'function' ? new BroadcastChannel('foreman-board-streams') : null;
+const streamPaused = () => U.demo || window.__BOARD_FIXTURE__ || B.params.replay != null || B.params.t != null;
+function releaseStreams() {
+  clearTimeout(hiddenReleaseTimer); hiddenReleaseTimer = null;
+  if (streamsReleased || streamPaused()) return;
+  streamsReleased = true;
+  disconnectUniverse(); disconnect();
+  watchingTimer = setInterval(() => { fetch('health?watching=1').catch(() => {}); }, WATCHING_PING_MS);
+}
+// 前台页面的流迟迟连不上（01-state.js 的 watchStream 调用）：请其他看板标签页让出连接
+function askForStream() { if (STREAM_CHANNEL && document.visibilityState !== 'hidden') STREAM_CHANNEL.postMessage('release'); }
+if (STREAM_CHANNEL) STREAM_CHANNEL.onmessage = (e) => { if (e.data === 'release' && document.visibilityState === 'hidden') releaseStreams(); };
 function onVisibilityChange() {
   clearTimeout(hiddenReleaseTimer); hiddenReleaseTimer = null;
   // 回放重连会从头播放，不能暂停共用时钟；定格和演示沿用原来的取数方式。
-  if (U.demo || window.__BOARD_FIXTURE__ || B.params.replay != null || B.params.t != null) return;
-  if (document.visibilityState === 'hidden') {
-    hiddenReleaseTimer = setTimeout(() => {
-      streamsReleased = true;
-      disconnectUniverse(); disconnect();
-    }, HIDDEN_RELEASE_MS);
-  } else if (streamsReleased) {
+  if (streamPaused()) return;
+  if (document.visibilityState === 'hidden') hiddenReleaseTimer = setTimeout(releaseStreams, HIDDEN_RELEASE_MS);
+  else if (streamsReleased) {
     streamsReleased = false;
+    clearInterval(watchingTimer); watchingTimer = null;
     if (FLY.mode === 'in' || FLY.mode === 'board') connect();
     else connectUniverse(); // 飞出已经切回宇宙流，动画未结束时也接回同一层。
   }

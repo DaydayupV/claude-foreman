@@ -167,6 +167,7 @@ async function executeOpencode(ctx) {
     if (files.length) parts.push(focusFiles(files).trim());
     if (scope?.target === 'diff') {
       const material = reviewPatchText(scope, { budget: MAX_REVIEW_CHARS, readsFiles: true });
+      if (material.tooLarge) die(M.reviewTooLarge(material.chars, MAX_REVIEW_CHARS));
       parts.push(M.reviewMaterial(material.fileList, material.patch, material.fence, material.note));
     }
     prompt = [...parts, M.reviewFooter, M.reviewSchemaFooter(schemaText)].join('\n\n') + '\n';

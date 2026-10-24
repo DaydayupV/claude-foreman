@@ -105,6 +105,7 @@ function onBacklog(b) {
       lane.last = lane.events.reduce((last, ev) => (!last || ev.ts >= last.ts ? ev : last), null);
     }
     B.feed = B.feed.filter(keep); B.life = B.life.filter(keep);
+    if (b.run === 'cc') B.prompts = [];
     B.version++;
   }
   b.events.forEach((ev) => onEv(ev, !b.rate_events));
@@ -151,18 +152,20 @@ function scopeQuery() {
   return p;
 }
 
-const STREAM_STUCK_MS = 8000;
+const STREAM_STUCK_MS = 8000, STREAM_ASK_MS = 2000;
 let streamsReleased = false;
 // 同主机连接被别的标签页占满时不一定触发 error，初次连接和断线重连都要计时。
 function watchStream(state, es) {
   const wait = () => {
+    // 2 秒还没连上：多半是同一浏览器的连接被别的看板标签页占满了，请后台的那些让出来（09-main.js）
+    if (es.readyState === 0 && state.askTimer == null) state.askTimer = setTimeout(() => { state.askTimer = null; if (es.readyState === 0 && typeof askForStream === 'function') askForStream(); }, STREAM_ASK_MS);
     if (es.readyState !== 0 || state.stuckTimer != null || state.stuckNoticed) return;
     state.stuckTimer = setTimeout(() => {
       state.stuckTimer = null;
       if (es.readyState === 0) { state.stuckNoticed = true; showNotice(TEXT.streamStuck); }
     }, STREAM_STUCK_MS);
   };
-  es.addEventListener('open', () => { clearTimeout(state.stuckTimer); state.stuckTimer = null; state.stuckNoticed = false; });
+  es.addEventListener('open', () => { clearTimeout(state.stuckTimer); clearTimeout(state.askTimer); state.stuckTimer = state.askTimer = null; state.stuckNoticed = false; });
   es.addEventListener('error', wait);
   wait();
 }

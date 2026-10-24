@@ -145,6 +145,13 @@ function enteredAt(lane, t) {
 // Claude Code：用户每发一条消息、每建一份派发计划，算把这一段的产出交出去了（kind 记下是哪一种，动画不同）；
 // 实际输出 = 这一段里第一条给用户的话、第一次改文件或交 Claude Code 席报告
 const CC_OUT_KINDS = new Set(['msg', 'edit']);
+// Claude Code 的产出框没有人"读走"：这一轮安静 CC_QUIET（记录时间）以后就地收起（化成光点散开），下一轮有输出时再出现
+const CC_QUIET = 3 * 60000;
+// Claude Code 车道在 before 之前最后一次有动静的时刻
+function ccLastAct(cc, before) {
+  for (let i = cc.events.length - 1; i >= 0; i--) if (cc.events[i].ts < before) return cc.events[i].ts;
+  return -Infinity;
+}
 function ccLife(t) {
   const cc = B.laneById.get('cc');
   if (!cc || !latest(cc)) return { phase: 'none' };
@@ -163,13 +170,20 @@ function ccLife(t) {
     return O;
   };
   const last = bounds[bounds.length - 1], prev = bounds[bounds.length - 2];
-  // 刚交出去的上一段：有过输出就先播收起的动画
+  // 刚交出去的上一段：有过输出就先播收起的动画（上一段已经因为安静收起了就不再播）
   if (prev && last.kind) {
     const O = firstOut(prev.ts, last.ts), age = secSince(last.ts, t) - Math.max(0, OUT_MIN_SHOW - secSince(O, last.ts));
-    if (O < last.ts && age < OUT_COLLAPSE) return { phase: age < 0 ? 'show' : 'collapse', from: prev.ts, to: last.ts, age: age < 0 ? 9 : age, kind: last.kind };
+    const quietBefore = ccLastAct(cc, last.ts) + CC_QUIET < last.ts;
+    if (O < last.ts && !quietBefore && age < OUT_COLLAPSE) return { phase: age < 0 ? 'show' : 'collapse', from: prev.ts, to: last.ts, age: age < 0 ? 9 : age, kind: last.kind };
   }
   const O = firstOut(last.ts, t);
   if (O === Infinity) return laneActive(cc, t) ? { phase: 'gather', from: last.ts, grow: 1 - Math.exp(-(t - last.ts) / 60000) } : { phase: 'none', from: last.ts };
+  // 这一轮已经安静了一阵：框就地收起，收完就不再显示
+  const quietAt = ccLastAct(cc, t + 1) + CC_QUIET;
+  if (quietAt < t) {
+    const age = secSince(quietAt, t);
+    return age < OUT_COLLAPSE ? { phase: 'collapse', from: last.ts, to: t, age, kind: 'quiet' } : { phase: 'none', from: last.ts };
+  }
   return { phase: 'show', from: last.ts, age: secSince(O, t) };
 }
 
