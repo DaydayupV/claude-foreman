@@ -99,7 +99,7 @@ function drawUniverse(L) {
 }
 function drawUniverseOn(L) {
   // 星图都是柔光，按 1 倍像素画看不出差别，高分屏上要画的像素少很多
-  const dpr = Math.min(devicePixelRatio || 1, 1), w = viewEl.clientWidth, h = viewEl.clientHeight, cv = UFX.cv;
+  const dpr = Math.min(devicePixelRatio || 1, 1), { cw: w, ch: h } = viewBox(), cv = UFX.cv;
   if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
     cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
     cv.style.width = `${w}px`; cv.style.height = `${h}px`;

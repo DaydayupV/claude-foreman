@@ -163,21 +163,67 @@ function renderDone(done, t, seen, deadline) {
   return built;
 }
 
-// 返回 false 表示这一帧没建完（已结束的组很多时折叠行分几帧建）
+// 返回 false 表示这一帧没建完（已结束的组很多时折叠行分几帧建，或者有栏第一次量到的宽度和先用的不一样，要按真宽度重画）
 function renderTerms(t, L) {
   const deadline = performance.now() + 12;
   const cc = B.laneById.get('cc'), title = cc && latest(cc) ? latest(cc).title : null;
   setText($('conv'), Display.D.conversation(title));
-  if (!termsNear()) return true;
+  if (!(viewBox().termsTop < innerHeight + 200)) return true;
   const box = $('terms'), seen = new Set(), units = termUnits(t, L);
   const done = units.filter((u) => unitFinished(u, t)).sort((a, b) => unitEnd(b, t) - unitEnd(a, t));
   const live = units.filter((u) => !done.includes(u));
-  fillRow(box, live, t, seen);
-  // 回到上面一排的栏（又续接了）去掉"可收起"的样子
-  for (const u of live) PANEL.cols.get(u.id)?.classList.remove('done-open');
-  const built = renderDone(done, t, seen, deadline);
-  for (const [id, col] of PANEL.cols) if (!seen.has(id)) { col.remove(); PANEL.cols.delete(id); }
-  return built;
+  let built;
+  SETTLE.on = true;
+  try {
+    fillRow(box, live, t, seen);
+    // 回到上面一排的栏（又续接了）去掉"可收起"的样子
+    for (const u of live) PANEL.cols.get(u.id)?.classList.remove('done-open');
+    built = renderDone(done, t, seen, deadline);
+    for (const [id, col] of PANEL.cols) if (!seen.has(id)) { col.remove(); PANEL.cols.delete(id); }
+  } finally { SETTLE.on = false; }
+  return settleTerms() && built;
+}
+
+// 终端区的写和量分开：renderTerms 期间各栏先全部写完，最后集中量一次（各组要不要收起、各栏正文多宽），再统一贴底。
+// 不在每栏写完立刻读高度和宽度：每读一次浏览器都得把整页重排一遍，落地后第一次搭终端区时这样要几十毫秒。
+// 不在 renderTerms 里直接调用（比如测试）时照旧当场量
+const SETTLE = { on: false, stick: new Set(), groups: new Map(), widths: new Set(), lastW: null, retries: 0 };
+const termChars = (w) => Math.max(20, Math.floor((w || 560) / 6.6) - 4);
+// 正文按多少字折行：用上一次量到的这一栏的宽度；新栏先借别的栏的宽度，量出来不一样时整块重画一次
+function termWidth(ol) {
+  if (!SETTLE.on) return termChars(ol.clientWidth);
+  SETTLE.widths.add(ol);
+  ol.usedW = ol.cw ?? SETTLE.lastW;
+  return termChars(ol.usedW);
+}
+function collapseGroup(col, blocks) {
+  for (const b of blocks) {
+    const el = col.seats.get(b.id);
+    if (!PANEL.open.has(b.id)) fillFlow(el.querySelector('.term'), Display.collapseLines(el.fullLines, true, 'click to open').map((line) => typeof line === 'string' ? { cls: 'plain', text: line } : line));
+  }
+}
+// 返回 false 表示有新栏的宽度猜错了，下一帧重画
+function settleTerms() {
+  // 量：这时这一帧的 DOM 都写完了，只排一次版
+  const fold = [...SETTLE.groups].filter(([col]) => { const box = col.querySelector('.seats'); return box.clientHeight > 0 && box.scrollHeight > box.clientHeight; });
+  let again = false;
+  for (const ol of SETTLE.widths) {
+    const w = ol.clientWidth;
+    if (!w) continue; // 量不到宽度（栏还没显示出来）：不重画，等它显示出来以后的下一次
+    if (termChars(w) !== termChars(ol.usedW)) again = true;
+    ol.cw = w; SETTLE.lastW = w;
+  }
+  // 宽度和折行时用的不一样（新栏先借的宽度、窗口缩放、栏数变了）：下一帧按量到的宽度重画。
+  // 连着最多重画两次，免得滚动条一出一没让宽度来回变
+  SETTLE.retries = again ? (SETTLE.retries || 0) + 1 : 0;
+  if (SETTLE.retries > 2) again = false;
+  // 写：放不下的已结束组每席只留四行（贴底等下面一起做）
+  SETTLE.on = true;
+  try { for (const [col, blocks] of fold) collapseGroup(col, blocks); } finally { SETTLE.on = false; }
+  // 贴底：再排一次版，之后只改滚动位置，不会再触发排版
+  for (const ol of SETTLE.stick) ol.scrollTop = ol.scrollHeight;
+  SETTLE.stick.clear(); SETTLE.groups.clear(); SETTLE.widths.clear();
+  return !again;
 }
 
 // 填一段对话流，默认跟着贴在底部；往上翻看时不再跟随，翻回底部又恢复。
@@ -195,7 +241,8 @@ function fillFlow(ol, lines) {
     }, { passive: true });
   }
   fillTerm(ol, lines);
-  if (ol.stick) ol.scrollTop = ol.scrollHeight;
+  if (!ol.stick) return;
+  if (SETTLE.on) SETTLE.stick.add(ol); else ol.scrollTop = ol.scrollHeight;
 }
 const setAvatar = (img, key) => { if (img.dataset.key !== key) { img.src = avatarSrc(key); img.alt = look(key).name; img.dataset.key = key; } };
 
@@ -289,12 +336,10 @@ function fillGroup(col, u, t) {
     if (b.host) fillHostSeat(el, b.host, numbers.runs.get(b.host.id)); else fillSeat(el, b.lane, t, numbers.runs.get(currentRun(b.lane, t).id), head.split);
   });
   for (const [id, el] of col.seats) if (!seen.has(id)) { el.remove(); col.seats.delete(id); }
-  // 先量全文实际高度，再决定是否每席保留四行，展开的席始终显示全文。
-  const collapse = !queue.length && !states.some((s) => s.running) && box.clientHeight > 0 && box.scrollHeight > box.clientHeight;
-  if (collapse) for (const b of blocks) {
-    const el = col.seats.get(b.id);
-    if (!PANEL.open.has(b.id)) fillFlow(el.querySelector('.term'), Display.collapseLines(el.fullLines, true, 'click to open').map((line) => typeof line === 'string' ? { cls: 'plain', text: line } : line));
-  }
+  // 先量全文实际高度，再决定是否每席保留四行，展开的席始终显示全文（renderTerms 里留到最后集中量）
+  const collapsible = !queue.length && !states.some((s) => s.running);
+  if (SETTLE.on) { if (collapsible) SETTLE.groups.set(col, blocks); }
+  else if (collapsible && box.clientHeight > 0 && box.scrollHeight > box.clientHeight) collapseGroup(col, blocks);
   let finished = col.querySelector('.all-done');
   if (!finished) { finished = document.createElement('div'); finished.className = 'all-done'; col.append(finished); }
   setText(finished, states.length && !queue.length && !states.some((s) => s.running) ? `✔ ${Display.D.dashAllFinishedShort}` : '');
@@ -330,7 +375,7 @@ function fillSeat(el, lane, t, no, split = false) {
   setText(el.querySelector('b'), Display.modelLabel(run.meta));
   setText(el.querySelector('.st'), st.right.filter(Boolean).join(' '));
   setText(el.querySelector('.role'), Display.seatLine(run.meta, { title: split }));
-  const ol = el.querySelector('.term'), width = Math.max(20, Math.floor((ol.clientWidth || 560) / 6.6) - 4);
+  const ol = el.querySelector('.term'), width = termWidth(ol);
   let lines = open ? timeline(lane, t, { open: true }) : ended ? conclusion(r, width)
     : Display.liveLines(liveState(lane, r, t), 8, width, TERM_C).map((text) => ({ cls: 'plain', text }));
   if (!lines.length && st.running && !liveState(lane, r, t).api.req) lines = [{ cls: 'plain', text: Display.D.watchWorking }];
@@ -351,7 +396,7 @@ function fillHostSeat(el, h, no = 0) {
   setText(el.querySelector('b'), Display.modelLabel(run.meta));
   setText(el.querySelector('.st'), st.right.filter(Boolean).join(' '));
   setText(el.querySelector('.role'), Display.seatLine(run.meta));
-  const ol = el.querySelector('.term'), width = Math.max(20, Math.floor((ol.clientWidth || 560) / 6.6) - 4);
+  const ol = el.querySelector('.term'), width = termWidth(ol);
   el.fullLines = conclusion(h, width); fillFlow(ol, el.fullLines);
   const use = el.querySelector('.use'); use.hidden = false;
   setText(use.firstChild, Display.seatUsage(run.meta, run.result)); setText(use.lastChild, h.id);

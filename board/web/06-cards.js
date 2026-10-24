@@ -136,8 +136,11 @@ function fillLaneOut(box, lane, t) {
   fillOut(box, `OUTPUT · round ${roundOf(lane, t)}`, dedupeFiles(files), report, scopeLead(lane, t), thumbs);
 }
 
+// 返回卡片建完没有：新建卡片一次最多花约 6 毫秒（至少建 6 张），没建完的下一帧接着建。
+// 飞进长对话时第一次要建上百张卡片，一次建完就是三十多毫秒；那时卡片层还没淡入，分几帧建看不出来
 function renderWorld(t, L) {
-  const seen = new Set(['cc']);
+  const seen = new Set(['cc']), deadline = performance.now() + 6;
+  let created = 0, done = true;
   // Claude Code
   let cc = UI.cards.get('cc');
   if (!cc) { cc = cardShell('cc'); UI.cards.set('cc', cc); }
@@ -161,12 +164,18 @@ function renderWorld(t, L) {
   const ccFiles = ccLane ? ccLane.events.filter((e) => e.k === 'edit' && e.ts > from && e.ts <= to).map((e) => editParts(e.t)) : [];
   fillOut(ccOut, 'CLAUDE CODE · OUTPUT', dedupeFiles(ccFiles), '', ccLead(t, from, to));
 
-  // 刻度带上的各组标题
+  // 刻度带上的各组标题。超出预算以后，还没建过的组整组留到下一帧（组标题要算各席的状态，第一次也不便宜）；建过的照常更新
   const headSeen = new Set();
   for (const g of L.groups) {
-    headSeen.add(g.key);
     let h = UI.heads.get(g.key);
-    if (!h) { h = document.createElement('div'); h.className = 'ghead'; h.dataset.key = g.key; h.innerHTML = '<b></b>'; worldEl.append(h); UI.heads.set(g.key, h); }
+    if (!h && created >= 6 && performance.now() > deadline) {
+      // 留到下一帧的组里已经有的卡片（车道刚换到这个新组）照样算在版面上，不藏
+      done = false;
+      for (const lane of g.lanes) if (UI.cards.has(lane.id)) seen.add(lane.id);
+      continue;
+    }
+    headSeen.add(g.key);
+    if (!h) { h = document.createElement('div'); h.className = 'ghead'; h.dataset.key = g.key; h.innerHTML = '<b></b>'; worldEl.append(h); UI.heads.set(g.key, h); created++; }
     place(h, g.head);
     h.classList.toggle('old', g.old);
     h.classList.toggle('collapsed', g.collapsed);
@@ -177,8 +186,9 @@ function renderWorld(t, L) {
       const row = L.rows.get(lane.id);
       let card = UI.cards.get(lane.id), out = UI.outs.get(lane.id);
       if (!row) { if (card) card.hidden = true; if (out) out.hidden = true; continue; }
+      if (!card && created >= 6 && performance.now() > deadline) { done = false; continue; }
       seen.add(lane.id);
-      if (!card) { card = cardShell(lane.id); UI.cards.set(lane.id, card); }
+      if (!card) { card = cardShell(lane.id); UI.cards.set(lane.id, card); created++; }
       if (!out) { out = document.createElement('div'); out.className = 'outbox'; worldEl.append(out); UI.outs.set(lane.id, out); }
       card.hidden = out.hidden = false;
       place(card, row.card); place(out, row.out);
@@ -194,6 +204,7 @@ function renderWorld(t, L) {
     if (id.startsWith('ghost:')) { el.remove(); map.delete(id); } else el.hidden = true;
   }
   for (const [id, el] of UI.heads) el.hidden = !headSeen.has(id);
+  return done;
 }
 
 function groupHead(all, t) {

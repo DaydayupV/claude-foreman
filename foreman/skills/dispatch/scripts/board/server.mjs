@@ -129,9 +129,37 @@ const backlog = (events) => {
   return [...(start ? [start] : []), ...events.filter((ev) => ev !== start && (kept.has(ev) || tail.has(ev)))];
 };
 const RATE_EVENTS_MAX = 20000;
-// 展示截断不能截掉统计分母；统计历史只发计算需要的字段，上限与页面一致。
+// 同一次读到的数据（同一范围的几个页面共用一份）先整理一次：按任务分好的事件、每个任务和每份计划的 JSON、排队快照、
+// Claude Code 事件的比对键。不然每个页面每秒都要把全部事件按任务过滤一遍（任务数 × 事件数）、把 Claude Code 的每条事件序列化一遍，
+// 长对话开着几个看板标签页时，没有新数据也能占满一个核
+const PREPARED = new WeakMap();
+// 比对键按事件对象记住：feed 增量解析，两次读取之间没变的事件还是同一个对象
+const EVENT_KEYS = new WeakMap();
+const keyOf = (ev) => {
+  let key = EVENT_KEYS.get(ev);
+  if (key == null) { key = ev.messageId || JSON.stringify({ ...ev, target: undefined }); EVENT_KEYS.set(ev, key); }
+  return key;
+};
+function prepared(data) {
+  let p = PREPARED.get(data);
+  if (p) return p;
+  const byRun = new Map(), plans = new Map();
+  let queue = null;
+  for (const ev of data.events) {
+    if (ev.k === 'dispatch_queue') { queue ??= ev; continue; }
+    if (ev.k === 'fplan') { plans.set(ev, JSON.stringify(ev)); continue; }
+    if (byRun.has(ev.run)) byRun.get(ev.run).push(ev); else byRun.set(ev.run, [ev]);
+  }
+  const runs = [...data.runs].sort((a, b) => (b.id === 'cc') - (a.id === 'cc'));
+  p = { byRun, plans, queue, queueText: JSON.stringify(queue?.tickets), runs, texts: new Map(runs.map((r) => [r.id, JSON.stringify(r)])),
+    ccLinks: new Map((byRun.get('cc') || []).map((ev) => [keyOf(ev), ev.target])) };
+  PREPARED.set(data, p);
+  return p;
+}
+// 展示截断不能截掉统计分母；统计历史只发计算需要的字段，上限与页面一致。用量只用得到输出数（页面的速度分段只读 u.out），
+// Claude Code 车道一次两万条，少发输入、缓存几个数能小不少
 const rateHistory = (events) => events.slice(-RATE_EVENTS_MAX).map(({ run, ts, k, u, n, tot, end, usage_from, usage_to }) =>
-  ({ run, ts, k, u, n, tot, end, usage_from, usage_to }));
+  ({ run, ts, k, u: u && { out: u.out }, n, tot, end, usage_from, usage_to }));
 
 function replaySessions(target, root, claudeDir) {
   if (target === 'all') return undefined;
@@ -212,25 +240,23 @@ async function main() {
     ? client.mux.res.write(`data: ${client.sub} ${event} ${JSON.stringify(data)}\n\n`)
     : client.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   const liveUpdate = (client, data) => {
-    const queue = data.events.find((ev) => ev.k === 'dispatch_queue'), queueText = JSON.stringify(queue?.tickets);
+    const p = prepared(data), queue = p.queue, queueText = p.queueText;
     if (queue && client.queue !== queueText) { send(client, 'ev', queue); client.queue = queueText; }
     // 计划事件单独发，不走每个任务最多 200 条的正文截取：编号要靠完整的计划声明（Claude Code 车道很长时计划会被截掉）。
     // 内容变了再发一次，页面按计划 id 替换
     client.plans ??= new Map();
     const sendPlans = (filter = () => true) => {
-      for (const ev of data.events) if (ev.k === 'fplan' && filter(ev)) {
-        const text = JSON.stringify(ev);
+      for (const [ev, text] of p.plans) if (filter(ev)) {
         if (client.plans.get(ev.plan) !== text) { send(client, 'ev', ev); client.plans.set(ev.plan, text); }
       }
     };
     sendPlans();
     // Claude Code 车道先发：各席什么时候离开刻度带要看它的"任务交回"，它排在最后的话，刚结束的组会先画出来再一闪消失
-    for (const run of [...data.runs].sort((a, b) => (b.id === 'cc') - (a.id === 'cc'))) {
-      const text = JSON.stringify(run), previous = client.seen.get(run.id), revision = data.revisions[run.id];
+    for (const run of p.runs) {
+      const text = p.texts.get(run.id), previous = client.seen.get(run.id), revision = data.revisions[run.id];
       if (previous?.text !== text || previous?.revision !== revision) send(client, 'run', run);
-      const events = data.events.filter((ev) => ev.run === run.id && ev.k !== 'dispatch_queue' && ev.k !== 'fplan'), version = data.versions[run.id];
-      const keyOf = (ev) => ev.messageId || JSON.stringify({ ...ev, target: undefined });
-      const links = run.id === 'cc' ? new Map(events.map((ev) => [keyOf(ev), ev.target])) : null;
+      const events = p.byRun.get(run.id) || [], version = data.versions[run.id];
+      const links = run.id === 'cc' ? p.ccLinks : null;
       // 记录被从头重读了（文件被替换、截短后重写，版本变了）：整份重发并让页面先清掉这个任务的旧事件，不能把新旧两份叠在一起
       if (!previous || previous.version !== version) {
         send(client, 'backlog', { run: run.id, events: backlog(events), rate_events: rateHistory(events), ...(previous ? { reset: true } : {}) });

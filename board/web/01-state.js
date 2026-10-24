@@ -18,7 +18,6 @@ const B = {
   runs: new Map(),        // run id → run 消息
   lanes: [],              // 按首次出现的先后
   laneById: new Map(),
-  feed: [],               // 所有车道的事件，按时间，最多 FEED_MAX 条
   life: [],               // 派发计划和裁决事件，单独留着不丢（流程动效要从计划建起一直看到裁决）
   prompts: [],            // 用户每条消息的时刻（Claude Code 车道的 prompt 事件），单独留着不随车道事件裁掉：终端区按它分"最近一轮"
   total: 0,               // 收到的事件总数（含已丢掉的）
@@ -121,7 +120,7 @@ function openStream(query) {
 }
 
 // 统计用的事件不带正文，留得多一些；超出时这条车道的平均速度显示 —（分子分母不再覆盖同一段）
-const FEED_MAX = 3000, LANE_EVENTS_MAX = 600, RATE_EVENTS_MAX = 20000;
+const LANE_EVENTS_MAX = 600, RATE_EVENTS_MAX = 20000;
 
 // 现在是记录里的哪个时刻（毫秒）。直播用本机时间（服务在同一台机器上）；回放从连上那一刻起按倍速走；?t= 停在固定时刻。
 function now() {
@@ -132,7 +131,7 @@ function now() {
 }
 
 function reset() {
-  B.runs.clear(); B.lanes = []; B.laneById.clear(); B.feed = []; B.life = []; B.prompts = []; B.total = 0; B.done = false; B.version++;
+  B.runs.clear(); B.lanes = []; B.laneById.clear(); B.life = []; B.prompts = []; B.total = 0; B.done = false; B.version++;
 }
 
 function onHello(h) {
@@ -167,22 +166,47 @@ function onRun(r) {
   wake();
 }
 
-function onEv(ev, stats = true) {
-  const lane = laneFor(ev.lane || B.runs.get(ev.run)?.lane || ev.run);
+// 展示缓存会截断；另存不含正文的统计边界，保证累计输出和生成时长覆盖同一段。
+const rateFields = ({ run, ts, k, u, n, tot, end, usage_from, usage_to }) => ({ run, ts, k, u, n, tot, end, usage_from, usage_to });
+const laneOf = (ev) => laneFor(ev.lane || B.runs.get(ev.run)?.lane || ev.run);
+
+// 一条事件除了进车道以外的记账：序号、计划和评判、用户消息的时刻、车道最后一条
+function noteEvent(ev, lane) {
   ev.id = B.total++;
-  insertByTs(lane.events, ev, LANE_EVENTS_MAX);
-  // 展示缓存会截断；另存不含正文的统计边界，保证累计输出和生成时长覆盖同一段。
-  if (B.clock.mode === 'live' && stats !== false) {
-    const { run, ts, k, u, n, tot, end, usage_from, usage_to } = ev;
-    insertByTs(lane.rate_events, { run, ts, k, u, n, tot, end, usage_from, usage_to }, RATE_EVENTS_MAX);
-  }
-  lane.ver = (lane.ver || 0) + 1;
-  insertByTs(B.feed, ev, FEED_MAX);
   // 同一份计划的事件可能再发（内容变了、重连）：按计划 id 只留最新一份
   if (ev.k === 'fplan') B.life = B.life.filter((x) => !(x.k === 'fplan' && x.plan === ev.plan));
   if (ev.k === 'fplan' || ev.k === 'verdict') insertByTs(B.life, ev, Infinity);
   if (ev.k === 'prompt' && Number.isFinite(ev.ts) && !B.prompts.includes(ev.ts)) { B.prompts.push(ev.ts); B.prompts.sort((a, b) => a - b); }
   if (!lane.last || ev.ts >= lane.last.ts) lane.last = ev;
+}
+
+// 实时的一条事件
+function onEv(ev, stats = true) {
+  const lane = laneOf(ev);
+  noteEvent(ev, lane);
+  insertByTs(lane.events, ev, LANE_EVENTS_MAX);
+  if (B.clock.mode === 'live' && stats !== false) insertByTs(lane.rate_events, rateFields(ev), RATE_EVENTS_MAX);
+  lane.ver = (lane.ver || 0) + 1;
+  B.version++;
+  wake();
+}
+
+// 一批历史事件（一个任务的回填、快照）：结果和逐条 onEv 完全一样，但每条车道只归并、截断一次，版本号每批只加一次。
+// 逐条插入时，乱序到达的旧事件要从尾部一路往前找位置，长对话一次回填几千条就把飞入动画卡住
+function onEvents(events, stats = true) {
+  if (!events.length) return;
+  const byLane = new Map();
+  for (const ev of events) {
+    const lane = laneOf(ev);
+    noteEvent(ev, lane);
+    if (byLane.has(lane)) byLane.get(lane).push(ev); else byLane.set(lane, [ev]);
+  }
+  const rates = B.clock.mode === 'live' && stats !== false;
+  for (const [lane, list] of byLane) {
+    lane.events = mergeByTs(lane.events, list, LANE_EVENTS_MAX);
+    if (rates) lane.rate_events = mergeByTs(lane.rate_events, list.map(rateFields), RATE_EVENTS_MAX);
+    lane.ver = (lane.ver || 0) + 1;
+  }
   B.version++;
   wake();
 }
@@ -196,24 +220,35 @@ function onBacklog(b) {
       lane.rate_events = lane.rate_events.filter(keep);
       lane.last = lane.events.reduce((last, ev) => (!last || ev.ts >= last.ts ? ev : last), null);
     }
-    B.feed = B.feed.filter(keep); B.life = B.life.filter(keep);
+    B.life = B.life.filter(keep);
     if (b.run === 'cc') B.prompts = [];
     B.version++;
   }
-  b.events.forEach((ev) => onEv(ev, !b.rate_events));
+  onEvents(b.events, !b.rate_events);
   if (b.rate_events) replaceRateHistory(b.run, b.rate_events);
 }
 
 function replaceRateHistory(run, events) {
-  const lane = laneFor(B.runs.get(run)?.lane || run), rest = lane.rate_events.filter((ev) => ev.run !== run);
-  // 两边都按时间排好：一次合并，不逐条插入（Claude Code 车道一次就有上万条）；时间相同时原有的在前，和逐条插入一样
-  const incoming = events.every((ev, i) => !i || events[i - 1].ts <= ev.ts) ? events : [...events].sort((a, b) => a.ts - b.ts), merged = [];
-  for (let i = 0, j = 0; i < rest.length || j < incoming.length;) {
-    merged.push(j >= incoming.length || i < rest.length && rest[i].ts <= incoming[j].ts ? rest[i++] : incoming[j++]);
-  }
-  lane.rate_events = merged.length > RATE_EVENTS_MAX ? merged.slice(-RATE_EVENTS_MAX) : merged;
+  const lane = laneFor(B.runs.get(run)?.lane || run);
+  // Claude Code 车道一次就有上万条：一次合并，不逐条插入
+  lane.rate_events = mergeByTs(lane.rate_events.filter((ev) => ev.run !== run), events, RATE_EVENTS_MAX);
   lane.ver = (lane.ver || 0) + 1; B.version++;
   wake();
+}
+
+// 把一批事件并进按时间排好的数组，返回新数组：这批先按时间稳定排序，时间相同时原有的在前、这批按到达先后在后，
+// 超出上限丢掉最早的。和逐条 insertByTs 的结果一样
+function mergeByTs(list, batch, max) {
+  const incoming = batch.every((ev, i) => !i || batch[i - 1].ts <= ev.ts) ? batch : [...batch].sort((a, b) => a.ts - b.ts);
+  let merged;
+  if (!incoming.length || !list.length || incoming[0].ts >= list.at(-1).ts) merged = list.concat(incoming);
+  else {
+    merged = [];
+    for (let i = 0, j = 0; i < list.length || j < incoming.length;) {
+      merged.push(j >= incoming.length || i < list.length && list[i].ts <= incoming[j].ts ? list[i++] : incoming[j++]);
+    }
+  }
+  return merged.length > max ? merged.slice(-max) : merged;
 }
 
 // 直播里派发事件先到、目标任务后出现时，服务端补发一次 ev_link：给原来那条事件补上 target
@@ -237,8 +272,12 @@ function loadSnapshot(s) {
   onHello(s.hello);
   if (B.params.t == null && s.hello.replay) B.clock.frozenAt = s.hello.replay.end; // 内嵌快照没给 t 时停在末尾
   for (const r of s.runs) onRun(r);
-  for (const ev of s.events) onEv(ev, !s.rate_events);
-  if (s.rate_events) for (const r of s.runs) replaceRateHistory(r.id, s.rate_events.filter((ev) => ev.run === r.id));
+  onEvents(s.events, !s.rate_events);
+  if (s.rate_events) {
+    const byRun = new Map(s.runs.map((r) => [r.id, []]));
+    for (const ev of s.rate_events) byRun.get(ev.run)?.push(ev);
+    for (const [run, events] of byRun) replaceRateHistory(run, events);
+  }
   B.connected = true;
 }
 

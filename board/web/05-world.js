@@ -17,7 +17,7 @@ const REEL = { s: 0, off: 0, speed: 14, last: 0, hover: false, overflow: false, 
 const fitWidth = (w, h) => (w < 600 && h > w ? WL.bandX + WL.bandW + WL.margin : WL.W);
 // 100% 比例下屏幕能看到的世界 y 范围
 function fitRange(H) {
-  const w = viewEl.clientWidth || 1, h = viewEl.clientHeight || 1, k = Math.min(w / fitWidth(w, h), h / H) * 0.97, ty = (h - H * k) / 2;
+  const { cw: w, ch: h } = viewBox(), k = Math.min(w / fitWidth(w, h), h / H) * 0.97, ty = (h - H * k) / 2;
   return { top: -ty / k, bot: (h - ty) / k };
 }
 function stepReel(nowMs) {
@@ -143,8 +143,21 @@ function computeLayout(t) {
 const VIEW = { k: 1, tx: 0, ty: 0, goal: null, auto: true, w: 0, h: 0, H: 600 };
 const viewEl = $('view'), worldEl = $('world');
 
+// 视图的大小和位置：每帧开头（09-main.js 的 step，还没改任何 DOM 时）量一次，这一帧里都用它。
+// 写了卡片、表格或变换以后再量，浏览器得当场把整页重排一遍（飞进长对话时这一下就有二三十毫秒）
+// termsTop：终端区的上沿，离可见范围不远时才重画终端区（07-terms.js）
+const VIEWBOX = { frame: -1, width: 0, height: 0, cw: 1, ch: 1, bottom: 0, termsTop: 0 };
+function viewBox() {
+  if (VIEWBOX.frame !== UV.frame) {
+    const r = viewEl.getBoundingClientRect();
+    Object.assign(VIEWBOX, { frame: UV.frame, width: r.width, height: r.height, cw: viewEl.clientWidth || 1, ch: viewEl.clientHeight || 1, bottom: r.bottom,
+      termsTop: $('termsec').getBoundingClientRect().top });
+  }
+  return VIEWBOX;
+}
+
 function fitGoal() {
-  const r = viewEl.getBoundingClientRect();
+  const r = viewBox();
   // 视图还没有大小（面板刚打开、窗口最小化）时不重新适配，留着原来的镜头：按 0 适配会让缩放变成 0、线宽变成无穷大
   if (!(r.width > 0 && r.height > 0 && VIEW.H > 0)) return { k: VIEW.k > 0 ? VIEW.k : 1, tx: VIEW.tx, ty: VIEW.ty };
   const W = fitWidth(r.width, r.height), k = Math.min(r.width / W, r.height / VIEW.H) * 0.97;
@@ -244,7 +257,8 @@ addEventListener('keydown', (e) => {
   wake();
 });
 // 视图区域大小变了（窗口缩放、用量面板随模型数量变高变矮）就重新适配，缓动过去
-new ResizeObserver(() => { if (VIEW.auto) fitView(); wake(); }).observe(viewEl);
+// 视图大小变了：先作废这一帧量好的尺寸（viewBox），再按新尺寸重新适配
+new ResizeObserver(() => { VIEWBOX.frame = -1; if (VIEW.auto) fitView(); wake(); }).observe(viewEl);
 
 // 折叠或展开一组：记下组头现在的位置，排版时让它停在原处展开（鼠标移开后整体再慢慢回正）
 function toggleGroup(key) {

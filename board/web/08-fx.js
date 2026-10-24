@@ -156,7 +156,7 @@ function sizeCanvas(cv, w, h, dpr) {
 }
 
 function drawFx(t, L) {
-  const dpr = devicePixelRatio || 1, w = viewEl.clientWidth, h = viewEl.clientHeight, T = FLYFX;
+  const dpr = devicePixelRatio || 1, { cw: w, ch: h } = viewBox(), T = FLYFX;
   sizeCanvas(FX.cv, w, h, dpr); sizeCanvas(FX.ov.cv, w, h, dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);

@@ -11,10 +11,13 @@ function wake() { if (!raf) raf = requestAnimationFrame(frame); }
 // 数据一直在来的对话（正在干活的那个）事件很密：数据变了最快每 250 毫秒刷新一次；界面操作（UI.ver）马上刷新；没变也每半秒刷新一次。
 // 飞入动画进行中用量表和终端区在画面下方还没露出来，先不搭（一次要算整份统计、建整块 DOM），免得和动画抢同一帧；
 // 落地后先搭用量表，搭完了再搭终端区，两块不挤在同一帧里。
-// 用量表和终端区一次只新建约 12 毫秒的行（第一次搭、行一下多了很多时），没建完的下一帧接着建（again）
-const DOM = { version: -1, ui: -1, at: 0, deferred: false, again: false };
+// 用量表和终端区一次只新建约 12 毫秒的行（第一次搭、行一下多了很多时），没建完的下一帧接着建（again）。
+// 卡片没建完（world，06-cards.js 的 renderWorld 分帧建）时下一帧只接着建卡片，用量表和终端区不跟着重画
+const DOM = { version: -1, ui: -1, at: 0, deferred: false, again: false, world: false };
 function domStep(nowMs, landing) {
-  if (!(UI.ver !== DOM.ui || B.version !== DOM.version && nowMs - DOM.at >= 250 || nowMs - DOM.at > 500 || DOM.again || DOM.deferred && !landing)) return null;
+  if (!(UI.ver !== DOM.ui || B.version !== DOM.version && nowMs - DOM.at >= 250 || nowMs - DOM.at > 500 || DOM.again || DOM.deferred && !landing)) {
+    return DOM.world ? { table: false, terms: false } : null;
+  }
   DOM.version = B.version; DOM.ui = UI.ver; DOM.at = nowMs; DOM.again = false;
   if (landing) { DOM.deferred = 'all'; return { table: false, terms: false }; }
   if (DOM.deferred === 'all') return { table: true, terms: false };
@@ -49,6 +52,7 @@ function step() {
   if (nowMs - lastFrame < (moving ? FRAME_BUSY : FRAME_IDLE) - 3) { wake(); return; }
   lastFrame = nowMs;
   UV.fitCache = null; UV.frame++;
+  viewBox(); // 先量视图，这一帧后面写 DOM 以后不再量（05-world.js）
   // 连不上看板服务超过 20 秒：多半是服务退出了或者换了新地址，重连旧地址没有用，提示去拿新链接（只说一次，连上后重置）。
   // 每帧都查：飞进看板以后星图那一层不再画，也要能提示
   // 已经确认服务退出、显示着一直留着的提示时，不拿这条会淡出的盖掉
@@ -61,7 +65,7 @@ function step() {
     if (share.uni > 0) uniFrame(share.fx <= 0);
     applyShare(share);
     renderCrumb();
-    if (share.fx <= 0) { wake(); return; }
+    if (share.fx <= 0) { if (FLY.mode === 'in') warmBoard(); wake(); return; }
   }
   stepReel(nowMs);
   const t = now();
@@ -74,14 +78,24 @@ function step() {
   if (dom) {
     loadFinals();
     renderTop(t);
-    renderWorld(t, L);
+    const world = renderWorld(t, L);
     const table = dom.table ? renderTable(t) : true, terms = dom.terms ? renderTerms(t, L) : true;
     domDrawn(dom, table, terms);
+    DOM.world = !world; // 卡片还没建完，下一帧接着建
   }
   placeWorld(L, t);
-  // 往下滚到终端、星图整个移出屏幕时不画画布
-  if ((viewMoving || nowMs - lastFx >= 30) && viewEl.getBoundingClientRect().bottom > 0) { lastFx = nowMs; drawFx(t, L); }
+  // 往下滚到终端、星图整个移出屏幕时不画画布。镜头不动时画布约 30 帧就够了；飞入飞出的弧线区炸开、收拢时每帧都画，
+  // 不然它只有宇宙层一半的帧数，看起来一顿一顿的
+  const flying = FLY.mode === 'in' || FLY.mode === 'out';
+  if ((viewMoving || flying || nowMs - lastFx >= 30) && viewBox().bottom > 0) { lastFx = nowMs; drawFx(t, L); }
   wake();
+}
+
+// 飞入的前一段看板还没开始画、宇宙层一帧只要几毫秒：趁这时先把 Claude Code 车道的统计算好（长对话有两万条统计事件，
+// 第一次算要十几毫秒，之后有缓存），免得堆到看板第一帧里，和建卡片、第一次画画布挤在一起
+function warmBoard() {
+  const cc = B.laneById.get('cc');
+  if (cc?.rate_events.length) laneStats(cc, now());
 }
 
 // 宇宙层：所有对话的星图（08-uni-*.js），飞进某个对话之前不画看板
@@ -112,7 +126,7 @@ function uniFrame(alone = true) {
   }
   stepUni();
   // 往下滚到终端、星图整个移出屏幕时不画
-  if (viewEl.getBoundingClientRect().bottom > 0) drawUniverse(L);
+  if (viewBox().bottom > 0) drawUniverse(L);
   setText($("zoom-val"), `${Math.round((UV.k / uniFitGoal().k) * 100)}%`);
 }
 
