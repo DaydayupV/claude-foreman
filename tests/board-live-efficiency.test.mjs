@@ -32,7 +32,8 @@ test('live fixture output matches the original parser including versions and rev
     assert.deepEqual(data.revisions, Object.fromEntries(data.runs.map((r) => [r.id, r.id === 'cc' ? '' : `${signature(path.join(runs, r.id, 'meta.json'))}:${signature(path.join(runs, r.id, 'result.json'))}`])));
   }
   // 在修改生产实现之前取值；哈希覆盖完整的 cc 消息和全部事件，文件签名单独逐项检查。
-  assert.deepEqual(hashes, ['2c3d0e87fd0f495dc0421cb8ee3de63387e0bcc88f6d5463223c39d34fd49ef6', '468ffd8caf73f145d04a93226806a4bcf2a660b98fa9a3289ad137b995c79229', '2c3d0e87fd0f495dc0421cb8ee3de63387e0bcc88f6d5463223c39d34fd49ef6']);
+  // 命令事件加了 aid、协作方的多行消息连成一行以后更新；去掉 aid 和费用字段后，剩下的差别只来自多行消息
+  assert.deepEqual(hashes, ['52ad0eb6d048a7295b85a7a586f9e8f1829bd67610327c94f986ed638efb680a', '3a6a6d0f52d32e6816b64c2c031844e5ef35807fb44150ea8065a88591a0fe5c', '52ad0eb6d048a7295b85a7a586f9e8f1829bd67610327c94f986ed638efb680a']);
 });
 
 test('appending message chunks preserves original last-row usage, event order and final cwd', (t) => {
@@ -48,7 +49,8 @@ test('appending message chunks preserves original last-row usage, event order an
   ];
   additions.forEach((rows, i) => { write(f.file, rows, true); hashes.push(hash(feed.read({ session: 's' }, base + (i + 1) * 1000))); });
   assert.equal(JSON.stringify(first), frozen);
-  assert.deepEqual(hashes, ['65e7291694d4e9033be2cc11d0f16934e2f584805eb84fc06c914b3e694f91b4', 'bef824db744f2344869215fe9cdfbd03bedab35d481c43e2fec4c9cc82e8d736', 'b431bb4cb9216e8638d311cf50d376e2628c9659a3d9a8594d5f4abb0271cc89', 'c60b063f1ac239971a9a2ad746060b0bb02ebee424acab6fe48d4593755100f6']);
+  // Claude Code 的命令事件加了 aid（tool_use.id）、费用加了 cost_partial 以后更新；去掉这两个字段算出的哈希和改前完全一样
+  assert.deepEqual(hashes, ['3d3baa52e67c5f936d37a90df56b1abfc23faf7f4709f3e6a93fbbac873d72ed', 'fb76f955e6ee21f133257ee9c79eca1cd043c928f5e1976331bb6c6574dc6337', 'd03bca40df9a9cfbd31caadbe9cb428608201081a4847021a4a833328ec708fb', '4a58c42e2eda859630d01c3c066d9d69fc17275b463c2bbdd49171120748f98a']);
   assert.deepEqual(feed.read({ session: 's' }, base + 4000).versions, { cc: `${f.file}:0` });
   assert.deepEqual(feed.read({ session: 's' }, base + 4000).revisions, { cc: '' });
 });

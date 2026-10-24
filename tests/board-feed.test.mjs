@@ -46,7 +46,8 @@ test('feed 每轮只读一次排队目录及票据，保留不可读票据的位
 
 test('messages, reports, PowerShell, tools, edits and the remaining protocol events', () => {
   const take = (event) => normalize(event, run, {});
-  assert.equal(take(item('agent_message', { text: '\nhello\nsecond' }))[0].t, 'hello');
+  // 多行的消息连成一行：网页时间线只显示一行，只留第一行时常常只剩一个 "{"
+  assert.equal(take(item('agent_message', { text: '\nhello\nsecond' }))[0].t, 'hello second');
   assert.equal(take(item('agent_message', { text: '{"status":"done"}' }))[0].k, 'report');
   assert.equal(take(item('agent_message', { text: '[1,2]' }))[0].k, 'msg');
   assert.equal(take(item('reasoning', { text: '\n**Thinking**\nnext' }))[0].t, 'Thinking');
@@ -184,13 +185,16 @@ test('host replay usage prefixes retain nulls, zeroes, price changes and unknown
     { t: 'unknown', u: { in: 4, cached: 0, cache_write: null, out: null } },
     { t: 'priced', u: { in: 0, cached: null, cache_write: 1, out: 3 } },
   ].map((event, i) => ({ run: 'cc', lane: 'cc', ts: start + i * 1000, k: 'usage', ...event }));
-  const data = { scope: { kind: 'session', value: 's' }, prices, runs: [{ id: 'cc', kind: 'host', started_at: start }], events, hostEnd: start + 5000 };
+  const data = { scope: { kind: 'session', value: 's' }, prices, runs: [{ id: 'cc', kind: 'host', started_at: start, cost_partial: true }], events, hostEnd: start + 5000 };
   const updates = buildReplay(data, {}, start).timeline.filter((m) => m.event === 'run' && m.data.usage).map((m) => m.data);
   assert.equal(updates.length, 4);
   updates.forEach((update, i) => {
     const prefix = events.slice(0, i + 1), cost = hostCost(prefix, prices);
     assert.deepEqual(update.usage, usageTotals(prefix)); assert.equal(update.cost_usd, cost);
     assert.equal(update.cost_source, cost == null ? 'unknown' : 'api_price');
+    // 有的消息算不出价时能算的照算，另外标 cost_partial（显示时费用后面带 +）
+    assert.equal(!!update.cost_partial, i >= 2);
+    // 最终的 run 带着 cost_partial，回放早期（还没播到算不出价的消息）不能继承它
   });
 });
 

@@ -48,7 +48,8 @@ test('排队进程被强制杀掉后，下一个持锁者清掉死票据，后�
   const dead = tickets(h)[0]; first.stop(); await first.done;
   assert.equal(fs.existsSync(dead.file), true);
   const next = h.startBridge(args(h, 'next'));
-  await poll(() => tickets(h).length === 1 && tickets(h)[0].title === 'next', '死票据被回收');
+  // 只读一次票据列表：连读两次时中间可能变了，第二次读到空列表会直接报错而不是接着等
+  await poll(() => { const list = tickets(h); return list.length === 1 && list[0].title === 'next'; }, '死票据被回收');
   assert.equal(fs.existsSync(dead.file), false); assert.ok(tickets(h)[0].sequence > dead.sequence);
   // 票据先落盘、位次提示随后才写到 stderr：等提示出现，不能看到票据就断言
   await poll(() => next.stderr.includes(M.queuePosition('codex', 1, 1, 60)), '位次提示');

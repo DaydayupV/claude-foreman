@@ -504,6 +504,7 @@ test('page mode strips live replay/from before connecting, retains legacy fly-in
       setTimeout: (fn, ms) => timers.push({ fn, ms }), clearTimeout() {},
       fetch: async (url) => { requests.push(url); return { ok: true, json: async () => ({ runs: runSession ? [{ session: runSession }] : [] }) }; },
       EventSource: class { constructor(url) { streams.push(url); } addEventListener() {} },
+      document: { visibilityState: 'visible', addEventListener() {} },
     });
     vm.runInContext(sources + '\n' + main, context);
     await new Promise(setImmediate);
@@ -542,6 +543,7 @@ test('legacy links pick the right conversation, honour a touch before the answer
       addEventListener: (type, fn) => listeners.push([type, fn]), wake() {}, playDemo() {}, setTimeout() {}, clearTimeout() {},
       fetch: async (url) => { requests.push(url); if (touch) for (const [type, fn] of listeners) if (type === 'pointerdown') fn(); return { ok: true, json: async () => ({ runs }) }; },
       EventSource: class { addEventListener() {} },
+      document: { visibilityState: 'visible', addEventListener() {} },
     });
     vm.runInContext(sources + '\n' + main, context);
     await new Promise(setImmediate);

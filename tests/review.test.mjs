@@ -47,13 +47,10 @@ for (const lang of ['zh', 'en']) test(`opencode 审查注入只读 foreman-revie
   failed(await h.bridge(['resume', '--run', r.run_id, '--level', 'normal', '--brief', '-']), M.reviewNoResume);
 });
 
-test('opencode 审查材料超限直接拒绝且不启动，Codex 没有该上限', async (t) => {
+test('opencode 审查材料超限时改成给行号照常启动，Codex 没有该上限', async (t) => {
   const h = sandbox(t); configure(h); h.initGit(); h.write('source.txt', 'x'.repeat(MAX_REVIEW_CHARS) + '\n');
   const r = await h.bridge(args(h));
-  assert.equal(r.code, 2); assert.equal(r.stdout, '');
-  const chars = Number(/共 (\d+) 字符/.exec(r.stderr)?.[1]);
-  assert.ok(chars > MAX_REVIEW_CHARS); assert.ok(r.stderr.includes(M.reviewTooLarge(chars, MAX_REVIEW_CHARS)));
-  assert.equal(h.calls().length, 0); assert.equal(h.records().filter((m) => m.participant !== 'host').length, 0);
+  assert.equal(r.code, 0, r.stderr); assert.ok(h.calls().length >= 1);
   configure(h, 'codex');
   const native = output(await h.bridge(args(h)));
   assert.equal(native.review_scope.files_total, 1); assert.ok(read(path.join(native.run_dir, 'review.patch')).length > MAX_REVIEW_CHARS);

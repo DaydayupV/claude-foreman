@@ -136,7 +136,7 @@ test('API 非 Git 的 diff 沿用普通开头，材料超限在登记和请求�
   for (const target of ['diff', 'files', 'claims']) {
     const rejected = await h.bridge(args(h, ['--target', target, '--file', 'source.txt']));
     assert.equal(rejected.code, 2); assert.equal(rejected.stdout, '');
-    assert.ok(rejected.stderr.includes(target === 'diff' ? '要审查的改动共' : '材料共'), rejected.stderr);
+    assert.ok(rejected.stderr.includes(target === 'diff' ? '要审查的改动去掉生成文件后仍有' : '材料共'), rejected.stderr);
   }
   assert.equal(h.records().filter((m) => m.participant !== 'host').length, 1); assert.equal(api.requests.length, 1);
 });
@@ -235,11 +235,11 @@ test('diff 计划的改动被撤回后拒绝席位，非 Git 计划没有指纹'
   assert.equal(h.records().filter((m) => m.participant !== 'host').length, 1); assert.equal(h.calls().length, 1);
 });
 
-for (const agent of ['oc', 'pi']) test(`${agent} 的 diff 补丁超限时不登记、不调用`, async (t) => {
+// opencode、pi 能自己读文件：补丁超过上限时不再拒绝，放不下的文件改成给行号（细节见 review-material.test.mjs）
+for (const agent of ['oc', 'pi']) test(`${agent} 的 diff 补丁超限时照常启动，改成给行号`, async (t) => {
   const h = sandbox(t); configure(h, agent); h.initGit(); h.write('source.txt', 'x'.repeat(200001));
-  const r = await h.bridge(args(h)); assert.equal(r.code, 2); assert.equal(r.stdout, '');
-  const chars = Number(/共 (\d+) 字符/.exec(r.stderr)?.[1]); assert.ok(chars > 200000);
-  assert.ok(r.stderr.includes(M.reviewTooLarge(chars, 200000))); assert.equal(h.records().filter((m) => m.participant !== 'host').length, 0); assert.equal(h.calls().length, 0);
+  const r = await h.bridge(args(h)); assert.equal(r.code, 0, r.stderr);
+  assert.equal(h.records().filter((m) => m.participant !== 'host').length, 1); assert.ok(h.calls().length >= 1);
 });
 
 for (const change of ['修改', '删除', 'Git 错误']) test(`审查结束时${change}材料不会丢失结果，stale 和原始错误如实记录`, async (t) => {

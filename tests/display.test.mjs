@@ -428,7 +428,7 @@ function displayBoard(lang = 'zh') {
   const page = buildPage(), shared = page.slice(page.indexOf('const Display ='), page.indexOf('// ---- 00-text.js'));
   const names = ['00-text', '01-state', '03-timeline', '04-rates', '05-world', '06-states', '06-cards', '07-table', '07-terms'];
   const source = names.map((name) => fs.readFileSync(new URL(`../board/web/${name}.js`, import.meta.url), 'utf8')).join('\n');
-  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits };', context);
+  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd };', context);
   return { ...context.api, el, context };
 }
 
@@ -849,4 +849,54 @@ test('用量表和终端区一样排：Claude Code、正在跑的组、已结束
   assert.deepEqual(shown, ['opus · Claude Code', '# review · check | ●1:run ✗1:bad', 'm2 · Codex CLI', 'm3 · Codex CLI', '# run · old task | ✔1:ok', 'm1 · Codex CLI']);
   // 状态列按色调上色
   assert.deepEqual([rows[2], rows[3], rows[5]].map((tr) => tr.children[2].dataset.tone), ['bad', 'run', 'ok']);
+});
+
+test('已结束的组：用户最后一条消息之后结束的展开成栏，之前的折成一行（费用含所有轮次），点过的按点的来', () => {
+  const b = displayBoard(), t = 300000;
+  b.onRun({ id: 'cc', lane: 'cc', kind: 'host', agent_type: 'host', model: 'opus', status: 'idle', started_at: 0 });
+  b.onEv({ lane: 'cc', run: 'cc', ts: 50000, k: 'prompt', t: 'next round' });
+  b.onRun({ id: 'old1', kind: 'exec', model: 'm1', title: 'old task', group: 'old', status: 'done', started_at: 0, ended_at: 10000, cost_usd: 0.1, display: { status: 'done', report: { status: 'partial' } } });
+  b.onRun({ id: 'old2', lane: 'old1', parent: 'old1', kind: 'exec', model: 'm1', title: 'old task', group: 'old', status: 'done', started_at: 20000, ended_at: 40000, cost_usd: 0.05, display: { status: 'done', report: { status: 'completed' } } });
+  b.onRun({ id: 'new1', kind: 'exec', model: 'm2', title: 'new task', group: 'new', status: 'done', started_at: 60000, ended_at: 90000, cost_usd: 0.2, display: { status: 'done', report: { status: 'completed' } } });
+  const done = b.termUnits(t).filter((u) => b.unitFinished(u, t)).sort((x, y) => b.unitEnd(y, t) - b.unitEnd(x, t));
+  const box = b.el('termdone'), render = () => { b.renderDone(done, t, new Set()); const [sub, row, lines] = box.children; return { sub: sub.textContent, open: row.children.map((c) => c.dataset.lane), closed: lines.children.map((l) => l.textContent) }; };
+  let shown = render();
+  assert.equal(shown.sub, 'finished · 2');
+  assert.deepEqual(shown.open, ['group:new']);
+  // 折起来的一行：标题和计数跟展开后的栏头一样，费用两轮相加
+  assert.deepEqual(shown.closed, [`▸ run · old task · ✔1 · ended ${new Date(40000).toTimeString().slice(0, 5)} · $0.15`]);
+  // 用户点开旧的、收起新的
+  b.PANEL.fold.set('group:old', true); b.PANEL.fold.set('group:new', false);
+  shown = render();
+  assert.deepEqual(shown.open, ['group:old']);
+  assert.equal(shown.closed.length, 1); assert.match(shown.closed[0], /^▸ run · new task · ✔1 · ended /);
+});
+
+test('小修：超时后的其余报错写成次要的；底部放不下时换短按键；单复数；只有费用的用量行；没报用量的写明', () => {
+  const run = Display.displayRun({ id: 'r', kind: 'exec', model: 'm', status: 'timeout', started_at: 0, ended_at: 1000 });
+  const lines = Display.finalLines(run, { status: 'timeout', errors: ['hit the 1-minute limit', 'codex exit 1: mcp worker quit'] }, false, 120);
+  assert.ok(lines.some((l) => l.startsWith('✗ hit the 1-minute limit')), lines.join('\n'));
+  assert.ok(lines.some((l) => l.startsWith('· codex exit 1')), lines.join('\n'));
+  const keys = Display.D.dashKeys('1–13', false, true), short = Display.D.dashKeysShort('1–13', false);
+  const foot = Display.dashFooter('✔ all finished · ↓ 13 more lines below', keys, 79, true, short);
+  assert.equal(foot.keys, short); assert.match(foot.left, /13 more lines below/);
+  assert.match(Display.collapseLines(['a', 'b', 'c', 'd', 'e'], true, 'click').at(-1), /… 1 more line · click/);
+  assert.equal(Display.usageLine({ status: 'failed', cost_usd: 0.01, cost_source: 'api_price' }, {}), 'cost $0.010');
+  assert.equal(Display.usageLine({ status: 'failed' }, {}), Display.D.watchNoUsage);
+  assert.equal(Display.usageLine({ status: 'running' }, {}), '');
+});
+
+test('审查修正：网络共享的根不同就写绝对路径；用户消息的时刻不随车道事件裁掉', () => {
+  const run = (cwd) => Display.displayRun({ id: 'r', kind: 'exec', model: 'm', status: 'done', started_at: 0, ended_at: 1, cwd });
+  const outside = (cwd, path) => Display.outsideCwdText({ cwd, changes: { outside_cwd: [{ path, by: 'agent', in_scope: false }] } }, run(cwd).meta);
+  assert.match(outside('//serverA/share/project', '//serverB/share/file.txt'), /\/\/serverB\/share\/file\.txt/);
+  assert.match(outside('//serverA/share/project', '//serverA/other/x.txt'), /\/\/serverA\/other\/x\.txt/);
+  assert.match(outside('C:\\work\\project', 'C:\\work\\other\\x.txt'), /\.\.\\other\\x\.txt/);
+  assert.match(outside('C:\\work\\project', 'D:\\x.txt'), /D:\\x\.txt/);
+  const b = displayBoard();
+  b.onRun({ id: 'cc', lane: 'cc', kind: 'host', agent_type: 'host', model: 'opus', status: 'idle', started_at: 0 });
+  b.onEv({ lane: 'cc', run: 'cc', ts: 1000, k: 'prompt', t: 'go' });
+  for (let i = 0; i < 700; i++) b.onEv({ lane: 'cc', run: 'cc', ts: 2000 + i, k: 'msg', t: `m${i}` });
+  assert.equal(b.B.laneById.get('cc').events.some((e) => e.k === 'prompt'), false);
+  assert.deepEqual([...b.B.prompts], [1000]);
 });
