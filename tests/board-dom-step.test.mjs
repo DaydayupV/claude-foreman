@@ -44,3 +44,15 @@ test('平时没画完的下一帧接着画，不等 250 毫秒', () => {
   d = c.domStep(1016, false); assert.deepEqual({ ...d }, { table: true, terms: true }); c.domDrawn(d, true, true);
   assert.equal(c.domStep(1032, false), null);
 });
+
+test('卡片没建完时下一帧只接着建卡片，不带用量表和终端区，也不打乱 250 毫秒的节奏', () => {
+  const c = stepper();
+  let d = c.domStep(1000, false); c.domDrawn(d, true, true);
+  vm.runInContext('DOM.world = true', c);
+  assert.deepEqual({ ...c.domStep(1016, false) }, { table: false, terms: false });
+  assert.deepEqual({ ...c.domStep(1032, false) }, { table: false, terms: false });
+  c.B.version++; assert.deepEqual({ ...c.domStep(1100, false) }, { table: false, terms: false }); // 数据变了也还没到 250 毫秒
+  d = c.domStep(1250, false); assert.deepEqual({ ...d }, { table: true, terms: true }); c.domDrawn(d, true, true);
+  vm.runInContext('DOM.world = false', c);
+  assert.equal(c.domStep(1266, false), null);
+});

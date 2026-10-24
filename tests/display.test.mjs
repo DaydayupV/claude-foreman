@@ -428,7 +428,7 @@ function displayBoard(lang = 'zh') {
   const page = buildPage(), shared = page.slice(page.indexOf('const Display ='), page.indexOf('// ---- 00-text.js'));
   const names = ['00-text', '01-state', '03-timeline', '04-rates', '05-world', '06-states', '06-cards', '07-table', '07-terms'];
   const source = names.map((name) => fs.readFileSync(new URL(`../board/web/${name}.js`, import.meta.url), 'utf8')).join('\n');
-  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, conclusion, painted, outOfScope, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd, onBacklog };', context);
+  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, conclusion, painted, outOfScope, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd, onBacklog, SETTLE, settleTerms };', context);
   return { ...context.api, el, context };
 }
 
@@ -625,6 +625,23 @@ test('运行中说话、思考、读、搜、命令和重连提示在终端与�
   b.fillSeat(seat, lane, 2000, 1);
   // 网页的正文带和终端同样的颜色代码（03-timeline.js 的 TERM_C），去掉颜色后逐字一致
   assert.deepEqual(Array.from(seat.fullLines, (l) => plain(l.text)), Display.liveLines(tl.state, 8, 80));
+});
+
+test('终端区在 renderTerms 里先全部写完再集中量：放不下的已结束组最后才收起，贴底集中做，新栏宽度猜错时要求重画', () => {
+  const lines = Array.from({ length: 8 }, (_, i) => `line ${i + 1}`);
+  const b = displayBoard(), r = { id: 'fold', model: 'm', kind: 'discuss', group: 'g', status: 'done', started_at: 0, ended_at: 1000,
+    display: { status: 'done', report: { position: lines.join('\n') } } };
+  b.onRun(r); b.onEv({ run: r.id, ts: 1000, k: 'end', t: 'done' });
+  const col = b.groupColumn('g'), box = col.querySelector('.seats'); box.clientHeight = 100; box.scrollHeight = 500;
+  b.SETTLE.on = true; b.fillGroup(col, { group: 'g', lanes: b.B.lanes }, 2000); b.SETTLE.on = false;
+  const term = col.seats.get('fold').querySelector('.term');
+  assert.ok(term.children.length > 5); // 写的时候还没量，没收起
+  term.scrollHeight = 321;
+  assert.equal(b.settleTerms(), false); // 新栏先按猜的宽度折行，量出来不一样：下一帧重画
+  assert.equal(term.children.length, 5); assert.equal(term.children.at(-1).textContent, '… 4 more lines · click to open');
+  assert.equal(term.scrollTop, 321);
+  b.SETTLE.on = true; b.fillGroup(col, { group: 'g', lanes: b.B.lanes }, 2000); b.SETTLE.on = false;
+  assert.equal(b.settleTerms(), true); // 第二次用量到的宽度，不再重画
 });
 
 test('终端区保留已离场组，网页编号和排序按计划号码，刷新后和续接后不变', () => {

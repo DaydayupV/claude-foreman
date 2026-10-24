@@ -366,7 +366,7 @@ test('a reset backlog drops the run old events before adding the new ones', () =
   const texts = (list) => Array.from(list, (e) => e.t); // VM 里的数组和这里不是同一个 realm
   assert.deepEqual(texts(B.laneById.get('a').events), ['new']);
   assert.deepEqual(texts(B.laneById.get('b').events), ['other']);
-  assert.deepEqual(texts(B.feed), ['other', 'new']);
+  assert.equal(B.total, 4); // 收到的事件总数，含被清掉的
   onBacklog({ run: 'b', events: [{ run: 'b', ts: 6, k: 'msg', t: 'more' }] }); // 没有 reset：只是补上
   assert.deepEqual(texts(B.laneById.get('b').events), ['other', 'more']);
 });

@@ -189,13 +189,13 @@ test('看板后台重连沿用对话参数，hello 后重发 run/backlog 不重�
   };
   fill(b.B.es); b.UI.open.add('seat');
   b.visibility('hidden'); b.advance(601000);
-  assert.equal(b.B.lanes.length, 1); assert.equal(b.B.feed.length, 2);
+  assert.equal(b.B.lanes.length, 1); assert.equal(b.B.lanes[0].events.length, 2);
   b.visibility('visible');
   assert.equal(b.B.params, params); assert.equal(b.B.es.url, url); assert.equal(b.FLY.id, session.id);
   fill(b.B.es);
   assert.equal(b.B.runs.size, 2); assert.equal(b.B.lanes.length, 1); assert.equal(b.B.laneById.size, 1);
   assert.equal(b.B.lanes[0].runs.length, 2); assert.equal(b.B.lanes[0].events.length, 2);
-  assert.equal(b.B.lanes[0].rate_events.length, 2); assert.equal(b.B.feed.length, 2); assert.equal(b.B.total, 2);
+  assert.equal(b.B.lanes[0].rate_events.length, 2); assert.equal(b.B.total, 2);
   assert.equal(b.UI.open.has('seat'), true); assert.equal(b.FLY.mode, 'board');
 });
 
