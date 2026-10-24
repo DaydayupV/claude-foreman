@@ -349,10 +349,11 @@ function sessionFile(sessionId, startedAt) {
 // 命令执行期间被取消时它会漏掉最后一次请求，之后一直偏低，哪怕它写在后面。所以两种各取最新一条，用 total_tokens 大的那个，不相加。
 // 最近一次请求、窗口和额度只有 token_count 有。两种都没有就返回 null。
 // 先读末尾 1 MB；缺一种记录、文件又更大时，再读末尾 4 MB 扫一遍（最新的那条被一大段输出挤出 1 MB 时，续接相减会出负数），还缺就按读到的算。
+// 整份读完也没有用量记录时，说明这个会话还没有一次请求完成（比如第一次请求前就被取消），返回 no_requests: true，续接时以 0 为基线。
 function codexSessionStats(sessionId, startedAt) {
   const file = sessionFile(sessionId, startedAt);
   if (!file) return null;
-  let count = null, record = null;
+  let count = null, record = null, whole = false;
   try {
     const st = fs.statSync(file);
     const fd = fs.openSync(file, 'r');
@@ -362,11 +363,12 @@ function codexSessionStats(sessionId, startedAt) {
         const chunk = Buffer.alloc(len);
         fs.readSync(fd, chunk, 0, len, st.size - len);
         ({ count, record } = latestUsageRecords(chunk, sessionId));
-        if ((count && record) || st.size <= len) break;
+        whole = st.size <= len;
+        if ((count && record) || whole) break;
       }
     } finally { fs.closeSync(fd); }
   } catch { return null; } // 会话记录被锁或刚被删掉：这次没有统计，结果照常落盘
-  if (!count && !record) return null;
+  if (!count && !record) return whole ? { total_token_usage: null, last_request: null, rate_limit: null, no_requests: true } : null;
   const usage = count?.info?.total_token_usage;
   const threadUsage = record?.thread_token_usage;
   const tokens = (u) => u?.total_tokens ?? (u?.input_tokens ?? 0) + (u?.output_tokens ?? 0);
