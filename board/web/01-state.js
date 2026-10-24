@@ -162,7 +162,12 @@ function watchStream(state, es) {
     if (es.readyState !== 0 || state.stuckTimer != null || state.stuckNoticed) return;
     state.stuckTimer = setTimeout(() => {
       state.stuckTimer = null;
-      if (es.readyState === 0) { state.stuckNoticed = true; showNotice(TEXT.streamStuck); }
+      if (es.readyState !== 0) return;
+      state.stuckNoticed = true; showNotice(TEXT.streamStuck);
+      // 再问一下服务：直接被拒（网络错误）说明服务已经退出，换成一直留着的提示；超时多半是连接被别的标签页占满，原提示不变
+      if (typeof AbortSignal === 'function' && typeof AbortSignal.timeout === 'function') {
+        fetch('health', { signal: AbortSignal.timeout(3000) }).catch((e) => { if (e?.name === 'TypeError' && es.readyState === 0) showNotice(TEXT.boardGone, true); });
+      }
     }, STREAM_STUCK_MS);
   };
   es.addEventListener('open', () => { clearTimeout(state.stuckTimer); clearTimeout(state.askTimer); state.stuckTimer = state.askTimer = null; state.stuckNoticed = false; });

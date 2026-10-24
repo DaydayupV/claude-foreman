@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createFeed, buildReplay, snapshotAt, imagesOf } from './feed.mjs';
 import { loadPrices } from '../prices.mjs';
 import { createUniverse, universeChanges, universeAt, desktopRoots } from './universe.mjs';
-import { buildId } from './build-id.mjs';
+import { buildId, buildStamp } from './build-id.mjs';
 import { retryFile, removeLock } from './lock.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -16,7 +16,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const LANG = process.env.FOREMAN_LANG || (() => { try { return JSON.parse(fs.readFileSync(path.join(here, '..', 'language.json'), 'utf8')).language; } catch { return 'zh'; } })();
 const keys = ['runs', 'port', 'idle-min', 'group', 'run', 'replay', 'speed', 'maxgap', 'transcript', 'session', 'claude-dir', 'lead', 'tail', 'prices', 'window-h', 'config'];
 const replayMode = process.argv.slice(2).some((arg) => arg === '--replay' || arg.startsWith('--replay='));
-let lockFile, owner, ownerRaw, server, runsRoot, build;
+let lockFile, owner, ownerRaw, server, runsRoot, build, stamp;
 const short = (e) => String(e.message || e).replace(/\s+/g, ' ');
 function readLock() {
   let raw, mtime;
@@ -162,7 +162,8 @@ async function main() {
   let directory = false;
   try { directory = fs.statSync(root).isDirectory(); } catch { /* 统一报目录不存在 */ }
   if (!directory) throw new Error(`runs directory not found: ${root}`);
-  build = buildId(here);
+  // 先记文件的大小和修改时间再算 buildId：启动期间插件被换掉时，第一次自查就能发现
+  stamp = buildStamp(here); build = buildId(here);
   let reused;
   if (replayMode) owner = { pid: process.pid, port: 0, token: randomBytes(16).toString('hex') };
   else { lockFile = path.join(root, 'board.lock.json'); reused = await claim(); }
@@ -283,12 +284,14 @@ async function main() {
     res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Referrer-Policy', 'no-referrer');
     const end = (status, type, body = '') => { res.writeHead(status, type ? { 'Content-Type': type } : {}); res.end(req.method === 'HEAD' ? undefined : body); };
     if (![`127.0.0.1:${owner.port}`, `localhost:${owner.port}`].includes(req.headers.host)) return end(403);
-    if (!['GET', 'HEAD'].includes(req.method)) return end(405);
+    if (!['GET', 'HEAD', 'POST'].includes(req.method)) return end(405);
     let url;
     try { url = new URL(req.url, `http://127.0.0.1:${owner.port}`); } catch { return end(400); }
     const prefix = `/${owner.token}/`;
     if (!url.pathname.startsWith(prefix)) return end(404);
     const route = url.pathname.slice(prefix.length);
+    // 只有 shutdown 收 POST，shutdown 也只收 POST
+    if ((req.method === 'POST') !== (route === 'shutdown')) return end(405);
     try {
       if (!route) {
         res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data: 'self'; base-uri 'none'; form-action 'none'");
@@ -300,6 +303,11 @@ async function main() {
           .replace(/window\.__LANG__ = '(?:zh|en)';/, `window.__LANG__ = '${lang === 'en' ? 'en' : 'zh'}';`)
           .replace("window.__BOARD_MODE__ = 'live';", `window.__BOARD_MODE__ = '${replayMode ? 'replay' : 'live'}';`);
         return end(200, 'text/html; charset=utf-8', html);
+      }
+      // board --stop 和换版本时请服务自己退出：凭路径里已经核对过的令牌，不按 pid 结束进程，免得误杀复用了同一个 pid 的程序
+      if (route === 'shutdown') {
+        res.once('finish', () => process.exit(0));
+        return end(200, 'application/json', JSON.stringify({ ok: true, pid: process.pid }));
       }
       if (route === 'health') {
         // 后台标签页为了不占浏览器的连接数让出了数据流，但还开着：报到一次就算有人在看
@@ -389,6 +397,12 @@ async function main() {
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => process.exit(0));
   setInterval(() => {
     if (!replayMode && !holdsLock()) quitLostLock();
+    // 插件被卸载或更新：自己的文件已经删掉或换成别的版本，不再留在后台（下一次 board 会启动新版）
+    const current = buildStamp(here);
+    if (current !== stamp) {
+      stamp = current;
+      if (buildId(here) !== build) { process.stderr.write('board: the plugin files were removed or replaced; exiting\n'); server?.close(); process.exit(0); }
+    }
     const now = Date.now();
     for (const client of clients) client.res.write(': ping\n\n');
     try {

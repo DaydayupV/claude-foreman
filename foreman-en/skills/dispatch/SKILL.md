@@ -309,7 +309,7 @@ Whenever work goes to another model, that is, right after starting `run`, `image
 - **Web board** (alongside the terminal live view, on every handoff): once the terminal tab is dealt with, run `node "<script path>" board` and read its JSON.
   - `enabled` is `true`: send the user the `url` as a link, for example `[web board](<url>)`, saying it opens in their default browser, straight into this conversation's board; zooming out shows every conversation on this computer. **Don't open it with any browser tool** (neither the app's browser pane nor Claude in Chrome); the user clicks the link.
   - `enabled` is `false`: just say "The web board is off", optionally adding that `/foreman-en:setup` or setting `dispatch.web` to `true` in the config turns it on.
-  - One board server is shared by every conversation on this computer: `board` reuses it when it's already running (`started` is `false`) and starts one in the background only when it isn't. If the command fails, pass on the error; the handed-off work isn't affected.
+  - One board server is shared by every conversation on this computer: `board` reuses it when it's already running (`started` is `false`) and starts one in the background only when it isn't. If the command fails, pass on the error; the handed-off work isn't affected. The server exits by itself after 30 minutes with nobody watching and no task running, and when the plugin is removed or updated; when the user wants it closed now, run `board --stop`.
   - The board is live only. When the user wants a finished conversation played back in time to look into a problem, use `board --replay <conversation id, run_id, group or all> [--speed <N>] [--maxgap <sec>]`. It starts a separate, temporary replay server; send its `url` as a link the same way. When the records are too large (over 256 MB) or the target isn't found, pass the error on as it is. Don't use it when handing off work.
 
 ### When an agent needs an answer
@@ -458,6 +458,7 @@ node "<script path>" image  --plan <plan_id> --seat <n> --brief "<brief.md>" --t
 node "<script path>" status [--run <run_id|last> | --group <name> | --plan <plan_id>] [--limit n]
 node "<script path>" watch  [--run <run_id|last> | --group <name>]
 node "<script path>" board  [--replay <conversation id|run_id|group|all> [--speed <N>] [--maxgap <sec>]] (without --replay: the live board)
+node "<script path>" board --stop (shuts down the live board server)
 node "<script path>" config [--cwd "<project dir>"] [--format json|md]
 node "<script path>" check  [--agent <agent>] [--format json|md]
 node "<script path>" models [--format json|md]

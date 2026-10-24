@@ -186,7 +186,8 @@ A second way to watch, alongside the terminal live view, off by default: set `di
 - **The board server**:
   - One local process shared by every conversation on this computer, reachable only on 127.0.0.1 with a one-time token.
   - It only reads your conversation records and run records, plus the archived flag of each conversation in the Claude desktop app's list (nothing else from it).
-  - It exits after 30 minutes with nobody looking and nothing running.
+  - It exits after 30 minutes with nobody looking and nothing running (a board tab left in the background for over 30 minutes doesn't count as looking), and when the plugin is removed or updated.
+  - To shut it down now, run `node <the plugin's scripts folder>/cli.mjs board --stop` in a terminal.
 - **Replay (for debugging)**: every link the plugin gives is live. To play a finished conversation back in time to look into a problem, run `node <the plugin's scripts folder>/cli.mjs board --replay <conversation id, run id, group or all>` in a terminal. Add `--speed <N>` to speed it up and `--maxgap <sec>` to shorten idle gaps.
   - It starts a separate, temporary replay server and prints a link. The server exits after ten minutes with no one watching, and leaves the live page alone.
   - Records over 256 MB in total are refused, with the size given.

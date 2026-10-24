@@ -96,19 +96,20 @@ function uniFrame(alone = true) {
 // 图片的原生拖动一律不要（CSS 管不到的浏览器靠这里）
 addEventListener('dragstart', (e) => { if (e.target instanceof HTMLImageElement) e.preventDefault(); });
 history.scrollRestoration = 'manual'; // 每次打开都停在星图和用量面板的位置
-// 页头下方的一行提示，12 秒后淡出
-function showNotice(text) {
+// 页头下方的一行提示，12 秒后淡出；keep 为 true 时一直留着（看板服务已经退出）
+function showNotice(text, keep = false) {
   const el = $('notice');
   el.textContent = text; el.classList.remove('faded');
-  clearTimeout(showNotice.timer); showNotice.timer = setTimeout(() => el.classList.add('faded'), 12000);
+  clearTimeout(showNotice.timer); showNotice.timer = keep ? null : setTimeout(() => el.classList.add('faded'), 12000);
 }
 
 // 后台标签页让出数据流：浏览器对同一主机只开 6 条连接，看板标签页多了，前台的页面会连不上。
 // 平时在后台 10 分钟才让（让出以后再回来，较早的记录只剩最近 200 条，不能切一下窗口就让）；
 // 前台的页面连不上超过 2 秒时，通过同源广播请后台的看板标签页马上让出来。
-// 让出以后每分钟向服务报一次在，服务不会因为没有连接就当成没人看而退出
-const HIDDEN_RELEASE_MS = 600000, WATCHING_PING_MS = 60000;
-let hiddenReleaseTimer = null, watchingTimer = null;
+// 让出以后每分钟向服务报一次在，服务不会因为没有连接就当成没人看而退出；
+// 在后台放了 30 分钟以上就不再报，忘在后台的标签页不能让服务一直不退出
+const HIDDEN_RELEASE_MS = 600000, WATCHING_PING_MS = 60000, WATCHING_MAX_MS = 1800000;
+let hiddenReleaseTimer = null, watchingTimer = null, hiddenSince = null;
 const STREAM_CHANNEL = typeof BroadcastChannel === 'function' ? new BroadcastChannel('foreman-board-streams') : null;
 const streamPaused = () => U.demo || window.__BOARD_FIXTURE__ || B.params.replay != null || B.params.t != null;
 function releaseStreams() {
@@ -116,7 +117,10 @@ function releaseStreams() {
   if (streamsReleased || streamPaused()) return;
   streamsReleased = true;
   disconnectUniverse(); disconnect();
-  watchingTimer = setInterval(() => { fetch('health?watching=1').catch(() => {}); }, WATCHING_PING_MS);
+  watchingTimer = setInterval(() => {
+    if (hiddenSince != null && performance.now() - hiddenSince >= WATCHING_MAX_MS) { clearInterval(watchingTimer); watchingTimer = null; return; }
+    fetch('health?watching=1').catch(() => {});
+  }, WATCHING_PING_MS);
 }
 // 前台页面的流迟迟连不上（01-state.js 的 watchStream 调用）：请其他看板标签页让出连接
 function askForStream() { if (STREAM_CHANNEL && document.visibilityState !== 'hidden') STREAM_CHANNEL.postMessage('release'); }
@@ -125,8 +129,9 @@ function onVisibilityChange() {
   clearTimeout(hiddenReleaseTimer); hiddenReleaseTimer = null;
   // 回放重连会从头播放，不能暂停共用时钟；定格和演示沿用原来的取数方式。
   if (streamPaused()) return;
-  if (document.visibilityState === 'hidden') hiddenReleaseTimer = setTimeout(releaseStreams, HIDDEN_RELEASE_MS);
-  else if (streamsReleased) {
+  if (document.visibilityState === 'hidden') { hiddenSince = performance.now(); hiddenReleaseTimer = setTimeout(releaseStreams, HIDDEN_RELEASE_MS); return; }
+  hiddenSince = null;
+  if (streamsReleased) {
     streamsReleased = false;
     clearInterval(watchingTimer); watchingTimer = null;
     if (FLY.mode === 'in' || FLY.mode === 'board') connect();

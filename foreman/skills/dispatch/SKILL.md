@@ -307,7 +307,7 @@ API 协作方的服务繁忙时，请求会在服务端排队，迟迟不开始�
 - **网页看板**（和终端实时查看并列，每次派出都做）：终端标签页处理完后，运行 `node "<脚本路径>" board`，读输出的 JSON。
   - `enabled` 为 `true`：把 `url` 写成链接发给用户，比如 `[网页看板](<url>)`，说明点开会在本机的默认浏览器里打开，直接进入这个对话的看板，再往外缩能看到本机所有对话。**不要用任何浏览器工具替用户打开**（应用里的网页面板、Claude in Chrome 都不用），由用户自己点链接。
   - `enabled` 为 `false`：只写一句"网页看板未开启"，可以顺带说明用 `/foreman:setup` 或在配置里把 `dispatch.web` 设成 `true` 打开。
-  - 看板服务是这台电脑上所有对话共用的：`board` 发现服务已经在运行就直接复用（`started` 为 `false`），没在运行才在后台启动一个。命令报错时转告错误，不影响派出的任务。
+  - 看板服务是这台电脑上所有对话共用的：`board` 发现服务已经在运行就直接复用（`started` 为 `false`），没在运行才在后台启动一个。命令报错时转告错误，不影响派出的任务。服务 30 分钟没人看、也没有任务在跑会自己退出，插件被卸载或更新后也会退出；用户要马上关掉时运行 `board --stop`。
   - 看板只做直播。用户要把已经结束的对话按时间重新播一遍查问题时，用 `board --replay <对话 id、run_id、组名或 all> [--speed <倍数>] [--maxgap <秒>]`：它另起一个临时回放服务，输出的 `url` 同样写成链接发给用户。记录太大（超过 256 MB）或找不到目标时，把报错原文转告用户。派活时不用它。
 
 ### 协作方要人回答时
@@ -456,6 +456,7 @@ node "<脚本路径>" image  --plan <plan_id> --seat <序号> --brief "<任务�
 node "<脚本路径>" status [--run <run_id|last> | --group <组名> | --plan <plan_id>] [--limit n]
 node "<脚本路径>" watch  [--run <run_id|last> | --group <组名>]
 node "<脚本路径>" board  [--replay <对话 id|run_id|组名|all> [--speed <倍数>] [--maxgap <秒>]]（不带 --replay 是直播看板）
+node "<脚本路径>" board --stop（关掉直播看板服务）
 node "<脚本路径>" config [--cwd "<项目目录>"] [--format json|md]
 node "<脚本路径>" check  [--agent <协作方>] [--format json|md]
 node "<脚本路径>" models [--format json|md]
