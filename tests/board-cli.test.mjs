@@ -31,7 +31,7 @@ for (const lang of ['zh', 'en']) {
 
 test('board 后台启动后可复用，支持当前对话与显式对话，并拒绝非法参数', async (t) => {
   const h = sandbox(t), c = baseConfig(), lockFile = path.join(h.runs, 'board.lock.json');
-  c.dispatch.web = true;
+  c.dispatch.watch.web = true;
   h.config(c);
   const noSession = { env: { CLAUDE_CODE_SESSION_ID: '' } };
   try {
@@ -80,7 +80,7 @@ test('board 后台启动后可复用，支持当前对话与显式对话，并�
 
 test('board --replay 每次启动独立服务，透传速度，报告对话数且保留直播锁和错误文件', { timeout: 20000 }, async (t) => {
   const h = sandbox(t), c = baseConfig(), pids = [];
-  c.dispatch.web = true; h.config(c);
+  c.dispatch.watch.web = true; h.config(c);
   const at = new Date().toISOString(), lockFile = path.join(h.runs, 'board.lock.json'), errFile = path.join(h.runs, 'board.err');
   for (const id of ['picked', 'other']) {
     const timestamp = id === 'picked' ? new Date(Date.now() - 2 * 86400000).toISOString() : at;
@@ -116,14 +116,14 @@ test('board --replay 每次启动独立服务，透传速度，报告对话数�
 for (const lang of ['zh', 'en']) {
   test(`board --replay 报告找不到目标和普通启动失败 (${lang})`, async (t) => {
     const h = sandbox(t), c = baseConfig(), options = { env: { FOREMAN_LANG: lang } };
-    c.dispatch.web = true; h.config(c);
+    c.dispatch.watch.web = true; h.config(c);
     failed(await h.bridge(['board', '--replay', 'missing'], options), MESSAGES[lang].boardReplayNotFound('missing'));
     failed(await h.bridge(['board', '--replay', 'all', '--speed', '0'], options), MESSAGES[lang].boardStartFailed('invalid replay timing'));
     for (const name of ['board.lock.json', 'board.err']) assert.equal(fs.existsSync(path.join(h.runs, name)), false);
   });
 
   test(`board --replay 超限错误使用一位小数 MB (${lang})`, async (t) => {
-    const h = sandbox(t), c = baseConfig(); c.dispatch.web = true; h.config(c);
+    const h = sandbox(t), c = baseConfig(); c.dispatch.watch.web = true; h.config(c);
     const transcript = JSON.stringify({ type: 'user', timestamp: new Date().toISOString(), cwd: h.cwd, message: { content: 'a'.repeat(1024 ** 2) } }) + '\n';
     write(path.join(h.home, '.claude/projects/demo/large.jsonl'), transcript);
     const result = await h.bridge(['board', '--replay', 'large'], { env: { FOREMAN_LANG: lang, FOREMAN_TEST_REPLAY_LIMIT_BYTES: String(1024 ** 2) } });
@@ -138,7 +138,7 @@ for (const lang of ['zh', 'en']) {
 
 test('macOS 内存是否够用只看总量，仍报告空闲内存', async (t) => {
   const h = sandbox(t);
-  h.config({ dispatch: { web: true } });
+  h.config({ dispatch: { watch: { terminal: true, web: true } } });
   const script = write(path.join(h.home, 'darwin-check.mjs'), `
     Object.defineProperty(process, 'platform', { value: 'darwin' });
     process.argv = [process.execPath, ${JSON.stringify(BRIDGE)}, 'check'];

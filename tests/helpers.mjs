@@ -39,7 +39,7 @@ const git = (process.env.PATH || '').split(path.delimiter)
 assert.ok(git, '测试需要已有的 Git');
 
 export const baseConfig = () => ({
-  dispatch: { watch: 'off', timeout_min: 1, stall_min: 0, busy_ask_min: 0 },
+  dispatch: { watch: { terminal: false, web: false }, timeout_min: 1, stall_min: 0, busy_ask_min: 0 },
   agents: { codex: { type: 'codex cli', bin: CODEX, model: 'fake-codex', max_parallel: 4 } },
   modules: {
     run: { simple: 'claude code', normal: 'claude code', complex: [{ agent: 'codex', effort: 'max' }] },

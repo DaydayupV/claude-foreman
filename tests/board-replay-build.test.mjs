@@ -47,16 +47,17 @@ function golden() {
 // 动作事件增加 aid 后更新 detail、buildReplay、snapshots；递归去掉 aid 算出的七个哈希和改前完全一样。
 // 协作方的多行消息连成一行、Claude Code 的费用改成能算的照算（加 cost_partial）以后，buildReplay、snapshots 再更新；
 // 去掉 aid、费用字段和 msg 事件的正文后，七个哈希和改前的代码算出的完全一样
+// 宇宙对话摘要加了 prompt_at（最近一条用户消息的时间）以后，timeline、snapshots 再更新；递归去掉 prompt_at 算出的七个哈希和改前完全一样
 test('replay output matches SHA256 after auditing original-time additions against the fixture baseline', () => {
   // 已与返工前消息逐字段核对：仅显示字段和历史队列载荷变化；开始消息不提前携带结论，时钟及调度不变。
   assert.deepEqual(golden(), {
     hello: 'dd6d6628b6d0fd85c66d16e1f24a2de8a5dfa93ecaebfcf40fcade0540733508',
     initial: '616a456690c5e135fd70a2b9767f92f7d530100cccdb86e75e9693c1f7b0e236',
-    timeline: '42d2977375016be5425671652b990731fa1e40897bb513c3f7db8493dd1665f4',
+    timeline: 'e7da163d4b17359d846e7feaaf6376ccc68fefbb848735dc7c2dec8330e94c4e',
     clock: '09ab08ee5a6cec0f81855ecc0900a233a658523e80cf31681f62870837f2fa49',
     detail: '59f25409291918485abb3af6065893facf4e00af6c5b849ae87510bb2992f119',
     buildReplay: '3be480362a19d718a0560a9c0573da0005d45cce222199207906ae81e26fe799',
-    snapshots: 'a267ae2cdab7adebcbda9de57f73548f26c776dd4893904536522249b1228a43',
+    snapshots: '2c2dad52448268c11f8625b0d66057df6074a74bbbd1719041e35965bfcadee3',
   });
 });
 

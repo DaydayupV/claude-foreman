@@ -153,12 +153,12 @@ for (const lang of ['zh', 'en']) test(`${lang} cards, headers and tooltips show 
   b.fillCard(b.card, b.B.lanes[0], 10000); b.renderTable(10000);
   assert.equal(b.card.querySelector('.rate').textContent, 'now ≈ 10 tok/s · gen avg ≈ 10 · out 100');
   assert.equal(b.table.children[1].children[0].children[6].textContent, '100 · 20%');
-  assert.deepEqual(b.table.firstChild.children.slice(3, 6).map((c) => c.textContent), ['now ≈tok/s', 'last 2 min', 'gen avg ≈tok/s']);
+  assert.deepEqual(b.table.firstChild.children.slice(3, 6).map((c) => c.textContent), ['now ≈tok/s', 'tok/s over time', 'gen avg ≈tok/s']);
   const titles = lang === 'zh' ? ['近 10 秒的估算，可能借用同一模型之前的样本',
-    '近 2 分钟的速度曲线（估算）：每个点是约 6 秒内的输出 token 除以这段时间；运行中可能借用实时估速',
+    '这条车道全部时长的速度曲线（估算）：从第一轮开始画到最后一轮结束，结束后停住；40 个点，每个点是它之前约两格时长内的输出 token 除以这段时间；运行中可能借用实时估速',
     '本席各轮累计输出 ÷ 估算的生成时长；已扣掉能识别的跑命令时段，仍可能含等待和读文件的时间'] :
     ['Estimate over the last 10 seconds; may borrow earlier samples of the same model',
-      'Speed over the last 2 minutes (estimated): each point is the output tokens in about 6 seconds divided by that time; while running it may use the live estimate',
+      "Speed over this lane's whole time (estimated): drawn from its first round's start to its last round's end, then it stays put; 40 points, each the output tokens in about two points' worth of time before it divided by that time; while running it may use the live estimate",
       "This seat's total output ÷ estimated generation time; command time that can be recognised is excluded, waiting and file reads may remain"];
   assert.deepEqual(b.table.firstChild.children.slice(3, 6).map((c) => c.title), titles);
   b.onRun(run({ id: 'missing', lane: 'seat', status: 'done', ended_at: 10000, usage: null, usage_unattributed: true }));

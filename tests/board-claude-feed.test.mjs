@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { parseTranscriptLines } from '../foreman/skills/dispatch/scripts/board/claude-feed.mjs';
+import { parseTranscriptLines, promptOf } from '../foreman/skills/dispatch/scripts/board/claude-feed.mjs';
 import { createFeed, buildReplay, snapshotAt, laneOf, hostCost } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
 import { loadPrices, priceFor } from '../foreman/skills/dispatch/scripts/prices.mjs';
 
@@ -37,6 +37,47 @@ test('synthetic transcript covers every Claude event, deduplicates message usage
   assert.deepEqual(usage.map((e) => [e.ts, e.n, e.u]), [[start + 100, 3, { in: 7, cached: null, cache_write: null, out: 3 }]]);
   assert.equal(Object.keys(tasks).length, 10);
   for (const wrapper of ['<command-name>x', '<local-command-stdout>x', '<system-reminder>x', '<task-notification>x']) assert.deepEqual(parseTranscriptLines([row('user', wrapper)], ctx).events, []);
+});
+
+test('promptOf 按来源识别用户消息，旧记录排除元数据并剥离提醒块', () => {
+  const reminder = '<system-reminder>系统\n说明</system-reminder>';
+  const command = '<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>完成检查</command-args>';
+  const peer = `Another Claude session sent a message:\n<cross-session-message from="local_demo" name="demo">${reminder}协作消息\n第二行</cross-session-message>\n后续说明`;
+  const cases = [
+    ['human 双来源', `${reminder}\n用户${reminder}输入\n第二行`, { origin: { kind: 'human' }, turnOrigin: 'human' }, '用户输入'],
+    ['human origin', `${reminder}直接输入`, { origin: { kind: 'human' } }, '直接输入'],
+    ['human turnOrigin 命令', command, { turnOrigin: 'human' }, '/goal 完成检查'],
+    ['human 无参数命令', '<command-name>/goal</command-name>\n<command-args></command-args>', { origin: { kind: 'human' }, turnOrigin: 'human' }, '/goal'],
+    ['human 来源优先于元数据', '用户输入', { isMeta: true, promptSource: 'sdk', turnOrigin: 'human' }, '用户输入'],
+    ['peer 双来源', peer, { isMeta: true, origin: { kind: 'peer' }, turnOrigin: 'peer' }, '协作消息'],
+    ['peer origin', peer, { isMeta: true, origin: { kind: 'peer' } }, '协作消息'],
+    ['peer turnOrigin', peer, { isMeta: true, turnOrigin: 'peer' }, '协作消息'],
+    ['sdk 普通正文', '系统事件', { origin: { kind: 'sdk' } }, null],
+    ['sdk 提醒', `${reminder}系统事件`, { promptSource: 'sdk', turnOrigin: 'sdk' }, null],
+    ['task origin', '<task-notification>任务完成</task-notification>', { origin: { kind: 'task-notification' }, turnOrigin: 'task_notification' }, null],
+    ['task turnOrigin', '任务完成', { turnOrigin: 'task_notification' }, null],
+    ['scheduled', '定时唤醒', { isMeta: true, promptSource: 'system', turnOrigin: 'scheduled' }, null],
+    ['未知来源', '其他事件', { turnOrigin: 'other' }, null],
+    ['旧版文本块', [{ type: 'text', text: `\n${reminder}旧版输入\n第二行` }], {}, '旧版输入'],
+    ['旧版多提醒块', `${reminder}\n${reminder}旧版正文${reminder}`, {}, '旧版正文'],
+    ['只有提醒', reminder, {}, null],
+    ['human 只有提醒', reminder, { turnOrigin: 'human' }, null],
+    ['skill 注入', 'Base directory for this skill: /demo', { isMeta: true }, null],
+    ['图片占位', '[Image: demo.png]', { isMeta: true }, null],
+    ['旧版本地命令', command, {}, null],
+    ['旧版 compact', '<command-name>/compact</command-name>', {}, null],
+    ['本地命令输出', '<local-command-stdout>完成</local-command-stdout>', {}, null],
+    ['本地命令说明', '<local-command-caveat>说明</local-command-caveat>', {}, null],
+    ['工具结果', [{ type: 'tool_result', tool_use_id: 'unused', content: '完成' }], {}, null],
+    ['sidechain', '用户输入', { turnOrigin: 'human', isSidechain: true }, null],
+    ['assistant', '助手输出', { type: 'assistant', turnOrigin: 'human' }, null],
+  ];
+  for (const [name, content, fields, expected] of cases) {
+    const input = row('user', content, 0, fields);
+    assert.equal(promptOf(input), expected, name);
+    const events = parseTranscriptLines([input], ctx).events.filter((e) => e.k === 'prompt');
+    assert.deepEqual(events.map((e) => e.t), expected == null ? [] : [expected], name);
+  }
 });
 
 test('tool aliases and path boundaries retain outside paths and the last 120 characters', () => {
@@ -76,6 +117,10 @@ test('linking respects agent preference, mode, inclusive windows, plan seats, an
   const bg = [cmd('discuss --agent chosen'), row('user', [{ type: 'tool_result', tool_use_id: 'tool_0', content: [{ type: 'text', text: 'Command running in background with ID: pending1' }] }], 1), tool('Read', { file_path: 'C:/demo/tasks/pending1.output' }, 2)];
   assert.equal(parseTranscriptLines(bg, { ...context, runsInScope: [], runIds: [] }).events[1].target, undefined);
   assert.deepEqual(parseTranscriptLines(bg, context).events[1].target, ['preferred']);
+  const notification = row('user', '<task-notification><task-id>pending1</task-id><status>completed</status></task-notification>', 3,
+    { isMeta: true, origin: { kind: 'task-notification' }, turnOrigin: 'task_notification' });
+  assert.deepEqual(parseTranscriptLines([...bg, notification], context).events.filter((e) => ['prompt', 'returned'].includes(e.k))
+    .map((e) => [e.k, e.t, e.target]), [['returned', 'completed', ['preferred']]]);
 });
 
 test('prices strip providers, prefer specific models, fall back rates, and preserve cost sources', () => {

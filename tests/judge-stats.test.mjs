@@ -83,6 +83,10 @@ test('judge --same 合并同编号多条链接、去重、整体替换并保留�
   const third = output(await h.bridge(['judge', '--run', 'a', '--partial', 'F1']));
   assert.equal(third.items.F1.verdict, 'partial');
   assert.deepEqual(third.items.F1.same_as, ['b:F4']);
+  // 选项写几次时几次的值合在一起，后写的不盖掉前面的
+  const fourth = output(await h.bridge(['judge', '--run', 'a', '--accept', 'F1', '--accept', 'F2', '--same', 'F1=b:F3', '--same', 'F2=c:F5']));
+  assert.equal(fourth.items.F1.verdict, 'accept'); assert.equal(fourth.items.F2.verdict, 'accept');
+  assert.deepEqual(fourth.items.F1.same_as, ['b:F3']); assert.deepEqual(fourth.items.F2.same_as, ['c:F5']);
 });
 
 test('judge --same 拒绝运行中同伴且不写文件，运行中任务也不能 clear', async (t) => {

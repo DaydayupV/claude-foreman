@@ -95,6 +95,26 @@ test('计划启动参数取自计划，配对、席位及不一致参数均拒�
   ]) failed(await h.bridge(args), message);
   const r = output(await h.bridge([...start, '--scope', 'src', '--no-snapshot', '--level', 'complex', '--cwd', h.cwd, '--group', 'plan-group', '--effort', 'low', '--model', 'any-model']));
   assert.deepEqual([r.module, r.cell, r.plan, r.seat, r.role, r.group, r.effort, r.model, r.model_overridden], ['run', 'complex', p.plan_id, 1, null, 'plan-group', 'low', 'any-model', true]);
+  const resume = (id, extra = []) => ['resume', '--run', id, '--level', 'complex', '--brief', '-', '--no-snapshot', ...extra];
+  const second = output(await h.bridge(resume(r.run_id)));
+  assert.equal(second.effort, p.seats[0].effort);
+  assert.equal(output(await h.bridge(resume(second.run_id, ['--effort', 'high']))).effort, 'high');
+});
+
+test('无计划续接沿用上一轮实际强度，命令覆盖后下一轮继续沿用', async (t) => {
+  const h = sandbox(t);
+  const first = output(await h.bridge(['run', '--cwd', h.cwd, '--level', 'simple', '--agent', 'codex', '--effort', 'high', '--brief', '-', '--no-snapshot']));
+  assert.equal(first.plan, null); assert.equal(first.effort, 'high');
+  const resume = (id, extra = []) => ['resume', '--run', id, '--level', 'simple', '--brief', '-', '--no-snapshot', ...extra];
+  const second = output(await h.bridge(resume(first.run_id)));
+  const third = output(await h.bridge(resume(second.run_id, ['--effort', 'low'])));
+  const fourth = output(await h.bridge(resume(third.run_id)));
+  for (const [record, effort] of [[second, 'high'], [third, 'low'], [fourth, 'low']]) {
+    assert.equal(record.effort, effort);
+    assert.equal(json(path.join(record.run_dir, 'meta.json')).effort, effort);
+  }
+  assert.deepEqual(h.calls().map((call) => call.args.find((arg) => arg.startsWith('model_reasoning_effort='))),
+    ['high', 'high', 'low', 'low'].map((effort) => `model_reasoning_effort="${effort}"`));
 });
 
 test('启动重新校验整份计划，新增必选、移除候选和项目关闭均拒绝', async (t) => {

@@ -428,7 +428,7 @@ function displayBoard(lang = 'zh') {
   const page = buildPage(), shared = page.slice(page.indexOf('const Display ='), page.indexOf('// ---- 00-text.js'));
   const names = ['00-text', '01-state', '03-timeline', '04-rates', '05-world', '06-states', '06-cards', '07-table', '07-terms'];
   const source = names.map((name) => fs.readFileSync(new URL(`../board/web/${name}.js`, import.meta.url), 'utf8')).join('\n');
-  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd, onBacklog };', context);
+  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, conclusion, painted, outOfScope, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd, onBacklog };', context);
   return { ...context.api, el, context };
 }
 
@@ -481,7 +481,7 @@ test('同一记录在真实终端组汇总和两种语言的网页席位块中�
         const role = seat.querySelector('.role').textContent;
         const bodyAt = at + (role ? 2 : 1);
         if (role) assert.equal(compact(out[at + 1]), compact(role));
-        assert.deepEqual(out.slice(bodyAt, bodyAt + seat.fullLines.length).map((l) => l.trim()), Array.from(seat.fullLines, (l) => l.text.trim()), id);
+        assert.deepEqual(out.slice(bodyAt, bodyAt + seat.fullLines.length).map((l) => l.trim()), Array.from(seat.fullLines, (l) => plain(l.text).trim()), id);
         const after = bodyAt + seat.fullLines.length, end = out.findIndex((l, i) => i >= after && l.startsWith('─'));
         const usage = compact(out.slice(after, end).join(' ')).replaceAll(' · ', ' ');
         assert.equal(usage, compact(seat.querySelector('.use').firstChild.textContent + ' ' + seat.querySelector('.use').lastChild.textContent).replaceAll(' · ', ' '));
@@ -623,7 +623,8 @@ test('运行中说话、思考、读、搜、命令和重连提示在终端与�
   for (const ev of events) { tl.show(ev); normalizeEvent(ev, { id: r.id, meta }, state).forEach(b.onEv); }
   const seat = new DisplayElement(); seat.querySelector('.term').clientWidth = 84 * 6.6;
   b.fillSeat(seat, lane, 2000, 1);
-  assert.deepEqual(Array.from(seat.fullLines, (l) => l.text), Display.liveLines(tl.state, 8, 80));
+  // 网页的正文带和终端同样的颜色代码（03-timeline.js 的 TERM_C），去掉颜色后逐字一致
+  assert.deepEqual(Array.from(seat.fullLines, (l) => plain(l.text)), Display.liveLines(tl.state, 8, 80));
 });
 
 test('终端区保留已离场组，网页编号和排序按计划号码，刷新后和续接后不变', () => {
@@ -913,4 +914,35 @@ test('补审修正：对话记录重置后用户消息的时刻按新记录重�
   b.renderDone(done, t, new Set());
   const [, , lines] = b.el('termdone').children;
   assert.match(lines.children[0].textContent, /\$0\.10\+$/);
+});
+
+test('卡片的 ⚠N 结束后也算写到工作目录外、又不在范围里的文件；进行中照旧只看范围外的编辑', () => {
+  const b = displayBoard();
+  const r = { id: 'r', lane: 'r', kind: 'exec', model: 'm', status: 'done', started_at: 0, ended_at: 1000, scope: ['src'],
+    display: { status: 'done', changes: { outside_cwd: [{ path: 'O:\\bench.txt', in_scope: false }, { path: 'O:\\ok.txt', in_scope: true }] }, cwd: 'O:\\w' } };
+  const lane = { id: 'r', runs: [r], events: [{ run: 'r', ts: 500, k: 'edit', t: 'edit docs/x.md' }, { run: 'r', ts: 600, k: 'edit', t: 'edit src/a.mjs' }] };
+  assert.deepEqual([...b.outOfScope(lane, r, 2000)], ['..\\bench.txt', 'docs/x.md']);
+  assert.deepEqual([...b.outOfScope(lane, r, 800)], ['docs/x.md']);
+  // 没写范围的任务也标出写到工作目录外的
+  assert.deepEqual([...b.outOfScope(lane, { ...r, scope: [] }, 2000)], ['..\\bench.txt']);
+});
+
+test('单任务查看：超时以后只有第一条报错是原因，其余用 · 标（和分组查看、网页一致）', () => {
+  const tl = createTimeline({ kind: 'exec', model: 'm', started_at: 0 }, (p) => p);
+  tl.finish({ status: 'timeout', duration_s: 60, errors: ['hit the 1-minute limit', 'codex exit 1: mcp worker quit'] }, { kind: 'exec', model: 'm', started_at: 0 });
+  const text = tl.lines(120).map(plain).join('\n');
+  assert.match(text, /✗ hit the 1-minute limit/); assert.match(text, /· codex exit 1: mcp worker quit/); assert.doesNotMatch(text, /✗ codex exit 1/);
+});
+
+test('网页终端区的结论和错误按终端的颜色上色：原因红、次要报错暗、越界黄，拆成带色的片段', () => {
+  const b = displayBoard();
+  const r = { id: 'r', lane: 'r', kind: 'exec', model: 'm', status: 'timeout', started_at: 0, ended_at: 1000, cwd: 'O:\\w',
+    display: { status: 'timeout', errors: ['hit the 1-minute limit', 'codex exit 1'], changes: { outside_cwd: [{ path: 'O:\\x.txt', in_scope: false }] }, cwd: 'O:\\w' } };
+  const lines = b.conclusion(r, 120).map((l) => l.text);
+  assert.ok(lines.some((l) => l.startsWith('\x1b[31m✗\x1b[0m') && plain(l).includes('hit the 1-minute limit')), lines.join('\n'));
+  assert.ok(lines.some((l) => l.startsWith('\x1b[2m') && plain(l).startsWith('· codex exit 1')), lines.join('\n'));
+  assert.ok(lines.some((l) => l.startsWith('\x1b[33m⚠\x1b[0m')), lines.join('\n'));
+  const parts = b.painted(lines.find((l) => plain(l).includes('hit the 1-minute limit')));
+  assert.equal(parts[0].className, 'c-bad'); assert.equal(parts[0].textContent, '✗');
+  assert.deepEqual([...b.painted('no colors')], ['no colors']);
 });

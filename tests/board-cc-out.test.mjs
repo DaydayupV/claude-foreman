@@ -29,6 +29,16 @@ test('Claude Code 的产出框在这一轮安静 3 分钟后就地收起，下�
   assert.equal(next(2000 + 10 * minute + 3000).phase, 'show');
 });
 
+test('安静收起以后，后台任务交回、跑命令都不让框回来；空档之后有了回答才回来，只显示空档之后的', () => {
+  const back = 2000 + 5 * minute;
+  const ccLife = life([{ ts: 1000, k: 'prompt' }, { ts: 2000, k: 'msg', t: 'waiting' }, { ts: back, k: 'returned', t: 'completed' },
+    { ts: back + 1000, k: 'cmd', t: 'cat out' }, { ts: back + 5000, k: 'msg', t: 'review is back' }]);
+  assert.equal(ccLife(back + 500).phase, 'none');
+  assert.equal(ccLife(back + 3000).phase, 'none');
+  const shown = ccLife(back + 6000);
+  assert.equal(shown.phase, 'show'); assert.equal(shown.from, 2000);
+});
+
 test('还在说话的一轮不收起；没到 3 分钟就来了下一条消息时照旧往上飞走', () => {
   const busy = life([{ ts: 1000, k: 'prompt' }, { ts: 2000, k: 'msg', t: 'a' }, { ts: 2000 + 2.5 * minute, k: 'cmd', t: 'ls' }]);
   assert.equal(busy(2000 + 4 * minute).phase, 'show');

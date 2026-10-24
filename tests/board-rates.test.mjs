@@ -163,7 +163,6 @@ test('live Codex uses its own previous rounds without adding output or generatio
     const s = b.laneStats(l, t);
     near(s.rate, avg); near(s.avg, avg); near(s.output, 500); assert.equal(s.est, true);
   }
-  near(b.sparkline(l, 50000, 10000, 2).at(-1), avg);
   assert.equal(b.segments(l), cached); near(total(b, l), 500);
 });
 
@@ -302,11 +301,16 @@ test('frozen live snapshots never estimate, including a frozen timestamp of zero
   near(b.rateAt(l, 60000), 500 / 30); assert.equal(b.laneStats(l, 60000).est, true);
 });
 
-test('costPartial flags only ended runs with unknown resolved costs', () => {
+test('costPartial flags runs whose cost is not in yet: still running, or ended unpriced unless usage is all zero', () => {
   const cases = [
     { extra: { status: 'done', ended_at: 20000, cost_usd: 3, cost_source: 'api_price' }, partial: false, cost: 5 },
     { extra: { status: 'done', ended_at: 20000, cost_usd: null }, partial: true, cost: 2 },
-    { extra: { status: 'running', ended_at: null, cost_usd: null }, partial: false, cost: 2 },
+    // 和宇宙视图同一条规则：还在跑的任务费用还没算进来
+    { extra: { status: 'running', ended_at: null, cost_usd: null }, partial: true, cost: 2 },
+    // 一次请求都没完成（用量全是 0）：没有可算的费用
+    { extra: { status: 'failed', ended_at: 20000, cost_usd: null, usage: { input: 0, cached: 0, cache_write: null, output: 0 } }, partial: false, cost: 2 },
+    // 用量没报（字段是 null）：费用确实不知道
+    { extra: { status: 'done', ended_at: 20000, cost_usd: null, usage: { input: null, cached: null, cache_write: null, output: null } }, partial: true, cost: 2 },
   ];
   for (const { extra, partial, cost } of cases) {
     const b = board(), l = lane(b, 'paid', [], { status: 'done', ended_at: 10000, cost_usd: 2 });
@@ -314,7 +318,7 @@ test('costPartial flags only ended runs with unknown resolved costs', () => {
     b.onRun({ id: 'free', lane: l.id, started_at: 0, ended_at: 10000, status: 'done', cost_usd: 0 });
     const s = b.laneStats(l, 30000);
     assert.equal(s.costPartial, partial); near(s.cost, cost);
-    if (partial) {
+    if (partial && extra.ended_at != null) {
       b.FINAL.set('extra', { cost_usd: 4 });
       assert.equal(b.laneStats(l, 30000).costPartial, false); near(b.laneStats(l, 30000).cost, 6);
     }
@@ -365,4 +369,17 @@ test('a reset backlog drops the run old events before adding the new ones', () =
   assert.deepEqual(texts(B.feed), ['other', 'new']);
   onBacklog({ run: 'b', events: [{ run: 'b', ts: 6, k: 'msg', t: 'more' }] }); // 没有 reset：只是补上
   assert.deepEqual(texts(B.laneById.get('b').events), ['other', 'more']);
+});
+
+test('速度曲线画这条车道的全部时长，结束以后停住不再往前走', () => {
+  const b = board(), l = lane(b, 'seat', [[0, 'turn'], [40000, 'usage', { u: { out: 400 } }]], { status: 'done', ended_at: 40000 });
+  const ended = Array.from(b.sparkline(l, 50000, 4));
+  // 4 个点落在 10、20、30、40 秒（开始到结束四等分），每点取前 20 秒的平均：400 个 token 均匀分在 40 秒里
+  assert.equal(ended.length, 4);
+  near(ended.at(-1), 10); near(ended[1], 10); assert.ok(ended[0] > 0);
+  // 结束很久以后再看，曲线一样
+  assert.deepEqual(Array.from(b.sparkline(l, 500000, 4)), ended);
+  // 还没开始的车道是一条平线
+  const idle = board(), later = lane(idle, 'later', [], { started_at: 60000 });
+  assert.deepEqual(Array.from(idle.sparkline(later, 30000, 3)), [0, 0, 0]);
 });

@@ -164,6 +164,32 @@ test('run summaries cap at 16 / ten minutes, omit host, count the window, dedupl
   assert.equal(s.runs.some((r) => Object.hasOwn(r, 'report_head')), false);
 });
 
+test('宇宙标题和最近用户消息使用统一判定，系统注入不清除告警', (t) => {
+  const ignored = [
+    ['Base directory for this skill: /demo', { isMeta: true }], ['[Image: demo.png]', { isMeta: true }],
+    ['<system-reminder>系统事件</system-reminder>', { promptSource: 'sdk', turnOrigin: 'sdk' }],
+    ['<task-notification>任务完成</task-notification>', { origin: { kind: 'task-notification' }, turnOrigin: 'task_notification' }],
+    ['定时唤醒', { isMeta: true, promptSource: 'system', turnOrigin: 'scheduled' }],
+  ];
+  for (const [content, fields, title] of [
+    ['<system-reminder>提醒</system-reminder>\n用户输入', { origin: { kind: 'human' }, turnOrigin: 'human' }, '用户输入'],
+    ['Another Claude session sent a message:\n<cross-session-message from="local_demo" name="demo">协作消息</cross-session-message>\n说明',
+      { isMeta: true, origin: { kind: 'peer' }, turnOrigin: 'peer' }, '协作消息'],
+    ['<system-reminder>提醒</system-reminder>\n旧版输入', {}, '旧版输入'],
+    ['<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>检查</command-args>', { turnOrigin: 'human' }, '/goal 检查'],
+  ]) {
+    const f = temp(t), file = f.session('s', [...ignored.map(([text, extra], i) => ({ ...row('user', now - 4000 + i, text), ...extra })),
+      { ...row('user', now - 2000, content), ...fields }]);
+    f.run('failed', { status: 'failed', started_at: now - 1500, ended_at: now - 1000 });
+    const universe = createUniverse(f.options);
+    assert.equal(universe.read().sessions[0].title, title);
+    fs.appendFileSync(file, ignored.map(([text, extra], i) => JSON.stringify({ ...row('user', now + i, text), ...extra })).join('\n') + '\n');
+    assert.equal(universe.read(now + 20).sessions[0].alert.run, 'failed');
+    fs.appendFileSync(file, JSON.stringify({ ...row('user', now + 10, content), ...fields }) + '\n');
+    assert.equal(universe.read(now + 20).sessions[0].alert, null);
+  }
+});
+
 test('费用摘要只汇总 API 价格，旧来源重新计价，缺基线的累计用量留为未知', (t) => {
   const f = temp(t);
   f.session('s', [answer(now - 30000, { usage: { input_tokens: 100, cache_read_input_tokens: 200, cache_creation_input_tokens: 30, output_tokens: 40 } })]);
@@ -754,6 +780,49 @@ test('state column lists failed seats of groups that are still running, skips re
   assert.deepEqual(s.issues.map((x) => [x.run, x.status]), [['a2', 'timed_out'], ['a3', 'timed_out']]);
   f.run('a1', { group: 'g', status: 'done' }); f.run('a5', { group: 'g', status: 'done', parent: 'a4', started_at: now - 2000 });
   assert.deepEqual(createUniverse(f.options).read().sessions[0].issues, []);
+});
+
+test('排队票按对话保持组的问题点和派发状态，每次扫描只读一次票据', (t) => {
+  const f = temp(t), dir = path.join(f.options.runs, '.state', 'queue', 'configured'), at = Date.now();
+  for (const id of ['s', 'other', 'queue-only']) f.session(id, [row('user', now - 50000, id), answer(now - 40000)]);
+  f.session('waiting', [row('user', now - 50000, 'waiting'), tool(now - 40000)]);
+  f.run('group-failed', { group: 'g', plan: 'shared', status: 'timed_out', started_at: now - 800000, ended_at: now - 700000 });
+  f.run('other-group', { group: 'h', plan: 'shared', status: 'failed', ended_at: now - 1000 });
+  f.run('plan-failed', { group: 'j', plan: 'fallback', status: 'failed', ended_at: now - 3000 });
+  f.run('ungrouped-failed', { plan: 'ungrouped', status: 'failed', ended_at: now - 2000 });
+  f.run('other-session', { claude_session: 'other', group: 'g', status: 'failed' });
+  const ticket = { pid: process.pid, pid_started_at: new Date(Math.ceil(performance.timeOrigin)).toISOString(),
+    queued_at: new Date(at - 1000).toISOString(), expires_at: new Date(at + 60000).toISOString(), agent: 'configured' };
+  const files = [
+    { claude_session: 's', group: 'g', plan: 'shared' }, { claude_session: 's', plan: 'fallback' },
+    { claude_session: 's', plan: 'ungrouped' }, { claude_session: 'queue-only', group: 'new' },
+    { claude_session: 'waiting', group: 'g' }, { claude_session: 'missing', group: 'h' },
+  ].map((fields, i) => { const file = path.join(dir, `${i + 1}.json`); f.write(file, { ...ticket, ...fields }); return file; });
+  const readdir = fs.readdirSync, read = fs.readFileSync, listed = new Map(), reads = new Map();
+  t.mock.method(fs, 'readdirSync', function (file, ...args) {
+    if (file === dir || file === path.dirname(dir)) listed.set(file, (listed.get(file) || 0) + 1);
+    return readdir.call(this, file, ...args);
+  });
+  t.mock.method(fs, 'readFileSync', function (file, ...args) {
+    if (files.includes(file)) reads.set(file, (reads.get(file) || 0) + 1);
+    return read.call(this, file, ...args);
+  });
+  const universe = createUniverse(f.options);
+  for (let round = 1; round <= 2; round++) {
+    const sessions = new Map(universe.read(now + round).sessions.map((s) => [s.id, s]));
+    assert.equal(sessions.get('s').state, 'dispatching');
+    assert.deepEqual(sessions.get('s').issues.map((r) => r.run), ['group-failed', 'plan-failed', 'ungrouped-failed']);
+    assert.ok(!sessions.get('s').runs.some((r) => r.id === 'group-failed'));
+    assert.equal(sessions.get('queue-only').state, 'dispatching'); assert.deepEqual(sessions.get('queue-only').runs, []);
+    assert.equal(sessions.get('other').state, 'idle'); assert.deepEqual(sessions.get('other').issues, []);
+    assert.equal(sessions.get('waiting').state, 'waiting');
+    assert.equal(listed.get(dir), round); assert.equal(listed.get(path.dirname(dir)), round);
+    for (const file of files) assert.equal(reads.get(file), round);
+  }
+  for (const file of files) fs.unlinkSync(file);
+  const sessions = new Map(universe.read(now + 3).sessions.map((s) => [s.id, s]));
+  assert.equal(sessions.get('s').state, 'idle'); assert.deepEqual(sessions.get('s').issues, []);
+  assert.equal(sessions.get('queue-only').state, 'idle'); assert.equal(sessions.get('waiting').state, 'waiting');
 });
 
 test('conversations archived or deleted in the desktop app are left out of the universe, other ones stay', (t) => {

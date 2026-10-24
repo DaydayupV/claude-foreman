@@ -145,6 +145,13 @@ for (const [label, command] of [
   ['npx --registry 后的包名', 'npx --registry https://registry.example @openai/codex exec -'],
   ['npx -c 整条命令', 'npx -c "codex exec -"'], ['npx --call= 整条命令', 'npx --call="opencode run task"'],
   ['opencode 全局选项', 'opencode --log-level debug run -'],
+  ['heredoc 之后的调用', "cat > notes.md <<'EOF'\n| pi · deepseek |\nEOF\npi -p hello"],
+  ['bash here-string 不算 heredoc', 'cat <<<EOF\npi -p hello'],
+  ['引号里的 << 不算 heredoc', 'echo "<<EOF"\ncodex exec "check"'],
+  ['注释里的 << 不算 heredoc', 'ls # see <<EOF\nopencode run task'],
+  ['会展开的 heredoc 里的命令替换', 'cat <<EOF\n$(codex exec "check")\nEOF'],
+  ['会展开的 heredoc 里的反引号', 'cat <<-END\n\t`pi -p hello`\n\tEND'],
+  ['PowerShell 双引号 here-string 里的子表达式', 'Set-Content a.md @"\n$(codex exec "check")\n"@'],
 ]) {
   test(`直接调用守卫拦截 ${label}`, async (t) => {
     const h = sandbox(t), r = await h.hook('guard-direct-calls.mjs', { tool_input: { command } });
@@ -165,6 +172,12 @@ for (const [label, command] of [
   ['opencode 调试', 'opencode debug run'], ['opencode 服务', 'opencode service status'],
   ['opencode 帮助', 'opencode run --help'], ['opencode 总帮助', 'opencode --help'],
   ['opencode 文字提及', 'echo "opencode run"'], ['opencode 带分隔符的文字', 'node -e "console.log(\'opencode run; codex exec\')"'],
+  ['heredoc 正文里的表格', "cat >> notes.md <<'EOF'\n| 席 | 协作方 |\n| 2 | pi · deepseek-flash |\ncodex exec 只是文字\nEOF"],
+  ['<<- 带缩进的结束行', 'cat <<-END > a.txt\n\topencode run x\n\tEND'],
+  ['PowerShell here-string', "Set-Content a.md @'\n| pi · deepseek |\n'@"],
+  ['<<\\WORD 的正文原样是文字', 'cat <<\\EOF > a.md\n| pi · deepseek |\n$(codex exec "x")\nEOF'],
+  ['加了引号的 heredoc 里的命令替换不执行', "cat <<'EOF' > a.md\n$(codex exec \"x\")\nEOF"],
+  ['PowerShell 双引号 here-string 里没有子表达式', 'Set-Content a.md @"\n| pi · deepseek |\n"@'],
 ]) {
   test(`直接调用守卫放行${label}`, async (t) => {
     const h = sandbox(t), r = await h.hook('guard-direct-calls.mjs', { tool_input: { command } });

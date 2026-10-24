@@ -15,9 +15,9 @@ test('没有用户配置时生成初始配置并提示首次使用', async (t) =
   assert.equal(c.effective.modules.run.normal, 'claude code');
   assert.deepEqual(c.effective.agents, {});
   const saved = json(h.userConfig);
-  assert.equal(c.effective.dispatch.web, false);
+  assert.deepEqual(c.effective.dispatch.watch, { terminal: true, web: false });
   assert.equal(Object.hasOwn(saved.dispatch, 'web'), false);
-  assert.deepEqual({ ...saved, dispatch: { ...saved.dispatch, web: false } }, c.effective);
+  assert.deepEqual(saved, c.effective);
   assert.equal(r.stderr.split('\n')[0], `foreman: ${M.starterCreated(h.userConfig, M.starterNoCodex + M.starterNext)}`);
   assert.ok(!(await h.bridge(['config'])).stderr.includes('foreman:'));
   assert.equal(h.calls().length, 0);
@@ -35,7 +35,8 @@ test('零点十以前的配置自动改写并保留原文备份', async (t) => {
   assert.equal(migrated.auto_dispatch, undefined);
   assert.equal(migrated.agents['legacy-model'].bin, CODEX);
   assert.equal(c.effective.dispatch.auto, false);
-  assert.equal(c.effective.dispatch.web, false);
+  assert.deepEqual(c.effective.dispatch.watch, { terminal: false, web: false });
+  assert.deepEqual(migrated.dispatch.watch, c.effective.dispatch.watch);
   assert.equal(Object.hasOwn(migrated.dispatch, 'web'), false);
   assert.deepEqual(c.resolved_modules.run.normal, [{ agent: 'legacy-model', model: 'legacy-model', effort: 'high', required: false }]);
   assert.deepEqual(c.resolved_modules.discuss.simple, [{ agent: 'legacy-model', model: 'legacy-model', effort: 'low', required: false }]);
@@ -45,7 +46,6 @@ test('零点十以前的配置自动改写并保留原文备份', async (t) => {
 });
 
 for (const [name, change, key, reason] of [
-  ['网页看板开关必须是布尔值', (c) => { c.dispatch.web = 'true'; }, 'dispatch.web', M.invalid.boolean],
   ['未知协作方类型被拒绝', (c) => { c.agents.codex.type = 'unknown'; }, 'agents.codex.type', M.invalid.agentType],
   ['执行等级不能使用 API 协作方', (c) => {
     c.agents.api = apiAgent('http://127.0.0.1:1');
@@ -74,15 +74,16 @@ test('项目配置忽略不允许的字段并保留允许的覆盖', async (t) =
   });
   const original = read(file), r = await h.bridge(['config', '--cwd', h.cwd]), c = output(r);
   assert.equal(c.effective.dispatch.auto, true);
-  assert.equal(c.effective.dispatch.watch, 'off');
-  assert.equal(c.effective.dispatch.web, false);
+  assert.deepEqual(c.effective.dispatch.watch, { terminal: false, web: false });
+  assert.equal(Object.hasOwn(c.effective.dispatch, 'web'), false);
   assert.equal(c.effective.dispatch.timeout_min, 0.5);
   assert.equal(c.runs_dir, h.runs);
   assert.equal(c.effective.agents.codex.bin, CODEX);
   assert.equal(c.effective.agents.codex.model, 'fake-codex');
   assert.equal(c.effective.agents.extra, undefined);
-  assert.ok(r.stderr.includes(M.projectIgnored(M.list(['unexpected', 'dispatch.auto', 'dispatch.runs_dir', 'dispatch.watch', 'dispatch.web', 'agents']))));
+  assert.ok(r.stderr.includes(M.projectIgnored(M.list(['unexpected', 'dispatch.auto', 'dispatch.runs_dir', 'dispatch.watch', 'agents']))));
   assert.equal(read(file), original);
+  assert.equal(fs.existsSync(`${file}.bak`), false);
 });
 
 test('项目配置不能把额外的 API 或 opencode 加入讨论等级', async (t) => {
@@ -123,34 +124,75 @@ test('英文覆盖变量使用英文首次提示', async (t) => {
   assert.ok(fs.existsSync(h.userConfig));
 });
 
-test('加载配置、补写席位和迁移 levels 都不写入默认 dispatch.web', async (t) => {
+test('加载配置、补写席位和迁移 levels 都写全 watch 两项，重复加载不改写', async (t) => {
   const h = sandbox(t);
   for (const kind of ['current', 'seats', 'levels']) {
     const c = baseConfig();
+    c.dispatch.watch = 'off';
     if (kind === 'seats') for (const mode of ['discuss', 'review']) delete c.modules[mode].seats;
     if (kind === 'levels') { c.levels = c.modules; delete c.modules; }
     h.config(c);
     const original = read(h.userConfig);
-    assert.equal(output(await h.bridge(['config'])).effective.dispatch.web, false);
+    assert.deepEqual(output(await h.bridge(['config'])).effective.dispatch.watch, { terminal: false, web: false });
     assert.equal(Object.hasOwn(json(h.userConfig).dispatch, 'web'), false);
-    if (kind === 'current') assert.equal(read(h.userConfig), original);
-    else {
-      const saved = json(h.userConfig);
-      assert.ok(saved.modules.discuss.seats);
-      assert.ok(saved.modules.review.seats);
-    }
+    assert.notEqual(read(h.userConfig), original);
+    const savedConfig = json(h.userConfig);
+    assert.deepEqual(savedConfig.dispatch.watch, { terminal: false, web: false });
+    assert.ok(savedConfig.modules.discuss.seats);
+    assert.ok(savedConfig.modules.review.seats);
     const saved = read(h.userConfig);
-    assert.equal(output(await h.bridge(['config'])).effective.dispatch.web, false);
+    assert.deepEqual(output(await h.bridge(['config'])).effective.dispatch.watch, { terminal: false, web: false });
     assert.equal(read(h.userConfig), saved);
   }
 });
 
-test('用户显式开启 dispatch.web 后迁移仍保留该值，项目配置不能关闭它', async (t) => {
+test('旧 web 开启后迁移仍保留该值，新项目配置不能关闭它', async (t) => {
   const h = sandbox(t), c = baseConfig();
+  c.dispatch.watch = 'off';
   c.dispatch.web = true;
   delete c.modules.discuss.seats;
   h.config(c);
-  h.write('.claude/foreman.json', { dispatch: { web: false } });
-  assert.equal(output(await h.bridge(['config', '--cwd', h.cwd])).effective.dispatch.web, true);
-  assert.equal(json(h.userConfig).dispatch.web, true);
+  const file = h.write('.claude/foreman.json', { dispatch: { watch: { terminal: false, web: false } } }), original = read(file);
+  assert.deepEqual(output(await h.bridge(['config', '--cwd', h.cwd])).effective.dispatch.watch, { terminal: false, web: true });
+  assert.deepEqual(json(h.userConfig).dispatch.watch, { terminal: false, web: true });
+  assert.equal(read(file), original);
+  assert.equal(fs.existsSync(`${file}.bak`), false);
+});
+
+for (const [dispatch, watch] of [
+  [undefined, { terminal: true, web: false }],
+  [{}, { terminal: true, web: false }],
+  [{ watch: 'auto' }, { terminal: true, web: false }],
+  [{ watch: 'off', web: true }, { terminal: false, web: true }],
+  [{ web: false }, { terminal: true, web: false }],
+  [{ web: true }, { terminal: true, web: true }],
+  [{ watch: { terminal: true, web: true }, web: false }, { terminal: true, web: true }],
+  [{ watch: { terminal: false, web: false }, web: 'true' }, { terminal: false, web: false }],
+]) test(`watch 迁移补默认值并优先使用新对象：${JSON.stringify(dispatch)}`, async (t) => {
+  const h = sandbox(t), c = baseConfig();
+  if (dispatch === undefined) delete c.dispatch; else c.dispatch = dispatch;
+  h.config(c);
+  const original = read(h.userConfig);
+  assert.deepEqual(output(await h.bridge(['config'])).effective.dispatch.watch, watch);
+  assert.deepEqual(json(h.userConfig).dispatch.watch, watch);
+  assert.equal(Object.hasOwn(json(h.userConfig).dispatch, 'web'), false);
+  assert.equal(read(`${h.userConfig}.bak`), original);
+  const saved = read(h.userConfig);
+  output(await h.bridge(['config']));
+  assert.equal(read(h.userConfig), saved);
+  assert.deepEqual(fs.readdirSync(path.dirname(h.userConfig)).filter((name) => name.includes('.bak')), ['config.json.bak']);
+});
+
+for (const lang of ['zh', 'en']) test(`watch 严格校验对象、两项布尔值和额外键 (${lang})`, async (t) => {
+  const h = sandbox(t);
+  for (const watch of [null, true, [], {}, 'invalid', { terminal: true }, { terminal: 'auto', web: false },
+    { terminal: true, web: 0 }, { terminal: true, web: false, extra: true }]) {
+    const c = baseConfig(); c.dispatch.watch = watch; h.config(c);
+    const original = read(h.userConfig);
+    failed(await h.bridge(['config'], { env: { FOREMAN_LANG: lang } }), MESSAGES[lang].watchShape);
+    assert.equal(read(h.userConfig), original);
+    assert.equal(fs.existsSync(`${h.userConfig}.bak`), false);
+  }
+  const c = baseConfig(); c.dispatch.watch = 'auto'; c.dispatch.web = 'true'; h.config(c);
+  failed(await h.bridge(['config'], { env: { FOREMAN_LANG: lang } }), MESSAGES[lang].watchShape);
 });

@@ -80,14 +80,15 @@ test('外部路径最多列 30 条但保留完整条数，前 3 条之后显示�
   assert.ok(shown(limited).includes(`⚠ ${D.watchOutsideCwd(path.relative(h.cwd, path.resolve(h.cwd, '../wrong.txt')), 0)}`));
 });
 
-test('显示保留 Windows 的上级路径和其他盘绝对路径，只提示范围外的执行写入', () => {
+test('显示：往上不超过两级的写 Windows 相对路径，更远的和其他盘的写完整路径，只提示范围外的执行写入', () => {
   const r = { kind: 'exec', cwd: 'O:\\project\\.claude\\worktrees\\task', changes: { outside_cwd: [
+    { path: 'O:\\project\\.claude\\notes.txt', by: 'agent', in_scope: false },
     { path: 'O:\\projectan\\wrong.txt', by: 'agent', in_scope: false },
     { path: 'C:\\other\\written.txt', by: 'reported', in_scope: false },
     { path: 'O:\\allowed\\yes.txt', by: 'agent', in_scope: true },
   ] } };
-  assert.deepEqual(shown(r), [`⚠ ${D.watchOutsideCwd('..\\..\\..\\..\\projectan\\wrong.txt, C:\\other\\written.txt', 0)}`]);
-  assert.deepEqual(shown({ ...r, cwd: undefined }), [`⚠ ${D.watchOutsideCwd('O:\\projectan\\wrong.txt, C:\\other\\written.txt', 0)}`]);
+  assert.deepEqual(shown(r), [`⚠ ${D.watchOutsideCwd('..\\..\\notes.txt, O:\\projectan\\wrong.txt, C:\\other\\written.txt', 0)}`]);
+  assert.deepEqual(shown({ ...r, cwd: undefined }), [`⚠ ${D.watchOutsideCwd('O:\\project\\.claude\\notes.txt, O:\\projectan\\wrong.txt, C:\\other\\written.txt', 0)}`]);
   assert.deepEqual(shown({ ...r, kind: 'review' }), []);
 });
 

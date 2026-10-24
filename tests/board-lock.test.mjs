@@ -14,7 +14,7 @@ const boardDir = path.join(ROOT, 'foreman/skills/dispatch/scripts/board');
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 async function withBoard(t, run) {
   const h = sandbox(t), cfg = baseConfig(), children = [];
-  cfg.dispatch.web = true; h.config(cfg);
+  cfg.dispatch.watch.web = true; h.config(cfg);
   fs.mkdirSync(h.runs, { recursive: true });
   const lockFile = path.join(h.runs, 'board.lock.json');
   try { await run(h, children, lockFile); }
@@ -252,13 +252,13 @@ test('插件文件被换掉或删掉后，服务在自查时退出并删掉自�
   }
 }));
 
-for (const lang of ['zh', 'en']) test(`board --stop 关掉直播服务；没在运行时如实说明；dispatch.web 关掉后照样能关 (${lang})`, (t) => withBoard(t, async (h, children, lockFile) => {
+for (const lang of ['zh', 'en']) test(`board --stop 关掉直播服务；没在运行时如实说明；dispatch.watch.web 关掉后照样能关 (${lang})`, (t) => withBoard(t, async (h, children, lockFile) => {
   const options = { env: { FOREMAN_LANG: lang } }, notRunning = { stopped: false, message: MESSAGES[lang].boardNotRunning };
   assert.deepEqual(output(await h.bridge(['board', '--stop'], options)), notRunning);
   failed(await h.bridge(['board', '--stop', '--replay', 'all'], options), MESSAGES[lang].badArg('--replay'));
   assert.equal(output(await h.bridge(['board'], options)).started, true);
   const lock = json(lockFile), cfg = baseConfig();
-  cfg.dispatch.web = false; h.config(cfg);
+  cfg.dispatch.watch.web = false; h.config(cfg);
   assert.deepEqual(output(await h.bridge(['board', '--stop'], options)), { stopped: true, pid: lock.pid });
   assert.equal(alive(lock.pid), false);
   assert.equal(fs.existsSync(lockFile), false);

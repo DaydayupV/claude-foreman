@@ -326,3 +326,9 @@ test('排队最多带 30 张票据并报总数，标题按 160 字截', (t) => {
   assert.equal(queue.tickets.length, 30); assert.equal(queue.total, 35);
   assert.ok(queue.tickets.every((q) => q.title.length <= 160));
 });
+
+test('卡片产出框的改动清单不含同组别的任务改的文件', () => {
+  const run = { id: 'r', dir: 'x', meta: { kind: 'exec', status: 'done', started_at: '2026-10-24T10:00:00Z', ended_at: '2026-10-24T10:01:00Z' }, tail: { state: {} },
+    result: { status: 'done', changes: { files: [{ path: 'mine.mjs', by: 'agent' }, { path: 'theirs.mjs', by: 'unknown', group_run: 'other' }, { path: 'seen.mjs', by: 'unknown' }] } } };
+  assert.deepEqual(runMessage(run, 'r').changed.map((f) => f.path), ['mine.mjs', 'seen.mjs']);
+});
