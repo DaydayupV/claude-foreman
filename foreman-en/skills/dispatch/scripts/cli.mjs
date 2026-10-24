@@ -71,6 +71,10 @@ function parseArgs(argv) {
     if (!a.startsWith('--')) die(M.badArg(a));
     const key = a.slice(2);
     if (FLAGS.has(key)) { opts[key] = true; continue; }
+    if (cmd === 'resume' && key === 'reason' && (rest[i + 1] == null || rest[i + 1].startsWith('--'))) {
+      opts.reason = undefined;
+      continue;
+    }
     const val = rest[++i];
     if (val === undefined) die(M.missingValue(a));
     if (key === 'add-dir' || key === 'track' || key === 'scope' || key === 'file' || key === 'seat' && cmd === 'plan') opts[key].push(val);
@@ -148,8 +152,16 @@ async function cmdResume(o) {
   if (!o.scope.length) o.scope = parent.meta.scope || [];
   const kind = module === 'review' ? 'review' : module === 'discuss' ? 'discuss' : 'exec';
   if (kind === 'review') die(M.reviewNoResume);
-  adapters[agentTypeOf(parent.meta)].validateResume?.(parent);
   const discuss = kind === 'discuss';
+  if (discuss && Object.hasOwn(o, 'reason')) die(M.resumeReasonDiscuss);
+  if (!discuss && !['rework', 'answer', 'recover'].includes(o.reason)) die(M.resumeReason(o.reason));
+  adapters[agentTypeOf(parent.meta)].validateResume?.(parent);
+  let resumeNote;
+  if (!discuss) {
+    const outcome = records.runOutcome(parent);
+    const { mismatch } = records.resumeVerdict({ resume_reason: o.reason }, outcome);
+    if (mismatch) resumeNote = M.resumeReasonMismatch(mismatch, outcome.status);
+  }
   if (o.group != null && !discuss && !o.scope.length) die(M.groupNeedsScope);
   let round = null;
   if (discuss) {
@@ -176,7 +188,7 @@ async function cmdResume(o) {
   return adapters[profile.agent.type].execute({ cfg, ...profile, mode: 'resume', kind, cwd: parent.meta.cwd, brief, addDirs,
     ...(image ? { step: parent.meta.step, route: parent.meta.route } : {}),
     title: o.title || parent.meta.title, parent: parent.id, parentDir: parent.dir, sessionId: parent.meta.session_id,
-    previousRunAccess: parent.meta.run_access, round, opts: o });
+    previousRunAccess: parent.meta.run_access, round, resumeReason: o.reason, resumeNote, opts: o });
 }
 
 async function cmdReview(o) {

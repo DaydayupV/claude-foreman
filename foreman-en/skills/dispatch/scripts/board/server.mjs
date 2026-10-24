@@ -112,6 +112,10 @@ function scopeOptions(values) {
   if (!Number.isFinite(scope.speed) || scope.speed <= 0 || !Number.isFinite(scope.maxgap) || scope.maxgap < 0) throw new Error('invalid replay timing');
   return scope;
 }
+function streamScope(params) {
+  if (!replayMode && (params.has('replay') || params.has('from')) || replayMode && !params.has('replay')) throw new Error();
+  return scopeOptions(Object.fromEntries(params));
+}
 const hello = (data, now) => ({ v: 3, mode: 'live', scope: data.scope, now, replay: null });
 // 连上（或重连）时补发的事件只留最近 200 条；开头的 start 和最近一条用户消息（终端区按它分"最近一轮"）另外留着，不被挤掉
 // 也留着最近 100 条"后台任务交回"（returned）：页面靠它们知道哪一席的结果已经被读走、什么时候离开刻度带，
@@ -182,7 +186,7 @@ async function main() {
   const replayLimitBytes = process.env.FOREMAN_TEST_REPLAY_LIMIT_BYTES == null ? undefined : Number(process.env.FOREMAN_TEST_REPLAY_LIMIT_BYTES);
   const feed = replayMode ? null : createFeed(root, options), universe = createUniverse({ ...options, runs: root, config: configFile, windowH, replayLimitBytes,
     // 直播时宇宙只列桌面版对话列表里还在的对话（归档、删掉的不列）；回放照原样
-    desktopRoots: replayMode ? [] : desktopRoots() }), clients = new Set();
+    desktopRoots: replayMode ? [] : desktopRoots() }), clients = new Set(), muxes = new Map();
   const sessions = replayMode ? replaySessions(values.replay, root, options.claudeDir) : undefined;
   const sharedReplay = replayMode ? universe.replay({ speed: timing.speed, maxgap: timing.maxgap, sessions }, Date.now()) : null, details = new Map();
   // 单个组或任务的回放：第一次请求时构建（现在只要几十毫秒），之后复用；范围里没有任务的记成 null（404）
@@ -204,7 +208,9 @@ async function main() {
     for (const id of ids) details.set(id, sharedReplay.detail(id));
   }
   let poll = null, connections = 0, idleSince = feed?.hasRunning(Date.now()) ? null : Date.now(), watchedAt = -Infinity;
-  const send = (client, event, data) => client.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  const send = (client, event, data) => client.mux
+    ? client.mux.res.write(`data: ${client.sub} ${event} ${JSON.stringify(data)}\n\n`)
+    : client.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   const liveUpdate = (client, data) => {
     const queue = data.events.find((ev) => ev.k === 'dispatch_queue'), queueText = JSON.stringify(queue?.tickets);
     if (queue && client.queue !== queueText) { send(client, 'ev', queue); client.queue = queueText; }
@@ -280,7 +286,23 @@ async function main() {
     };
     next();
   };
-  server = http.createServer((req, res) => {
+  const removeClient = (client) => {
+    clearTimeout(client.timer); clients.delete(client);
+    if (!clients.size) idleSince = Date.now();
+    updatePolling();
+  };
+  const closeMux = (c, mux) => {
+    for (const client of mux.subs.values()) removeClient(client);
+    mux.subs.clear();
+    if (muxes.get(c) === mux) muxes.delete(c);
+  };
+  const startStream = (client, opened, data, replay = null) => {
+    send(client, 'hello', replay?.hello || (client.all ? universe.hello(opened) : hello(data, opened)));
+    if (replay) { if (client.all) send(client, 'universe', replay.initial); play(client, replay, opened); }
+    else if (client.all) universeUpdate(client, universe.read(opened)); else liveUpdate(client, data);
+    updatePolling();
+  };
+  server = http.createServer(async (req, res) => {
     if (replayMode) {
       connections++; idleSince = null;
       res.once('close', () => { if (!--connections) idleSince = Date.now(); });
@@ -294,11 +316,12 @@ async function main() {
     const prefix = `/${owner.token}/`;
     if (!url.pathname.startsWith(prefix)) return end(404);
     const route = url.pathname.slice(prefix.length);
-    // 只有 shutdown 收 POST，shutdown 也只收 POST
-    if ((req.method === 'POST') !== (route === 'shutdown')) return end(405);
+    if (replayMode && ['mux', 'sub', 'unsub'].includes(route)) return end(404);
+    // 控制路由只收 POST，其余只收 GET/HEAD。
+    if ((req.method === 'POST') !== new Set(['shutdown', 'sub', 'unsub']).has(route)) return end(405);
     try {
       if (!route) {
-        res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data: 'self'; base-uri 'none'; form-action 'none'");
+        res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; worker-src 'self'; img-src data: 'self'; base-uri 'none'; form-action 'none'");
         let html;
         try { html = fs.readFileSync(path.join(here, 'index.html'), 'utf8'); }
         catch (e) { if (e.code !== 'ENOENT') throw e; html = '<!doctype html><title>Foreman board</title><p>Board page is not built yet.</p>'; }
@@ -307,6 +330,51 @@ async function main() {
           .replace(/window\.__LANG__ = '(?:zh|en)';/, `window.__LANG__ = '${lang === 'en' ? 'en' : 'zh'}';`)
           .replace("window.__BOARD_MODE__ = 'live';", `window.__BOARD_MODE__ = '${replayMode ? 'replay' : 'live'}';`);
         return end(200, 'text/html; charset=utf-8', html);
+      }
+      if (route === 'stream-worker.js') {
+        res.setHeader('Content-Security-Policy', "default-src 'none'; connect-src 'self'");
+        return end(200, 'text/javascript; charset=utf-8', fs.readFileSync(path.join(here, route)));
+      }
+      if (['mux', 'sub', 'unsub'].includes(route)) {
+        if (route === 'mux') {
+          const c = url.searchParams.get('c');
+          if (!/^[A-Za-z0-9_-]{8,64}$/.test(c || '')) return end(400);
+          if (req.method === 'HEAD') return end(200, 'text/event-stream');
+          const previous = muxes.get(c);
+          if (previous) { previous.res.end(); closeMux(c, previous); }
+          res.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive' }); res.flushHeaders();
+          const mux = { res, subs: new Map() }; muxes.set(c, mux);
+          res.once('close', () => closeMux(c, mux));
+          return;
+        }
+        const chunks = []; let size = 0;
+        for await (const chunk of req.iterator({ destroyOnReturn: false })) {
+          size += chunk.length;
+          if (size > 16384) { req.resume(); return end(413); }
+          chunks.push(chunk);
+        }
+        let body;
+        try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return end(400); }
+        if (!body || typeof body.c !== 'string' || !/^[A-Za-z0-9_-]{8,64}$/.test(body.c)
+          || typeof body.s !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(body.s)
+          || route === 'sub' && typeof body.q !== 'string') return end(400);
+        const mux = muxes.get(body.c);
+        if (!mux) return end(404);
+        let scope, all;
+        if (route === 'sub') {
+          const params = new URLSearchParams(body.q);
+          try { scope = streamScope(params); } catch { return end(400); }
+          all = params.get('level') === 'all';
+        }
+        const previous = mux.subs.get(body.s);
+        if (previous) { mux.subs.delete(body.s); removeClient(previous); }
+        if (route === 'sub') {
+          const opened = Date.now(), data = all ? null : feed.read(scope, opened);
+          const client = { mux, sub: body.s, scope, all, seen: new Map(), timer: null };
+          mux.subs.set(body.s, client); clients.add(client); idleSince = Date.now();
+          send(client, 'open', {}); startStream(client, opened, data);
+        }
+        return end(200, 'application/json', JSON.stringify({ ok: true }));
       }
       // board --stop 和换版本时请服务自己退出：凭路径里已经核对过的令牌，不按 pid 结束进程，免得误杀复用了同一个 pid 的程序
       if (route === 'shutdown') {
@@ -338,10 +406,8 @@ async function main() {
         return end(200, type, req.method === 'HEAD' ? '' : fs.readFileSync(file));
       }
       if (!['stream', 'snapshot', 'sessions'].includes(route)) return end(404);
-      if (!replayMode && (url.searchParams.has('replay') || url.searchParams.has('from'))) return end(400);
-      if (replayMode && url.searchParams.get('replay') == null) return end(400);
       let scope;
-      try { scope = scopeOptions(Object.fromEntries(url.searchParams)); } catch { return end(400); }
+      try { scope = streamScope(url.searchParams); } catch { return end(400); }
       if (route === 'snapshot' && url.searchParams.get('level') === 'all') return end(400);
       const opened = Date.now(), all = route === 'sessions' || url.searchParams.get('level') === 'all';
       // replay=<组或任务> 是 v2 的单个范围回放（演示页的明细用），只在回放服务上有
@@ -369,11 +435,8 @@ async function main() {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive' }); res.flushHeaders();
       const client = { res, scope, all, seen: new Map(), timer: null };
       clients.add(client); idleSince = Date.now();
-      res.once('close', () => { clearTimeout(client.timer); clients.delete(client); if (!clients.size) idleSince = Date.now(); updatePolling(); });
-      send(client, 'hello', replay?.hello || (all ? universe.hello(opened) : hello(data, opened)));
-      if (replay) { if (all) send(client, 'universe', replay.initial); play(client, replay, opened); }
-      else if (all) universeUpdate(client, universe.read(opened)); else liveUpdate(client, data);
-      updatePolling();
+      res.once('close', () => removeClient(client));
+      startStream(client, opened, data, replay);
     } catch (e) {
       process.stderr.write(`board: ${short(e)}\n`);
       if (res.headersSent) res.destroy(); else end(500);
@@ -408,7 +471,8 @@ async function main() {
       if (buildId(here) !== build) { process.stderr.write('board: the plugin files were removed or replaced; exiting\n'); server?.close(); process.exit(0); }
     }
     const now = Date.now();
-    for (const client of clients) client.res.write(': ping\n\n');
+    for (const client of clients) if (!client.mux) client.res.write(': ping\n\n');
+    for (const mux of muxes.values()) mux.res.write(': ping\n\n');
     try {
       if (replayMode ? connections > 0 : clients.size || feed.hasRunning(now) || now - watchedAt < 120000) idleSince = null;
       else if (idleSince == null) idleSince = now;

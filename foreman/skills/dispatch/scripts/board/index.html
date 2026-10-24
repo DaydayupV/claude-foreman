@@ -1213,6 +1213,98 @@ const B = {
   version: 0,             // 数据每变一次加一，面板据此决定要不要重画
   clock: { mode: 'live', start: 0, end: 0, speed: 1, perf0: 0, frozenAt: null },
 };
+
+let streamWorker = null, streamWorkerFailed = false, streamTab = null, streamSeq = 0, streamTabReady = Promise.resolve();
+const sharedStreams = new Map();
+class SharedStream {
+  constructor(query) {
+    this.query = query; this.id = streamTab + '_' + ++streamSeq;
+    this.state = 0; this.closed = false; this.direct = null; this.listeners = new Map();
+    this.onopen = this.onerror = null;
+    sharedStreams.set(this.id, this); this.subscribe();
+  }
+  get readyState() { return this.direct ? this.direct.readyState : this.state; }
+  addEventListener(name, fn) {
+    if (!this.listeners.has(name)) {
+      this.listeners.set(name, []);
+      if (this.direct && name !== 'open' && name !== 'error') this.forward(name);
+    }
+    this.listeners.get(name).push(fn);
+  }
+  dispatch(name, event) {
+    if (this.closed) return;
+    for (const fn of this.listeners.get(name) || []) fn.call(this, event);
+    this['on' + name]?.(event);
+  }
+  receive(message) {
+    if (this.closed || this.direct) return;
+    if (message.state) {
+      this.state = message.state === 'open' ? 1 : message.state === 'closed' ? 2 : 0;
+      if (message.state === 'open') streamWorkerOpened = true;
+      const type = message.state === 'open' ? 'open' : 'error'; this.dispatch(type, { type });
+      if (type === 'error' && message.opened === false) checkStreamWorker();
+    } else this.dispatch(message.event, { data: message.data });
+  }
+  subscribe() {
+    // 页面先拿住锁，worker 随后排队；页面消失时 worker 才能拿到它。
+    streamTabReady.then(() => {
+      if (!this.closed && !this.direct && this.state !== 2 && !streamWorkerFailed)
+        streamWorker.port.postMessage({ op: 'sub', id: this.id, q: this.query, tab: streamTab });
+    });
+  }
+  forward(name) { this.direct.addEventListener(name, (event) => this.dispatch(name, event)); }
+  fallback() {
+    if (this.closed || this.state === 2 || this.direct) return;
+    this.direct = new EventSource(`stream?${this.query}`);
+    for (const name of new Set(['open', 'error', ...this.listeners.keys()])) this.forward(name);
+  }
+  close() {
+    if (this.closed) return;
+    this.closed = true; this.state = 2; sharedStreams.delete(this.id);
+    if (this.direct) this.direct.close();
+    else if (!streamWorkerFailed) streamWorker.port.postMessage({ op: 'unsub', id: this.id });
+  }
+}
+function failStreamWorker() {
+  if (streamWorkerFailed) return;
+  streamWorkerFailed = true;
+  for (const stream of sharedStreams.values()) stream.fallback();
+  if (streamWorker && streamTab) streamWorker.port.postMessage({ op: 'bye', tab: streamTab });
+  streamWorker?.port.close();
+}
+// worker 的长连接一次都没连上过：页面自己问一下服务。服务通着，说明是 worker 发不出请求
+// （Claude 桌面版的内置浏览器里 worker 能加载，但它发的请求一律失败），改走直连；服务不通就照常等它回来
+// 查的这一会儿 worker 可能已经连上了：回来时这一页收到过 open 就不切
+let streamWorkerCheck = null, streamWorkerOpened = false;
+function checkStreamWorker() {
+  if (streamWorkerCheck || streamWorkerFailed || streamWorkerOpened) return;
+  const options = typeof AbortSignal === 'function' && typeof AbortSignal.timeout === 'function' ? { signal: AbortSignal.timeout(5000) } : undefined;
+  streamWorkerCheck = fetch('health', options).then((r) => { if (r.ok && !streamWorkerOpened) failStreamWorker(); }, () => {}).finally(() => { streamWorkerCheck = null; });
+}
+function openStream(query) {
+  query = String(query);
+  if (window.__BOARD_MODE__ === 'live' && B.params.replay == null && B.params.t == null && !window.__BOARD_FIXTURE__
+    && typeof SharedWorker === 'function' && !streamWorkerFailed) {
+    if (!streamWorker) {
+      try { streamWorker = new SharedWorker('stream-worker.js', { name: 'foreman-board-streams' }); }
+      catch { failStreamWorker(); }
+      if (streamWorker) {
+        streamTab = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+        if (navigator.locks) streamTabReady = new Promise((resolve) => {
+          navigator.locks.request('foreman-board-tab-' + streamTab, () => { resolve(); return new Promise(() => {}); });
+        });
+        streamWorker.onerror = failStreamWorker;
+        streamWorker.port.onmessage = ({ data }) => sharedStreams.get(data.id)?.receive(data);
+        streamWorker.port.start();
+        addEventListener('pagehide', () => { if (!streamWorkerFailed) streamWorker.port.postMessage({ op: 'bye', tab: streamTab }); });
+        addEventListener('pageshow', (e) => { if (e.persisted) for (const stream of sharedStreams.values()) stream.subscribe(); });
+      }
+    }
+    if (!streamWorkerFailed) return new SharedStream(query);
+  }
+  return new EventSource(`stream?${query}`);
+}
+
 // 统计用的事件不带正文，留得多一些；超出时这条车道的平均速度显示 —（分子分母不再覆盖同一段）
 const FEED_MAX = 3000, LANE_EVENTS_MAX = 600, RATE_EVENTS_MAX = 20000;
 
@@ -1374,7 +1466,7 @@ function connect() {
     return;
   }
   if (B.es || streamsReleased) return;
-  const es = new EventSource(`stream?${q}`);
+  const es = openStream(q);
   B.es = es;
   watchStream(B, es);
   const on = (name, fn) => es.addEventListener(name, (e) => fn(JSON.parse(e.data)));
@@ -1495,7 +1587,7 @@ function connectUniverse() {
     return;
   }
   if (U.es || streamsReleased) return;
-  const es = new EventSource(`stream?${q}`);
+  const es = openStream(q);
   U.es = es;
   watchStream(U, es);
   const on = (name, fn) => es.addEventListener(name, (e) => fn(JSON.parse(e.data)));
@@ -2037,6 +2129,19 @@ function groupLeave(lanes, t) {
   return when <= t ? secSince(when, t) / LEAVE_ANIM : 0;
 }
 
+// 一组此刻在刻度带上显示哪些席位：这一批里启动过的，加上结果还没被读走的；计划里还没启动的虚影席照常显示。
+// 一批 = 组里的任务一个接一个、中间没有一刻全部停下的一段。全部停下以后再续接就是新的一批，
+// 只有新一批里启动的席位回来（比如返工只续接了两席，早就结束的第三席不跟着回来；讨论第 2 轮不续接的广度席也一样）
+function bandLanes(lanes, t) {
+  const runs = lanes.flatMap((l) => (l.ghost ? [] : l.runs.filter((r) => r.started_at <= t && r.kind !== 'answer'))).sort(byStart);
+  let busy = -Infinity, from = -Infinity;
+  for (const r of runs) {
+    if (r.started_at > busy) from = busy;
+    busy = Math.max(busy, r.ended_at != null && r.ended_at <= t ? r.ended_at : Infinity);
+  }
+  return lanes.filter((l) => l.ghost || runAt(l, t).started_at > from || leaveAt(l, runAt(l, t), t) > t);
+}
+
 // 一席这一次是什么时候"进来"的：第一次任务启动，或者离开之后下一轮任务启动；一直在的返回 null（不播进场）
 function enteredAt(lane, t) {
   const runs = lane.runs.filter((r) => r.started_at <= t), r = runs[runs.length - 1];
@@ -2562,9 +2667,8 @@ function computeLayout(t) {
   const L = { groups: [], rows: new Map() };
   const plan = [];
   for (const [key, all] of order) {
-    // 上一轮之后没再续接、已经离开的席位不再显示（比如讨论第 2 轮只续接了一部分）
-    const top = Math.max(1, ...all.filter((l) => !l.ghost).map((l) => runAt(l, t).round || 1));
-    const lanes = all.filter((l) => l.ghost || (runAt(l, t).round || 1) === top || leaveAt(l, runAt(l, t), t) > t);
+    // 上一批之后没再续接、已经离开的席位不再显示（见 04-life.js 的 bandLanes）
+    const lanes = bandLanes(all, t);
     const leave = groupLeave(lanes, t);
     if (leave >= 1) continue;
     lanes.sort((a, b) => seatOrder(a) - seatOrder(b) || laneT0(a) - laneT0(b));
@@ -5973,9 +6077,9 @@ function showNotice(text, keep = false) {
   showNotice.kept = keep;
 }
 
-// 后台标签页让出数据流：浏览器对同一主机只开 6 条连接，看板标签页多了，前台的页面会连不上。
-// 平时在后台 10 分钟才让（让出以后再回来，较早的记录只剩最近 200 条，不能切一下窗口就让）；
-// 前台的页面连不上超过 2 秒时，通过同源广播请后台的看板标签页马上让出来。
+// 后台满 10 分钟取消订阅，省下服务和浏览器的计算；直连流也会腾出同主机最多 6 条的连接。
+// 让出以后再回来，较早的记录只剩最近 200 条，不能切一下窗口就让；
+// 前台的页面连不上超过 2 秒时，通过同源广播请后台用直连流的看板标签页马上让出来。
 // 让出以后每分钟向服务报一次在，服务不会因为没有连接就当成没人看而退出；
 // 在后台放了 30 分钟以上就不再报，忘在后台的标签页不能让服务一直不退出
 const HIDDEN_RELEASE_MS = 600000, WATCHING_PING_MS = 60000, WATCHING_MAX_MS = 1800000;
@@ -5994,7 +6098,10 @@ function releaseStreams() {
 }
 // 前台页面的流迟迟连不上（01-state.js 的 watchStream 调用）：请其他看板标签页让出连接
 function askForStream() { if (STREAM_CHANNEL && document.visibilityState !== 'hidden') STREAM_CHANNEL.postMessage('release'); }
-if (STREAM_CHANNEL) STREAM_CHANNEL.onmessage = (e) => { if (e.data === 'release' && document.visibilityState === 'hidden') releaseStreams(); };
+if (STREAM_CHANNEL) STREAM_CHANNEL.onmessage = (e) => {
+  if (e.data === 'release' && document.visibilityState === 'hidden'
+    && [B.es, U.es].some((es) => es && (!(es instanceof SharedStream) || es.direct))) releaseStreams();
+};
 function onVisibilityChange() {
   clearTimeout(hiddenReleaseTimer); hiddenReleaseTimer = null;
   // 回放重连会从头播放，不能暂停共用时钟；定格和演示沿用原来的取数方式。

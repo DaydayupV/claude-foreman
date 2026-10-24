@@ -574,7 +574,7 @@ function admission(meta, cfg, { runs, unreadable } = readRunsLocked(meta.id), qu
     if (meta.module === 'review' || meta.kind === 'review' || meta.mode === 'review') {
       if (valid) return M.reviewSeatTaken(meta.plan, meta.seat, valid.id);
     } else if (latest && (valid || latest.meta.session_id || fs.existsSync(path.join(latest.dir, 'messages.json')))) {
-      return M.seatAlreadyStarted(meta.plan, meta.seat, latest.id);
+      return M.seatAlreadyStarted(meta.plan, meta.seat, latest.id, meta.module === 'discuss' || meta.kind === 'discuss');
     }
   }
   for (const other of meta.group != null && writesFiles(meta) ? running : []) {
@@ -638,6 +638,19 @@ function runOutcome(run) {
   // 部分完成仍有可用的交付，不算失败
   const partial = !blocked && status === 'done' && result?.report?.status === 'partial';
   return { running, status, result, valid, ok, blocked, partial };
+}
+
+// 有声明就按声明统计，旧续接沿用原推断；不一致只提示，不改判。
+function resumeVerdict(meta, parentOutcome) {
+  const reason = meta.resume_reason, inferred = !reason;
+  const rework = inferred ? parentOutcome.status === 'done' && parentOutcome.valid && !parentOutcome.blocked : reason === 'rework';
+  let mismatch = null;
+  if (!inferred) {
+    if (reason === 'answer' && !parentOutcome.blocked && !parentOutcome.result?.questions?.length) mismatch = 'answer';
+    if (reason === 'recover' && parentOutcome.status === 'done' && parentOutcome.valid) mismatch = 'recover';
+    if (reason === 'rework' && !parentOutcome.valid) mismatch = 'rework';
+  }
+  return { rework, inferred, mismatch };
 }
 
 // 已经续接过的任务：被别的任务续接的，以及同一计划同一席后来又重新启动过的（结果看最新的一轮）。
@@ -709,4 +722,4 @@ function isRunning(m, { query = true } = {}) {
 }
 const UNVERIFIED_LIMIT_MS = 25 * 3600000;
 
-export { RUNS_ROOT, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, saveMeta, metaWriteWarning, settleMeta, findRun, describeActivity, groupRuns, checkAdmission, readRunsLocked, runEnd, runOutcome, resultValid, resumedRuns, groupTally, groupSummary, groupScopeOwner, absolute, readMeta, checkRunners, isRunning, writesFiles };
+export { RUNS_ROOT, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, saveMeta, metaWriteWarning, settleMeta, findRun, describeActivity, groupRuns, checkAdmission, readRunsLocked, runEnd, runOutcome, resumeVerdict, resultValid, resumedRuns, groupTally, groupSummary, groupScopeOwner, absolute, readMeta, checkRunners, isRunning, writesFiles };
