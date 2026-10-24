@@ -1214,7 +1214,6 @@ const B = {
   runs: new Map(),        // run id → run 消息
   lanes: [],              // 按首次出现的先后
   laneById: new Map(),
-  feed: [],               // 所有车道的事件，按时间，最多 FEED_MAX 条
   life: [],               // 派发计划和裁决事件，单独留着不丢（流程动效要从计划建起一直看到裁决）
   prompts: [],            // 用户每条消息的时刻（Claude Code 车道的 prompt 事件），单独留着不随车道事件裁掉：终端区按它分"最近一轮"
   total: 0,               // 收到的事件总数（含已丢掉的）
@@ -1317,7 +1316,7 @@ function openStream(query) {
 }
 
 // 统计用的事件不带正文，留得多一些；超出时这条车道的平均速度显示 —（分子分母不再覆盖同一段）
-const FEED_MAX = 3000, LANE_EVENTS_MAX = 600, RATE_EVENTS_MAX = 20000;
+const LANE_EVENTS_MAX = 600, RATE_EVENTS_MAX = 20000;
 
 // 现在是记录里的哪个时刻（毫秒）。直播用本机时间（服务在同一台机器上）；回放从连上那一刻起按倍速走；?t= 停在固定时刻。
 function now() {
@@ -1328,7 +1327,7 @@ function now() {
 }
 
 function reset() {
-  B.runs.clear(); B.lanes = []; B.laneById.clear(); B.feed = []; B.life = []; B.prompts = []; B.total = 0; B.done = false; B.version++;
+  B.runs.clear(); B.lanes = []; B.laneById.clear(); B.life = []; B.prompts = []; B.total = 0; B.done = false; B.version++;
 }
 
 function onHello(h) {
@@ -1363,22 +1362,47 @@ function onRun(r) {
   wake();
 }
 
-function onEv(ev, stats = true) {
-  const lane = laneFor(ev.lane || B.runs.get(ev.run)?.lane || ev.run);
+// 展示缓存会截断；另存不含正文的统计边界，保证累计输出和生成时长覆盖同一段。
+const rateFields = ({ run, ts, k, u, n, tot, end, usage_from, usage_to }) => ({ run, ts, k, u, n, tot, end, usage_from, usage_to });
+const laneOf = (ev) => laneFor(ev.lane || B.runs.get(ev.run)?.lane || ev.run);
+
+// 一条事件除了进车道以外的记账：序号、计划和评判、用户消息的时刻、车道最后一条
+function noteEvent(ev, lane) {
   ev.id = B.total++;
-  insertByTs(lane.events, ev, LANE_EVENTS_MAX);
-  // 展示缓存会截断；另存不含正文的统计边界，保证累计输出和生成时长覆盖同一段。
-  if (B.clock.mode === 'live' && stats !== false) {
-    const { run, ts, k, u, n, tot, end, usage_from, usage_to } = ev;
-    insertByTs(lane.rate_events, { run, ts, k, u, n, tot, end, usage_from, usage_to }, RATE_EVENTS_MAX);
-  }
-  lane.ver = (lane.ver || 0) + 1;
-  insertByTs(B.feed, ev, FEED_MAX);
   // 同一份计划的事件可能再发（内容变了、重连）：按计划 id 只留最新一份
   if (ev.k === 'fplan') B.life = B.life.filter((x) => !(x.k === 'fplan' && x.plan === ev.plan));
   if (ev.k === 'fplan' || ev.k === 'verdict') insertByTs(B.life, ev, Infinity);
   if (ev.k === 'prompt' && Number.isFinite(ev.ts) && !B.prompts.includes(ev.ts)) { B.prompts.push(ev.ts); B.prompts.sort((a, b) => a - b); }
   if (!lane.last || ev.ts >= lane.last.ts) lane.last = ev;
+}
+
+// 实时的一条事件
+function onEv(ev, stats = true) {
+  const lane = laneOf(ev);
+  noteEvent(ev, lane);
+  insertByTs(lane.events, ev, LANE_EVENTS_MAX);
+  if (B.clock.mode === 'live' && stats !== false) insertByTs(lane.rate_events, rateFields(ev), RATE_EVENTS_MAX);
+  lane.ver = (lane.ver || 0) + 1;
+  B.version++;
+  wake();
+}
+
+// 一批历史事件（一个任务的回填、快照）：结果和逐条 onEv 完全一样，但每条车道只归并、截断一次，版本号每批只加一次。
+// 逐条插入时，乱序到达的旧事件要从尾部一路往前找位置，长对话一次回填几千条就把飞入动画卡住
+function onEvents(events, stats = true) {
+  if (!events.length) return;
+  const byLane = new Map();
+  for (const ev of events) {
+    const lane = laneOf(ev);
+    noteEvent(ev, lane);
+    if (byLane.has(lane)) byLane.get(lane).push(ev); else byLane.set(lane, [ev]);
+  }
+  const rates = B.clock.mode === 'live' && stats !== false;
+  for (const [lane, list] of byLane) {
+    lane.events = mergeByTs(lane.events, list, LANE_EVENTS_MAX);
+    if (rates) lane.rate_events = mergeByTs(lane.rate_events, list.map(rateFields), RATE_EVENTS_MAX);
+    lane.ver = (lane.ver || 0) + 1;
+  }
   B.version++;
   wake();
 }
@@ -1392,24 +1416,35 @@ function onBacklog(b) {
       lane.rate_events = lane.rate_events.filter(keep);
       lane.last = lane.events.reduce((last, ev) => (!last || ev.ts >= last.ts ? ev : last), null);
     }
-    B.feed = B.feed.filter(keep); B.life = B.life.filter(keep);
+    B.life = B.life.filter(keep);
     if (b.run === 'cc') B.prompts = [];
     B.version++;
   }
-  b.events.forEach((ev) => onEv(ev, !b.rate_events));
+  onEvents(b.events, !b.rate_events);
   if (b.rate_events) replaceRateHistory(b.run, b.rate_events);
 }
 
 function replaceRateHistory(run, events) {
-  const lane = laneFor(B.runs.get(run)?.lane || run), rest = lane.rate_events.filter((ev) => ev.run !== run);
-  // 两边都按时间排好：一次合并，不逐条插入（Claude Code 车道一次就有上万条）；时间相同时原有的在前，和逐条插入一样
-  const incoming = events.every((ev, i) => !i || events[i - 1].ts <= ev.ts) ? events : [...events].sort((a, b) => a.ts - b.ts), merged = [];
-  for (let i = 0, j = 0; i < rest.length || j < incoming.length;) {
-    merged.push(j >= incoming.length || i < rest.length && rest[i].ts <= incoming[j].ts ? rest[i++] : incoming[j++]);
-  }
-  lane.rate_events = merged.length > RATE_EVENTS_MAX ? merged.slice(-RATE_EVENTS_MAX) : merged;
+  const lane = laneFor(B.runs.get(run)?.lane || run);
+  // Claude Code 车道一次就有上万条：一次合并，不逐条插入
+  lane.rate_events = mergeByTs(lane.rate_events.filter((ev) => ev.run !== run), events, RATE_EVENTS_MAX);
   lane.ver = (lane.ver || 0) + 1; B.version++;
   wake();
+}
+
+// 把一批事件并进按时间排好的数组，返回新数组：这批先按时间稳定排序，时间相同时原有的在前、这批按到达先后在后，
+// 超出上限丢掉最早的。和逐条 insertByTs 的结果一样
+function mergeByTs(list, batch, max) {
+  const incoming = batch.every((ev, i) => !i || batch[i - 1].ts <= ev.ts) ? batch : [...batch].sort((a, b) => a.ts - b.ts);
+  let merged;
+  if (!incoming.length || !list.length || incoming[0].ts >= list.at(-1).ts) merged = list.concat(incoming);
+  else {
+    merged = [];
+    for (let i = 0, j = 0; i < list.length || j < incoming.length;) {
+      merged.push(j >= incoming.length || i < list.length && list[i].ts <= incoming[j].ts ? list[i++] : incoming[j++]);
+    }
+  }
+  return merged.length > max ? merged.slice(-max) : merged;
 }
 
 // 直播里派发事件先到、目标任务后出现时，服务端补发一次 ev_link：给原来那条事件补上 target
@@ -1433,8 +1468,12 @@ function loadSnapshot(s) {
   onHello(s.hello);
   if (B.params.t == null && s.hello.replay) B.clock.frozenAt = s.hello.replay.end; // 内嵌快照没给 t 时停在末尾
   for (const r of s.runs) onRun(r);
-  for (const ev of s.events) onEv(ev, !s.rate_events);
-  if (s.rate_events) for (const r of s.runs) replaceRateHistory(r.id, s.rate_events.filter((ev) => ev.run === r.id));
+  onEvents(s.events, !s.rate_events);
+  if (s.rate_events) {
+    const byRun = new Map(s.runs.map((r) => [r.id, []]));
+    for (const ev of s.rate_events) byRun.get(ev.run)?.push(ev);
+    for (const [run, events] of byRun) replaceRateHistory(run, events);
+  }
   B.connected = true;
 }
 
@@ -2637,7 +2676,7 @@ const REEL = { s: 0, off: 0, speed: 14, last: 0, hover: false, overflow: false, 
 const fitWidth = (w, h) => (w < 600 && h > w ? WL.bandX + WL.bandW + WL.margin : WL.W);
 // 100% 比例下屏幕能看到的世界 y 范围
 function fitRange(H) {
-  const w = viewEl.clientWidth || 1, h = viewEl.clientHeight || 1, k = Math.min(w / fitWidth(w, h), h / H) * 0.97, ty = (h - H * k) / 2;
+  const { cw: w, ch: h } = viewBox(), k = Math.min(w / fitWidth(w, h), h / H) * 0.97, ty = (h - H * k) / 2;
   return { top: -ty / k, bot: (h - ty) / k };
 }
 function stepReel(nowMs) {
@@ -2763,8 +2802,21 @@ function computeLayout(t) {
 const VIEW = { k: 1, tx: 0, ty: 0, goal: null, auto: true, w: 0, h: 0, H: 600 };
 const viewEl = $('view'), worldEl = $('world');
 
+// 视图的大小和位置：每帧开头（09-main.js 的 step，还没改任何 DOM 时）量一次，这一帧里都用它。
+// 写了卡片、表格或变换以后再量，浏览器得当场把整页重排一遍（飞进长对话时这一下就有二三十毫秒）
+// termsTop：终端区的上沿，离可见范围不远时才重画终端区（07-terms.js）
+const VIEWBOX = { frame: -1, width: 0, height: 0, cw: 1, ch: 1, bottom: 0, termsTop: 0 };
+function viewBox() {
+  if (VIEWBOX.frame !== UV.frame) {
+    const r = viewEl.getBoundingClientRect();
+    Object.assign(VIEWBOX, { frame: UV.frame, width: r.width, height: r.height, cw: viewEl.clientWidth || 1, ch: viewEl.clientHeight || 1, bottom: r.bottom,
+      termsTop: $('termsec').getBoundingClientRect().top });
+  }
+  return VIEWBOX;
+}
+
 function fitGoal() {
-  const r = viewEl.getBoundingClientRect();
+  const r = viewBox();
   // 视图还没有大小（面板刚打开、窗口最小化）时不重新适配，留着原来的镜头：按 0 适配会让缩放变成 0、线宽变成无穷大
   if (!(r.width > 0 && r.height > 0 && VIEW.H > 0)) return { k: VIEW.k > 0 ? VIEW.k : 1, tx: VIEW.tx, ty: VIEW.ty };
   const W = fitWidth(r.width, r.height), k = Math.min(r.width / W, r.height / VIEW.H) * 0.97;
@@ -2864,7 +2916,8 @@ addEventListener('keydown', (e) => {
   wake();
 });
 // 视图区域大小变了（窗口缩放、用量面板随模型数量变高变矮）就重新适配，缓动过去
-new ResizeObserver(() => { if (VIEW.auto) fitView(); wake(); }).observe(viewEl);
+// 视图大小变了：先作废这一帧量好的尺寸（viewBox），再按新尺寸重新适配
+new ResizeObserver(() => { VIEWBOX.frame = -1; if (VIEW.auto) fitView(); wake(); }).observe(viewEl);
 
 // 折叠或展开一组：记下组头现在的位置，排版时让它停在原处展开（鼠标移开后整体再慢慢回正）
 function toggleGroup(key) {
@@ -3020,8 +3073,11 @@ function fillLaneOut(box, lane, t) {
   fillOut(box, `OUTPUT · round ${roundOf(lane, t)}`, dedupeFiles(files), report, scopeLead(lane, t), thumbs);
 }
 
+// 返回卡片建完没有：新建卡片一次最多花约 6 毫秒（至少建 6 张），没建完的下一帧接着建。
+// 飞进长对话时第一次要建上百张卡片，一次建完就是三十多毫秒；那时卡片层还没淡入，分几帧建看不出来
 function renderWorld(t, L) {
-  const seen = new Set(['cc']);
+  const seen = new Set(['cc']), deadline = performance.now() + 6;
+  let created = 0, done = true;
   // Claude Code
   let cc = UI.cards.get('cc');
   if (!cc) { cc = cardShell('cc'); UI.cards.set('cc', cc); }
@@ -3045,12 +3101,18 @@ function renderWorld(t, L) {
   const ccFiles = ccLane ? ccLane.events.filter((e) => e.k === 'edit' && e.ts > from && e.ts <= to).map((e) => editParts(e.t)) : [];
   fillOut(ccOut, 'CLAUDE CODE · OUTPUT', dedupeFiles(ccFiles), '', ccLead(t, from, to));
 
-  // 刻度带上的各组标题
+  // 刻度带上的各组标题。超出预算以后，还没建过的组整组留到下一帧（组标题要算各席的状态，第一次也不便宜）；建过的照常更新
   const headSeen = new Set();
   for (const g of L.groups) {
-    headSeen.add(g.key);
     let h = UI.heads.get(g.key);
-    if (!h) { h = document.createElement('div'); h.className = 'ghead'; h.dataset.key = g.key; h.innerHTML = '<b></b>'; worldEl.append(h); UI.heads.set(g.key, h); }
+    if (!h && created >= 6 && performance.now() > deadline) {
+      // 留到下一帧的组里已经有的卡片（车道刚换到这个新组）照样算在版面上，不藏
+      done = false;
+      for (const lane of g.lanes) if (UI.cards.has(lane.id)) seen.add(lane.id);
+      continue;
+    }
+    headSeen.add(g.key);
+    if (!h) { h = document.createElement('div'); h.className = 'ghead'; h.dataset.key = g.key; h.innerHTML = '<b></b>'; worldEl.append(h); UI.heads.set(g.key, h); created++; }
     place(h, g.head);
     h.classList.toggle('old', g.old);
     h.classList.toggle('collapsed', g.collapsed);
@@ -3061,8 +3123,9 @@ function renderWorld(t, L) {
       const row = L.rows.get(lane.id);
       let card = UI.cards.get(lane.id), out = UI.outs.get(lane.id);
       if (!row) { if (card) card.hidden = true; if (out) out.hidden = true; continue; }
+      if (!card && created >= 6 && performance.now() > deadline) { done = false; continue; }
       seen.add(lane.id);
-      if (!card) { card = cardShell(lane.id); UI.cards.set(lane.id, card); }
+      if (!card) { card = cardShell(lane.id); UI.cards.set(lane.id, card); created++; }
       if (!out) { out = document.createElement('div'); out.className = 'outbox'; worldEl.append(out); UI.outs.set(lane.id, out); }
       card.hidden = out.hidden = false;
       place(card, row.card); place(out, row.out);
@@ -3078,6 +3141,7 @@ function renderWorld(t, L) {
     if (id.startsWith('ghost:')) { el.remove(); map.delete(id); } else el.hidden = true;
   }
   for (const [id, el] of UI.heads) el.hidden = !headSeen.has(id);
+  return done;
 }
 
 function groupHead(all, t) {
@@ -3581,21 +3645,67 @@ function renderDone(done, t, seen, deadline) {
   return built;
 }
 
-// 返回 false 表示这一帧没建完（已结束的组很多时折叠行分几帧建）
+// 返回 false 表示这一帧没建完（已结束的组很多时折叠行分几帧建，或者有栏第一次量到的宽度和先用的不一样，要按真宽度重画）
 function renderTerms(t, L) {
   const deadline = performance.now() + 12;
   const cc = B.laneById.get('cc'), title = cc && latest(cc) ? latest(cc).title : null;
   setText($('conv'), Display.D.conversation(title));
-  if (!termsNear()) return true;
+  if (!(viewBox().termsTop < innerHeight + 200)) return true;
   const box = $('terms'), seen = new Set(), units = termUnits(t, L);
   const done = units.filter((u) => unitFinished(u, t)).sort((a, b) => unitEnd(b, t) - unitEnd(a, t));
   const live = units.filter((u) => !done.includes(u));
-  fillRow(box, live, t, seen);
-  // 回到上面一排的栏（又续接了）去掉"可收起"的样子
-  for (const u of live) PANEL.cols.get(u.id)?.classList.remove('done-open');
-  const built = renderDone(done, t, seen, deadline);
-  for (const [id, col] of PANEL.cols) if (!seen.has(id)) { col.remove(); PANEL.cols.delete(id); }
-  return built;
+  let built;
+  SETTLE.on = true;
+  try {
+    fillRow(box, live, t, seen);
+    // 回到上面一排的栏（又续接了）去掉"可收起"的样子
+    for (const u of live) PANEL.cols.get(u.id)?.classList.remove('done-open');
+    built = renderDone(done, t, seen, deadline);
+    for (const [id, col] of PANEL.cols) if (!seen.has(id)) { col.remove(); PANEL.cols.delete(id); }
+  } finally { SETTLE.on = false; }
+  return settleTerms() && built;
+}
+
+// 终端区的写和量分开：renderTerms 期间各栏先全部写完，最后集中量一次（各组要不要收起、各栏正文多宽），再统一贴底。
+// 不在每栏写完立刻读高度和宽度：每读一次浏览器都得把整页重排一遍，落地后第一次搭终端区时这样要几十毫秒。
+// 不在 renderTerms 里直接调用（比如测试）时照旧当场量
+const SETTLE = { on: false, stick: new Set(), groups: new Map(), widths: new Set(), lastW: null, retries: 0 };
+const termChars = (w) => Math.max(20, Math.floor((w || 560) / 6.6) - 4);
+// 正文按多少字折行：用上一次量到的这一栏的宽度；新栏先借别的栏的宽度，量出来不一样时整块重画一次
+function termWidth(ol) {
+  if (!SETTLE.on) return termChars(ol.clientWidth);
+  SETTLE.widths.add(ol);
+  ol.usedW = ol.cw ?? SETTLE.lastW;
+  return termChars(ol.usedW);
+}
+function collapseGroup(col, blocks) {
+  for (const b of blocks) {
+    const el = col.seats.get(b.id);
+    if (!PANEL.open.has(b.id)) fillFlow(el.querySelector('.term'), Display.collapseLines(el.fullLines, true, 'click to open').map((line) => typeof line === 'string' ? { cls: 'plain', text: line } : line));
+  }
+}
+// 返回 false 表示有新栏的宽度猜错了，下一帧重画
+function settleTerms() {
+  // 量：这时这一帧的 DOM 都写完了，只排一次版
+  const fold = [...SETTLE.groups].filter(([col]) => { const box = col.querySelector('.seats'); return box.clientHeight > 0 && box.scrollHeight > box.clientHeight; });
+  let again = false;
+  for (const ol of SETTLE.widths) {
+    const w = ol.clientWidth;
+    if (!w) continue; // 量不到宽度（栏还没显示出来）：不重画，等它显示出来以后的下一次
+    if (termChars(w) !== termChars(ol.usedW)) again = true;
+    ol.cw = w; SETTLE.lastW = w;
+  }
+  // 宽度和折行时用的不一样（新栏先借的宽度、窗口缩放、栏数变了）：下一帧按量到的宽度重画。
+  // 连着最多重画两次，免得滚动条一出一没让宽度来回变
+  SETTLE.retries = again ? (SETTLE.retries || 0) + 1 : 0;
+  if (SETTLE.retries > 2) again = false;
+  // 写：放不下的已结束组每席只留四行（贴底等下面一起做）
+  SETTLE.on = true;
+  try { for (const [col, blocks] of fold) collapseGroup(col, blocks); } finally { SETTLE.on = false; }
+  // 贴底：再排一次版，之后只改滚动位置，不会再触发排版
+  for (const ol of SETTLE.stick) ol.scrollTop = ol.scrollHeight;
+  SETTLE.stick.clear(); SETTLE.groups.clear(); SETTLE.widths.clear();
+  return !again;
 }
 
 // 填一段对话流，默认跟着贴在底部；往上翻看时不再跟随，翻回底部又恢复。
@@ -3613,7 +3723,8 @@ function fillFlow(ol, lines) {
     }, { passive: true });
   }
   fillTerm(ol, lines);
-  if (ol.stick) ol.scrollTop = ol.scrollHeight;
+  if (!ol.stick) return;
+  if (SETTLE.on) SETTLE.stick.add(ol); else ol.scrollTop = ol.scrollHeight;
 }
 const setAvatar = (img, key) => { if (img.dataset.key !== key) { img.src = avatarSrc(key); img.alt = look(key).name; img.dataset.key = key; } };
 
@@ -3707,12 +3818,10 @@ function fillGroup(col, u, t) {
     if (b.host) fillHostSeat(el, b.host, numbers.runs.get(b.host.id)); else fillSeat(el, b.lane, t, numbers.runs.get(currentRun(b.lane, t).id), head.split);
   });
   for (const [id, el] of col.seats) if (!seen.has(id)) { el.remove(); col.seats.delete(id); }
-  // 先量全文实际高度，再决定是否每席保留四行，展开的席始终显示全文。
-  const collapse = !queue.length && !states.some((s) => s.running) && box.clientHeight > 0 && box.scrollHeight > box.clientHeight;
-  if (collapse) for (const b of blocks) {
-    const el = col.seats.get(b.id);
-    if (!PANEL.open.has(b.id)) fillFlow(el.querySelector('.term'), Display.collapseLines(el.fullLines, true, 'click to open').map((line) => typeof line === 'string' ? { cls: 'plain', text: line } : line));
-  }
+  // 先量全文实际高度，再决定是否每席保留四行，展开的席始终显示全文（renderTerms 里留到最后集中量）
+  const collapsible = !queue.length && !states.some((s) => s.running);
+  if (SETTLE.on) { if (collapsible) SETTLE.groups.set(col, blocks); }
+  else if (collapsible && box.clientHeight > 0 && box.scrollHeight > box.clientHeight) collapseGroup(col, blocks);
   let finished = col.querySelector('.all-done');
   if (!finished) { finished = document.createElement('div'); finished.className = 'all-done'; col.append(finished); }
   setText(finished, states.length && !queue.length && !states.some((s) => s.running) ? `✔ ${Display.D.dashAllFinishedShort}` : '');
@@ -3748,7 +3857,7 @@ function fillSeat(el, lane, t, no, split = false) {
   setText(el.querySelector('b'), Display.modelLabel(run.meta));
   setText(el.querySelector('.st'), st.right.filter(Boolean).join(' '));
   setText(el.querySelector('.role'), Display.seatLine(run.meta, { title: split }));
-  const ol = el.querySelector('.term'), width = Math.max(20, Math.floor((ol.clientWidth || 560) / 6.6) - 4);
+  const ol = el.querySelector('.term'), width = termWidth(ol);
   let lines = open ? timeline(lane, t, { open: true }) : ended ? conclusion(r, width)
     : Display.liveLines(liveState(lane, r, t), 8, width, TERM_C).map((text) => ({ cls: 'plain', text }));
   if (!lines.length && st.running && !liveState(lane, r, t).api.req) lines = [{ cls: 'plain', text: Display.D.watchWorking }];
@@ -3769,7 +3878,7 @@ function fillHostSeat(el, h, no = 0) {
   setText(el.querySelector('b'), Display.modelLabel(run.meta));
   setText(el.querySelector('.st'), st.right.filter(Boolean).join(' '));
   setText(el.querySelector('.role'), Display.seatLine(run.meta));
-  const ol = el.querySelector('.term'), width = Math.max(20, Math.floor((ol.clientWidth || 560) / 6.6) - 4);
+  const ol = el.querySelector('.term'), width = termWidth(ol);
   el.fullLines = conclusion(h, width); fillFlow(ol, el.fullLines);
   const use = el.querySelector('.use'); use.hidden = false;
   setText(use.firstChild, Display.seatUsage(run.meta, run.result)); setText(use.lastChild, h.id);
@@ -4413,7 +4522,7 @@ function sizeCanvas(cv, w, h, dpr) {
 }
 
 function drawFx(t, L) {
-  const dpr = devicePixelRatio || 1, w = viewEl.clientWidth, h = viewEl.clientHeight, T = FLYFX;
+  const dpr = devicePixelRatio || 1, { cw: w, ch: h } = viewBox(), T = FLYFX;
   sizeCanvas(FX.cv, w, h, dpr); sizeCanvas(FX.ov.cv, w, h, dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
@@ -5478,7 +5587,7 @@ function drawUniverse(L) {
 }
 function drawUniverseOn(L) {
   // 星图都是柔光，按 1 倍像素画看不出差别，高分屏上要画的像素少很多
-  const dpr = Math.min(devicePixelRatio || 1, 1), w = viewEl.clientWidth, h = viewEl.clientHeight, cv = UFX.cv;
+  const dpr = Math.min(devicePixelRatio || 1, 1), { cw: w, ch: h } = viewBox(), cv = UFX.cv;
   if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
     cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
     cv.style.width = `${w}px`; cv.style.height = `${h}px`;
@@ -6089,10 +6198,13 @@ function wake() { if (!raf) raf = requestAnimationFrame(frame); }
 // 数据一直在来的对话（正在干活的那个）事件很密：数据变了最快每 250 毫秒刷新一次；界面操作（UI.ver）马上刷新；没变也每半秒刷新一次。
 // 飞入动画进行中用量表和终端区在画面下方还没露出来，先不搭（一次要算整份统计、建整块 DOM），免得和动画抢同一帧；
 // 落地后先搭用量表，搭完了再搭终端区，两块不挤在同一帧里。
-// 用量表和终端区一次只新建约 12 毫秒的行（第一次搭、行一下多了很多时），没建完的下一帧接着建（again）
-const DOM = { version: -1, ui: -1, at: 0, deferred: false, again: false };
+// 用量表和终端区一次只新建约 12 毫秒的行（第一次搭、行一下多了很多时），没建完的下一帧接着建（again）。
+// 卡片没建完（world，06-cards.js 的 renderWorld 分帧建）时下一帧只接着建卡片，用量表和终端区不跟着重画
+const DOM = { version: -1, ui: -1, at: 0, deferred: false, again: false, world: false };
 function domStep(nowMs, landing) {
-  if (!(UI.ver !== DOM.ui || B.version !== DOM.version && nowMs - DOM.at >= 250 || nowMs - DOM.at > 500 || DOM.again || DOM.deferred && !landing)) return null;
+  if (!(UI.ver !== DOM.ui || B.version !== DOM.version && nowMs - DOM.at >= 250 || nowMs - DOM.at > 500 || DOM.again || DOM.deferred && !landing)) {
+    return DOM.world ? { table: false, terms: false } : null;
+  }
   DOM.version = B.version; DOM.ui = UI.ver; DOM.at = nowMs; DOM.again = false;
   if (landing) { DOM.deferred = 'all'; return { table: false, terms: false }; }
   if (DOM.deferred === 'all') return { table: true, terms: false };
@@ -6127,6 +6239,7 @@ function step() {
   if (nowMs - lastFrame < (moving ? FRAME_BUSY : FRAME_IDLE) - 3) { wake(); return; }
   lastFrame = nowMs;
   UV.fitCache = null; UV.frame++;
+  viewBox(); // 先量视图，这一帧后面写 DOM 以后不再量（05-world.js）
   // 连不上看板服务超过 20 秒：多半是服务退出了或者换了新地址，重连旧地址没有用，提示去拿新链接（只说一次，连上后重置）。
   // 每帧都查：飞进看板以后星图那一层不再画，也要能提示
   // 已经确认服务退出、显示着一直留着的提示时，不拿这条会淡出的盖掉
@@ -6139,7 +6252,7 @@ function step() {
     if (share.uni > 0) uniFrame(share.fx <= 0);
     applyShare(share);
     renderCrumb();
-    if (share.fx <= 0) { wake(); return; }
+    if (share.fx <= 0) { if (FLY.mode === 'in') warmBoard(); wake(); return; }
   }
   stepReel(nowMs);
   const t = now();
@@ -6152,14 +6265,24 @@ function step() {
   if (dom) {
     loadFinals();
     renderTop(t);
-    renderWorld(t, L);
+    const world = renderWorld(t, L);
     const table = dom.table ? renderTable(t) : true, terms = dom.terms ? renderTerms(t, L) : true;
     domDrawn(dom, table, terms);
+    DOM.world = !world; // 卡片还没建完，下一帧接着建
   }
   placeWorld(L, t);
-  // 往下滚到终端、星图整个移出屏幕时不画画布
-  if ((viewMoving || nowMs - lastFx >= 30) && viewEl.getBoundingClientRect().bottom > 0) { lastFx = nowMs; drawFx(t, L); }
+  // 往下滚到终端、星图整个移出屏幕时不画画布。镜头不动时画布约 30 帧就够了；飞入飞出的弧线区炸开、收拢时每帧都画，
+  // 不然它只有宇宙层一半的帧数，看起来一顿一顿的
+  const flying = FLY.mode === 'in' || FLY.mode === 'out';
+  if ((viewMoving || flying || nowMs - lastFx >= 30) && viewBox().bottom > 0) { lastFx = nowMs; drawFx(t, L); }
   wake();
+}
+
+// 飞入的前一段看板还没开始画、宇宙层一帧只要几毫秒：趁这时先把 Claude Code 车道的统计算好（长对话有两万条统计事件，
+// 第一次算要十几毫秒，之后有缓存），免得堆到看板第一帧里，和建卡片、第一次画画布挤在一起
+function warmBoard() {
+  const cc = B.laneById.get('cc');
+  if (cc?.rate_events.length) laneStats(cc, now());
 }
 
 // 宇宙层：所有对话的星图（08-uni-*.js），飞进某个对话之前不画看板
@@ -6190,7 +6313,7 @@ function uniFrame(alone = true) {
   }
   stepUni();
   // 往下滚到终端、星图整个移出屏幕时不画
-  if (viewEl.getBoundingClientRect().bottom > 0) drawUniverse(L);
+  if (viewBox().bottom > 0) drawUniverse(L);
   setText($("zoom-val"), `${Math.round((UV.k / uniFitGoal().k) * 100)}%`);
 }
 
