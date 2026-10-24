@@ -93,7 +93,7 @@ test('续接时跳过开工前的会话文件，只读新增请求用量', async
   next.payload.response_id = 'resp_new'; next.payload.usage = usage;
   // 拖 1.6 秒，让这一轮有能算速度的时长（duration_s 取整到秒）
   const scenario = h.scenario({ session_id: sessionId, append_rollout: true, rollout: [next], steps: [{ delay_ms: 1600 }] }, 'resume');
-  const r = output(await h.bridge(['resume', '--run', parent.run_id, '--level', 'complex', '--brief', '-'], { env: scenario.env }));
+  const r = output(await h.bridge(['resume', '--run', parent.run_id, '--level', 'complex', '--brief', '-', '--reason', 'rework'], { env: scenario.env }));
   assert.deepEqual(h.events(r.run_id).filter((e) => e.type === 'step.usage').map((e) => e.usage), [usage]);
   assert.equal(r.usage_scope, 'this_run');
   assert.equal(r.usage.input_tokens, 120); assert.equal(r.usage.output_tokens, 40);

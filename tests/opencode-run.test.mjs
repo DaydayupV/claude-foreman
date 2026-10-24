@@ -140,7 +140,7 @@ test('opencode 执行和续接需要用户授权，项目配置不能开启执�
   assert.equal(r.effective.modules.run.complex, 'claude code');
   failed(await h.bridge(taskArgs(h, 'run', ['--agent', 'oc'])), M.runAccessRequired('oc', 'opencode cli'));
   seedRun(h, 'previous-exec', { agent: 'oc', agent_type: 'opencode cli', run_access: 'edit' });
-  failed(await h.bridge(['resume', '--run', 'previous-exec', '--level', 'complex', '--brief', '-', '--agent', 'oc']), M.runAccessRequired('oc', 'opencode cli'));
+  failed(await h.bridge(['resume', '--run', 'previous-exec', '--level', 'complex', '--brief', '-', '--reason', 'rework', '--agent', 'oc']), M.runAccessRequired('oc', 'opencode cli'));
   assert.equal(h.calls().filter((c) => ['run', 'exec'].includes(c.operation)).length, 0, JSON.stringify(h.calls()));
 });
 
@@ -283,7 +283,7 @@ test('opencode 续接同一会话和组范围 track，权限变化记入 notes',
   const s = h.scenario({ last_message: report });
   const first = output(await h.bridge(taskArgs(h, 'run', ['--group', 'work', '--scope', 'src', '--track', 'ignored.txt']), { env: s.env }));
   // 续接只能接最新的一轮，每次都接上一轮
-  const resume = (run) => ['resume', '--run', run.run_id, '--level', 'complex', '--brief', '-'];
+  const resume = (run) => ['resume', '--run', run.run_id, '--level', 'complex', '--brief', '-', '--reason', 'rework'];
   const same = output(await h.bridge(resume(first), { env: s.env }));
   assert.equal(same.run_access, 'edit'); assert.equal(same.session_id, first.session_id); assert.deepEqual(same.notes, []);
   c.agents.oc.run_access = 'shell'; h.config(c);

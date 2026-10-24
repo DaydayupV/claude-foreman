@@ -7,7 +7,49 @@ import { plannedSandbox as sandbox, plannedArgs, output, failed, seedRun, taskAr
 import { report, discussion, review } from './fixtures/reports.mjs';
 const M = MESSAGES.zh;
 const url = (file) => JSON.stringify(pathToFileURL(path.join(ROOT, 'foreman/skills/dispatch/scripts', file)).href);
-const resume = (id, extra = []) => ['resume', '--run', id, '--level', 'complex', '--brief', '-', '--no-snapshot', ...extra];
+const resume = (id, extra = []) => ['resume', '--run', id, '--level', 'complex', '--brief', '-', '--reason', 'rework', '--no-snapshot', ...extra];
+
+test('执行和图像续接缺少或写错 --reason 时说明三个值，且不启动协作方', async (t) => {
+  const h = sandbox(t);
+  for (const module of ['run', 'image']) {
+    seedRun(h, `parent-${module}`, { module });
+    const args = ['resume', '--run', `parent-${module}`, '--brief', '-', ...(module === 'run' ? ['--level', 'complex'] : [])];
+    for (const flags of [[], ['--reason'], ['--reason', 'invalid']]) {
+      const r = await h.bridge([...args, ...flags]);
+      failed(r, M.resumeReason(flags[1]));
+      for (const value of ['rework', 'answer', 'recover']) assert.ok(r.stderr.includes(`${value}：`), r.stderr);
+    }
+    failed(await h.bridge(['resume', '--run', `parent-${module}`, '--reason', '--brief', '-']), M.resumeReason());
+  }
+  assert.equal(h.calls().length, 0); assert.equal(h.records().length, 2);
+});
+
+test('讨论续接拒绝 --reason，审查先报原有的不能续接', async (t) => {
+  const h = sandbox(t);
+  seedRun(h, 'parent-discuss', { module: 'discuss', kind: 'discuss', mode: 'discuss' });
+  seedRun(h, 'parent-review', { module: 'review', kind: 'review', mode: 'review' });
+  for (const flags of [['--reason', 'answer'], ['--reason']]) {
+    failed(await h.bridge(['resume', '--run', 'parent-discuss', '--brief', '-', ...flags]), M.resumeReasonDiscuss);
+    failed(await h.bridge(['resume', '--run', 'parent-review', '--brief', '-', ...flags]), M.reviewNoResume);
+  }
+  assert.equal(h.calls().length, 0); assert.equal(h.records().length, 2);
+});
+
+for (const [reason, status, result] of [
+  ['answer', 'done', { status: 'done', report }],
+  ['recover', 'done', { status: 'done', report }],
+  ['rework', 'timeout', { status: 'timeout' }],
+]) test(`续接 ${reason} 不一致时只写一条 notes，声明保存在子轮且每轮重填`, async (t) => {
+  const h = sandbox(t), parent = seedRun(h, 'parent', { status }, result);
+  const before = fs.readFileSync(path.join(parent, 'meta.json'), 'utf8');
+  const r = output(await h.bridge(['resume', '--run', 'parent', '--level', 'complex', '--brief', '-', '--reason', reason, '--no-snapshot']));
+  assert.deepEqual(r.notes, [M.resumeReasonMismatch(reason, status)]);
+  assert.deepEqual(h.result(r.run_id).notes, r.notes);
+  assert.equal(json(path.join(r.run_dir, 'meta.json')).resume_reason, reason);
+  assert.equal(fs.readFileSync(path.join(parent, 'meta.json'), 'utf8'), before);
+  failed(await h.bridge(['resume', '--run', r.run_id, '--level', 'complex', '--brief', '-']), M.resumeReason());
+  assert.equal(h.calls().length, 1); assert.equal(h.records().length, 2);
+});
 
 test('续接拒绝运行中和旧轮次，锁内阻止并行分叉，最新结束轮次可续接', async (t) => {
   const h = sandbox(t), id = '20000101-root';

@@ -246,9 +246,11 @@ test('图像续接沿用格子、路线、计划及席位，不读 run 等级且
   const first = output(await h.bridge(launch(p, ['--scope', 'out']), { env: firstScenario.env }));
   for (const level of ['simple', 'normal', 'complex']) c.modules.run[level] = 'claude code'; h.config(c);
   fs.unlinkSync(answersFile(h));
-  failed(await h.bridge(['resume', '--run', first.run_id, '--brief', '-', '--level', 'complex']), M.imageNoLevel);
+  failed(await h.bridge(['resume', '--run', first.run_id, '--brief', '-', '--level', 'complex', '--reason', 'rework']), M.imageNoLevel);
   const secondScenario = h.scenario({ images: ['new.png'] }, 'resume');
-  const second = output(await h.bridge(['resume', '--run', first.run_id, '--brief', '-', '--track', 'new.svg'], { env: secondScenario.env }));
+  const second = output(await h.bridge(['resume', '--run', first.run_id, '--brief', '-', '--reason', 'rework', '--track', 'new.svg'], { env: secondScenario.env }));
+  assert.equal(json(path.join(second.run_dir, 'meta.json')).resume_reason, 'rework');
+  assert.equal(Object.hasOwn(json(path.join(first.run_dir, 'meta.json')), 'resume_reason'), false);
   assert.deepEqual([second.module, second.cell, second.step, second.route, second.level, second.mode, second.plan, second.seat], ['image', 'generate', 'generate', 2, null, 'resume', p.plan_id, 1]);
   assert.deepEqual(second.generated_images.map((p) => path.basename(p)), ['new.png']); assert.equal(second.parent, first.run_id);
   assert.ok((await h.bridge(['status'])).stdout.includes('resume'));
@@ -256,12 +258,12 @@ test('图像续接沿用格子、路线、计划及席位，不读 run 等级且
   // 续接没有记轮次，按续接链数出第 2 轮
   assert.ok(watched.stdout.includes(`  ${D.dots(['image', second.run_id, 'generate', 'route ②', D.watchRound(2)])}\n`), watched.stdout);
   c.agents.second = { ...c.agents.codex }; c.modules.image.generate = [{ agent: 'second' }]; h.config(c);
-  failed(await h.bridge(['resume', '--run', second.run_id, '--brief', '-']), M.resumeAgentNotInCell('codex', 'modules.image.generate', 'second'));
+  failed(await h.bridge(['resume', '--run', second.run_id, '--brief', '-', '--reason', 'rework']), M.resumeAgentNotInCell('codex', 'modules.image.generate', 'second'));
   c.modules.image.generate = null; h.config(c);
-  failed(await h.bridge(['resume', '--run', second.run_id, '--brief', '-']), M.imageCellClosed('modules.image.generate'));
+  failed(await h.bridge(['resume', '--run', second.run_id, '--brief', '-', '--reason', 'rework']), M.imageCellClosed('modules.image.generate'));
   c.modules.image.generate = [{ agent: 'codex' }]; h.config(c);
   h.write('.claude/foreman.json', { modules: { image: { generate: null } } });
-  failed(await h.bridge(['resume', '--run', second.run_id, '--brief', '-']), M.cellClosedByProject('modules.image.generate', false));
+  failed(await h.bridge(['resume', '--run', second.run_id, '--brief', '-', '--reason', 'rework']), M.cellClosedByProject('modules.image.generate', false));
 });
 
 test('普通执行及其续接出图告警，draw 路线 3/4 检查位图而路线 2 允许混合', async (t) => {
@@ -270,7 +272,7 @@ test('普通执行及其续接出图告警，draw 路线 3/4 检查位图而路�
   const run = output(await h.bridge(['run', '--cwd', h.cwd, '--level', 'complex', '--brief', '-', '--no-snapshot'], { env: s.env }));
   assert.ok(run.warnings.includes(M.imageOutsideModule));
   const more = h.scenario({ images: ['outside-resume.png'] }, 'more');
-  const resumed = output(await h.bridge(['resume', '--run', run.run_id, '--level', 'complex', '--brief', '-', '--no-snapshot'], { env: more.env }));
+  const resumed = output(await h.bridge(['resume', '--run', run.run_id, '--level', 'complex', '--brief', '-', '--reason', 'rework', '--no-snapshot'], { env: more.env }));
   assert.ok(resumed.warnings.includes(M.imageOutsideModule));
   for (const route of [4, 3, 2]) {
     answer(h, route); const p = output(await h.bridge(planArgs(h, 'draw', route)));
@@ -327,7 +329,7 @@ test('超过 2 MB 且被 gitignore 忽略的 SVG 仍检查，启动与续接自�
   assert.ok(r.changes.files.some((f) => f.path === 'out/large.svg' && f.status === 'A'));
   assert.ok(r.warnings.includes(M.vectorEmbedsBitmap('③', 'out/large.svg')));
   const next = h.scenario({ files: { 'more/resume.svg': '<svg><image/></svg>' } }, 'ignored-resume');
-  const resumed = output(await h.bridge(['resume', '--run', r.run_id, '--brief', '-', '--scope', 'more', '--scope', outside, '--scope', 'more'], { env: next.env }));
+  const resumed = output(await h.bridge(['resume', '--run', r.run_id, '--brief', '-', '--reason', 'rework', '--scope', 'more', '--scope', outside, '--scope', 'more'], { env: next.env }));
   assert.deepEqual(resumed.track, ['out', 'more']);
   assert.ok(resumed.changes.files.some((f) => f.path === 'more/resume.svg'));
   assert.ok(resumed.warnings.includes(M.vectorEmbedsBitmap('③', 'more/resume.svg')));
@@ -357,7 +359,7 @@ test('续接沿用 scope 时自己的上一轮不算同组其他任务，脚本�
   const p = output(await h.bridge(planArgs(h, 'draw', 3)));
   const first = output(await h.bridge(launch(p, ['--scope', 'out']), { env: h.scenario({ files: { 'out/first.svg': '<svg><path/></svg>' } }, 'first').env }));
   const next = h.scenario({ files: { 'out/resumed.svg': '<svg><image href="x.png"/></svg>' } }, 'second');
-  const r = output(await h.bridge(['resume', '--run', first.run_id, '--brief', '-'], { env: next.env }));
+  const r = output(await h.bridge(['resume', '--run', first.run_id, '--brief', '-', '--reason', 'rework'], { env: next.env }));
   const file = r.changes.files.find((f) => f.path === 'out/resumed.svg');
   assert.equal(file.by, 'unknown'); assert.equal(file.group_run, undefined);
   assert.ok(r.warnings.includes(M.vectorEmbedsBitmap('③', 'out/resumed.svg')));

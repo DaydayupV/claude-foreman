@@ -11,7 +11,7 @@ test('续接使用上一轮会话并沿用组、范围和 track，用量只算�
     { stats: { ...sessionStats, info: { ...sessionStats.info, total_token_usage: Object.fromEntries(Object.entries(usage).map(([k, v]) => [k, v * 2])) } }, images: ['second.png'] },
   ] });
   const first = output(await h.bridge(taskArgs(h, 'run', ['--group', 'resume-group', '--scope', 'src', '--track', 'ignored.txt', '--no-snapshot']), { env: s.env }));
-  const second = output(await h.bridge(['resume', '--run', first.run_id, '--brief', '-', '--level', 'complex', '--track', './ignored.txt', '--no-snapshot'], { env: s.env, input: '继续合成任务' }));
+  const second = output(await h.bridge(['resume', '--run', first.run_id, '--brief', '-', '--level', 'complex', '--reason', 'rework', '--track', './ignored.txt', '--no-snapshot'], { env: s.env, input: '继续合成任务' }));
   assert.equal(second.mode, 'resume');
   assert.equal(second.parent, first.run_id);
   assert.equal(second.session_id, first.session_id);

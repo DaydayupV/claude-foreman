@@ -246,12 +246,12 @@ test('续接到 "claude code" 的等级时必须给等级并点名，推理强�
   const h = sandbox(t);
   h.config(baseConfig());
   const first = output(await h.bridge(args(h, 'run', ['--level', 'complex'])));
-  const resume = ['resume', '--run', first.run_id, '--brief', '-', '--no-snapshot'];
+  const resume = ['resume', '--run', first.run_id, '--brief', '-', '--reason', 'rework', '--no-snapshot'];
   failed(await h.bridge([...resume, '--level', 'normal']), M.levelForClaude('normal'));
   const named = output(await h.bridge([...resume, '--level', 'normal', '--agent', 'codex']));
   assert.equal(named.agent, 'codex');
   assert.equal(named.effort, 'high');
-  failed(await h.bridge(['resume', '--run', named.run_id, '--brief', '-', '--no-snapshot', '--effort', 'low']), M.missingLevel('simple / normal / complex'));
+  failed(await h.bridge(['resume', '--run', named.run_id, '--brief', '-', '--reason', 'rework', '--no-snapshot', '--effort', 'low']), M.missingLevel('simple / normal / complex'));
   // 续接只能接最新的一轮，所以从 named 接着续
-  assert.equal(output(await h.bridge(['resume', '--run', named.run_id, '--brief', '-', '--no-snapshot', '--level', 'normal', '--agent', 'codex', '--effort', 'low'])).effort, 'low');
+  assert.equal(output(await h.bridge(['resume', '--run', named.run_id, '--brief', '-', '--reason', 'rework', '--no-snapshot', '--level', 'normal', '--agent', 'codex', '--effort', 'low'])).effort, 'low');
 });

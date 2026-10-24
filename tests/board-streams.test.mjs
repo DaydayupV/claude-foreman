@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { webcrypto } from 'node:crypto';
 
 const source = ['00-text', '01-state', '01-universe', '08-uni-fly', '09-main'].map((name) =>
   fs.readFileSync(new URL(`../board/web/${name}.js`, import.meta.url), 'utf8')).join('\n');
@@ -10,9 +11,9 @@ const session = { id: 'conversation', project: 'project', title: 'test', state: 
 const universe = { projects: [{ key: 'project', name: 'test' }], sessions: [session], agents: [] };
 
 // health：卡住提示后再问服务时的结果（refused 是服务已经退出，timeout 是连接被占满）；不给时页面里没有 AbortSignal.timeout，不去问
-function board({ search = '', replay = false, lang = 'zh', visibility = 'visible', health } = {}) {
+function board({ search = '', replay = false, lang = 'zh', visibility = 'visible', health, shared = false } = {}) {
   let time = 0, timerId = 0, peak = 0, demoStarts = 0, api, channel = null;
-  const timers = new Map(), intervals = new Map(), streams = [], notices = [], requests = [], listeners = new Map(), elements = new Map();
+  const timers = new Map(), intervals = new Map(), streams = [], workers = [], notices = [], requests = [], listeners = new Map(), elements = new Map();
   const active = () => streams.filter((es) => es.readyState !== 2);
   class EventSource {
     readyState = 0; listeners = new Map();
@@ -38,6 +39,13 @@ function board({ search = '', replay = false, lang = 'zh', visibility = 'visible
   const camera = () => ({ k: 1, tx: 0, ty: 0, auto: true });
   const context = vm.createContext({ window: { __LANG__: lang, __BOARD_MODE__: replay ? 'replay' : 'live' },
     location: new URL(`http://localhost/board/${search}`), history: { replaceState() {} }, URL, URLSearchParams, EventSource, document,
+    crypto: webcrypto, navigator: {},
+    ...(shared ? { SharedWorker: class {
+      constructor() {
+        this.port = { sent: [], postMessage(message) { this.sent.push(message); }, start() {}, close() {} };
+        workers.push(this);
+      }
+    } } : {}),
     performance: { now: () => time, getEntriesByType: () => [] }, addEventListener() {}, requestAnimationFrame: () => 1,
     setTimeout: (fn, ms) => { const id = ++timerId; timers.set(id, { fn, at: time + ms }); return id; },
     clearTimeout: (id) => timers.delete(id),
@@ -62,7 +70,7 @@ function board({ search = '', replay = false, lang = 'zh', visibility = 'visible
   });
   vm.runInContext(`${source}\nglobalThis.api = { B, U, FLY, UI, TEXT, connect, disconnect, connectUniverse, disconnectUniverse, flyIn, flyOut, stepFly, uHello, uUniverse };`, context);
   api = context.api;
-  return { ...api, streams, active, notices, requests, el, intervals, get channel() { return channel; }, get peak() { return peak; }, get demoStarts() { return demoStarts; },
+  return { ...api, streams, workers, active, notices, requests, el, intervals, get channel() { return channel; }, get peak() { return peak; }, get demoStarts() { return demoStarts; },
     seed() {
       api.uHello(replay ? { ...hello, mode: 'replay', replay: { start: 1000, end: 1000000, speed: 2 } } : hello);
       api.uUniverse(universe);
@@ -240,4 +248,26 @@ test('在后台时没连上的页面回到前台，马上请其他看板标签�
   // 已经连上的页面回到前台不打扰别人
   const ok = board(); ok.seed(); ok.U.es.emit('open'); ok.visibility('hidden'); ok.visibility('visible');
   assert.deepEqual(ok.channel.sent, []);
+});
+
+test('共享流忽略广播让出，后台满 10 分钟仍取消订阅，worker 失败转直连后重新参与让出', async () => {
+  const b = board({ shared: true }); b.seed(); await new Promise(setImmediate);
+  const first = b.U.es, worker = b.workers[0], sent = worker.port.sent;
+  worker.port.onmessage({ data: { id: first.id, state: 'open' } });
+  b.visibility('hidden'); b.channel.onmessage({ data: 'release' });
+  assert.equal(b.U.es, first); assert.equal(first.readyState, 1);
+  b.advance(600000); assert.equal(b.U.es, null); assert.equal(first.readyState, 2);
+  assert.equal(sent.at(-1).op, 'unsub'); assert.equal(sent.at(-1).id, first.id);
+  b.visibility('visible'); await new Promise(setImmediate);
+  assert.notEqual(b.U.es, first); assert.equal(sent.at(-1).op, 'sub'); assert.equal(b.workers.length, 1);
+  worker.onerror(); assert.equal(b.active().length, 1);
+  b.visibility('hidden'); b.channel.onmessage({ data: 'release' }); assert.equal(b.active().length, 0);
+});
+
+test('共享流同样在 2 秒广播、8 秒提示，open 后清掉等待计时器', async () => {
+  const b = board({ shared: true }); b.seed(); await new Promise(setImmediate);
+  b.advance(2000); assert.deepEqual(b.channel.sent, ['release']);
+  b.advance(6000); assert.deepEqual(b.notices, [b.TEXT.streamStuck]);
+  b.workers[0].port.onmessage({ data: { id: b.U.es.id, state: 'open' } });
+  b.advance(8000); assert.deepEqual(b.notices, [b.TEXT.streamStuck]);
 });

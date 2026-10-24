@@ -132,7 +132,7 @@ test('运行中增量采集 view_image，事件、活动步骤、时间线和续
   assert.ok(verbose.stdout.includes(`◉ ${D.watchImageViewed(picture)}`));
   const nextPicture = path.join(h.cwd, 'next.png');
   const resume = h.scenario({ append_rollout: true, rollout: [viewed(nextPicture, 'next-view'), viewOutput('next-view')].map(({ timestamp, ...r }) => r) }, 'resume-views');
-  const next = output(await h.bridge(['resume', '--run', meta.id, '--level', 'complex', '--brief', '-', '--no-snapshot'], { env: resume.env }));
+  const next = output(await h.bridge(['resume', '--run', meta.id, '--level', 'complex', '--brief', '-', '--reason', 'recover', '--no-snapshot'], { env: resume.env }));
   assert.deepEqual(next.viewed_images, [{ path: nextPicture, ok: true }]);
   assert.deepEqual(h.events(next.run_id).filter((e) => e.type === 'image.viewed').map((e) => e.path), [nextPicture]);
 });
@@ -169,7 +169,7 @@ test('审查计划保存实际默认未提交范围，旧 false 计划启动仍�
 test('项目关格的派出和续接错误仅在显式 --agent 时提点名', async (t) => {
   const h = sandbox(t); h.write('.claude/foreman.json', { modules: { run: { complex: 'claude code' } } });
   seedRun(h, 'parent', { module: 'run', cell: 'complex' });
-  for (const args of [['run', '--cwd', h.cwd, '--level', 'complex', '--brief', '-'], ['resume', '--run', 'parent', '--level', 'complex', '--brief', '-']]) {
+  for (const args of [['run', '--cwd', h.cwd, '--level', 'complex', '--brief', '-'], ['resume', '--run', 'parent', '--level', 'complex', '--brief', '-', '--reason', 'rework']]) {
     for (const named of [false, true]) {
       const r = await h.bridge([...args, ...(named ? ['--agent', 'codex'] : [])]);
       failed(r, M.cellClosedByProject('modules.run.complex', named)); assert.equal(r.stderr.includes('--agent'), named);

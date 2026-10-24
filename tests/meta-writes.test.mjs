@@ -205,7 +205,7 @@ fs.renameSync = (from, to, ...args) => {
   assert.equal(h.result(first.run_id).warnings.includes(warning), false);
   assert.deepEqual(output(await h.bridge(['cancel', '--run', first.run_id])), { run_id: first.run_id, ok: false, status: 'done', note: M.cancelAlreadyEnded });
   assert.notEqual(read(file), before); assert.equal(json(file).status, 'done'); assert.equal(json(file).session_id, 'result-session'); assert.equal(json(file).dismissed_at, undefined);
-  const resumed = output(await h.bridge(['resume', '--run', first.run_id, '--brief', '-', '--level', 'complex', '--no-snapshot'], { env: s.env }));
+  const resumed = output(await h.bridge(['resume', '--run', first.run_id, '--brief', '-', '--level', 'complex', '--reason', 'rework', '--no-snapshot'], { env: s.env }));
   assert.equal(resumed.session_id, 'result-session'); assert.deepEqual(s.calls().at(-1).args.slice(-2), ['result-session', '-']);
   assert.deepEqual(s.calls().at(-1).args.slice(0, 2), ['exec', 'resume']);
 });

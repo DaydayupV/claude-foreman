@@ -320,6 +320,43 @@ test('stats 返工只算正常交回报告后的续接，图像沿根模块统�
   assert.deepEqual(r.rows.map((row) => [row.module, row.rework]), [
     ['run', { seats: 6, reworked: 1, rate: 0.17 }], ['image', { seats: 1, reworked: 1, rate: 1 }],
   ]);
+  assert.deepEqual(r.rows.map((row) => row.rework_basis), [
+    { inferred_seats: 6, inferred_reworked: 1 }, { inferred_seats: 1, inferred_reworked: 1 },
+  ]);
+});
+
+for (const module of ['run', 'image']) test(`stats ${module} 全部声明时按原因计返工，跳过运行轮次且只归根模型`, async (t) => {
+  const h = sandbox(t), completed = { status: 'done', report: { status: 'completed' } };
+  for (const [i, [reason, result]] of [
+    ['answer', completed], ['rework', { status: 'done', report: { status: 'blocked' } }],
+    ['rework', { status: 'timeout' }], ['recover', completed],
+  ].entries()) {
+    seedRun(h, `root-${i}`, { module, model: 'root-model', status: result.status }, result);
+    seedRun(h, `next-${i}`, { module, model: 'child-model', mode: 'resume', parent: `root-${i}`, resume_reason: reason }, completed);
+  }
+  seedRun(h, 'again', { module, model: 'child-model', mode: 'resume', parent: 'next-1', resume_reason: 'rework' }, completed);
+  seedRun(h, 'running', { module, mode: 'resume', parent: 'next-0', status: 'running', pid: process.pid, ended_at: undefined });
+  const r = output(await h.bridge(['stats'])), root = r.rows.find((row) => row.model === 'root-model');
+  assert.deepEqual(root.rework, { seats: 4, reworked: 2, rate: 0.5 });
+  assert.deepEqual(root.rework_basis, { inferred_seats: 0, inferred_reworked: 0 });
+  assert.equal(r.rows.find((row) => row.model === 'child-model').rework.seats, 0);
+  assert.equal(r.totals.running_skipped, 1);
+});
+
+test('stats 部分声明按席合并推断，显式 rework 排除只靠推断的返工且不改写旧记录', async (t) => {
+  const h = sandbox(t), completed = { status: 'done', report: { status: 'completed' } }, files = [];
+  for (const [i, reason] of ['answer', 'rework', 'answer'].entries()) {
+    files.push(seedRun(h, `root-${i}`, {}, i === 2 ? { status: 'done', report: { status: 'blocked' } } : completed));
+    files.push(seedRun(h, `old-${i}`, { mode: 'resume', parent: `root-${i}` }, completed));
+    files.push(seedRun(h, `new-${i}`, { mode: 'resume', parent: `old-${i}`, resume_reason: reason }, completed));
+  }
+  for (const module of ['discuss', 'review']) seedRun(h, module, { module, kind: module, mode: module });
+  const before = files.map((dir) => fs.readFileSync(path.join(dir, 'meta.json'), 'utf8'));
+  const r = output(await h.bridge(['stats'])), row = r.rows.find((row) => row.module === 'run');
+  assert.deepEqual(row.rework, { seats: 3, reworked: 2, rate: 0.67 });
+  assert.deepEqual(row.rework_basis, { inferred_seats: 3, inferred_reworked: 1 });
+  for (const row of r.rows.filter((row) => row.module !== 'run')) assert.equal(Object.hasOwn(row, 'rework_basis'), false);
+  assert.deepEqual(files.map((dir) => fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')), before);
 });
 
 test('stats 正常交回 partial 报告后的续接也算返工', async (t) => {

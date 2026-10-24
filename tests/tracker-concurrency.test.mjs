@@ -171,6 +171,24 @@ test('记录目录放在项目内时，显式 track 项目也不会把任一任�
   }
 });
 
+test('快照存原始字节：项目改了 .gitattributes 的换行设置，没改过的 CRLF 文件不算改动', async (t) => {
+  const h = sandbox(t);
+  h.write('.gitattributes', '* text=auto eol=lf\n');
+  h.write('fixtures/crlf.csv', 'a,b\r\nc,d\r\n');
+  const r = output(await h.start('-e', [snapshotScript(h, String.raw`
+    const before = tracker.snap('before');
+    fs.appendFileSync('.gitattributes', '*.csv -text\n');
+    const after = tracker.snap('after');
+    const patchFile = ${JSON.stringify(path.join(h.home, 'attributes.patch'))};
+    const diff = tracker.diff(before, after, patchFile);
+    const stored = spawn('git', ['--git-dir', gitDir, 'rev-parse', before.tree + ':fixtures/crlf.csv'], { encoding: 'utf8', windowsHide: true }).stdout.trim();
+    const raw = spawn('git', ['hash-object', '--no-filters', 'fixtures/crlf.csv'], { encoding: 'utf8', windowsHide: true }).stdout.trim();
+    console.log(JSON.stringify({ files: diff.files, stored, raw }));
+  `)]).done);
+  assert.deepEqual(r.files, [{ status: 'M', path: '.gitattributes' }]);
+  assert.equal(r.stored, r.raw);
+});
+
 test('中文路径及 5 MB 前后阈值保留原有大小文件语义', async (t) => {
   const h = sandbox(t), size = 5 * 1024 * 1024;
   h.write('中文/阈下.bin', Buffer.alloc(size - 1));

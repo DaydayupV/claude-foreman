@@ -48,7 +48,7 @@ test('旧部分等级先继承，模型覆盖拆分且清除覆盖字段', async
   }
   assert.deepEqual(c.resolved_modules.review.simple, [{ agent: 'base-model', model: 'base-model', effort: 'medium', required: false }]);
   seedRun(h, '20000101-split', { agent: 'codex', agent_type: 'codex', model: 'run-model', status: 'timeout' });
-  const response = await h.bridge(['resume', '--run', '20000101-split', '--level', 'normal', '--agent', 'codex', '--brief', '-', '--no-snapshot']);
+  const response = await h.bridge(['resume', '--run', '20000101-split', '--level', 'normal', '--agent', 'codex', '--brief', '-', '--reason', 'recover', '--no-snapshot']);
   const resumed = output(response);
   assert.equal(resumed.agent, 'run-model');
   assert.equal(resumed.model, 'run-model');
@@ -199,7 +199,7 @@ test('旧类型和旧代号在 status、watch、resume 及并发准入中继续�
     const watch = await h.bridge(['watch', '--run', id, '--verbose']);
     assert.equal(watch.code, 0, watch.stderr);
     assert.ok(watch.stdout.includes(type === 'opencode' ? 'opencode CLI' : type === 'openai-compatible' ? 'API' : 'Codex CLI'));
-    const r = output(await h.bridge(['resume', '--run', id, '--level', 'complex', '--brief', '-', '--no-snapshot']));
+    const r = output(await h.bridge(['resume', '--run', id, '--level', 'complex', '--brief', '-', ...(kind === 'exec' ? ['--reason', 'recover'] : []), '--no-snapshot']));
     assert.equal(r.agent, name === 'oc' ? 'model' : name === 'api' ? 'remote' : 'renamed');
     assert.equal(r.agent_type, type === 'opencode' ? 'opencode cli' : type === 'openai-compatible' ? 'api' : 'codex cli');
   }

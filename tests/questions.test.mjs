@@ -49,7 +49,7 @@ test('Codex 四个入口默认 never，显式 approval 覆盖默认值', async (
     if (approval) c.agents.codex.approval = approval;
     h.config(c);
     const first = output(await h.bridge(taskArgs(h, 'run', ['--no-snapshot'])));
-    const resumed = output(await h.bridge(['resume', '--run', first.run_id, '--brief', '-', '--level', 'complex', '--no-snapshot']));
+    const resumed = output(await h.bridge(['resume', '--run', first.run_id, '--brief', '-', '--level', 'complex', '--reason', 'rework', '--no-snapshot']));
     const reviewed = output(await h.bridge(taskArgs(h, 'review', ['--no-snapshot'])));
     const s = h.scenario({ last_message: { ...discussion, open_questions: [] } }, 'discuss');
     const discussed = output(await h.bridge(discussArgs(h, 'codex'), { env: s.env }));
@@ -155,7 +155,7 @@ for (const tool of ['codex', 'oc']) {
     assert.ok(w.stdout.includes(`${D.watchInputPromptPrefix}Continue? (y/n)`));
     assert.ok(!w.stdout.includes('✗'));
     const next = h.scenario({ last_message: tool === 'codex' ? report : discussion }, 'resume');
-    const resumed = output(await h.bridge(['resume', '--run', r.run_id, '--brief', '-', '--level', 'complex', '--no-snapshot'], { env: next.env }));
+    const resumed = output(await h.bridge(['resume', '--run', r.run_id, '--brief', '-', '--level', 'complex', ...(tool === 'codex' ? ['--reason', 'answer'] : []), '--no-snapshot'], { env: next.env }));
     assert.equal(resumed.session_id, r.session_id);
     assert.equal(resumed.status, 'done');
     assert.ok(!output(await h.hook('session-reminder.mjs')).hookSpecificOutput.additionalContext.includes(r.run_id));

@@ -155,7 +155,7 @@ test('Codex 用量白名单保留已报告的缓存写入，并对续接扣除�
   const initial = output(await h.bridge(taskArgs(h, 'run', ['--no-snapshot']), { env: first.env }));
   assert.equal(initial.usage.cache_write_input_tokens, 100000); assert.equal(initial.cost_usd, 2.67);
   const next = h.scenario({ stats: { info: { total_token_usage: Object.fromEntries(Object.entries(total).map(([k, v]) => [k, v * 2])) } } }, 'next');
-  const resumed = output(await h.bridge(taskArgs(h, 'resume', ['--run', initial.run_id, '--no-snapshot']), { env: next.env }));
+  const resumed = output(await h.bridge(taskArgs(h, 'resume', ['--run', initial.run_id, '--reason', 'rework', '--no-snapshot']), { env: next.env }));
   assert.equal(resumed.usage.cache_write_input_tokens, 100000); assert.equal(resumed.usage_scope, 'this_run');
   assert.equal(resumed.cost_source, 'api_price'); assert.equal(resumed.cost_usd, 2.67);
   assert.deepEqual(json(path.join(resumed.run_dir, 'result.json')), resumed);
