@@ -6,7 +6,8 @@ import { sandbox, seedRun, poll, write, json, MESSAGES } from './helpers.mjs';
 import { report } from './fixtures/reports.mjs';
 import { textWidth } from '../foreman/skills/dispatch/scripts/util.mjs';
 
-const D = MESSAGES.en;
+import { D as displayText } from '../foreman/skills/dispatch/scripts/display.mjs';
+const D = { ...MESSAGES.en, ...displayText };
 const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
 const said = (text) => ({ type: 'item.completed', ts: new Date().toISOString(), item: { type: 'agent_message', text } });
 const live = { status: 'running', pid: process.pid, ended_at: undefined };
@@ -171,6 +172,22 @@ test('祖先第一次显示时读不出、后来恢复，再续接仍沿用原�
   const after = await frameWhere(watch, size, has('再续接的正文'));
   assert.ok(has('2 ● chain')(after) && has('1 ✔ peer')(after), after.join('\n'));
   assert.ok(!after.some((line) => /^3 /.test(line)), after.join('\n'));
+  watch.stop();
+  await watch.done;
+});
+
+test('同名组里别的对话的计划不占号：只按这个对话（和接着它做的）计划与任务编号', async (t) => {
+  const h = sandbox(t), group = 'shared-name', size = '120x40', at = Date.now();
+  for (const [plan, minutes] of [['old-plan', 60], ['new-plan', 1]]) write(path.join(h.runs, 'plans', `${plan}.json`), { plan_id: plan, module: 'run', cell: 'normal', group, cwd: h.cwd,
+    created_at: new Date(at - minutes * 60000).toISOString(), seats: [1, 2].map((seat) => ({ seat, agent: 'codex' })), required: [] });
+  seedRun(h, '20000101-000001-old', { group, plan: 'old-plan', seat: 1, claude_session: 'old-session', model: 'old-one' }, { status: 'done', report });
+  seedRun(h, '20000101-000002-old', { group, plan: 'old-plan', seat: 2, claude_session: 'old-session', model: 'old-two' }, { status: 'done', report });
+  seedRun(h, '20000101-000003-new', { ...live, group, plan: 'new-plan', seat: 1, model: 'new-one' });
+  seedRun(h, '20000101-000004-new', { ...live, group, plan: 'new-plan', seat: 2, model: 'new-two' });
+  const watch = open(h, group, size);
+  const frame = await frameWhere(watch, size, (f) => has('new-one')(f) && has('new-two')(f));
+  assert.ok(has('1 ● new-one')(frame) && has('2 ● new-two')(frame), frame.join('\n'));
+  assert.ok(!has('old-one')(frame), frame.join('\n'));
   watch.stop();
   await watch.done;
 });

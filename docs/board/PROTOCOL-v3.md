@@ -148,6 +148,7 @@ The page keeps the latest summary per id and rebuilds everything from `universe`
 - The universe stream sends each `session`, `project` and `agents` message at the mapped time at which its source entry or run event happened.
 - Summary rules that depend on `now` use the mapped replay time.
 - `GET /sessions?replay=all&t=<sec>` gives the state at `start + t × speed`, like a v1 snapshot.
+- Replayed messages keep their record times (`original_ts`, `original_started_at`, `original_ended_at`) and `hello.replay.time_map` maps play time back to record time, so speeds, durations and the clock are the same as live (PROTOCOL-v2 §5).
 
 ## 9. One conversation in detail (`session=<id>`)
 

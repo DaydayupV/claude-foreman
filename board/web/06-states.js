@@ -21,7 +21,10 @@ function askAt(lane, t) {
 // 排队看事件：最近一条有意义的事件是 queued 就还在排（回放里 run 消息的 queued 标记只反映结尾）
 function fateAt(lane, r, t) {
   if (!r || r.started_at > t) return null;
-  if (r.ended_at != null && r.ended_at <= t) return r.status === 'done' ? 'done' : r.status === 'cancelled' ? 'cancelled' : 'failed';
+  if (r.ended_at != null && r.ended_at <= t) {
+    const kind = seatStatus(lane, r, t).kind;
+    return ['ok', 'partial', 'blocked', 'resumed'].includes(kind) ? kind === 'ok' ? 'done' : kind : r.status === 'cancelled' ? 'cancelled' : 'failed';
+  }
   for (let i = lane.events.length - 1; i >= 0; i--) {
     const ev = lane.events[i];
     if (ev.run !== r.id || ev.ts > t || ev.k === 'usage') continue;
@@ -56,10 +59,9 @@ function decorateCard(el, lane, t) {
   }
   const live = lane.runs.filter((x) => x.started_at <= t && x.kind !== 'answer'), r = live[live.length - 1];
   const fate = fateAt(lane, r, t);
-  for (const c of ['queued', 'cancelled', 'failed']) el.classList.toggle(c, fate === c);
+  for (const c of ['queued', 'cancelled', 'failed', 'partial', 'blocked', 'resumed']) el.classList.toggle(c, fate === c);
   const over = outOfScope(lane, r, t).length, st = el.querySelector('.st');
-  if (fate === 'queued') setText(st, st.textContent.replace('running', 'queued'));
-  if (over) setText(st, `${st.textContent} · ${TEXT.outOfScope(over)}`);
+  if (over) st.title = TEXT.outOfScope(over); else st.title = '';
   st.classList.toggle('bad', st.classList.contains('bad') || over > 0);
 }
 

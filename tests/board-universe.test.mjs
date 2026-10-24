@@ -276,6 +276,22 @@ async function startServer(t, f, args = [], env = {}) {
   return { child, exited, message, url, address: url && `${url.origin}${url.pathname}` };
 }
 
+test('无 run 或 Claude Code 记录时，快照和直播仍传递计划及队列，离队后发空快照', { timeout: 10000 }, async (t) => {
+  const f = temp(t), at = Date.now(), ticket = path.join(f.options.runs, '.state/queue/codex/1.json');
+  f.write(ticket, { sequence: 1, pid: process.pid, pid_started_at: new Date(Math.ceil(performance.timeOrigin)).toISOString(),
+    expires_at: new Date(at + 60000).toISOString(), queued_at: new Date(at - 1000).toISOString(),
+    agent: 'codex', group: 'g', claude_session: 's', plan: 'p', seat: 1, title: 'waiting' });
+  f.write(path.join(f.options.runs, 'plans/p.json'), { plan_id: 'p', module: 'run', group: 'g', cell: 'normal', created_at: new Date(at - 2000).toISOString(), seats: [{ seat: 1, agent: 'codex' }] });
+  const { address } = await startServer(t, f);
+  const snapshot = await (await fetch(`${address}snapshot?session=s`)).json();
+  assert.equal(snapshot.runs.length, 0); assert.ok(snapshot.events.some((e) => e.k === 'fplan' && e.plan === 'p'));
+  assert.equal(snapshot.events.find((e) => e.k === 'dispatch_queue').tickets.length, 1);
+  const frames = await collect(`${address}stream?session=s`, (m) => m.event === 'ev' && m.data.k === 'dispatch_queue' && m.data.tickets.length === 0,
+    (m) => { if (m.event === 'ev' && m.data.k === 'dispatch_queue' && m.data.tickets.length) fs.unlinkSync(ticket); });
+  assert.equal(frames.filter((m) => m.event === 'ev' && m.data.k === 'fplan').length, 1);
+  assert.deepEqual(frames.filter((m) => m.event === 'ev' && m.data.k === 'dispatch_queue').map((m) => m.data.tickets.length), [1, 0]);
+});
+
 test('live routes preserve guards and updates, reject replay/from; debug replay shares its clock and from scheduling', { timeout: 15000 }, async (t) => {
   const f = temp(t), liveNow = Date.now();
   f.session('s', [row('user', liveNow - 20000, 'first'), answer(liveNow - 10000)], 'demo', liveNow);
@@ -459,7 +475,8 @@ test('page mode strips live replay/from before connecting, retains legacy fly-in
   for (const [query, mode, runSession, pending, route] of [
     ['replay=20261023-120000-pick&from=123&lang=zh', 'live', 'assigned', 'assigned', 'snapshot?run=20261023-120000-pick'],
     ['replay=group&from=0&s=&focus=here', 'live', 'assigned', 'assigned', 'snapshot?group=group'],
-    ['replay=orphan', 'live', null, 'orphan', 'snapshot?group=orphan'],
+    // 查不到的组名不再当成对话 id 飞进去，改为提示找不到
+    ['replay=orphan', 'live', null, null, 'snapshot?group=orphan'],
     ['replay=all&from=0', 'live', null, null, null],
     ['from=1&s=chosen', 'live', null, 'chosen', null],
     ['replay=all&s=chosen', 'replay', null, 'chosen', null],
@@ -481,8 +498,11 @@ test('page mode strips live replay/from before connecting, retains legacy fly-in
     await new Promise(setImmediate);
     assert.equal(vm.runInContext('FLY.pending', context), pending, query);
     assert.deepEqual(requests, route ? [route] : [], query);
-    assert.equal(notice.textContent, showNotice ? '回放是调试功能，这里显示的是实时画面。要回放，请运行 board --replay <对话、任务或组>' : '', query);
-    assert.equal(timers.length, showNotice ? 1 : 0, query);
+    const expectedNotice = query === 'replay=orphan' ? '记录里找不到这个地址里的组：orphan'
+      : showNotice ? '回放是调试功能，这里显示的是实时画面。要回放，请运行 board --replay <对话、任务或组>' : '';
+    assert.equal(notice.textContent, expectedNotice, query);
+    // 查不到的组先后有两条提示（回放链接的说明、找不到），各自一个淡出计时
+    assert.equal(timers.length, showNotice ? (query === 'replay=orphan' ? 2 : 1) : 0, query);
     if (showNotice) {
       assert.equal(timers[0].ms, 12000); timers[0].fn(); assert.deepEqual(classes, ['faded']);
       const cleaned = new URL(replacements[0]); assert.equal(cleaned.searchParams.has('replay'), false); assert.equal(cleaned.searchParams.has('from'), false);

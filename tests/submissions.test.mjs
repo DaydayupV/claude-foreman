@@ -1,3 +1,4 @@
+import { D as displayText } from '../foreman/skills/dispatch/scripts/display.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -243,7 +244,7 @@ test('watch 组视图里 Claude Code 席排在最前、和外部席一样写身�
     for (const flags of [[], ['--verbose']]) {
       const single = await h.bridge(['watch', '--run', a.run_id, ...flags], { env: { FOREMAN_LANG: lang } });
       assert.equal(single.code, 0, single.stderr); assert.match(single.stdout, new RegExp(`✔ host-model · Claude Code +${submitted}\\n`));
-      assert.ok(single.stdout.includes(MESSAGES.en.watchAnswerSubmitted(1)) && single.stdout.includes(discussion.position), single.stdout);
+      assert.ok(single.stdout.includes(displayText.watchAnswerSubmitted(1)) && single.stdout.includes(discussion.position), single.stdout);
       assert.ok(!single.stdout.includes('Codex CLI'), single.stdout);
     }
   }

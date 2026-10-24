@@ -221,7 +221,7 @@ export function createUniverse(options) {
     return [...runs.values()].map((run) => {
       // 基线结果可能迟到，累计用量不能沿用缺基线时缓存的消息。
       if (run.result?.usage_scope === 'session_total') run.message = null;
-      return run.message ??= { ...runMessage(run, laneOf(run, runs), options.prices, runs),
+      return run.message ??= { ...runMessage(run, laneOf(run, runs), options.prices, runs, { display: false }),
         session: run.meta.claude_session, host: run.meta.participant === 'host', since: run.tail.state.since ?? null };
     });
   };
@@ -340,7 +340,8 @@ export function createUniverse(options) {
       for (const run of data.runs) if (!invalid.has(run.id)) { times.push(run.started_at); times.push(run.kind === 'host' ? data.hostEnd : run.ended_at); }
       for (const event of data.events) if (!invalid.has(event.run)) times.push(event.ts);
       for (const run of data.runs.filter((r) => r.id !== 'cc' && r.kind !== 'answer' && Number.isFinite(r.started_at))) {
-        const final = { ...run, session: session.id, host: false, since: null };
+        const { display, ...summary } = run;
+        const final = { ...summary, session: session.id, host: false, since: null };
         sources.push({ time: run.started_at, id: session.id, run: { ...final, status: 'running', ended_at: null, usage: null, ...costFields(null, 'unknown'), queued: false } });
         if (Number.isFinite(run.ended_at)) sources.push({ time: run.ended_at, id: session.id, run: final });
         for (const source of queues.get(run.id)?.sources || []) sources.push({ ...source, id: session.id });

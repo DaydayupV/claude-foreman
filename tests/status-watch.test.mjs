@@ -8,7 +8,8 @@ import { sandbox, taskArgs, output, failed, poll, seedRun, expected, json, read,
 import { command } from './fixtures/reports.mjs';
 import { watchRecords, watchText } from './fixtures/watch.mjs';
 const M = MESSAGES.zh;
-const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
+import { D as displayText } from '../foreman/skills/dispatch/scripts/display.mjs';
+const D = { ...MESSAGES.en, ...displayText }; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
 
 test('status 列表按记录排序并汇总当前会话的组', async (t) => {
   const h = sandbox(t);
@@ -216,4 +217,21 @@ test('用量行写 run avg，取消、超时、卡死的轮次标 partial usage'
   assert.equal(r.code, 0, r.stderr);
   assert.ok(r.stdout.includes('run avg 40 tok/s') && !r.stdout.includes('run avg 40 tok/s (partial usage)'), r.stdout);
   assert.ok(r.stdout.includes('run avg 4 tok/s (partial usage)'), r.stdout);
+});
+
+test('续接链成环时 watch --run 照常结束，不会卡住', async (t) => {
+  const h = sandbox(t);
+  seedRun(h, '20000101-000001-ring', { parent: '20000101-000002-ring', mode: 'resume' }, { status: 'done', report: { status: 'completed', summary: 'a' } });
+  seedRun(h, '20000101-000002-ring', { parent: '20000101-000001-ring', mode: 'resume' }, { status: 'done', report: { status: 'completed', summary: 'b' } });
+  const r = await h.bridge(['watch', '--run', '20000101-000001-ring', '--no-intro'], { timeout: 20000 });
+  assert.equal(r.code, 0, r.stderr);
+});
+
+test('原生审查（没有结构化报告）的结论在单任务视图结尾照样写出', async (t) => {
+  const h = sandbox(t);
+  seedRun(h, '20000101-000001-native', { module: 'review', kind: 'review', mode: 'review' },
+    { status: 'done', native_review: true, report: null, last_message: 'Native review says: the cache key ignores the locale.' });
+  const r = await h.bridge(['watch', '--run', '20000101-000001-native', '--no-intro']);
+  assert.equal(r.code, 0, r.stderr);
+  assert.ok(r.stdout.includes('the cache key ignores the locale'), r.stdout);
 });

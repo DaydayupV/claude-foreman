@@ -169,6 +169,8 @@ test('活进程比 started_at 晚 500 毫秒启动时，cancel 判成复用，�
   assert.equal(fs.existsSync(path.join(dir, 'cancel')), false); assert.equal(fs.existsSync(path.join(dir, 'result.json')), false);
   const m = json(path.join(dir, 'meta.json'));
   assert.equal(m.status, 'interrupted'); assert.ok(Number.isFinite(Date.parse(m.dismissed_at)));
+  // 补上结束时间（最后一次活动），看板不会把它当成一直在跑
+  assert.ok(Number.isFinite(Date.parse(m.ended_at)) && Date.parse(m.ended_at) <= Date.parse(m.dismissed_at), m.ended_at);
 });
 
 test('强行结束前再次核对身份：进程号复用只标记中断，查不到启动时间就拒绝结束且不改记录', async (t) => {

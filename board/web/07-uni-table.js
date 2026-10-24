@@ -3,6 +3,7 @@
 // 星图里悬停的星系对应的行也亮起来；点一行飞进那个对话。
 // 飞进某个对话以后，07-table.js / 07-terms.js 换回这个对话的明细（08-uni-fly.js 的 resetBoardView 会清空这里留下的东西）。
 
+let uniHotRow = null; // 上一次滚到可见的悬停行
 const UNI_HEAD = ['', 'conversation', 'project', 'state', 'seats', 'done · failed', 'input · cache', 'output', 'cost', 'last'];
 const UNI_ROWS = new Map();
 // 记录时间里过去了多久：几秒、几分钟、几小时
@@ -57,6 +58,13 @@ function renderUniTable() {
     if (s.cost_usd == null || s.cost_partial) tot.priced = false;
   });
   for (const [id, tr] of UNI_ROWS) if (!U.sessions.has(id)) { tr.remove(); UNI_ROWS.delete(id); }
+  // 星图里悬停到某个星系时，它那一行滚出了表格的可视区就滚过去，联动才看得见（只滚表格自己，不动整页；同一次悬停只滚一次）
+  const hotRow = UV.hot ? UNI_ROWS.get(UV.hot.s.id) : null;
+  if (hotRow && hotRow !== uniHotRow && !UV.pick) {
+    const r = hotRow.getBoundingClientRect(), b = body.getBoundingClientRect();
+    if (r.top < b.top) body.scrollTop -= b.top - r.top; else if (r.bottom > b.bottom) body.scrollTop += r.bottom - b.bottom;
+  }
+  uniHotRow = hotRow;
   // 最近一段时间没有派发过的对话时，表格里写一句提示
   let empty = body.querySelector('.empty');
   if (!list.length && !empty) { empty = document.createElement('p'); empty.className = 'empty'; body.append(empty); }
@@ -78,7 +86,7 @@ function renderUniTop() {
   const c = U.clock, t = uNow(), replay = c.mode === 'replay';
   setText($('scope'), U.demo ? `demo · ×${c.speed}` : replay ? `replay · all · ×${c.speed}` : c.frozenAt != null ? 'snapshot · all' : 'live · all');
   const pct = replay && Number.isFinite(c.end) ? Math.round(((t - c.start) / Math.max(1, c.end - c.start)) * 100) : null;
-  setText($('clock'), `${new Date(t).toTimeString().slice(0, 8)}${pct != null ? ` · ${pct}%` : ''}`);
+  setText($('clock'), `${new Date(Display.recordedTime(t, replay ? U.hello?.replay?.time_map : null)).toTimeString().slice(0, 8)}${pct != null ? ` · ${pct}%` : ''}`);
   const w = pct != null ? `${pct}%` : '0';
   if ($('progress').style.width !== w) $('progress').style.width = w;
   const st = $('status');

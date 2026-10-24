@@ -6,7 +6,8 @@ import { setTimeout as pause } from 'node:timers/promises';
 import { sandbox, seedRun, poll, write, MESSAGES } from './helpers.mjs';
 import { readKeys, splitKeys } from '../foreman/skills/dispatch/scripts/watch-screen.mjs';
 
-const D = MESSAGES.en;
+import { D as displayText } from '../foreman/skills/dispatch/scripts/display.mjs';
+const D = { ...MESSAGES.en, ...displayText };
 const collect = (t) => {
   const batches = [], read = readKeys((keys) => batches.push(keys));
   t.after(read.stop);

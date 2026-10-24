@@ -127,3 +127,31 @@ The `run.usage` object uses the same four names (`input`, `cached`, `cache_write
   - otherwise null.
 - `changed`: up to 40 files from `result.json` `changes.files`, as `[{ "path", "kind", "added", "removed" }]`, using whichever of those fields the record has.
 - `cost_source`, as in §3.
+- `usage_scope`: copied from `result.json` when the record has it. A Codex resume whose usage is the session's running total (`session_total`) is turned into this round's increment before it is sent: the server subtracts the previous round's total along the resume chain (adding up `this_run` rounds back to the root, or stopping at an earlier `session_total`), and then sends `usage_scope: "this_run"`. A root round with a session total counts from zero. When the baseline can't be worked out (a missing ancestor, another session, a total that went down), `usage` is `null` and `usage_unattributed: true`; the page shows "—" for that run's input, output and average, with a hover note.
+- `display`: what the shared display rules (`scripts/display.mjs`) need to draw the same seat block as `foreman watch`. `null` while the run has no result. Fields:
+  - `status`, `valid`, `needs_decision`, `stale`, `duration_s`, `native_review`, `review_target`;
+  - `report`: `status`, `position`, `summary`, `verdict`, `findings` (`id`, `severity`, `location`, `issue`), `decision_requests` (`source`, `question`, `why_it_matters`, `recommendation`, `options`), `open_issues`, `open_questions`, `unverified`;
+  - `questions` (same shape as `decision_requests`), `errors` (with transient reconnect notes left out for runs that finished normally, as in the terminal);
+  - `usage` (the four `result.json` token fields as recorded), `usage_scope`, `last_request` (`tokens`, `window`), `output_tokens_per_s`, `cost_usd`, `cost_source`;
+  - `changes`: `available`, `files_total`, `agent_total`, `reported_total`, `unknown_total`, `group_total`;
+  - `last_message`.
+  Every text is cut at 4000 characters and every list at 30 items.
+- `display_round`: the round number, counting resumes back along the chain (execution and image resumes have no `round` of their own).
+- `module`, `participant`, `submitted_at`, `author`, `model_name`, `display_model`, `cell`, `route`: copied from the record, for the same seat lines as the terminal.
+- `dispatch_queue`: dispatches of the same group and conversation that are still waiting for a slot (`agent`, `title`, `plan`, `seat`, `queued_at`, `position`), at most 30. They have no run yet, so they have no seat number.
+
+The terminal live views and the web board's terminal section draw seat blocks with the same functions from `scripts/display.mjs`; `board/build.mjs` inlines that file into the page as a `Display` object. Labels in that section are English in both plugins, like the terminal.
+
+## 5. Rates
+
+The board and `foreman` show two different speeds. They are measured differently and can't be compared with each other.
+
+- **Run average** (`output_tokens_per_s` in `result.json` and `stats`, `run avg N tok/s` in the terminal): this round's output tokens (reasoning included) divided by its `duration_s`, which includes snapshots, commands, waiting for the provider and report repair requests, but not time spent queueing locally for a slot. Cancelled, timed-out and stalled rounds only count requests that finished, so they are marked `(partial usage)`.
+- **Board estimates** (cards `now ≈ N tok/s · gen avg ≈ M`, table columns `now ≈tok/s`, `last 2 min`, `gen avg ≈tok/s`), built from output segments:
+  - A `usage` event covers the time since the previous usage event of the same run (or the run's start). `step.usage` events carry one request's usage; `end` marks the last one of a turn; a turn total (`tot`) only fills what per-request usage didn't cover. opencode's final request often has no `step_finish`, so after its session export the adapter sends the rest as one more `step.usage` with `usage_from` and `usage_to` giving the interval it covers.
+  - Between usage events, `think` and `answer` character counts are turned into tokens at 4 characters per token.
+  - Recognised command periods (Codex command events) are taken out of the generation time. opencode and pi have no command start events, so their tool time can't be taken out.
+  - A single gap counts as generation time for at most 5 minutes.
+  - `now`: an estimate over the last 10 seconds; it may borrow earlier samples of the same model. `last 2 min`: a curve of 40 points, each one the output in about 6 seconds divided by that time. `gen avg`: the seat's total output divided by its estimated generation time.
+- **Completeness:** the page keeps statistics events (no text, up to 20000 per lane) apart from the 600-event display cache, and the server sends that compact history as `rate_events` with every snapshot, first connect, reconnect and backlog reset. When a finished run's segments don't add up to its final output (within a relative tolerance), its average shows "—" instead of a wrong number. The Claude Code lane is exempt, because its usage comes from the transcript's messages.
+- **Replays:** a replay still plays on the compressed clock (`maxgap`), but every replayed message keeps its record times as `original_ts`, `original_started_at` and `original_ended_at`, and `hello.replay.time_map` maps play time back to record time. Speeds, generation time, durations and the clock use record time, so a replay shows the same numbers as the live board whatever `--maxgap` and `--speed` are. The replay top-up (final output minus what the segments counted) only goes into the part of the run's time that no segment covers.

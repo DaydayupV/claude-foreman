@@ -5,6 +5,7 @@ import path from 'node:path';
 import { plannedSandbox as sandbox, output, failed, baseConfig, opencodeAgent, piAgent, apiAgent, taskArgs, read, json, write, poll, seedRun, MESSAGES } from './helpers.mjs';
 import { discussion, review, report } from './fixtures/reports.mjs';
 import { apiServer } from './fake/api-server.mjs';
+import { D as displayText } from '../foreman/skills/dispatch/scripts/display.mjs';
 const M = MESSAGES.zh;
 
 for (const agent of ['oc', 'pi', 'api']) for (const kind of ['discuss', 'review']) test(`${agent} 的${M.modeNames[kind]}只读等级为 tools`, async (t) => {
@@ -109,7 +110,7 @@ test('config 和 check 每方一条 audited 提醒，沙箱配置覆盖后不提
 
 // 显示文字中英两个插件一样，都是英文那一套
 for (const lang of ['zh', 'en']) test(`watch 非 TTY 显示审查结论、问题和未验证项，组和详细视图沿用结论（${lang} 插件）`, async (t) => {
-  const h = sandbox(t), m = MESSAGES.en, findings = ['high', 'medium', 'medium'].map((severity, i) => ({
+  const h = sandbox(t), m = { ...MESSAGES.en, ...displayText }, findings = ['high', 'medium', 'medium'].map((severity, i) => ({
     id: `F${i + 1}`, location: `source.txt:${i + 1}`, issue: 'missing guard', trigger: 'empty input', severity, evidence: 'empty path', suggestion: 'check first',
   }));
   const result = { status: 'done', exit_code: 0, duration_s: 1, report: { ...review, verdict: 'issues_found', findings, unverified: ['runtime unverified'] },

@@ -371,15 +371,15 @@ export function registerRun(dir, meta, cfg) {
   return null;
 }
 
-const queueDir = (agent) => path.join(RUNS_ROOT, '.state', 'queue', encodeURIComponent(agent));
+const queueDir = (agent, root = RUNS_ROOT) => path.join(root, '.state', 'queue', encodeURIComponent(agent));
 const readSequence = (file) => {
   try { const n = JSON.parse(fs.readFileSync(file, 'utf8')); return Number.isSafeInteger(n) && n >= 0 ? n : 0; }
   catch { return 0; }
 };
 // Node 起点是系统进程启动时间的上界；沿用 runner 的“更晚启动才确认复用”，兼容 ps 的秒精度。
 const ticketOwner = (ticket) => ({ status: 'running', pid: ticket.pid, started_at: ticket.pid_started_at ?? ticket.queued_at, ticket: true });
-function queueTickets(agent, clean = false) {
-  const dir = queueDir(agent), tickets = [];
+function queueTickets(agent, clean = false, root = RUNS_ROOT) {
+  const dir = queueDir(agent, root), tickets = [];
   const now = Date.now();
   let lastSequence = 0;
   let names;
@@ -423,11 +423,11 @@ function queueTickets(agent, clean = false) {
   return Object.assign(tickets, { lastSequence });
 }
 
-export function queuedRuns(group) {
-  const dir = path.join(RUNS_ROOT, '.state', 'queue');
+export function queuedRuns(group, root = RUNS_ROOT) {
+  const dir = path.join(root, '.state', 'queue');
   let agents;
   try { agents = fs.readdirSync(dir); } catch (e) { if (e.code === 'ENOENT') return []; throw e; }
-  const queues = agents.map((name) => queueTickets(decodeURIComponent(name)));
+  const queues = agents.map((name) => queueTickets(decodeURIComponent(name), false, root));
   // status 是按需读取，一次批量核验展示项；派发等待循环只核验队首。
   checkRunners(queues.flat().map(ticketOwner));
   // 读不出的票据照样占位次，但没有标题可显示，只计进位次

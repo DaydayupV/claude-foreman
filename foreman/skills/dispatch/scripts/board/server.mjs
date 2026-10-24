@@ -193,14 +193,30 @@ async function main() {
   let poll = null, connections = 0, idleSince = feed?.hasRunning(Date.now()) ? null : Date.now();
   const send = (client, event, data) => client.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   const liveUpdate = (client, data) => {
+    const queue = data.events.find((ev) => ev.k === 'dispatch_queue'), queueText = JSON.stringify(queue?.tickets);
+    if (queue && client.queue !== queueText) { send(client, 'ev', queue); client.queue = queueText; }
+    // 计划事件单独发，不走每个任务最多 200 条的正文截取：编号要靠完整的计划声明（Claude Code 车道很长时计划会被截掉）。
+    // 内容变了再发一次，页面按计划 id 替换
+    client.plans ??= new Map();
+    const sendPlans = (filter = () => true) => {
+      for (const ev of data.events) if (ev.k === 'fplan' && filter(ev)) {
+        const text = JSON.stringify(ev);
+        if (client.plans.get(ev.plan) !== text) { send(client, 'ev', ev); client.plans.set(ev.plan, text); }
+      }
+    };
+    sendPlans();
     for (const run of data.runs) {
       const text = JSON.stringify(run), previous = client.seen.get(run.id), revision = data.revisions[run.id];
       if (previous?.text !== text || previous?.revision !== revision) send(client, 'run', run);
-      const events = data.events.filter((ev) => ev.run === run.id), version = data.versions[run.id];
+      const events = data.events.filter((ev) => ev.run === run.id && ev.k !== 'dispatch_queue' && ev.k !== 'fplan'), version = data.versions[run.id];
       const keyOf = (ev) => ev.messageId || JSON.stringify({ ...ev, target: undefined });
       const links = run.id === 'cc' ? new Map(events.map((ev) => [keyOf(ev), ev.target])) : null;
       // 记录被从头重读了（文件被替换、截短后重写，版本变了）：整份重发并让页面先清掉这个任务的旧事件，不能把新旧两份叠在一起
-      if (!previous || previous.version !== version) send(client, 'backlog', { run: run.id, events: backlog(events), rate_events: rateHistory(events), ...(previous ? { reset: true } : {}) });
+      if (!previous || previous.version !== version) {
+        send(client, 'backlog', { run: run.id, events: backlog(events), rate_events: rateHistory(events), ...(previous ? { reset: true } : {}) });
+        // 页面清掉这个任务的旧事件时也清掉了挂在它上面的计划：补发
+        if (previous) { for (const [plan, text] of client.plans) if (JSON.parse(text).run === run.id) client.plans.delete(plan); sendPlans((ev) => ev.run === run.id); }
+      }
       else if (links) for (const ev of events) {
         const key = keyOf(ev);
         if (!previous.links.has(key)) send(client, 'ev', ev);
@@ -322,7 +338,8 @@ async function main() {
         const t = url.searchParams.has('t') ? Number(url.searchParams.get('t')) : Infinity;
         if (replay && (!Number.isFinite(t) && t !== Infinity || t < 0)) return end(400);
         const snapshot = replay ? snapshotAt(replay, t) : { hello: hello(data, opened), runs: data.runs,
-          events: data.runs.flatMap((run) => backlog(data.events.filter((ev) => ev.run === run.id))),
+          events: [...data.runs.flatMap((run) => backlog(data.events.filter((ev) => ev.run === run.id && ev.k !== 'fplan'))),
+            ...data.events.filter((ev) => ev.k === 'fplan' || !data.runs.some((r) => r.id === ev.run))],
           rate_events: data.runs.flatMap((run) => rateHistory(data.events.filter((ev) => ev.run === run.id))) };
         return end(200, 'application/json', JSON.stringify(snapshot));
       }

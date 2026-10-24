@@ -3,9 +3,9 @@
 // 还在变的条目（正在跑的命令、折叠行、连着改的文件）直接输出时等它定下来再写。
 import fs from 'node:fs';
 import path from 'node:path';
-import { RECONNECT, oneLine, plainCommand, needsDecision, isReconnect, textWidth, fitWidth, wrapWidth } from './util.mjs';
+import { oneLine, plainCommand, needsDecision, textWidth, fitWidth, wrapWidth } from './util.mjs';
 import { D, C, termCols, visibleWidth, clock, outcomeStyle, changedFor, usageLine, commandAction, foldText, thoughtLine } from './format.mjs';
-import { resultValid } from './records.mjs';
+import { reviewConclusion, resultOutcome, realErrors, durationOf, wrapAtDots, errorAction, moduleOf, liveStatus as displayLiveStatus } from './display.mjs';
 
 const TIME_W = 6; // "00:41 "
 const inner = (W) => Math.max(8, W - 1 - TIME_W - 2);
@@ -17,38 +17,6 @@ const SEARCH_COMMAND = /^\s*(rg|grep|egrep|fgrep|findstr|git\s+grep|Select-Strin
 const MAX_ACTIONS = 3; // 两句话之间的动作只显示前几条，其余折叠成一行
 const FILE_MARKS = { update: '✎', add: '+', delete: '−' };
 
-// 用量这类" · "分开的一串：在分隔符处折行，单段太长时再按宽度折，和组视图的用量行一致
-// 单段折行时 "/" 不留在行尾，挪到下一行开头（为此按少两列折）
-function wrapAtDots(text, width) {
-  const lines = [];
-  for (const part of text.split(' · ')) {
-    const last = lines.length - 1;
-    if (last >= 0 && textWidth(`${lines[last]} · ${part}`) <= width) { lines[last] += ` · ${part}`; continue; }
-    if (textWidth(part) <= width) { lines.push(part); continue; }
-    const pieces = wrapWidth(part, Math.max(4, part.includes('/') ? width - 2 : width));
-    for (let i = 0; i < pieces.length - 1; i++) {
-      if (/\s*\/$/.test(pieces[i])) { pieces[i] = pieces[i].replace(/\s*\/$/, ''); pieces[i + 1] = `/ ${pieces[i + 1]}`; }
-    }
-    lines.push(...pieces);
-  }
-  return lines;
-}
-
-// 成功的任务不再列出临时的重连提示；旧记录把它记成了错误
-const realErrors = (r, ok) => (r?.errors || []).filter((e) => !(ok && isReconnect(e)));
-// 结果里没有用时的旧记录，按元数据的开始和结束时间算
-const durationOf = (r, m) => r?.duration_s ?? (Date.parse(m?.ended_at) - Date.parse(m?.started_at)) / 1000;
-
-function reviewConclusion(report) {
-  if (!D.watchReview[report?.verdict]) return null;
-  const findings = report.findings || [];
-  const parts = ['high', 'medium', 'low'].map((severity) => {
-    const n = findings.filter((f) => f.severity === severity).length;
-    return n ? `${D.severityNames[severity]} ${n}` : null;
-  }).filter(Boolean).join(' · ');
-  return D.watchReview[report.verdict](findings.length, parts);
-}
-
 // 结束后的状态：记号和状态词上色，后面的用时（和运行中一样的时钟）、改动、材料变了的提醒用暗色
 function finishedParts(o, durationS, changed, stale) {
   const { mark, color, word } = outcomeStyle(o);
@@ -57,12 +25,7 @@ function finishedParts(o, durationS, changed, stale) {
   return { mark, color, word, rest, line: () => C.bold(color(`${mark} ${word}`)) + rest };
 }
 
-// 运行中的状态：记号、颜色和右侧的 [状态词, 时钟]。API 协作方写思考中、回答中、排队中，从发出请求算起；排队用黄色
-function liveStatus(meta, api, now = Date.now()) {
-  if (api.queued) return { mark: '⋯', color: C.yellow, right: [D.apiPhases.queued, clock(now - Date.parse(api.req))] };
-  if (api.req) return { mark: '●', color: C.cyan, right: [D.apiPhases[api.answering ? 'answering' : 'thinking'], clock(now - Date.parse(api.req))] };
-  return { mark: '●', color: C.cyan, right: [D.statusName('running'), clock(now - Date.parse(meta.started_at))] };
-}
+const liveStatus = (meta, api, now = Date.now()) => displayLiveStatus(meta, api, now, C);
 
 // 从 events.jsonl 增量读取，每读到一个事件调用一次 onEvent；返回的函数每次调用读新写进来的部分
 function eventReader(dir, onEvent) {
@@ -255,10 +218,10 @@ function createTimeline(meta, rel, { stream = false, write = (l) => process.stdo
     if (ev.type === 'item.completed' && it.type === 'command_execution' && !actions.has(it.id)) show({ ...ev, type: 'item.started' });
     if (ev.type === 'turn.failed' || ev.type === 'error') {
       const msg = ev.error?.message || ev.message || '';
-      const re = RECONNECT.exec(msg);
-      const mark = re ? ['⚠', C.yellow] : ['✗', C.red];
-      recent('other', re ? D.watchReconnect(re[1], re[2]) : oneLine(msg), { mark });
-      if (re) sub(D.watchReconnect(re[1], re[2]), { mark });
+      const action = errorAction(msg), reconnect = action.mark === '⚠';
+      const mark = [action.mark, reconnect ? C.yellow : C.red];
+      recent('other', action.text, { mark });
+      if (reconnect) sub(action.text, { mark });
       else { newBlock(); say(ev.ts, C.red('✗'), oneLine(msg), 3); }
     } else if (ev.type === 'image.generated') {
       flushFolded();
@@ -378,6 +341,8 @@ function createTimeline(meta, rel, { stream = false, write = (l) => process.stdo
     }
     const summary = r.report?.summary || r.report?.position;
     if (summary) { line(''); para(summary, '  '); }
+    // Codex 原生审查没有结构化报告，结论是 last_message（和组视图、网页一样当结论写）
+    else if (!conclusion && !r.report && m && moduleOf(m) === 'review' && r.status === 'done' && resultOutcome(r, m).valid && r.last_message) { line(''); para(r.last_message, '  '); }
     const issues = r.report?.open_issues || r.report?.open_questions || [];
     if (issues.length) {
       line(''); line(`  ${C.bold(D.watchOpenIssues)}`);
@@ -413,12 +378,5 @@ function createTimeline(meta, rel, { stream = false, write = (l) => process.stdo
   };
 }
 
-// 只有结果文件时的状态（时间线结尾和组视图）：和 records.mjs 的 runOutcome 判断一致
-function resultOutcome(r) {
-  const blocked = r.status === 'needs_input' || r.status === 'done' && (!!r.needs_decision || r.report?.status === 'blocked');
-  const valid = resultValid(r, r);
-  const partial = !blocked && r.status === 'done' && r.report?.status === 'partial';
-  return { running: false, status: r.status, result: r, blocked, valid, partial, ok: !blocked && valid && r.status === 'done' && (!r.report?.status || r.report.status === 'completed') };
-}
 
 export { createTimeline, reviewConclusion, resultOutcome, realErrors, durationOf, finishedParts, liveStatus, eventReader, wrapAtDots, hhmm };

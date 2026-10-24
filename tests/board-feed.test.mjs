@@ -5,11 +5,44 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { normalize, laneOf, selectScope, buildReplay, snapshotAt, createFeed, runMessage, hostCost, usageTotals } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
+import { sandbox, seedRun, write } from './helpers.mjs';
 
 const start = Date.parse('2026-10-18T13:40:00Z');
 const run = { id: 'one', lane: 'root', meta: { cwd: 'C:\\work' } };
 const raw = (type, fields = {}, dt = 0) => ({ type, ts: start + dt, ...fields });
 const item = (type, fields, phase = 'item.completed', dt = 0) => raw(phase, { item: { id: 'tool', type, ...fields } }, dt);
+
+test('feed 每轮只读一次排队目录及票据，保留不可读票据的位次；历史轮次不重复携带队列', (t) => {
+  const h = sandbox(t), group = 'queue-batch', dir = path.join(h.runs, '.state/queue/codex'), at = Date.now();
+  const ticket = { pid: process.pid, pid_started_at: new Date(Math.ceil(performance.timeOrigin)).toISOString(), expires_at: new Date(at + 60000).toISOString(),
+    queued_at: new Date(at - 1000).toISOString(), agent: 'codex', claude_session: 'test-session', group, plan: 'p', seat: 1, title: 'restart ' + 'x'.repeat(300) };
+  write(path.join(dir, '1.json'), ticket); write(path.join(dir, '2.json'), ticket);
+  write(path.join(dir, '3.json'), { ...ticket, expires_at: new Date(at - 1000).toISOString() });
+  write(path.join(dir, '4.json'), { ...ticket, pid: 99999999 });
+  for (let i = 1; i <= 8; i++) seedRun(h, `20000101-00000${i}-seat`, { group, plan: 'p', seat: 1, started_at: new Date(at - 60000).toISOString() });
+  seedRun(h, '20000101-000009-other', { group: 'other-group', plan: 'other', seat: 1 });
+  seedRun(h, '20000101-000010-other-session', { group, claude_session: 'other', plan: 'other-session', seat: 1 });
+  const readdir = fs.readdirSync, read = fs.readFileSync, listed = new Map(), reads = new Map();
+  t.mock.method(fs, 'readdirSync', function (file, ...args) { if (String(file).includes(`${path.sep}queue`)) listed.set(file, (listed.get(file) || 0) + 1); return readdir.call(this, file, ...args); });
+  t.mock.method(fs, 'readFileSync', function (file, ...args) {
+    if (path.dirname(String(file)) === dir) { reads.set(file, (reads.get(file) || 0) + 1); if (path.basename(file) === '1.json') throw Object.assign(new Error('unreadable'), { code: 'EIO' }); }
+    return read.call(this, file, ...args);
+  });
+  const feed = createFeed(h.runs);
+  for (let round = 1; round <= 2; round++) {
+    const data = feed.read({ session: 'test-session' }, at + round);
+    assert.equal(listed.get(path.dirname(dir)), round); assert.equal(listed.get(dir), round);
+    for (const n of [1, 2, 3, 4]) assert.equal(reads.get(path.join(dir, `${n}.json`)), round);
+    const carrying = data.runs.filter((r) => r.dispatch_queue?.length);
+    assert.deepEqual(carrying.map((r) => r.id), ['20000101-000008-seat']);
+    assert.equal(carrying[0].dispatch_queue[0].position, 2);
+    assert.equal(carrying[0].dispatch_queue[0].title, ticket.title.slice(0, 160));
+    assert.ok(data.runs.filter((r) => r.id !== '20000101-000008-seat').every((r) => !r.dispatch_queue?.length));
+    assert.equal(data.events.find((e) => e.k === 'dispatch_queue').tickets.length, 1);
+  }
+  const before = [...listed]; runMessage({ id: 'standalone', dir: path.join(h.runs, 'x'), meta: { group }, tail: { state: {} } }, 'standalone');
+  assert.deepEqual([...listed], before);
+});
 
 test('messages, reports, PowerShell, tools, edits and the remaining protocol events', () => {
   const take = (event) => normalize(event, run, {});
@@ -36,6 +69,7 @@ test('messages, reports, PowerShell, tools, edits and the remaining protocol eve
   const usage = take(raw('api.usage', { usage: { input_tokens: 10, cached_input_tokens: 7, output_tokens: 3 } }))[0];
   assert.equal(usage.n, 13); assert.deepEqual(usage.u, { in: 3, cached: 7, cache_write: null, out: 3 });
   for (const [type, k] of [['thread.started', 'turn'], ['turn.started', 'turn'], ['api.request', 'req'], ['api.queued', 'queued'], ['api.retry', 'retry'], ['api.error', 'error'], ['turn.failed', 'error'], ['error', 'error'], ['image.generated', 'image'], ['image.viewed', 'image']]) assert.equal(take(raw(type))[0].k, k);
+  assert.equal(take(raw('image.viewed'))[0].viewed, true); assert.ok(!take(raw('image.generated'))[0].viewed);
   assert.deepEqual(take(raw('api.repair')), []);
   const long = take(raw('error', { message: `${'x'.repeat(170)}\nsecond` }))[0];
   assert.equal(long.t.length, 160); assert.ok(!long.t.includes('\n'));
@@ -261,4 +295,30 @@ test('run messages carry the Claude Code conversation that dispatched them, so a
   const runs = feed.read({ group: 'skills-roles-1018' }, Date.parse('2026-10-19T00:00:00Z')).runs.filter((r) => r.id !== 'cc');
   assert.ok(runs.length > 0);
   assert.ok(runs.every((r) => r.session === '00000000-0000-4000-8000-0000000d3e40'), JSON.stringify(runs.map((r) => r.session)));
+});
+
+test('已结束却没写结束时间的旧记录，按最后一次写事件的时刻算结束，不再一直显示在跑', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'feed-ended-')), dir = path.join(root, '20000101-000000-gone');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(dir);
+  const startedAt = Date.parse('2026-10-23T15:14:10Z'), lastEvent = Date.parse('2026-10-23T15:14:40Z');
+  fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ kind: 'exec', mode: 'run', group: 'gone', status: 'interrupted', pid: 999999,
+    started_at: new Date(startedAt).toISOString(), dismissed_at: '2026-10-23T15:20:00Z', title: 't', model: 'm' }));
+  fs.writeFileSync(path.join(dir, 'events.jsonl'), JSON.stringify({ type: 'turn.started', ts: new Date(startedAt + 1000).toISOString() }) + '\n');
+  fs.utimesSync(path.join(dir, 'events.jsonl'), lastEvent / 1000, lastEvent / 1000);
+  const data = createFeed(root).read({ group: 'gone' }, Date.parse('2026-10-24T03:00:00Z'));
+  const run = data.runs.find((r) => r.id === '20000101-000000-gone');
+  assert.equal(run.status, 'interrupted');
+  assert.equal(run.ended_at, lastEvent);
+});
+
+test('排队最多带 30 张票据并报总数，标题按 160 字截', (t) => {
+  const h = sandbox(t), group = 'queue-many', dir = path.join(h.runs, '.state/queue/codex'), at = Date.now();
+  for (let i = 1; i <= 35; i++) write(path.join(dir, `${i}.json`), { pid: process.pid, pid_started_at: new Date(Math.ceil(performance.timeOrigin)).toISOString(),
+    expires_at: new Date(at + 60000).toISOString(), queued_at: new Date(at - 1000 + i).toISOString(), agent: 'codex', claude_session: 'test-session', group,
+    plan: 'p', seat: i, title: 'x'.repeat(500), sequence: i });
+  seedRun(h, '20000101-000001-seat', { group, plan: 'p', seat: 99, started_at: new Date(at - 60000).toISOString() });
+  const queue = createFeed(h.runs).read({ session: 'test-session' }, at).events.find((e) => e.k === 'dispatch_queue');
+  assert.equal(queue.tickets.length, 30); assert.equal(queue.total, 35);
+  assert.ok(queue.tickets.every((q) => q.title.length <= 160));
 });

@@ -103,6 +103,8 @@ async function cmdCancel(o, sessionStats) {
   const print = (x) => process.stdout.write(`${JSON.stringify({ run_id: run.id, ...x }, null, 2)}\n`);
   const dismiss = (m, status, note) => {
     Object.assign(m, { status, dismissed_at: new Date().toISOString() });
+    // 没写过结束时间的（调度进程被强行结束）补上最后一次活动的时间：看板按结束时间判断还在不在跑
+    if (!m.ended_at) m.ended_at = new Date(runEnd(run.dir, m)).toISOString();
     const saved = saveMeta(run.dir, m, { final: true });
     print(saved ? { ok: true, status, dismissed: true, ...(note ? { note } : {}) } : { ok: false, status, error: metaWriteWarning(run.dir) });
   };

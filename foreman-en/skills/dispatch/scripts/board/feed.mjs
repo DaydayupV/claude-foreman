@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseTranscriptLines, createTranscriptParser, plainCommand } from './claude-feed.mjs';
 import { priceFor, costOf } from '../prices.mjs';
+import { roundOf, resultOutcome, realErrors, reviewFinding, reviewCounts, current, queuedStarted } from '../display.mjs';
+import { queuedRuns, CLAUDE_SESSION } from '../records.mjs';
 
 export const ms = (v) => v == null ? null : typeof v === 'number' ? v : Date.parse(v);
 const oneLine = (v) => String(v ?? '').replace(/\r/g, '').split('\n').map((s) => s.trim()).filter(Boolean).join(' ⏎ ');
@@ -89,7 +91,7 @@ export function normalize(raw, run, state) {
       ...(raw.type === 'turn.completed' ? { tot: 1 } : {}), ...(raw.type === 'step.usage' && raw.final ? { end: 1 } : {}),
       ...(raw.usage_from != null ? { usage_from: ms(raw.usage_from), usage_to: ms(raw.usage_to) } : {}) });
   } else if (['api.error', 'turn.failed', 'error'].includes(raw.type)) emit('error', { t: raw.message ?? raw.error?.message ?? '' });
-  else if (raw.type === 'image.generated' || raw.type === 'image.viewed') emit('image', { t: path.win32.basename(raw.path || '') });
+  else if (raw.type === 'image.generated' || raw.type === 'image.viewed') emit('image', { t: path.win32.basename(raw.path || ''), ...(raw.type === 'image.viewed' ? { viewed: true } : {}) });
   return out;
 }
 
@@ -138,7 +140,43 @@ export function imagesOf(meta, result) {
   return [...new Set(out)].slice(0, 12);
 }
 
-export function runMessage(run, lane, prices, byId) {
+// 整份显示正文设上限，先省选项和附录，保留结论、状态与完整问题计数。
+function limitDisplay(display) {
+  const size = (v) => Buffer.byteLength(JSON.stringify(v));
+  let bytes = size(display);
+  const over = () => bytes > 65536, report = display.report;
+  if (!over()) return display;
+  for (const q of [...(display.questions || []), ...(report?.decision_requests || [])]) { bytes -= size(q.options) - 2; q.options = []; }
+  for (const key of ['unverified', 'open_issues', 'open_questions']) if (over() && report) { bytes -= size(report[key]) - 2; report[key] = []; }
+  // 有效性已经单独传递，超限时可省去终端区不用的审查材料描述。
+  if (over() && display.review_target != null) { delete display.review_target; bytes = size(display); }
+  // 先裁审查问题（总数和各严重程度另有 findings_counts），再把问题和报错的长文字截短，最后才去掉问题和报错的条目
+  const findings = report?.findings;
+  while (over() && findings?.length > 1) bytes -= size(findings.pop()) + 1;
+  // 有逐条的 questions 时摘要用它，报告里的 decision_requests 不显示：先去掉它们
+  if (display.questions?.length) while (over() && report?.decision_requests?.length) bytes -= size(report.decision_requests.pop()) + 1;
+  const cut = (v) => (typeof v === 'string' && v.length > 500 ? `${v.slice(0, 500)}…` : v);
+  if (over()) {
+    for (const q of [...(display.questions || []), ...(report?.decision_requests || [])]) for (const key of Object.keys(q)) q[key] = cut(q[key]);
+    if (display.errors) display.errors = display.errors.map(cut);
+    bytes = size(display);
+  }
+  // 报错保留第一条（超时、取消这类原因写在最前面），问题从后往前去掉
+  const lists = [report?.decision_requests, display.questions, display.errors].filter(Boolean).map((xs) => ({ xs, bytes: size(xs) }));
+  while (over() && lists.some(({ xs }) => xs.length > 1)) {
+    const largest = lists.filter(({ xs }) => xs.length > 1).sort((a, b) => b.bytes - a.bytes)[0];
+    const removed = size(largest.xs.pop()) + 1;
+    bytes -= removed; largest.bytes -= removed;
+  }
+  if (over()) {
+    const shorten = (v) => typeof v === 'string' ? v.slice(0, 500) : Array.isArray(v) ? v.map(shorten)
+      : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, shorten(x)])) : v;
+    return shorten(display);
+  }
+  return display;
+}
+
+export function runMessage(run, lane, prices, byId, { display: includeDisplay = true } = {}) {
   const m = run.meta, r = run.result, kind = m.module === 'image' ? 'image' : m.kind || (['discuss', 'review'].includes(m.mode) ? m.mode : 'exec');
   const message = { id: clip(run.id), lane: clip(lane), parent: clip(m.parent), kind, model: clip(m.model_shown || m.model) };
   for (const key of ['mode', 'agent', 'agent_type', 'level', 'effort', 'group', 'round', 'plan', 'seat', 'role', 'title', 'status']) message[key] = typeof m[key] === 'string' ? clip(m[key]) : m[key] ?? null;
@@ -170,13 +208,38 @@ export function runMessage(run, lane, prices, byId) {
   const cost = costOf({ ...m, ...r, usage: rawUsage, usage_scope,
     ...(cumulative ? { cost_source: undefined } : {}) }, prices);
   const head = kind === 'discuss' ? r?.report?.position ?? first(r?.last_message) : kind === 'review' ? r?.report && `${r.report.verdict} · ${(r.report.findings || []).length} findings` : ['exec', 'image'].includes(kind) ? r?.report?.summary ?? first(r?.last_message) : null;
+  // 终端原始用量和表格的本轮增量分开传，避免续接累计量改变既有统计含义。
+  const text = (v) => v == null ? v : String(v).slice(0, 4000);
+  const list = (xs, fn = text) => (xs || []).slice(0, 30).map(fn);
+  const fields = (value, keys) => Object.fromEntries(keys.filter((k) => value?.[k] != null).map((k) => [k, text(value[k])]));
+  const question = (q) => ({ ...fields(q, ['source', 'question', 'why_it_matters', 'recommendation']), options: (q.options || []).slice(0, 10).map((v) => String(v).slice(0, 500)) });
+  const finding = (f) => fields(reviewFinding(f), ['id', 'severity', 'location', 'issue']);
+  const values = (value, keys) => value == null ? null : Object.fromEntries(keys.filter((k) => value[k] != null).map((k) => [k, value[k]]));
+  const o = resultOutcome(r, { ...m, kind });
+  const report = r?.report ? { ...fields(r.report, ['status', 'position', 'summary', 'verdict']),
+    findings: list(r.report.findings, finding), findings_counts: reviewCounts(r.report.findings),
+    decision_requests: list(r.report.decision_requests, question), decision_requests_total: (r.report.decision_requests || []).length, open_issues: list(r.report.open_issues),
+    open_questions: list(r.report.open_questions), unverified: list(r.report.unverified) } : null;
+  const changes = r?.changes;
+  const display = includeDisplay && r ? { status: r.status, valid: o.valid, needs_decision: !!r.needs_decision, report,
+    // 原来的条数：列表最多带 30 条，大小超限时还会再裁，摘要按原数写"还有 N 条"
+    questions: r.questions == null ? null : list(r.questions, question), questions_total: r.questions?.length ?? 0,
+    errors: list(realErrors(r, o.ok || o.partial)), errors_total: realErrors(r, o.ok || o.partial).length,
+    stale: r.stale === true, duration_s: r.duration_s, usage: values(r.usage, ['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'output_tokens']), usage_scope: r.usage_scope,
+    last_request: values(r.last_request ?? r.context, ['tokens', 'window']), output_tokens_per_s: r.output_tokens_per_s,
+    ...costOf({ ...m, ...r }, prices), last_message: text(r.last_message), native_review: r.native_review, review_target: r.review_target,
+    changes: changes ? { ...Object.fromEntries(['available', 'files_total', 'agent_total', 'codex_total', 'reported_total', 'unknown_total'].map((k) => [k, changes[k]])),
+      group_total: changes.group_total ?? [...(changes.files || []), ...(changes.large_files_changed || [])].filter((f) => f?.group_run).length } : null } : null;
   return { ...message, started_at: ms(m.started_at), ended_at: ms(m.ended_at), duration_s: r?.duration_s ?? null,
+    ...(includeDisplay ? { display: display && limitDisplay(JSON.parse(JSON.stringify(display))) } : {}), display_round: roundOf(m, byId ?? new Map()), module: m.module ?? (kind === 'exec' ? 'run' : kind),
+    participant: m.participant ?? null, submitted_at: ms(m.submitted_at), author: !!m.author,
+    model_name: clip(m.model_name), display_model: clip(m.model || m.model_name || m.model_shown), cell: clip(m.cell), route: m.route ?? null,
     usage, ...(r?.usage_scope != null ? { usage_scope } : {}), ...(usage_unattributed ? { usage_unattributed: true } : {}),
     ...costFields(cost.cost_usd, cost.cost_source), report_head: head ? String(head).slice(0, 160) : null,
     changed: (r?.changes?.files || []).slice(0, 40).map((f) => Object.fromEntries(['path', 'kind', 'added', 'removed'].filter((k) => k in f).map((k) => [k, f[k]]))),
     review: kind === 'review' && r?.report ? { verdict: clip(r.report.verdict, 120),
       // 审查报告的字段名见 foreman 的 review.schema.json：位置是 location，问题是 issue
-      findings: (r.report.findings || []).slice(0, 8).map((f) => ({ severity: clip(f.severity, 120), where: clip(f.location ?? f.where, 120), title: clip(f.issue ?? f.title, 120) })) } : null,
+      findings: (r.report.findings || []).slice(0, 8).map((f) => { const value = finding(f); return { severity: clip(value.severity, 120), where: clip(value.location, 120), title: clip(value.issue, 120) }; }) } : null,
     files: (r?.files || []).slice(0, 12).map((f) => ({ path: clip(f.path), chars: f.chars ?? null })), queued: !!run.tail.state.queued,
     // 执行任务允许改动的路径（并发拆分时各份互不重叠），看板在席位卡下面标出来
     scope: Array.isArray(m.scope) ? m.scope.slice(0, 8).map((p) => clip(p, 120)) : [], images: imagesOf(m, r).length };
@@ -204,7 +267,8 @@ export function buildReplay(data, { speed = 1, maxgap = 20, clock } = {}, now) {
   const invalid = new Set(data.runs.filter((run) => !Number.isFinite(run.started_at)).map((run) => run.id));
   for (const run of data.runs) {
     if (invalid.has(run.id)) continue;
-    timeline.push({ time: run.started_at, event: 'run', data: { ...run, status: run.kind === 'answer' ? run.status : 'running', ended_at: null, duration_s: null, usage: null, ...costFields(null, 'unknown'), report_head: null, changed: [], review: null, files: [], queued: false } });
+    const { display, ...initial } = run;
+    timeline.push({ time: run.started_at, event: 'run', data: { ...initial, ...(run.kind === 'answer' ? { display } : {}), status: run.kind === 'answer' ? run.status : 'running', ended_at: null, duration_s: null, usage: null, ...costFields(null, 'unknown'), report_head: null, changed: [], review: null, files: [], queued: false } });
     if (run.kind === 'host') {
       let usage = usageTotals([]), cost = 0, unknown = false;
       for (const ev of data.events.filter((e) => e.run === 'cc' && e.k === 'usage' && Number.isFinite(e.ts))) {
@@ -324,12 +388,17 @@ export function settleRun(run) {
     // 和 foreman 的 status 一样：结束时间取最后一次写事件的时刻。
     const last = stat(path.join(run.dir, 'events.jsonl')) || stat(path.join(run.dir, 'meta.json'));
     run.meta = { ...run.meta, status: 'interrupted', ended_at: run.meta.ended_at ?? (last ? last.mtimeMs : ms(run.meta.started_at)) };
+  } else if (run.meta && run.meta.status !== 'running' && run.meta.participant !== 'host' && !run.meta.ended_at) {
+    // 已经结束却没写结束时间的（调度进程被强行结束后用 cancel 标成已处理的旧记录）：取最后一次写事件的时刻，
+    // 不看 meta.json（cancel 补写它的时间会晚很多），否则页面会一直当它在跑
+    const last = stat(path.join(run.dir, 'events.jsonl'));
+    run.meta = { ...run.meta, ended_at: last ? last.mtimeMs : ms(run.meta.started_at) };
   }
 }
 
 export function createFeed(root, options = {}) {
   const cache = new Map(), changed = new Set();
-  const transcripts = new Map(), recentWindows = new Map();
+  const transcripts = new Map(), recentWindows = new Map(), queueScopes = new Set();
   const findTranscript = (runs, recent, session) => {
     if (options.transcript) return stat(options.transcript)?.isFile() ? path.resolve(options.transcript) : null;
     if (!options.claudeDir) return null;
@@ -445,8 +514,12 @@ export function createFeed(root, options = {}) {
     const file = path.join(root, 'plans', `${id}.json`), st = stat(file);
     if (!st) return null;
     let entry = plans.get(id);
-    if (entry?.signature !== `${st.size}:${st.mtimeMs}`) { entry = { signature: `${st.size}:${st.mtimeMs}`, value: json(file) }; plans.set(id, entry); }
-    const p = entry.value;
+    // 只有读成功才记下签名：一时读不到（被占用、写到一半）时沿用上一份，下次再读，不把"读不到"缓存下来
+    if (entry?.signature !== `${st.size}:${st.mtimeMs}`) {
+      const value = json(file);
+      if (value) { entry = { signature: `${st.size}:${st.mtimeMs}`, value }; plans.set(id, entry); }
+    }
+    const p = entry?.value;
     if (!p || !Number.isFinite(ms(p.created_at))) return null;
     return { run: 'cc', lane: 'cc', ts: ms(p.created_at), k: 'fplan', plan: clip(id), group: clip(p.group), t: clip(p.why), module: clip(p.module), cell: clip(p.cell ?? p.level),
       host: p.host ? { role: clip(p.host.role) } : null, seats: (p.seats || []).map((s) => ({ seat: s.seat, model: clip(s.model), agent: clip(s.agent), role: clip(s.role), required: !!s.required })) };
@@ -477,7 +550,7 @@ export function createFeed(root, options = {}) {
       if (message.ended_at != null) history.push({ run: run.id, lane: run.lane, ts: message.ended_at, k: 'end', t: clip(message.status) });
       append(history, verdictEvents(run)); append(events, history);
     }
-    for (const id of new Set(selected.runs.map((r) => r.meta.plan).filter(Boolean))) { const ev = planEvent(id); if (ev) events.push(ev); }
+    for (const id of new Set([...selected.runs.map((r) => r.meta.plan), ...(selected.queued || []).map((q) => q.plan)].filter(Boolean))) { const ev = planEvent(id); if (ev) events.push(ev); }
     return { scope: selected.scope, runs, events, versions, revisions, prices: options.prices };
   };
   return {
@@ -566,7 +639,27 @@ export function createFeed(root, options = {}) {
       if (recent) available = () => [...cache.values()].filter((r) => nameSet.has(r.id) && (candidateSet.has(r.id) || roots.has(laneOf(r, cache))));
       selected = selectScope(available(), params, now);
       for (const run of selected.runs) if (!updated.has(run.id)) update(run.id);
-      return addClaude(dataOf(selected, now), selected.runs, params, now);
+      // 一个记录根目录每轮只扫一次票据、批量核验一次进程，再按组和会话分配。
+      const waiting = params.replay != null ? [] : queuedRuns(null, root);
+      const newestTicket = [...waiting].filter((q) => params.group == null || q.group === params.group).sort((a, b) => ms(b.queued_at) - ms(a.queued_at))[0];
+      const session = params.session ?? options.session ?? (selected.runs.length ? selected.runs[0].meta.claude_session
+        : newestTicket ? newestTicket.claude_session : CLAUDE_SESSION);
+      selected.queued = waiting.filter((q) => selected.scope.kind === 'session' ? q.claude_session === selected.scope.value
+        : selected.scope.kind === 'group' ? q.group === selected.scope.value && (q.claude_session ?? null) === (session ?? null)
+          : selected.scope.kind === 'run' ? selected.runs.some((r) => r.meta.group === q.group && (r.meta.claude_session ?? null) === (q.claude_session ?? null)) : true)
+        .filter((q) => !queuedStarted(q, selected.runs)).map((q) => ({ agent: clip(q.agent), model: clip(q.model), title: clip(q.title),
+          group: clip(q.group), session: clip(q.claude_session), plan: clip(q.plan), seat: q.seat, queued_at: ms(q.queued_at), position: q.position, sequence: q.sequence }));
+      // 协议说最多 30 条：多出来的只报条数（页面写"还有 N 个在排队"），不把整条队列推给每个页面
+      const queuedTotal = selected.queued.length;
+      selected.queued = selected.queued.slice(0, 30);
+      const data = addClaude(dataOf(selected, now), selected.runs, params, now);
+      const active = new Set(current(selected.runs).map((r) => r.id));
+      for (const run of data.runs) if (active.has(run.id) && run.group != null) run.dispatch_queue = selected.queued.filter((q) => q.group === run.group && (q.session ?? null) === (run.session ?? null));
+      // 无席位启动时也有组面板；快照走现有 ev 通道，网页不必伪造一条 run。
+      const queueKey = JSON.stringify(selected.scope);
+      if (selected.queued.length) queueScopes.add(queueKey);
+      if (params.replay == null && queueScopes.has(queueKey)) data.events.push({ run: 'dispatch_queue', lane: 'dispatch_queue', ts: now, k: 'dispatch_queue', tickets: selected.queued, total: queuedTotal });
+      return data;
     },
   };
 }

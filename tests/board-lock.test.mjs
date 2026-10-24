@@ -150,9 +150,9 @@ test('畸形请求返回 400 且服务仍可响应 health', (t) => withBoard(t, 
 }));
 
 test('build 不同的旧服务被结束并替换，链接随之改变', (t) => withBoard(t, async (h, children, lockFile) => {
-  const oldDir = path.join(h.home, 'old-board');
-  fs.mkdirSync(oldDir);
-  for (const file of ['server.mjs', 'feed.mjs', 'claude-feed.mjs', 'universe.mjs', '../prices.mjs', '../prices.json', 'build-id.mjs', 'lock.mjs']) fs.copyFileSync(path.join(boardDir, file), path.join(oldDir, file));
+  const oldDir = path.join(h.home, 'old-scripts/board');
+  // 保留旧服务的实际依赖树，避免共用显示模块新增后只复制入口导致启动失败。
+  fs.cpSync(path.dirname(boardDir), path.dirname(oldDir), { recursive: true });
   write(path.join(oldDir, 'index.html'), '<html lang="zh-CN">old</html>');
   const old = startServer(h, children, {}, path.join(oldDir, 'server.mjs'));
   await ready(old);

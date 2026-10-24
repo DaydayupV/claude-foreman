@@ -1,3 +1,4 @@
+import { D as displayText } from '../foreman/skills/dispatch/scripts/display.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
@@ -6,7 +7,7 @@ import { report, discussion, command } from './fixtures/reports.mjs';
 import { apiServer } from './fake/api-server.mjs';
 import { looksLikeQuestion, looksLikeInputPrompt } from '../foreman/skills/dispatch/scripts/util.mjs';
 const M = MESSAGES.zh;
-const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
+const D = { ...MESSAGES.en, ...displayText }; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
 const question = (source, text, extra = {}) => ({ source, question: text, options: [], recommendation: null, detail: null, ...extra });
 const message = (tool, text) => tool === 'codex' ? { type: 'item.completed', item: { type: 'agent_message', text } } : { type: 'text', part: { text } };
 const configure = (h, extra = {}) => {

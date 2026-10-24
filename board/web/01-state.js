@@ -85,6 +85,8 @@ function onEv(ev, stats = true) {
   }
   lane.ver = (lane.ver || 0) + 1;
   insertByTs(B.feed, ev, FEED_MAX);
+  // 同一份计划的事件可能再发（内容变了、重连）：按计划 id 只留最新一份
+  if (ev.k === 'fplan') B.life = B.life.filter((x) => !(x.k === 'fplan' && x.plan === ev.plan));
   if (ev.k === 'fplan' || ev.k === 'verdict') insertByTs(B.life, ev, Infinity);
   if (!lane.last || ev.ts >= lane.last.ts) lane.last = ev;
   B.version++;

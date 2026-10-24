@@ -11,6 +11,7 @@ import { liveCapable, interactive, listenKeys, stopKeys, liveScreen, readKeys, s
 import { createTimeline, reviewConclusion, resultOutcome, durationOf, finishedParts, liveStatus, eventReader, hhmm } from './watch-timeline.mjs';
 import { introScene, playIntro } from './watch-intro.mjs';
 import { watchGroup } from './watch-group.mjs';
+import { roundOf as displayRoundOf } from './display.mjs';
 
 const SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
 const readResult = (dir) => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'result.json'), 'utf8')); } catch { return null; } };
@@ -310,10 +311,13 @@ function singleView(meta, tl, dir, latest) {
 
 // 执行和图像的续接不记轮次，按续接链往回数
 function roundOf(meta) {
-  if (meta.round != null || !meta.parent) return meta.round;
-  let n = 1;
-  for (let id = meta.parent; id && n < 100; n++) id = readMeta(path.join(RUNS_ROOT, id))?.parent;
-  return n;
+  const byId = new Map();
+  // 记录写坏了、续接链绕成环时也要停下：按步数封顶，遇到读过的 id 就不再往回走
+  for (let id = meta.parent, n = 0; id && n < 100 && !byId.has(id); n++) {
+    const parent = readMeta(path.join(RUNS_ROOT, id));
+    byId.set(id, parent); id = parent?.parent;
+  }
+  return displayRoundOf(meta, byId);
 }
 
 async function watchRun(o, loadCfg) {

@@ -14,17 +14,17 @@ function cardShell(id) {
 }
 
 function fillCard(el, lane, t) {
-  const r = latest(lane), key = avatarFor(r.model, r.agent_type), st = laneStatus(lane, t), s = laneStats(lane, t), isCC = lane.id === 'cc';
+  const r = currentRun(lane, t) || latest(lane), key = avatarFor(r.model, r.agent_type), st = laneStatus(lane, t), s = laneStats(lane, t), isCC = lane.id === 'cc';
   el.style.setProperty('--tint', rgba(key));
   el.classList.toggle('running', st.running);
   const img = el.querySelector('.av');
   if (img.dataset.key !== key) { img.src = avatarSrc(key); img.alt = look(key).name; img.dataset.key = key; }
   setText(el.querySelector('.model'), isCC ? 'Claude Code' : `${shortModel(r.model) || look(key).name}${r.effort ? ` ${r.effort}` : ''}`);
+  el.querySelector('.model').title = Display.modelLabel(Display.displayRun(r).meta);
   const stEl = el.querySelector('.st');
-  const v = isCC ? null : verdictCounts(lane.id, t);
-  setText(stEl, `● ${st.word} ${fmtDur(s.elapsed)}${isCC ? '' : ` · ${CHANNEL[r.agent_type] || r.agent_type || ''}`}${v ? ` · ✓${v.a} ◐${v.p} ✗${v.r}` : ''}`);
-  stEl.classList.toggle('bad', !st.running && !['done', 'idle', 'active'].includes(st.word));
-  const round = Math.max(...lane.runs.filter((x) => x.started_at <= t).map((x) => x.round || 1));
+  setText(stEl, `${st.mark} ${st.word} ${Display.clock(laneElapsed(lane, t) * 1000)}`);
+  stEl.classList.toggle('bad', st.kind === 'failed');
+  const round = roundOf(lane, t);
   setText(el.querySelector('.tl'), isCC ? [shortModel(r.model), r.title].filter(Boolean).join(' · ')
     : [r.kind, r.role ? `[${r.role}]` : null, r.title, r.level, round > 1 ? `round ${round}` : null].filter(Boolean).join(' · '));
   const rate = el.querySelector('.rate'), sig = `${Math.round(s.rate)}|${s.avg == null ? '—' : Math.round(s.avg)}|${s.output}`;
@@ -57,10 +57,10 @@ function fillTerm(ol, lines) {
     li.className = l.cls;
     ts.className = 'ts';
     const m = hhmm(l.ts), act = l.cls.startsWith('act');
-    ts.textContent = act || m === lastMin ? '' : m;
+    ts.textContent = l.cls === 'plain' || act || m === lastMin ? '' : m;
     if (!act) lastMin = m;
     mk.className = 'mk';
-    mk.textContent = act ? '│ ' : l.cls.startsWith('user') ? '▌ ' : '◆ ';
+    mk.textContent = l.cls === 'plain' ? '' : act ? '│ ' : l.cls.startsWith('user') ? '▌ ' : '◆ ';
     li.append(ts, mk, l.text);
     ol.append(li);
   }
@@ -108,9 +108,11 @@ function fillLaneOut(box, lane, t) {
   if (ended) for (const c of r.changed || []) files.push({ kind: c.kind || 'update', path: c.path });
   for (const e of lane.events) if (e.run === r.id && e.k === 'edit' && e.ts <= t) files.push(editParts(e.t));
   let report = ended ? r.report_head || '' : '';
-  if (ended && r.review) report = `${r.review.verdict} · ${r.review.findings.length} findings`;
+  // 问题总数用完整计数（review.findings 只带前 8 条），老消息没有计数时用 report_head 里写的原数
+  const total = r.display?.report?.findings_counts?.total;
+  if (ended && r.review) report = total != null ? `${r.review.verdict} · ${total} findings` : r.report_head || `${r.review.verdict} · ${r.review.findings.length} findings`;
   const thumbs = ended && r.kind === 'image' && r.images ? Array.from({ length: Math.min(3, r.images) }, (_, i) => `image?run=${encodeURIComponent(r.id)}&n=${i}`) : [];
-  fillOut(box, `OUTPUT · round ${r.round || 1}`, dedupeFiles(files), report, scopeLead(lane, t), thumbs);
+  fillOut(box, `OUTPUT · round ${roundOf(lane, t)}`, dedupeFiles(files), report, scopeLead(lane, t), thumbs);
 }
 
 function renderWorld(t, L) {
@@ -179,12 +181,9 @@ function groupHead(all, t) {
   }
   // 和原生终端的组视图一样：执行拆成几份的写 split，标题是各份标题用" / "连起来；讨论和审查带角色的写 roles，否则 panel；
   // 各份等级不同时不写等级（写在各自的分工行里）
-  const runs = lanes.map(latest), r = runs[0], exec = r.kind === 'exec' || r.kind === 'image';
-  const mode = exec ? (lanes.length > 1 ? 'split' : null) : runs.some((x) => x.role && !GAP_ROLE.test(x.role)) ? 'roles' : lanes.length > 1 ? 'panel' : null;
-  const titles = [...new Set(runs.map((x) => x.title).filter(Boolean))], levels = new Set(runs.map((x) => x.level));
-  const round = Math.max(...lanes.flatMap((l) => l.runs.filter((x) => x.started_at <= t).map((x) => x.round || 1)));
+  const runs = lanes.map((l) => { const run = Display.displayRun(currentRun(l, t)); run.meta.round = roundOf(l, t); return run; });
   const st = lanes.map((l) => laneStatus(l, t)), running = st.filter((s) => s.running).length;
-  return { title: [r.kind, mode, titles.join(' / '), levels.size === 1 ? r.level : null, round > 1 ? `round ${round}` : null].filter(Boolean).join(' · '),
+  return { title: Display.groupTask(runs).text,
     counts: `${planned ? `${planned} planned · ` : ''}${running ? `${running} running · ` : ''}${st.length - running} finished` };
 }
 
@@ -199,7 +198,8 @@ function fillGhost(el, lane, t) {
   // 审查的补漏席：其他席都结束（去重以后）才启动，先写清楚在等什么；其他席都结束了就轻轻发光
   const gap = gapState(lane, t);
   el.classList.toggle('gap-ready', gap === 'ready');
-  setText(el.querySelector('.st'), `○ ${gap ? TEXT.gapSeat : 'planned'} · seat ${s.seat}${s.required ? ' · required' : ''}`);
+  const state = Display.outcomeStyle({ status: 'not_started' });
+  setText(el.querySelector('.st'), `${state.mark} ${state.word} · seat ${s.seat}${s.required ? ' · required' : ''}`);
   setText(el.querySelector('.tl'), gap === 'ready' ? TEXT.gapReady : gap ? TEXT.gapWaiting : [s.role ? `[${s.role}]` : null, 'waiting to launch'].filter(Boolean).join(' · '));
   const rate = el.querySelector('.rate');
   if (rate.dataset.sig !== '') { rate.dataset.sig = ''; rate.innerHTML = ''; }

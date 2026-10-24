@@ -15,24 +15,70 @@ function editParts(t) {
 const laneModel = (id) => { const l = B.laneById.get(id); const r = l && l.runs[l.runs.length - 1]; return r ? shortModel(r.model) : id; };
 const shortModel = (m) => String(m || '').split('/').pop();
 
-// 一条事件写成一行；返回 null 的事件不进对话流（用量、请求、开始这类）
+const displayPoints = () => B.clock.mode === 'replay' ? B.hello?.replay?.time_map : null;
+const currentRun = (lane, t) => lane.id === 'cc' ? latest(lane) : lane.runs.filter((r) => r.started_at <= t).at(-1);
+const roundOf = (lane, t) => { const r = currentRun(lane, t); return r ? Display.roundOf(Display.displayRun(r).meta, new Map(lane.runs.map((x) => [x.id, x]))) : 1; };
+function laneElapsed(lane, t, total = false) {
+  const runs = lane.runs.filter((r) => r.started_at <= t && r.kind !== 'answer');
+  const last = lane.events.filter((e) => e.run === 'cc' && e.ts <= t).at(-1);
+  const activity = last ? last.original_ts ?? Display.recordedTime(last.ts, displayPoints()) : null;
+  return (total ? runs : runs.slice(-1)).reduce((n, r) => n + Display.elapsedOf(r, t, displayPoints(), activity), 0);
+}
+function liveState(lane, r, t) {
+  const state = { speech: null, thought: null, recent: [], kinds: {}, api: {} };
+  let seq = 0, command = null;
+  for (const ev of lane.events) {
+    if (ev.run !== r.id || ev.ts > t) continue;
+    seq++;
+    if (ev.k === 'req') state.api = { req: ev.original_ts ?? Display.recordedTime(ev.ts, displayPoints()) };
+    else if (ev.k === 'queued') state.api.queued = true;
+    else if (ev.k === 'think' || ev.k === 'answer') {
+      state.api.queued = false; state.api.answering = ev.k === 'answer';
+      if (ev.t) state.thought = { text: Display.thoughtLine(ev.t), seq };
+    } else if (ev.k === 'msg') state.speech = { text: ev.t, seq };
+    else if (ev.k === 'cmd_done') { if (command && ev.ok === false) command.tag = '✗ failed'; }
+    else {
+      const line = lineOf(ev);
+      if (!line || !line.cls.startsWith('act') || ['end', 'report'].includes(ev.k)) continue;
+      const kind = ({ cmd: 'command', read: 'read', search: 'search', web: 'search', edit: 'edit', image: 'image' })[ev.k] || 'other';
+      const action = { kind, text: line.text };
+      if (ev.k === 'cmd') command = action;
+      state.recent.push(action); state.kinds[kind] = (state.kinds[kind] || 0) + 1;
+    }
+  }
+  if (!state.api.req && r.queued && !state.speech && !state.recent.length) state.api.queued = true;
+  return state;
+}
+function seatStatus(lane, r, t) {
+  if (!r) return { style: Display.outcomeStyle({ status: 'not_started' }), right: ['not started'], kind: 'not_started' };
+  const run = Display.displayRun(r), ended = r.ended_at != null && r.ended_at <= t;
+  const result = ended || r.kind === 'answer' ? run.result : { status: 'running' };
+  const outcome = Display.resultOutcome(result, run.meta);
+  outcome.resumed = ended && lane.runs.some((x) => x.parent === r.id && x.started_at <= t);
+  const meta = { ...run.meta, started_at: r.original_started_at ?? Display.recordedTime(r.started_at, displayPoints()),
+    ended_at: ended ? r.original_ended_at ?? Display.recordedTime(r.ended_at, displayPoints()) : null,
+    submitted_at: r.submitted_at ?? r.original_started_at ?? run.meta.submitted_at };
+  return Display.seatState(meta, result, liveState(lane, r, t).api, Display.recordedTime(t, displayPoints()), undefined, outcome);
+}
+
+// 用量保留在结尾，JSON 报告只在完成时显示，避免重复正文。
 function lineOf(ev) {
   const t = ev.t || '';
   switch (ev.k) {
     case 'prompt': return { cls: 'user', text: t };
     case 'msg': return { cls: 'node', text: t };
-    case 'report': return { cls: 'node', text: `report · ${ev.n ? `${ev.n} chars` : 'submitted'}` };
-    case 'end': return { cls: ev.t === 'done' ? 'node' : 'node bad', text: `finished · ${t}` };
-    case 'cmd': return { cls: 'act', text: `$ ${t}`, cmd: true };
-    case 'read': return { cls: 'act', text: `▸ ${t}` };
-    case 'search': return { cls: 'act', text: `⌕ ${t}` };
-    case 'web': return { cls: 'act', text: `⌁ ${t}` };
-    case 'edit': { const e = editParts(t); return { cls: 'act', text: `${EDIT_MARKS[e.kind] || '✎'} ${e.path}` }; }
-    case 'plan': return { cls: 'act', text: `plan ${t}` };
-    case 'image': return { cls: 'act', text: `▣ ${t}` };
-    case 'queued': return { cls: 'act', text: '… queued at provider' };
-    case 'retry': return { cls: 'act bad', text: `↻ retry ${t}` };
-    case 'error': return { cls: 'act bad', text: `✗ ${t}` };
+    case 'report': return null;
+    case 'end': return { cls: ev.t === 'done' ? 'node' : 'node bad', text: Display.D.statusName(t) };
+    case 'cmd': return { cls: 'act', text: Display.commandAction({ command: t, plain: true }).text, cmd: true, kind: 'command' };
+    case 'read': case 'search': return { cls: 'act', text: Display.commandAction({ category: ev.k, label: t }).text, kind: ev.k };
+    case 'web': return { cls: 'act', text: `◎ ${t}`, kind: 'search' };
+    case 'edit': { const e = editParts(t); return { cls: 'act', text: `${EDIT_MARKS[e.kind] || '✎'} ${e.path}`, kind: 'edit' }; }
+    case 'plan': return { cls: 'node', text: `◇ plan ${t}` };
+    case 'image': return { cls: 'act', text: ev.viewed ? `◉ ${Display.D.watchImageViewed(t)}` : `▣ ${Display.D.watchImage(t)}`, kind: 'image' };
+    case 'req': { const r = B.runs.get(ev.run); return { cls: 'node', text: Display.D.watchApiRequest(t, r?.effort, ev.n) }; }
+    case 'queued': return { cls: 'node', text: `⋯ ${Display.D.watchApiQueued}` };
+    case 'retry': return { cls: 'act bad', text: `⚠ ${Display.D.watchApiRetry(t)}` };
+    case 'error': { const a = Display.errorAction(t); return { cls: 'act bad', text: `${a.mark} ${a.text}` }; }
     case 'tool': return { cls: 'act', text: `· ${t}` };
     case 'dispatch': return { cls: 'act link', text: `⇢ ${t}${targets(ev)}` };
     case 'collect': return { cls: 'act link', text: `⇠ ${t || 'read results'}${targets(ev)}` };
@@ -47,27 +93,46 @@ function timeline(lane, t, { open = false, limit = 6 } = {}) {
   const lines = [];
   let block = [], lastCmd = null;
   const flush = (closed) => {
-    if (block.length > MAX_ACTIONS + 1) {
-      const hidden = block.length - MAX_ACTIONS;
+    if (block.length > MAX_ACTIONS) {
       // 已经过去的一段留前几条（和 watch 一样），正在进行的一段留最新几条
       const kept = closed ? block.slice(0, MAX_ACTIONS) : block.slice(-MAX_ACTIONS);
-      const fold = { cls: 'act fold', text: `… +${hidden} ${hidden === 1 ? 'action' : 'actions'}` };
+      const folded = closed ? block.slice(MAX_ACTIONS) : block.slice(0, -MAX_ACTIONS), counts = {};
+      for (const line of folded) counts[line.kind || 'other'] = (counts[line.kind || 'other'] || 0) + 1;
+      const fold = { cls: 'act fold', text: Display.foldText(counts) };
       lines.push(...(closed ? [...kept, fold] : [fold, ...kept]));
     } else lines.push(...block);
     block = [];
   };
   for (const ev of lane.events) {
     if (ev.ts > t) break;
-    if (ev.k === 'cmd_done') { if (lastCmd && ev.ok === false) { lastCmd.text += '  ✗'; lastCmd.cls += ' bad'; } continue; }
+    if (ev.k === 'cmd_done') { if (lastCmd && ev.ok === false) { lastCmd.text += '  ✗ failed'; lastCmd.cls += ' bad'; } continue; }
     const line = lineOf(ev);
+    if (ev.k === 'end') {
+      const r = lane.runs.find((r) => r.id === ev.run);
+      if (r) {
+        flush(true);
+        const st = seatStatus(lane, r, t), run = Display.displayRun(r);
+        lines.push({ ts: ev.original_ts ?? Display.recordedTime(ev.ts, displayPoints()), cls: 'node', text: `└ ${st.style.mark} ${st.right.filter(Boolean).join(' ')}` });
+        const usage = Display.usageLine(run.result, run.meta);
+        if (usage) lines.push({ cls: 'act', text: usage });
+        lines.push(...conclusion(r));
+        continue;
+      }
+    }
     if (!line) continue;
-    line.ts = ev.ts;
+    line.ts = ev.original_ts ?? Display.recordedTime(ev.ts, displayPoints());
     if (line.cmd) lastCmd = line;
     if (line.cls.startsWith('act')) block.push(line);
     else { flush(true); lines.push(line); }
   }
   flush(false);
   return open ? lines : lines.slice(-limit);
+}
+
+function conclusion(r, width = Infinity) {
+  const run = Display.displayRun(r), o = Display.resultOutcome(run.result, run.meta);
+  return Display.finalLines(run, run.result, run.meta.participant === 'host' || o.ok || o.partial, width)
+    .map((text) => ({ ts: r.original_ended_at ?? r.ended_at, cls: 'plain', text }));
 }
 
 // 卡片底行：最新的思考或正在写的回答，过了 90 秒（记录时间）就不再显示
@@ -81,4 +146,19 @@ function thinkingLine(lane, t) {
     if (ev.k === 'msg' || ev.k === 'end' || ev.k === 'report') return '';
   }
   return '';
+}
+
+// 计划里还没启动的席位：排着队、或者计划刚建好（30 分钟内）且从没排过队时画成虚影；
+// 排过队又离开了队列（取消、过期、派发失败）或者放了很久还没人启动，就不再画，免得这一组永远留在画面上
+const PLAN_IDLE = 30 * 60000; // 记录时间
+function seatWaiting(plan, seat, since, t) {
+  const tickets = (ev) => (ev.tickets || []).some((q) => q.plan === plan && (seat == null || q.seat === seat));
+  const snaps = (B.laneById.get('dispatch_queue')?.events || []).filter((e) => e.ts <= t);
+  if (snaps.length && tickets(snaps.at(-1))) return true;
+  return !snaps.some(tickets) && t - since < PLAN_IDLE;
+}
+// 一份计划还要不要占终端区：有任何任务（包括 Claude Code 席的报告），或者还有席位在等
+function planAlive(ev, t) {
+  if ([...B.runs.values()].some((r) => r.plan === ev.plan && r.started_at <= t)) return true;
+  return seatWaiting(ev.plan, null, ev.ts, t);
 }

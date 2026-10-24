@@ -13,9 +13,11 @@ const WL = { W: 1420, cardW: 154, cardH: 96, outW: 184, outH: 44, gap: 14, margi
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
 // 刻度带滚动：卡片放不下时各组从下往上循环慢慢滚（s 是滚过的世界距离）；鼠标停在刻度带上时停下，滚轮在那里是快速滚动
 const REEL = { s: 0, off: 0, speed: 14, last: 0, hover: false, overflow: false, anchor: null, born: new Map() };
+// 手机竖屏时整张 1420 宽的版面缩下来卡片太小：只适配左边（Claude Code 卡片、核心网、刻度带），产出列往右拖着看
+const fitWidth = (w, h) => (w < 600 && h > w ? WL.bandX + WL.bandW + WL.margin : WL.W);
 // 100% 比例下屏幕能看到的世界 y 范围
 function fitRange(H) {
-  const w = viewEl.clientWidth || 1, h = viewEl.clientHeight || 1, k = Math.min(w / WL.W, h / H) * 0.97, ty = (h - H * k) / 2;
+  const w = viewEl.clientWidth || 1, h = viewEl.clientHeight || 1, k = Math.min(w / fitWidth(w, h), h / H) * 0.97, ty = (h - H * k) / 2;
   return { top: -ty / k, bot: (h - ty) / k };
 }
 function stepReel(nowMs) {
@@ -33,12 +35,10 @@ function reelZone(sx) {
 const UI = { open: new Set(), collapsed: new Set(), cards: new Map(), outs: new Map(), heads: new Map(), tableRows: new Map() };
 
 function laneStatus(lane, t) {
-  const live = lane.runs.filter((r) => r.started_at <= t && r.kind !== 'answer');
-  const r = live[live.length - 1];
-  if (!r) return { word: 'waiting', running: false };
-  const ended = r.ended_at != null && r.ended_at <= t;
-  if (lane.id === 'cc') return { word: r.status === 'idle' && ended ? 'idle' : 'active', running: true };
-  return { word: ended ? (r.status === 'done' ? 'done' : r.status) : 'running', running: !ended };
+  const r = currentRun(lane, t);
+  if (lane.id === 'cc' && r) return { mark: r.status === 'idle' ? '○' : '●', word: r.status === 'idle' ? 'idle' : 'active', running: r.status !== 'idle' };
+  const st = seatStatus(lane, r, t);
+  return { ...st, mark: st.style.mark, word: st.style.word, running: !!st.running };
 }
 
 // 对话是否正在活跃进行（光束只在这时有基础流动）：席位看任务是否在运行；Claude Code 看最近 60 秒（记录时间）里有没有新动作
@@ -144,8 +144,8 @@ function fitGoal() {
   const r = viewEl.getBoundingClientRect();
   // 视图还没有大小（面板刚打开、窗口最小化）时不重新适配，留着原来的镜头：按 0 适配会让缩放变成 0、线宽变成无穷大
   if (!(r.width > 0 && r.height > 0 && VIEW.H > 0)) return { k: VIEW.k > 0 ? VIEW.k : 1, tx: VIEW.tx, ty: VIEW.ty };
-  const k = Math.min(r.width / WL.W, r.height / VIEW.H) * 0.97;
-  return { k, tx: (r.width - WL.W * k) / 2, ty: (r.height - VIEW.H * k) / 2 };
+  const W = fitWidth(r.width, r.height), k = Math.min(r.width / W, r.height / VIEW.H) * 0.97;
+  return { k, tx: (r.width - W * k) / 2, ty: (r.height - VIEW.H * k) / 2 };
 }
 function fitView(now = false) { VIEW.auto = true; VIEW.goal = fitGoal(); if (now) Object.assign(VIEW, VIEW.goal); }
 const kFit = () => fitGoal().k;

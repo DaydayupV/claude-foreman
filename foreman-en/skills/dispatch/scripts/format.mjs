@@ -3,10 +3,13 @@
 // 模型和 Claude 写的内容照原文显示，报错和其他提示仍按插件的语言。
 import path from 'node:path';
 import { MESSAGES } from './messages.mjs';
-import { modelOf, agentTypeOf, oneLine, plainCommand, textWidth, fitWidth } from './util.mjs';
+import { textWidth, fitWidth } from './util.mjs';
 import { costOf, loadPrices } from './prices.mjs';
 
-const D = MESSAGES.en;
+import { D as displayText, seatLine as displaySeatLine, shortModel, fullModel, modelLabel, moduleOf, taskLine, clock, took, shownStatus,
+  outcomeStyle as displayOutcomeStyle, agentTotal, changedText, changedFor, formatUsd, usageLine as displayUsageLine,
+  toolLabel, commandAction, foldText, thoughtLine } from './display.mjs';
+const D = { ...MESSAGES.en, ...displayText };
 
 // 测试用 FOREMAN_TEST_SCREEN=<宽>x<高> 把输出当成这么大的终端：画实时画面，也照常判断要不要上色。
 const TEST_SCREEN = /^(\d+)x(\d+)$/.exec(process.env.FOREMAN_TEST_SCREEN || '');
@@ -23,51 +26,11 @@ const visibleWidth = (s) => textWidth(s.replace(/\x1b\[[0-9;]*m/g, ''));
 // 按显示宽度补空格（中日韩字符占两格，颜色代码不占），用来对齐 status 的各列
 const padWidth = (s, width) => s + ' '.repeat(Math.max(0, width - visibleWidth(s)));
 
-// 模型名去掉"提供方/"前缀；带前缀的完整写法放进详细模式开头的信息行。
-const shortModel = (model) => String(model).slice(String(model).lastIndexOf('/') + 1) || String(model);
-const fullModel = (m) => (modelOf(m).includes('/') ? modelOf(m) : null);
-// 模型标签：<模型> <强度> · <接入方式>，没有推理强度时只写模型。旧记录没有 agent_type 和 model_name，都是 Codex CLI。
-// Claude Code 席写 <自报的模型> · Claude Code。开工那一行（source）另外注明模型来自 Codex 配置。
-const CHANNEL_KEY = { api: 'api', 'opencode cli': 'opencode', 'pi cli': 'pi' };
-const modelLabel = (m, { source = false } = {}) => (m?.participant === 'host' ? D.dots([m.model, 'Claude Code'])
-  : D.modelLabel(shortModel(modelOf(m)), D.channel[CHANNEL_KEY[agentTypeOf(m)] || 'codex'], m?.effort,
-    source && !m?.model && !!m?.model_name && agentTypeOf(m) === 'codex cli'));
-
-// 任务属于哪个模块；旧记录没有 module，按 kind 和模式推断
-const moduleOf = (m) => m?.module ?? (m?.kind === 'exec' ? 'run' : m?.kind ?? m?.mode);
-// 任务行：<模块> · [<模式> · ]<标题> · <等级>[ · round N]；图像任务用格子和路线代替等级
-const taskLine = (m, { mode = null, title = m?.title, round = m?.round } = {}) => D.dots([moduleOf(m), mode, title && oneLine(title),
-  ...(moduleOf(m) === 'image' ? [m?.cell, m?.route && `route ${'①②③④'[m.route - 1]}`] : [m?.level]), round > 1 && D.watchRound(round)]);
 // 身份行下面的分工行：角色、并发拆分这一份的标题（都加粗）和等级、图像的格子；Claude Code 席审自己写的东西时加暗色的 author。
 // 放不下 width 时先截标题和角色，再整行截短
-function seatLine(m, { title = false, width = Infinity } = {}) {
-  const parts = [[m.role, C.bold], [title && m.title, C.bold], [title && m.level, plain], [moduleOf(m) === 'image' && m.cell, plain], [m.author && 'author', C.dim]]
-    .filter(([text]) => text).map(([text, style]) => ({ text: oneLine(String(text)), style }));
-  if (!parts.length) return null;
-  const total = () => textWidth(parts.map((p) => p.text).join(' · '));
-  for (const p of [...parts].filter((x) => x.style === C.bold).sort((a, b) => textWidth(b.text) - textWidth(a.text))) {
-    if (total() <= width) break;
-    p.text = fitWidth(p.text, Math.max(4, textWidth(p.text) - (total() - width)));
-  }
-  if (total() > width) return C.dim(fitWidth(parts.map((p) => p.text).join(' · '), Math.max(1, width)));
-  return parts.map((p) => p.style(p.text)).join(C.dim(' · '));
-}
+const seatLine = (m, options) => displaySeatLine(m, options, C);
 
-// 运行中的计时写成 12:03，结束后写"用时 19 分 18 秒"
-const clock = (ms) => {
-  const s = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
-  return `${h ? `${h}:${String(m).padStart(2, '0')}` : m}:${String(s % 60).padStart(2, '0')}`;
-};
-const took = (sec) => (Number.isFinite(sec) ? D.took(D.duration(sec)) : ''); // 旧记录可能没有用时，就不写
-
-// 执行顺利结束时以报告里的状态为准（完成、部分完成、交回问题……）
-const shownStatus = (status, r) => (status === 'done' ? r?.needs_decision ? 'blocked' : r?.report?.status || status : status);
-// 部分完成仍有可用交付，不能和失败共用红色的叉号。
-function outcomeStyle(o) {
-  if (o.resumed) return { mark: '↪', color: C.dim, word: D.statusResumed };
-  const style = o.running ? { mark: '●', color: C.cyan } : o.ok ? { mark: '✔', color: C.green } : o.blocked ? { mark: '?', color: C.yellow } : o.partial ? { mark: '◐', color: C.yellow } : { mark: '✗', color: C.red };
-  return { ...style, word: D.statusName(o.running ? 'running' : o.status === 'done' && !o.blocked && o.valid === false ? 'no_result' : shownStatus(o.status, o.result)) };
-}
+const outcomeStyle = (o) => displayOutcomeStyle(o, C);
 
 // 身份行：[暗色席位号] 记号 <模型标签>，整行按状态上色加粗，右边是状态：状态词上色，时钟和补充暗色。
 // right 是 [状态词, 时钟, 补充]；窗口窄时先截模型标签，再去掉补充和时钟，最后才截状态词
@@ -88,53 +51,8 @@ function identityLine(m, style, right, width, no = null) {
   return `${lead}${style.color(style.mark)} ${label ? C.bold(style.color(label)) : ''}${text ? gap + painted : ''}`;
 }
 
-// 改动数包括有证据的和协作方自报的；改名前的记录里叫 codex_total。落在同组其他任务写入范围里的（group_run）不算归属未知。
-const agentTotal = (c) => (c?.agent_total == null && c?.codex_total == null ? undefined : (c.agent_total ?? c.codex_total) + (c.reported_total || 0));
-const groupTotal = (c) => c?.group_total ?? [...(c?.files || []), ...(c?.large_files_changed || [])].filter((f) => f?.group_run).length;
-function changedText(c) {
-  if (!c?.available) return D.watchNotTracked;
-  const mine = agentTotal(c);
-  if (mine == null) return D.watchChanged(c.files_total, 0, 0); // 旧记录没有归属信息，按全部改动算
-  const group = groupTotal(c);
-  return D.watchChanged(mine, Math.max(0, (c.unknown_total || 0) - group), group);
-}
-// 讨论和审查本来只读，只有真的改了文件才显示改动数（那是越界，要提醒）。
-const changedFor = (r, m) => (m?.kind === 'exec' || agentTotal(r?.changes) ? changedText(r?.changes) : null);
-
-// 费用按金额大小保留足够精度，零不带小数。status 和 watch 共用同一行用量与费用，只有费用时也照常显示。
-const formatUsd = (n) => (n === 0 ? '0' : n < 0.01 ? n.toPrecision(2) : n < 1 ? n.toFixed(3) : n.toFixed(2));
-function usageLine(result, meta) {
-  const cost = costOf({ ...meta, ...result }, loadPrices());
-  return [result?.usage ? D.tokenSummary(result.usage, result.last_request ?? result.context, D.tokenCount,
-    (result.usage_scope ?? (meta?.mode === 'resume' ? 'session_total' : 'this_run')) === 'session_total') : '',
-  // 取消、超时、卡死的轮次只记到最后一次完成的请求，速度偏低，标出来
-  result?.output_tokens_per_s != null ? D.outputSpeed(result.output_tokens_per_s, ['cancelled', 'timeout', 'stalled'].includes(result.status)) : '',
-  cost.cost_usd != null && cost.cost_source !== 'unknown' ? D.costUsd(formatUsd(cost.cost_usd)) : ''].filter(Boolean).join(' · ');
-}
-
-// opencode 和 pi 的读文件、搜索工具在时间线上写什么，适配器存进事件的 label，各适配器写法一致：
-// 读文件写路径；搜索先写模式，再写 glob 过滤和路径。没有模式时写 glob，都没有就写工具名，免得只剩一个路径、看不出搜了什么。
-function toolLabel(category, tool, { pattern, glob, path: where } = {}) {
-  const has = (x) => x != null && x !== '';
-  if (category === 'read') return has(where) ? String(where) : tool;
-  return [has(pattern) ? pattern : has(glob) ? glob : tool, has(pattern) ? glob : null, where].filter(has).map(String).join(' ');
-}
-
-// 工具调用怎么显示：opencode 和 pi 的读文件、搜索（category 为 read 或 search）写成"读 …""搜索 …"，不算命令、不加 $。
-function commandAction(it) {
-  if (it.category === 'read' || it.category === 'search') {
-    // 旧记录没有 label，从命令里去掉工具名
-    const text = oneLine(it.label ?? it.command);
-    const rest = it.label != null ? text : it.tool && text === it.tool ? '.' : it.tool && text.startsWith(`${it.tool} `) ? text.slice(it.tool.length + 1) : text;
-    return { kind: it.category, text: it.category === 'read' ? D.actionRead(rest) : D.actionSearch(rest) };
-  }
-  return { kind: 'command', text: `$ ${oneLine(plainCommand(it.command))}` };
-}
-// 折叠起来的动作按种类计数，比如"… +12 commands, +3 reads"
-const foldText = (counts) => D.watchFolded(D.list(Object.entries(counts).filter(([, n]) => n > 0).map(([kind, n]) => D.foldKinds[kind](n))));
-
-// 思考摘要只取第一行，去掉 Markdown 的加粗
-const thoughtLine = (text) => oneLine(String(text ?? '').trim().split('\n').find((l) => l.trim()) || '').replace(/\*\*/g, '');
+// 定价依赖本地价格表；纯显示函数只接收算好的费用。
+const usageLine = (result, meta) => displayUsageLine({ ...result, ...costOf({ ...meta, ...result }, loadPrices()) }, meta);
 
 // 计划那一行只给状态词上色："计划 <id>："用默认色，完整绿、不完整红、进行中青
 const PLAN_COLOR = { complete: C.green, incomplete: C.red, pending: C.cyan };

@@ -1,3 +1,4 @@
+import { D as displayText } from '../foreman/skills/dispatch/scripts/display.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -5,7 +6,7 @@ import path from 'node:path';
 import { sandbox, taskArgs, output, failed, json, read, write, poll, baseConfig, seedRun, MESSAGES, ROOT } from './helpers.mjs';
 import { report, usage, sessionStats, command } from './fixtures/reports.mjs';
 const M = MESSAGES.zh;
-const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
+const D = { ...MESSAGES.en, ...displayText }; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
 
 test('执行成功写报告、补丁、事件归属和会话用量', async (t) => {
   const h = sandbox(t);

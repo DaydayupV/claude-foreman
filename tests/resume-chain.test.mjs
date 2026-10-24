@@ -210,8 +210,9 @@ test('另一个会话重启同席并续接任务链，watch 显示最新轮次�
   assert.equal(watched.code, 0, watched.stderr);
   for (const id of [oldSeat, root, middle]) assert.ok(!watched.stdout.includes(id), watched.stdout);
   for (const id of [newSeat, leaf, peer]) assert.equal(watched.stdout.split(id).length - 1, 1, watched.stdout);
-  assert.ok(watched.stdout.indexOf(newSeat) < watched.stdout.indexOf(leaf), watched.stdout);
-  assert.ok(watched.stdout.indexOf(leaf) < watched.stdout.indexOf(peer), watched.stdout);
+  // 按席位号排：计划第 1 席（newSeat）、第 2 席（peer），没有计划的续接链取下一个空号排在后面
+  assert.ok(watched.stdout.indexOf(newSeat) < watched.stdout.indexOf(peer), watched.stdout);
+  assert.ok(watched.stdout.indexOf(peer) < watched.stdout.indexOf(leaf), watched.stdout);
 });
 
 test('审查席失败或无有效结果可以重启，有运行轮次或有效审查就拒绝', async (t) => {

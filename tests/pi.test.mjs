@@ -1,3 +1,4 @@
+import { D as displayText } from '../foreman/skills/dispatch/scripts/display.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -9,7 +10,7 @@ import { plannedSandbox as sandbox, baseConfig, piAgent, taskArgs, output, faile
 import { report, discussion } from './fixtures/reports.mjs';
 import { normalize } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
 const M = MESSAGES.zh;
-const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
+const D = { ...MESSAGES.en, ...displayText }; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
 const SCRIPTS = path.join(ROOT, 'foreman/skills/dispatch/scripts');
 const GUARD = path.join(SCRIPTS, 'adapters/pi-guard.mjs');
 const ISOLATE = ['--no-extensions', '--no-skills', '--no-prompt-templates', '--no-themes', '--no-mcp', '--no-approve', '--offline'];

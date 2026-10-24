@@ -1,3 +1,4 @@
+import { D as displayText } from '../foreman/skills/dispatch/scripts/display.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -7,7 +8,7 @@ import { readViewedImages } from '../foreman/skills/dispatch/scripts/image-calls
 import { formatUsd } from '../foreman/skills/dispatch/scripts/format.mjs';
 import { discussion, review } from './fixtures/reports.mjs';
 const M = MESSAGES.zh;
-const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
+const D = { ...MESSAGES.en, ...displayText }; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
 const raw = (payload, timestamp = new Date().toISOString()) => ({ timestamp, type: 'response_item', payload });
 const viewed = (file, call_id = 'view-code') => raw({ type: 'custom_tool_call', name: 'exec', call_id,
   input: `const r = await tools.view_image({path:${JSON.stringify(file)}}); image(r.image_url);` });

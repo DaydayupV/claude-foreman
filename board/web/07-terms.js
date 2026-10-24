@@ -7,7 +7,14 @@
 //  - Claude Code 自己的对话流单独一栏，放在最前
 // 有新内容时自动滚到底，往上翻看时不打扰。以后做多对话，切换对话就是换一组车道（termUnits）重画，标题跟着换。
 
-const PANEL = { cols: new Map(), open: new Set(), seen: false };
+const PANEL = { cols: new Map(), open: new Set(), seen: false, numbers: new Map() };
+const groupPlans = (group, t) => [...new Map(B.life.filter((p) => p.k === 'fplan' && p.group === group && p.ts <= t).map((p) => [p.plan, p])).values()];
+function dispatchQueue(t) {
+  const snapshot = B.laneById.get('dispatch_queue')?.events.filter((e) => e.ts <= t).at(-1);
+  const tickets = snapshot ? snapshot.tickets : [...B.runs.values()].filter((r) => r.started_at <= t).flatMap((r) => r.dispatch_queue || []);
+  return [...new Map(tickets.map((q) => [`${q.agent}:${q.sequence ?? q.position}:${q.queued_at}`, q])).values()]
+    .filter((q) => q.queued_at <= Display.recordedTime(t, displayPoints()));
+}
 // 终端区离可见范围不远时才重画（滚到星图那里时不用一直算）；刚滚进来时马上画一次
 const termsNear = () => $('termsec').getBoundingClientRect().top < innerHeight + 200;
 addEventListener('scroll', () => {
@@ -24,22 +31,30 @@ $('termsec').addEventListener('click', (e) => {
   B.version++; wake();
 });
 
-// 终端页的几栏：Claude Code，然后刻度带里的每一组（有组名的是组面板，没有的每个任务一栏单任务视图）
+// 动效离场的席位仍留在终端区，才能和终端组视图一样回看整组。
 function termUnits(t, L) {
   const units = [], cc = B.laneById.get('cc');
   if (cc && latest(cc) && latest(cc).started_at <= t) units.push({ id: 'cc', lane: cc });
-  for (const g of L ? L.groups : []) {
-    const lanes = g.lanes.filter((l) => !l.ghost && latest(l).started_at <= t);
-    if (!lanes.length) continue;
-    if (g.key.startsWith('lane:')) for (const lane of lanes) units.push({ id: lane.id, lane });
-    else units.push({ id: `group:${g.key}`, group: g.key, lanes });
+  const groups = new Map();
+  for (const lane of seatLanes(t)) {
+    const key = groupKey(lane);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(lane);
+  }
+  // 计划和队列可以先于第一条 run 到达，组面板不再依赖已有车道。
+  for (const item of [...B.life.filter((p) => p.k === 'fplan' && p.ts <= t && planAlive(p, t)), ...dispatchQueue(t),
+    ...[...B.runs.values()].filter((r) => r.kind === 'answer' && r.started_at <= t)])
+    if (item.group && !groups.has(item.group)) groups.set(item.group, []);
+  for (const [key, lanes] of groups) {
+    if (key.startsWith('lane:')) for (const lane of lanes) units.push({ id: lane.id, lane });
+    else units.push({ id: `group:${key}`, group: key, lanes });
   }
   return units;
 }
 
 function renderTerms(t, L) {
   const cc = B.laneById.get('cc'), title = cc && latest(cc) ? latest(cc).title : null;
-  setText($('conv'), TEXT.conversation(title));
+  setText($('conv'), Display.D.conversation(title));
   if (!termsNear()) return;
   const box = $('terms'), seen = new Set();
   termUnits(t, L).forEach((u, i) => {
@@ -71,7 +86,7 @@ function fillFlow(ol, lines) {
   if (ol.stick) ol.scrollTop = ol.scrollHeight;
 }
 const setAvatar = (img, key) => { if (img.dataset.key !== key) { img.src = avatarSrc(key); img.alt = look(key).name; img.dataset.key = key; } };
-const roundOf = (lane, t) => Math.max(1, ...lane.runs.filter((x) => x.started_at <= t).map((x) => x.round || 1));
+
 
 // ---- 单任务视图（Claude Code 和没有组的任务）：身份行、任务行、完整时间线 ----
 function termColumn(id) {
@@ -83,15 +98,15 @@ function termColumn(id) {
 }
 
 function fillColumn(col, lane, t) {
-  const r = latest(lane), key = avatarFor(r.model, r.agent_type), st = laneStatus(lane, t), isCC = lane.id === 'cc', round = roundOf(lane, t);
+  const r = currentRun(lane, t) || latest(lane), key = avatarFor(r.model, r.agent_type), st = laneStatus(lane, t), isCC = lane.id === 'cc', round = roundOf(lane, t);
   col.style.setProperty('--tint', rgba(key));
   col.classList.toggle('running', st.running && !isCC);
   col.classList.toggle('cc', isCC);
   setAvatar(col.querySelector('img'), key);
-  setText(col.querySelector('b'), isCC ? 'Claude Code' : `${shortModel(r.model) || look(key).name}${r.effort ? ` ${r.effort}` : ''}`);
-  setText(col.querySelector('.st'), `● ${st.word} ${fmtDur(laneStats(lane, t).elapsed)}${isCC ? '' : ` · ${CHANNEL[r.agent_type] || r.agent_type || ''}`}`);
+  setText(col.querySelector('b'), isCC ? 'Claude Code' : Display.modelLabel(Display.displayRun(r).meta));
+  setText(col.querySelector('.st'), `${st.mark} ${st.word} ${Display.clock(laneElapsed(lane, t) * 1000)}`);
   setText(col.querySelector('.task'), isCC ? [shortModel(r.model), r.title].filter(Boolean).join(' · ')
-    : [r.kind, r.title, r.level, round > 1 ? `round ${round}` : null].filter(Boolean).join(' · '));
+    : Display.taskLine(Display.displayRun(r).meta, { round }));
   fillFlow(col.querySelector('.term'), timeline(lane, t, { open: true }).slice(-400));
 }
 
@@ -105,29 +120,58 @@ function groupColumn(id) {
   return col;
 }
 
-const COUNT_MARKS = [['running', '●'], ['ok', '✔'], ['failed', '✗']];
 function fillGroup(col, u, t) {
-  const head = groupHead(u.lanes, t), counts = { running: 0, ok: 0, failed: 0 };
-  for (const lane of u.lanes) { const st = laneStatus(lane, t); counts[st.running ? 'running' : st.word === 'done' ? 'ok' : 'failed']++; }
-  setText(col.querySelector('header b'), head.title);
-  const cnt = col.querySelector('.cnt'), sig = COUNT_MARKS.map(([k]) => counts[k]).join('|');
-  if (cnt.dataset.sig !== sig) {
-    cnt.dataset.sig = sig; cnt.innerHTML = '';
-    for (const [k, mark] of COUNT_MARKS) if (counts[k]) { const s = document.createElement('i'); s.className = k; s.textContent = `${mark}${counts[k]}`; cnt.append(s); }
+  const history = [...B.runs.values()].filter((r) => r.group === u.group && r.started_at <= t).map(Display.displayRun);
+  const chosen = new Set(Display.current(history).map((r) => r.id));
+  const hosts = history.filter((r) => r.meta.participant === 'host' && chosen.has(r.id));
+  const blocks = [...hosts.map((r) => ({ id: `host:${r.id}`, host: B.runs.get(r.id) })), ...u.lanes.map((lane) => ({ id: lane.id, lane }))]
+    .filter((b) => chosen.has((b.host || currentRun(b.lane, t)).id));
+  const all = blocks.map((b) => Display.displayRun(b.host || currentRun(b.lane, t)));
+  const numberKey = `${all[0]?.meta.session || ''}:${u.group}`;
+  const plans = groupPlans(u.group, t);
+  const numbers = Display.seatNumbers(all, history, PANEL.numbers.get(numberKey), plans);
+  PANEL.numbers.set(numberKey, numbers);
+  blocks.sort((a, b) => numbers.runs.get((a.host || currentRun(a.lane, t)).id) - numbers.runs.get((b.host || currentRun(b.lane, t)).id));
+  all.sort((a, b) => numbers.runs.get(a.id) - numbers.runs.get(b.id));
+  for (const run of all) { const b = blocks.find((b) => (b.host || currentRun(b.lane, t)).id === run.id); if (b.lane) run.meta.round = roundOf(b.lane, t); }
+  const queue = dispatchQueue(t).filter((q) => q.group === u.group || q.group == null && all.some((r) => r.meta.plan === q.plan))
+    .filter((q) => !Display.queuedStarted(q, history));
+  const head = Display.groupTask(all, plans, queue), states = blocks.map((b) => b.host ? { kind: 'ok' } : seatStatus(b.lane, currentRun(b.lane, t), t));
+  setText(col.querySelector('header b'), head.text);
+  const notes = Display.planNotes(plans, history.map((r) => ({ ...r,
+    outcome: Display.resultOutcome(r.meta.ended_at != null && r.meta.ended_at <= t || r.meta.participant === 'host' ? r.result : { status: 'running' }, r.meta) })));
+  let noteBox = col.querySelector('.plan-notes');
+  if (!noteBox) { noteBox = document.createElement('div'); noteBox.className = 'plan-notes'; col.insertBefore(noteBox, col.querySelector('.seats')); }
+  noteBox.replaceChildren();
+  for (const p of notes.filter((p) => p.details || p.state === 'incomplete')) { const line = document.createElement('div'); line.textContent = p.line; noteBox.append(line); }
+  const count = col.querySelector('.cnt'); count.replaceChildren();
+  for (const p of Display.countParts([...states, ...queue.map(() => ({ kind: 'queued' }))])) {
+    if (count.children.length) count.append(' ');
+    const part = document.createElement('i'); part.className = p.kind; part.textContent = p.text; count.append(part);
   }
-  col.classList.toggle('running', counts.running > 0);
-  // Claude Code 席（交过报告的）在最前，其余按席位顺序
-  const cc = B.laneById.get('cc'), host = cc ? cc.runs.filter((r) => r.kind === 'answer' && r.group === u.group && r.started_at <= t).pop() : null;
-  const blocks = [...(host ? [{ id: `host:${u.group}`, host }] : []), ...u.lanes.map((lane) => ({ id: lane.id, lane }))];
+  col.classList.toggle('running', states.some((s) => s.running) || queue.length > 0);
   const box = col.querySelector('.seats'), seen = new Set();
   blocks.forEach((b, i) => {
     let el = col.seats.get(b.id);
     if (!el) { el = seatShell(b.id); col.seats.set(b.id, el); }
     seen.add(b.id);
     if (box.children[i] !== el) box.insertBefore(el, box.children[i] || null);
-    if (b.host) fillHostSeat(el, b.host); else fillSeat(el, b.lane, t, i + (host ? 0 : 1));
+    if (b.host) fillHostSeat(el, b.host, numbers.runs.get(b.host.id)); else fillSeat(el, b.lane, t, numbers.runs.get(currentRun(b.lane, t).id), head.split);
   });
   for (const [id, el] of col.seats) if (!seen.has(id)) { el.remove(); col.seats.delete(id); }
+  // 先量全文实际高度，再决定是否每席保留四行，展开的席始终显示全文。
+  const collapse = !queue.length && !states.some((s) => s.running) && box.clientHeight > 0 && box.scrollHeight > box.clientHeight;
+  if (collapse) for (const b of blocks) {
+    const el = col.seats.get(b.id);
+    if (!PANEL.open.has(b.id)) fillFlow(el.querySelector('.term'), Display.collapseLines(el.fullLines, true, 'click to open').map((line) => typeof line === 'string' ? { cls: 'plain', text: line } : line));
+  }
+  let pending = col.querySelector('.dispatch-queue');
+  if (!pending) { pending = document.createElement('div'); pending.className = 'dispatch-queue'; col.append(pending); }
+  pending.replaceChildren();
+  for (const q of queue) { const line = document.createElement('div'); line.textContent = Display.queuedLine(q, Display.recordedTime(t, displayPoints())); pending.append(line); }
+  // 服务端最多发 30 张票据，多出来的写一行条数
+  const snapshot = B.laneById.get('dispatch_queue')?.events.filter((e) => e.ts <= t).at(-1);
+  if (snapshot && snapshot.total > (snapshot.tickets || []).length) { const line = document.createElement('div'); line.textContent = Display.D.watchMoreQueued(snapshot.total - snapshot.tickets.length); pending.append(line); }
 }
 
 function seatShell(id) {
@@ -139,61 +183,39 @@ function seatShell(id) {
 }
 
 // 一席：身份行（席位号、模型、状态和用时）、分工行（角色或这一份的标题）、正文、结束后的用量
-function fillSeat(el, lane, t, no) {
-  const r = lane.runs.filter((x) => x.started_at <= t).pop() || latest(lane), key = avatarFor(r.model, r.agent_type), st = laneStatus(lane, t);
-  const open = PANEL.open.has(lane.id), round = roundOf(lane, t);
+function fillSeat(el, lane, t, no, split = false) {
+  const r = currentRun(lane, t), run = Display.displayRun(r), key = avatarFor(r.model, r.agent_type), st = seatStatus(lane, r, t);
+  const open = PANEL.open.has(lane.id), ended = r.ended_at != null && r.ended_at <= t;
   el.style.setProperty('--tint', rgba(key));
-  el.classList.toggle('running', st.running);
-  el.classList.toggle('open', open);
-  el.classList.toggle('bad', !st.running && st.word !== 'done');
+  el.classList.toggle('running', !!st.running); el.classList.toggle('open', open);
+  el.classList.toggle('bad', st.kind === 'failed');
+  el.dataset.kind = st.kind || ''; // 样式按状态上色：部分完成、交回问题、已续接、排队
   setAvatar(el.querySelector('img'), key);
-  setText(el.querySelector('.no'), String(r.seat ?? no));
-  setText(el.querySelector('b'), `${shortModel(r.model) || look(key).name}${r.effort ? ` ${r.effort}` : ''}`);
-  // 用时和用量只算这一轮的任务（和原生组视图一样），不把上一轮加进来
-  const ended = r.ended_at != null && r.ended_at <= t, took = (ended ? r.ended_at : t) - r.started_at;
-  setText(el.querySelector('.st'), `${st.running ? '●' : st.word === 'done' ? '✔' : '✗'} ${st.word} ${fmtDur(took / 1000)}${round > 1 ? ` · round ${round}` : ''}`);
-  // 分工行：角色；拆开的执行任务每份标题不同，再写这一份的标题和等级（组标题里放不下）
-  const exec = r.kind === 'exec' || r.kind === 'image';
-  setText(el.querySelector('.role'), [r.role ? `[${r.role}]` : null, exec ? r.title : null, exec ? r.level : null, CHANNEL[r.agent_type] || r.agent_type].filter(Boolean).join(' · '));
-  let lines;
-  if (open) lines = timeline(lane, t, { open: true }).slice(-400);
-  else if (!ended) lines = timeline(lane, t, { limit: 5 });
-  else lines = conclusion(r);
-  if (!lines.length) lines = [{ ts: r.started_at, cls: 'act fold', text: st.running ? 'working…' : '(no report)' }];
-  fillFlow(el.querySelector('.term'), lines);
-  const use = el.querySelector('.use');
-  use.hidden = !ended;
-  if (ended) {
-    const v = verdictCounts(lane.id, t);
-    const u = r.usage || {}, inAll = (u.input || 0) + (u.cached || 0) + (u.cache_write || 0);
-    setText(use.firstChild, [inAll ? `${fmtTok(inAll)} in` : null, u.output ? `${fmtTok(u.output)} out` : null,
-      r.cost_usd != null ? `$${fmtUsd(r.cost_usd)}` : null, v ? `✓${v.a} ◐${v.p} ✗${v.r}` : null].filter(Boolean).join(' · '));
-    setText(use.lastChild, r.id);
-  }
+  setText(el.querySelector('.no'), String(no));
+  setText(el.querySelector('b'), `${st.style.mark} ${Display.modelLabel(run.meta)}`);
+  setText(el.querySelector('.st'), st.right.filter(Boolean).join(' '));
+  setText(el.querySelector('.role'), Display.seatLine(run.meta, { title: split }));
+  const ol = el.querySelector('.term'), width = Math.max(20, Math.floor((ol.clientWidth || 560) / 6.6) - 4);
+  let lines = open ? timeline(lane, t, { open: true }) : ended ? conclusion(r, width)
+    : Display.liveLines(liveState(lane, r, t), 8, width).map((text) => ({ cls: 'plain', text }));
+  if (!lines.length && st.running && !liveState(lane, r, t).api.req) lines = [{ cls: 'plain', text: Display.D.watchWorking }];
+  el.fullLines = lines;
+  fillFlow(ol, lines);
+  const use = el.querySelector('.use'); use.hidden = !ended;
+  if (ended) { setText(use.firstChild, Display.seatUsage(run.meta, run.result)); setText(use.lastChild, r.id); }
 }
 
-// 结束后的正文：讨论写立场，执行写报告摘要，审查写结论和各条问题
-function conclusion(r) {
-  const at = r.ended_at, out = [];
-  if (r.review) {
-    out.push({ ts: at, cls: 'node', text: `${r.review.verdict} · ${r.review.findings.length} findings` });
-    for (const f of r.review.findings) out.push({ ts: at, cls: 'act', text: [f.severity, f.where, f.title].filter(Boolean).join(' · ') });
-  } else if (r.report_head) out.push({ ts: at, cls: 'node', text: r.report_head });
-  return out;
-}
-
-// Claude Code 席：交过的报告（没有用量）
-function fillHostSeat(el, h) {
-  el.style.setProperty('--tint', rgba('claude'));
-  el.classList.add('host');
+function fillHostSeat(el, h, no = 0) {
+  const run = Display.displayRun(h), open = PANEL.open.has(el.dataset.lane);
+  const st = Display.seatState(run.meta, run.result, {}, 0);
+  el.style.setProperty('--tint', rgba('claude')); el.classList.add('host'); el.classList.toggle('open', open);
   setAvatar(el.querySelector('img'), 'claude');
-  setText(el.querySelector('.no'), '0');
-  setText(el.querySelector('b'), `Claude Code${h.model ? ` · ${shortModel(h.model)}` : ''}`);
-  setText(el.querySelector('.st'), `✔ submitted ${hhmm(h.started_at)}${(h.round || 1) > 1 ? ` · round ${h.round}` : ''}`);
-  setText(el.querySelector('.role'), [h.role ? `[${h.role}]` : null, TEXT.hostSeat].filter(Boolean).join(' · '));
-  fillFlow(el.querySelector('.term'), h.report_head ? [{ ts: h.started_at, cls: 'node', text: h.report_head }] : []);
-  const use = el.querySelector('.use');
-  use.hidden = false;
-  setText(use.firstChild, TEXT.hostSeatNote);
-  setText(use.lastChild, h.id);
+  setText(el.querySelector('.no'), String(no));
+  setText(el.querySelector('b'), `${st.style.mark} ${Display.modelLabel(run.meta)}`);
+  setText(el.querySelector('.st'), st.right.filter(Boolean).join(' '));
+  setText(el.querySelector('.role'), Display.seatLine(run.meta));
+  const ol = el.querySelector('.term'), width = Math.max(20, Math.floor((ol.clientWidth || 560) / 6.6) - 4);
+  el.fullLines = conclusion(h, width); fillFlow(ol, el.fullLines);
+  const use = el.querySelector('.use'); use.hidden = false;
+  setText(use.firstChild, Display.seatUsage(run.meta, run.result)); setText(use.lastChild, h.id);
 }

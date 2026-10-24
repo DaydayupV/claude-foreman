@@ -1,3 +1,4 @@
+import { D as displayText } from '../foreman/skills/dispatch/scripts/display.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -7,7 +8,7 @@ import { sandbox, baseConfig, opencodeAgent, apiAgent, taskArgs, output, failed,
 import { report } from './fixtures/reports.mjs';
 import { normalize } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
 const M = MESSAGES.zh;
-const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
+const D = { ...MESSAGES.en, ...displayText }; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
 const configure = (h, access = 'edit') => {
   const c = baseConfig();
   c.agents.oc = { ...opencodeAgent(), ...(access === undefined ? {} : { run_access: access }) };

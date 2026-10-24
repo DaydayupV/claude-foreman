@@ -6,8 +6,9 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { createFeed } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
 import { createUniverse } from '../foreman/skills/dispatch/scripts/board/universe.mjs';
+import * as Display from '../foreman/skills/dispatch/scripts/display.mjs';
 
-const source = ['00-text', '01-state', '04-rates', '06-cards', '07-table'].map((name) =>
+const source = ['00-text', '01-state', '03-timeline', '04-rates', '06-cards', '07-table'].map((name) =>
   fs.readFileSync(new URL(`../board/web/${name}.js`, import.meta.url), 'utf8')).join('\n');
 class Element {
   children = []; dataset = {}; style = { setProperty() {} }; classList = { toggle() {} }; nodes = new Map();
@@ -32,7 +33,7 @@ class Element {
 function board(lang = 'zh') {
   const table = new Element(), card = new Element();
   let api;
-  const context = vm.createContext({ window: { __BOARD_FIXTURE__: true, __LANG__: lang }, location: { search: '' },
+  const context = vm.createContext({ Display, window: { __BOARD_FIXTURE__: true, __LANG__: lang }, location: { search: '' },
     URLSearchParams, performance: { now: () => 0 }, wake() {}, worldEl: { dataset: { lod: 0 } },
     document: { createElement: () => new Element(), documentElement: {}, querySelector: () => null },
     latest: (l) => l.runs.at(-1), avatarFor: () => 'model', rgba: () => '', avatarSrc: () => '', look: () => ({ name: 'model' }),

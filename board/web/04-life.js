@@ -42,6 +42,7 @@ function ghostLanes(t) {
   const out = [];
   for (const p of plansAt(t)) for (const s of p.seats) {
     if (p.runs.some((r) => r.seat === s.seat)) continue;
+    if (!seatWaiting(p.id, s.seat, p.ev.ts, t)) continue;
     out.push({ id: `ghost:${p.id}:${s.seat}`, ghost: true, plan: p.id, group: p.group, seat: s, t0: p.ev.ts, runs: [], events: [], seed: hash(`${p.id}:${s.seat}`) });
   }
   return out;

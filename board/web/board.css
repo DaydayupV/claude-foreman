@@ -2,7 +2,7 @@
   --bg: #050506; --panel: #0b0b0e; --edge: #26262b; --edge2: #3a3a42;
   --dim: #5c5c66; --mid: #8f8f9c; --text: #d2d2d9; --hi: #f5f5f8; --bad: #e88a9f;
   --mono: ui-monospace, "Cascadia Mono", "Sarasa Mono SC", Consolas, Menlo, monospace;
-  --top-h: 36px; --table-h: min(191px, 32vh); /* 底部面板固定高度：表头、正好 7 行、合计；行多了在面板里滚动 */
+  --top-h: 36px; --table-h: min(195px, 32vh); /* 底部面板固定高度：表头、正好 7 行（每行 19px）、合计；行多了在面板里滚动 */
 }
 * { box-sizing: border-box; }
 /* 整页可以往下滚：上面是星图和用量面板（打开时的位置），再往下是终端 */
@@ -12,12 +12,12 @@ html { scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent
 button { font: inherit; color: var(--mid); background: rgba(12,12,15,.9); border: 1px solid var(--edge); cursor: pointer; }
 button:hover, button:focus-visible { color: var(--hi); border-color: var(--mid); outline: none; }
 
-#top { position: fixed; left: 0; right: 0; top: 0; height: var(--top-h); display: flex; align-items: center; justify-content: space-between; padding: 0 14px; border-bottom: 1px solid rgba(200,200,212,.16); box-shadow: 0 1px 12px -6px rgba(230,230,240,.35); z-index: 3; background: rgba(5,5,6,.85); white-space: nowrap; overflow: hidden; }
+#top { position: fixed; left: 0; right: 0; top: 0; height: var(--top-h); display: flex; align-items: center; justify-content: space-between; padding: 0 14px; border-bottom: 1px solid rgba(200,200,212,.16); box-shadow: 0 1px 12px -6px rgba(230,230,240,.35); z-index: 5; background: rgba(5,5,6,.95); white-space: nowrap; overflow: hidden; }
 #top .brand b { color: var(--hi); letter-spacing: .14em; font-size: 12px; }
 #top .brand span { color: var(--dim); margin-left: 12px; }
 #clock { color: var(--mid); margin-left: 12px; overflow: hidden; text-overflow: ellipsis; }
 #progress { position: absolute; left: 0; bottom: -1px; height: 1px; width: 0; background: var(--mid); }
-#notice { position: fixed; top: calc(var(--top-h) + 8px); left: 50%; transform: translateX(-50%); z-index: 4; max-width: calc(100% - 28px); color: var(--dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; transition: opacity .8s; }
+#notice { position: fixed; top: calc(var(--top-h) + 8px); left: 50%; transform: translateX(-50%); z-index: 6; max-width: calc(100% - 28px); color: var(--dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; transition: opacity .8s; }
 #notice.faded { opacity: 0; }
 
 /* 主视图：画布和"世界"（卡片层）用同一个缩放平移 */
@@ -224,6 +224,8 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 .tgroup > header b { color: var(--text); font-weight: 600; }
 .tgroup .cnt i { font-style: normal; margin-left: 7px; }
 .tgroup .cnt .running { color: #74d4e8; } .tgroup .cnt .ok { color: #82d99c; } .tgroup .cnt .failed { color: var(--bad); }
+/* 和终端组标题的计数同色：部分完成、交回问题、排队琥珀色，已续接暗下去 */
+.tgroup .cnt :is(.partial, .blocked, .queued) { color: rgb(232,194,122); } .tgroup .cnt .resumed { color: var(--dim); }
 .tgroup .seats { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
 .seat { padding: 3px 6px 4px; border-bottom: 1px dashed rgba(170,170,182,.13); cursor: pointer; --pad: calc(2ch + 26px); }
 .seat:hover { background: rgba(255,255,255,.03); }
@@ -234,20 +236,66 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 .seat .id .st { margin-left: auto; color: #82d99c; flex: none; }
 .seat.running .id .st { color: var(--tint); }
 .seat.bad .id .st { color: var(--bad); }
+/* 部分完成、交回问题、排队用琥珀色，已续接的暗下去（结果看续接的那一轮）；和终端的颜色一致 */
+.seat:is([data-kind="partial"], [data-kind="blocked"], [data-kind="queued"]) .id .st { color: rgb(232,194,122); }
+.seat[data-kind="resumed"] .id .st, .seat[data-kind="resumed"] .id b { color: var(--dim); }
+.card:is(.partial, .blocked) { --cc: rgb(232,194,122); border-color: rgba(232,194,122,.5); }
+.card:is(.partial, .blocked) .st { color: rgb(232,194,122); }
+.card.resumed { filter: brightness(.72); }
 .seat .role { color: var(--dim); font-size: 10px; padding-left: var(--pad); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tcol .seat .term { flex: none; padding: 0 0 0 var(--pad); overflow: visible; }
 .tcol .seat.open .term { max-height: 30vh; overflow-y: auto; }
 .seat.open { background: rgba(255,255,255,.025); box-shadow: inset 2px 0 0 var(--tint); }
-.seat .use { display: flex; justify-content: space-between; gap: 8px; color: var(--dim); font-size: 9.5px; padding-left: var(--pad); white-space: nowrap; overflow: hidden; }
+/* 用量行和终端一样写全（缓存比例、上下文窗口、速度、费用），放不下就折行，run_id 仍靠右 */
+.seat .use { display: flex; flex-wrap: wrap; justify-content: space-between; column-gap: 8px; color: var(--dim); font-size: 9.5px; padding-left: var(--pad); }
+.seat .use .rid { margin-left: auto; }
 .seat .use[hidden] { display: none; }
 .seat .use .rid { opacity: .7; overflow: hidden; text-overflow: ellipsis; }
 /* 席位正文和原生组视图一样：不写时间，动作各占一行，说的话最多三行；展开看完整时间线时才全部显示 */
 .seat .term .ts { display: none; }
 .tcol .seat .term li { padding-left: 2ch; text-indent: -2ch; }
 .seat:not(.open) .term li.act, .seat:not(.open) .term li.fold { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.seat:not(.open) .term li:not(.act) { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.seat:not(.open) .term li:not(.act):not(.plain) { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+/* 共用规则已经排好的行（运行中的正文、折叠后的结论）照原样显示，不再截成三行 */
+.seat .term li.plain { white-space: pre-wrap; }
+/* 组里的计划缺口和还没开始的派发：一行一条，跟在标题和席位下面 */
+.tgroup .plan-notes, .tgroup .dispatch-queue { flex: none; padding: 2px 6px; font-size: 10px; color: rgb(232,194,122); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tgroup .plan-notes:empty, .tgroup .dispatch-queue:empty { display: none; }
+.tgroup .dispatch-queue { color: var(--mid); border-top: 1px dashed rgba(170,170,182,.13); }
 .seat.open .term .ts { display: inline-block; }
 .tcol .seat.open .term li { padding-left: 8ch; text-indent: -8ch; }
+
+/* 窄屏：平板去掉次要的列和提示，名额面板窄一些；手机上名额面板只留标题（点一下展开），
+   表格只留关键几列，终端各栏上下排。单对话的画布在手机上仍然很小，主要看表格和终端 */
+@media (max-width: 900px) {
+  #hud .hint { display: none; }
+  #uslots { width: 190px; }
+  #table .tr { gap: 8px; }
+  #usage:not([data-mode="uni"]) .tr { grid-template-columns: 22px 1.7fr .9fr .8fr .8fr 1.2fr .8fr .9fr; }
+  #usage:not([data-mode="uni"]) .tr > span:nth-child(5), #usage:not([data-mode="uni"]) .tr > span:nth-child(10) { display: none; }
+  #usage[data-mode="uni"] .tr { grid-template-columns: 22px 1.6fr .8fr 1.05fr 1.2fr .8fr .85fr .65fr; }
+  #usage[data-mode="uni"] .tr > span:nth-child(3), #usage[data-mode="uni"] .tr > span:nth-child(5) { display: none; }
+}
+@media (max-width: 600px) {
+  #top { padding: 0 10px; }
+  #top .brand { display: flex; align-items: center; min-width: 0; overflow: hidden; }
+  #scope { display: none; }
+  #crumb { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #clock { font-size: 10px; flex: none; }
+  #uslots { width: 132px; }
+  #uslots .rows { display: none; }
+  #uslots:hover .rows, #uslots:focus-within .rows { display: block; }
+  #uslots:hover { width: 220px; }
+  #table, #termsec { margin: 0 4px 6px; padding: 6px 8px; }
+  #table .tr { gap: 6px; }
+  #usage:not([data-mode="uni"]) .tr { grid-template-columns: 18px 1.3fr .95fr .7fr .75fr 1.1fr; }
+  #usage:not([data-mode="uni"]) .tr > span:is(:nth-child(4), :nth-child(7)) { display: none; }
+  #usage[data-mode="uni"] .tr { grid-template-columns: 18px 1.8fr .9fr .75fr 1fr; }
+  #usage[data-mode="uni"] .tr > span:is(:nth-child(6), :nth-child(7), :nth-child(10)) { display: none; }
+  #termsec { height: auto; min-height: calc(100vh - var(--top-h) - 14px); }
+  #terms { flex-direction: column; overflow: visible; }
+  .tcol, .tcol.cc, .tgroup { flex: none; min-width: 0; height: 70vh; }
+}
 
 /* 头像（卡片、用量表、终端栏里的）不能选中、不能拖出来 */
 img { -webkit-user-drag: none; user-select: none; -webkit-user-select: none; }

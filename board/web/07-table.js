@@ -32,13 +32,15 @@ function renderTable(t) {
       tr.innerHTML = '<span class="av"><img alt=""></span>' + '<span></span>'.repeat(TABLE_HEAD.length - 1);
       UI.tableRows.set(lane.id, tr);
     }
-    const r = latest(lane), key = avatarFor(r.model, r.agent_type), s = laneStats(lane, t), st = laneStatus(lane, t);
+    const r = currentRun(lane, t) || latest(lane), key = avatarFor(r.model, r.agent_type), s = laneStats(lane, t), st = laneStatus(lane, t);
     tr.style.setProperty('--tint', rgba(key));
     tr.classList.toggle('running', st.running);
     const img = tr.querySelector('img');
     if (img.dataset.key !== key) { img.src = avatarSrc(key); img.dataset.key = key; }
     const c = tr.children, inAll = s.input + s.cached + s.cache_write;
-    setText(c[1], `${shortModel(r.model) || 'Claude Code'}${lane.id === 'cc' ? ' · Claude Code' : ''}`);
+    // 同一个模型常有好几条车道：写上接入方式，悬停看这条车道的任务标题
+    setText(c[1], Display.modelLabel({ ...Display.displayRun(r).meta, ...(lane.id === 'cc' ? { agent_type: 'host' } : {}) }));
+    c[1].title = lane.id === 'cc' ? '' : [r.title, r.group, r.id].filter(Boolean).join(' · ');
     setText(c[2], st.word);
     setText(c[3], s.rate >= 0.5 ? `≈ ${Math.round(s.rate)}` : '—');
     sparkSvg(c[4], sparkline(lane, t));
@@ -48,7 +50,7 @@ function renderTable(t) {
     setText(c[7], s.output ? fmtTok(s.output) : '—');
     c[7].title = s.usage_unattributed ? TEXT.usageUnattributed : '';
     setText(c[8], fmtCost(s.cost, s.costPartial)); c[8].title = TEXT.costTitle;
-    setText(c[9], fmtDur(s.elapsed));
+    setText(c[9], Display.clock(laneElapsed(lane, t, true) * 1000));
     if (body.children[i] !== tr) body.insertBefore(tr, body.children[i] || null);
     tot.input += inAll; tot.cached += s.cached; tot.output += s.output; tot.rate += s.rate;
     tot.usage_unattributed ||= s.usage_unattributed;
@@ -82,7 +84,7 @@ function renderTop(t) {
   const c = B.clock, p = B.params;
   setText($('scope'), c.mode === 'replay' ? `replay · ${p.replay} · ×${c.speed}` : p.group ? `group · ${p.group}` : p.run ? `run · ${p.run}` : 'live · recent');
   const pct = c.mode === 'replay' ? Math.round(((t - c.start) / Math.max(1, c.end - c.start)) * 100) : null;
-  setText($('clock'), `${new Date(t).toTimeString().slice(0, 8)}${pct != null ? ` · ${pct}% · ${TEXT.replayEstimate}` : ''}`);
+  setText($('clock'), `${new Date(Display.recordedTime(t, displayPoints())).toTimeString().slice(0, 8)}${pct != null ? ` · ${pct}% · ${TEXT.replayEstimate}` : ''}`);
   $('progress').style.width = pct != null ? `${pct}%` : '0';
   const st = $('status');
   setText(st, B.error ? `connection ${B.error}` : !B.connected ? 'connecting…' : '');

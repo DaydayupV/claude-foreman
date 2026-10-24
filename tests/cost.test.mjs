@@ -1,3 +1,4 @@
+import { D as displayText } from '../foreman/skills/dispatch/scripts/display.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
@@ -235,8 +236,8 @@ test('终端只显示 cost，中英两个插件一样写英文，未知费用隐
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), ['cost $0.125', '', '', '', '']);
   }
-  assert.equal(MESSAGES.en.costUsd('0.12'), 'cost $0.12');
-  assert.equal(MESSAGES.en.costUsd.length, 1);
+  assert.equal(displayText.costUsd('0.12'), 'cost $0.12');
+  assert.equal(displayText.costUsd.length, 1);
   assert.ok(MESSAGES.zh.statsNotes.includes('费用（cost_usd）一律按模型官方 API 价格计算（插件自带的价格表 prices.json），和实际扣费不一定相同：Codex、Claude Code 用订阅时不按 token 扣钱，opencode、pi 的实际扣费以它们自己的账单为准。价格表里没有的模型算不出费用，计入 missing_runs。'));
   assert.ok(MESSAGES.en.statsNotes.includes("Cost (cost_usd) is always computed from each model's official API price (the plugin's price table, prices.json) and may differ from what you're actually charged: Codex and Claude Code on a subscription aren't charged per token, and opencode and pi bill through their own accounts. Models missing from the price table have no cost and count in missing_runs."));
 });

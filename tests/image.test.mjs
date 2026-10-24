@@ -1,3 +1,4 @@
+import { D as displayText } from '../foreman/skills/dispatch/scripts/display.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { sandbox, output, failed, baseConfig, seedRun, write, json, lines, opencodeAgent, apiAgent, ROOT, MESSAGES } from './helpers.mjs';
 import { report } from './fixtures/reports.mjs';
 const M = MESSAGES.zh;
-const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
+const D = { ...MESSAGES.en, ...displayText }; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
 const scripts = path.join(ROOT, 'foreman/skills/dispatch/scripts');
 const labels = ['① 位图', '② 位图 + 矢量混合', '③ 纯矢量（先出参考图）', '④ 纯矢量 / 代码'];
 const question = (text = '图像路线：这次选哪条路线？') => ({ question: text, header: '路线', multiSelect: false, options: labels });

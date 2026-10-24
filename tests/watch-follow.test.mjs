@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { sandbox, seedRun, poll, MESSAGES } from './helpers.mjs';
 import { report } from './fixtures/reports.mjs';
 import { textWidth } from '../foreman/skills/dispatch/scripts/util.mjs';
-const D = MESSAGES.en; // 实时查看的显示文字中英两个插件一样
+import { D as displayText } from '../foreman/skills/dispatch/scripts/display.mjs';
+const D = { ...MESSAGES.en, ...displayText }; // 实时查看的显示文字中英两个插件一样
 const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
 
 // 单任务视图跟着续接走：被续接过的一轮在底部上面多一行提示，按 n 换成续接链上最新的一轮

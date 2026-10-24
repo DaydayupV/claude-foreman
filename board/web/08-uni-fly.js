@@ -15,16 +15,21 @@ function resolveLegacyFocus() {
   const key = ['group', 'run', 'replay'].find((k) => scopes[k] != null && !(k === 'replay' && scopes[k] === 'all'));
   if (!key || FLY.pending || U.demo) return;
   const value = scopes[key], scope = LIVE_REPLAY_LINK && key === 'replay' ? (/^\d{8}-\d{6}-[a-z0-9]{4}$/.test(value) ? 'run' : 'group') : key;
-  fetch(`snapshot?${new URLSearchParams({ [scope]: value })}`).then((r) => (r.ok ? r.json() : null))
+  // 回放服务只认 replay=<组、任务或对话>（group=、run= 会回 400）；对不认识的范围回 404，和查不到任务一样提示
+  const query = BOARD_REPLAY ? { replay: value } : { [scope]: value }, kind = /^\d{8}-\d{6}-[a-z0-9]{4}$/.test(value) ? 'run' : 'group';
+  fetch(`snapshot?${new URLSearchParams(query)}`).then((r) => (r.ok ? r.json() : r.status === 404 ? { runs: [] } : null))
     .then((s) => {
       // 按地址点名的范围取对话：任务取它自己派出时所在的对话（跨对话续接的车道里，前面几轮可能在别的对话），
       // 组取最近派出的那一份
       const runs = (s?.runs || []).filter((r) => r.session);
       const own = scope === 'run' ? runs.find((r) => r.id === value) : null;
       const latest = runs.sort((a, b) => (b.started_at ?? 0) - (a.started_at ?? 0))[0];
-      const id = own?.session || latest?.session || (key === 'replay' ? value : null);
+      // 只有长得像对话 id（UUID）的值才直接当对话飞进去；查不到的组名、任务号不能当成对话
+      const id = own?.session || latest?.session || (key === 'replay' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ? value : null);
       // 等结果的这一会儿用户已经自己动了页面，就不再自动飞进去
       if (id && !FLY.touched && !FLY.pending && FLY.mode === 'universe') { FLY.pending = id; wake(); }
+      // 记录里根本没有这个组或任务（打错了、记录被删了）：说一声，不要停在宇宙里让人干等
+      else if (!id && s && !(s.runs || []).length) showNotice(TEXT.legacyNotFound(kind, value));
     })
     .catch(() => {});
 }
