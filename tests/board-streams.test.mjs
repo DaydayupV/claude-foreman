@@ -127,6 +127,7 @@ test('底部表格在切换进度 0.3 处换内容：飞入时对话列表留着
   // 模型列表搭起以后 0.3 秒淡入
   b.UI.tableAt = 0; b.advance(150);
   b.applyShare({ v: 1, uni: 0, fx: 1, rest: 1 }); assert.equal(usage.style.opacity, '0.500');
+  assert.equal(b.el('tall').style.opacity, '0.500'); // "展开全部"按钮跟着表格淡入淡出
   b.advance(150);
   b.applyShare({ v: 1, uni: 0, fx: 1, rest: 1 }); assert.equal(usage.style.opacity, '');
   // 飞出到宇宙一侧时（v 不到 0.3）是对话列表淡入，不再套模型列表的淡入
