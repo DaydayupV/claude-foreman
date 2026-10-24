@@ -98,7 +98,7 @@ function connectUniverse() {
 
 function disconnectUniverse() {
   if (U.es) { U.es.close(); U.es = null; }
-  clearTimeout(U.stuckTimer); U.stuckTimer = null; U.stuckNoticed = false;
+  clearTimeout(U.stuckTimer); clearTimeout(U.askTimer); U.stuckTimer = U.askTimer = null; U.stuckNoticed = false;
   // 主动让出连接不算服务失联，飞进看板和后台暂停时都不能触发 serverLost。
   U.error = null; U.lostAt = null; U.lostNoticed = false;
 }

@@ -113,9 +113,13 @@ function onBacklog(b) {
 }
 
 function replaceRateHistory(run, events) {
-  const lane = laneFor(B.runs.get(run)?.lane || run);
-  lane.rate_events = lane.rate_events.filter((ev) => ev.run !== run);
-  for (const ev of events) insertByTs(lane.rate_events, ev, RATE_EVENTS_MAX);
+  const lane = laneFor(B.runs.get(run)?.lane || run), rest = lane.rate_events.filter((ev) => ev.run !== run);
+  // 两边都按时间排好：一次合并，不逐条插入（Claude Code 车道一次就有上万条）；时间相同时原有的在前，和逐条插入一样
+  const incoming = events.every((ev, i) => !i || events[i - 1].ts <= ev.ts) ? events : [...events].sort((a, b) => a.ts - b.ts), merged = [];
+  for (let i = 0, j = 0; i < rest.length || j < incoming.length;) {
+    merged.push(j >= incoming.length || i < rest.length && rest[i].ts <= incoming[j].ts ? rest[i++] : incoming[j++]);
+  }
+  lane.rate_events = merged.length > RATE_EVENTS_MAX ? merged.slice(-RATE_EVENTS_MAX) : merged;
   lane.ver = (lane.ver || 0) + 1; B.version++;
   wake();
 }
@@ -202,7 +206,8 @@ function connect() {
 // 换看的对话之前关掉原来的数据流（宇宙层同一时刻只挂一个完整看板）
 function disconnect() {
   if (B.es) { B.es.close(); B.es = null; }
-  clearTimeout(B.stuckTimer); B.stuckTimer = null; B.stuckNoticed = false;
+  // 两个计时器都清掉：留着的"请别的标签页让出"会在重连后迟到地触发
+  clearTimeout(B.stuckTimer); clearTimeout(B.askTimer); B.stuckTimer = B.askTimer = null; B.stuckNoticed = false;
   B.connected = false; B.error = null;
 }
 

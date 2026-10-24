@@ -102,9 +102,9 @@ node server.mjs --replay <conversation | run id | group | all> [--speed <N>] [--
 - `kind` is that status (`failed`, `cancelled`, `quota_exhausted`, …), and `at` is its `ended_at`.
 
 **`issues`**
-- The seats with a problem in a part of this conversation that is still going: runs that ended with a final status other than `done` (`timed_out`, `failed`, `cancelled`, …) whose group (or plan, or lane when there is neither) still has a `running` run.
+- The seats with a problem in a part of this conversation that is still going: runs that ended with a final status other than `done` (`timed_out`, `failed`, `cancelled`, …) whose group (or plan, or lane when there is neither) still has a `running` run or a queued dispatch ticket, and which belong to the current batch of that group: going back from its running runs and queued tickets, runs whose time spans follow each other with gaps of at most 10 minutes. An old failure under a group name used again much later does not light up, while a failure in the current batch still does after the user sends another message.
 - A run is left out once a later run started on the same lane (it was resumed or restarted). Once the whole group has ended, its runs are no longer listed.
-- Oldest end first, at most 12. The page draws one dot per entry in the state column.
+- At most the 12 newest, listed oldest end first. The page draws one dot per entry in the state column.
 
 **Which conversations are listed.** In live mode, conversations that were archived or deleted in the Claude desktop app are left out, so the list matches the app's conversation list. The server reads only two fields of the app's per-conversation metadata (`<app data>/claude-code-sessions/<org>/<account>/local_*.json`: `cliSessionId` and `isArchived`) and the names of its `deleted_<id>` markers, every 5 seconds at most, and rereads a file only when its size or modification time changed. The app data folder is looked for above the plugin's own install path, then in the usual places (`%APPDATA%\Claude`, `%LOCALAPPDATA%\Claude-Data\*`, `~/Library/Application Support/Claude`, `~/.config/Claude`). When none is found, or for conversations the app does not know (started from a terminal), nothing is hidden. Replays list every conversation.
 

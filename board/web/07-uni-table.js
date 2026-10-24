@@ -89,7 +89,8 @@ function fillUniState(cell, s) {
   const sig = `${word}|${issues.map((x) => `${x.run}:${x.status}:${x.model}`).join(',')}`;
   if (cell.dataset.sig === sig) return;
   cell.dataset.sig = sig; cell.replaceChildren(word);
-  for (const x of issues) { const dot = document.createElement('i'); dot.className = 'issue'; dot.dataset.tone = 'bad'; cell.append(dot); }
+  // 等人回答是黄点，其余红点
+  for (const x of issues) { const dot = document.createElement('i'); dot.className = 'issue'; dot.dataset.tone = Display.toneOf(x.status === 'needs_input' ? 'blocked' : 'failed'); cell.append(dot); }
   cell.title = issues.map((x) => `${Display.D.statusName(x.status)} · ${shortModel(x.model) || '?'}`).join('\n');
 }
 

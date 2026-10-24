@@ -3,8 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ENTRY, USER_CONFIG, MODULE_CELLS, resolveAgentAlias, resolveProfile, validatePlan } from './config.mjs';
 import { RUNS_ROOT, CLAUDE_SESSION, listRuns, readMeta, checkRunners, runOutcome } from './records.mjs';
-import { validateReviewMaterial } from './review-scope.mjs';
-import { M, die, need, resolveDir } from './util.mjs';
+import { validateReviewMaterial, reviewPatchText, MAX_REVIEW_CHARS } from './review-scope.mjs';
+import { M, die, need, resolveDir, readAttachments, MAX_MATERIAL_CHARS } from './util.mjs';
+import { apiReviewPrompt, API_BRIEF_RESERVE } from './adapters/api.mjs';
 import { D, outcomeStyle } from './format.mjs';
 import { modelIdentity } from './prices.mjs';
 
@@ -79,12 +80,29 @@ function cmdPlan(o, load, adapters) {
   const plan = { module: o.module, cell: o.cell, seats, seat_target: null, count_why: o['count-why'] ?? null,
     ...(o.module === 'image' ? { route: Number(o.route) } : {}) };
   if (['discuss', 'review'].includes(o.module)) plan.host = { seat: 0, role: o['host-role'] ?? null };
+  let material;
   if (o.module === 'review') {
-    const material = validateReviewMaterial({ ...o, cwd });
+    material = validateReviewMaterial({ ...o, cwd });
     plan.review = { target: o.target || 'diff', file: o.file, uncommitted: (o.target || 'diff') === 'diff' && !o.base && !o.commit,
       base: o.base ?? null, commit: o.commit ?? null, fingerprint: material?.fingerprint ?? null };
   }
   const cell = validatePlan(cfg, plan, adapters);
+  // 建计划时按各席运行时的材料预算检查，免得启动前被拒而一直等不到记录。
+  if (material?.target === 'diff') {
+    const max = { cli: MAX_REVIEW_CHARS, api: MAX_MATERIAL_CHARS, reserve: API_BRIEF_RESERVE };
+    const tooLarge = seats.flatMap((seat) => {
+      const type = cfg.agents[seat.agent].type;
+      if (type === 'codex cli') return [];
+      if (type === 'api') {
+        const { prompt } = apiReviewPrompt({ cwd, target: 'diff', scope: material, brief: '', files: readAttachments(o.file, cwd, true) });
+        const chars = prompt.length + max.reserve;
+        return chars > max.api ? [M.planReviewTooLargeSeat(seat.seat, seat.agent, chars)] : [];
+      }
+      const { chars, tooLarge } = reviewPatchText(material, { budget: max.cli, readsFiles: true });
+      return tooLarge ? [M.planReviewTooLargeSeat(seat.seat, seat.agent, chars)] : [];
+    });
+    if (tooLarge.length) die(M.planReviewTooLarge(M.list(tooLarge), max));
+  }
   if (cell.outside_cell) plan.outside_cell = true;
   if (plan.host && !cell.outside_cell) {
     const configured = cfg.modules[o.module].seats[o.cell];

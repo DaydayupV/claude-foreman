@@ -3,7 +3,7 @@
 // 限帧：画面里的动作都很慢，静止时约 30 帧；拖动、缩放、镜头在走、飞入飞出时约 60 帧。
 // 不限的话会跟着显示器刷新率跑（144Hz 屏一秒重画 144 次），整页都卡。
 
-let raf = 0, drawnVersion = -1, lastDom = 0, lastFx = 0, started = false, lastFrame = 0, busyUntil = 0;
+let raf = 0, drawnVersion = -1, tablesDeferred = false, lastDom = 0, lastFx = 0, started = false, lastFrame = 0, busyUntil = 0;
 const FRAME_IDLE = 33, FRAME_BUSY = 16;
 function wake() { if (!raf) raf = requestAnimationFrame(frame); }
 // 用户在操作：接下来一小段时间按忙时的帧率画
@@ -30,7 +30,8 @@ function step() {
   UV.fitCache = null; UV.frame++;
   // 连不上看板服务超过 20 秒：多半是服务退出了或者换了新地址，重连旧地址没有用，提示去拿新链接（只说一次，连上后重置）。
   // 每帧都查：飞进看板以后星图那一层不再画，也要能提示
-  if (U.lostAt != null && !U.lostNoticed && !U.done && nowMs - U.lostAt > 20000) { U.lostNoticed = true; showNotice(TEXT.serverLost); }
+  // 已经确认服务退出、显示着一直留着的提示时，不拿这条会淡出的盖掉
+  if (U.lostAt != null && !U.lostNoticed && !U.done && nowMs - U.lostAt > 20000) { U.lostNoticed = true; if (!showNotice.kept) showNotice(TEXT.serverLost); }
   if (U.on) {
     // 宇宙层：飞入飞出的过渡里两边都画，按各自占的份额淡入淡出
     stepFly();
@@ -47,14 +48,16 @@ function step() {
   const L = computeLayout(t);
   if (!started) { started = true; VIEW.H = L.H; fitView(true); }
   const viewMoving = stepView(L.H);
-  if (B.version !== drawnVersion || nowMs - lastDom > 500) {
+  // 飞入动画进行中：用量表和终端区在画面下方还没露出来，先不搭（一次要算整份统计、建整块 DOM），落地以后马上补上，免得和动画抢同一帧
+  const landing = FLY.mode === 'in';
+  if (B.version !== drawnVersion || nowMs - lastDom > 500 || tablesDeferred && !landing) {
     drawnVersion = B.version;
     lastDom = nowMs;
     loadFinals();
     renderTop(t);
     renderWorld(t, L);
-    renderTable(t);
-    renderTerms(t, L);
+    tablesDeferred = landing;
+    if (!landing) { renderTable(t); renderTerms(t, L); }
   }
   placeWorld(L, t);
   // 往下滚到终端、星图整个移出屏幕时不画画布
@@ -101,6 +104,7 @@ function showNotice(text, keep = false) {
   const el = $('notice');
   el.textContent = text; el.classList.remove('faded');
   clearTimeout(showNotice.timer); showNotice.timer = keep ? null : setTimeout(() => el.classList.add('faded'), 12000);
+  showNotice.kept = keep;
 }
 
 // 后台标签页让出数据流：浏览器对同一主机只开 6 条连接，看板标签页多了，前台的页面会连不上。
@@ -131,6 +135,8 @@ function onVisibilityChange() {
   if (streamPaused()) return;
   if (document.visibilityState === 'hidden') { hiddenSince = performance.now(); hiddenReleaseTimer = setTimeout(releaseStreams, HIDDEN_RELEASE_MS); return; }
   hiddenSince = null;
+  // 回到前台时流还卡在连接中（在后台时连接被占满了）：请其他看板标签页让出，不用等它们自己隐藏满 10 分钟
+  if (!streamsReleased && [B.es, U.es].some((es) => es?.readyState === 0)) askForStream();
   if (streamsReleased) {
     streamsReleased = false;
     clearInterval(watchingTimer); watchingTimer = null;

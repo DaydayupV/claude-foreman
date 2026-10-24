@@ -107,7 +107,7 @@ Other event types are skipped. Streaming sources (`api.reasoning`, `api.content`
 
 ### `backlog` (live scopes, once per run on connect)
 
-`{ "run", "events": [ev…] }`: the last 200 normalized events of that run, synthetic `start` included. Replay sends no backlog.
+`{ "run", "events": [ev…] }`: the last 200 normalized events of that run, synthetic `start` included. For the Claude Code lane the newest user message and the newest 100 `returned` events are kept even when older (the page uses them to know when a seat's result was read and the seat leaves the band), and its `run` and `backlog` go out before the seats', so a group that has already left is never drawn first. Replay sends no backlog.
 
 ### `done` (replay only)
 

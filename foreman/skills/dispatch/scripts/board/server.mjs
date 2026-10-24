@@ -114,12 +114,15 @@ function scopeOptions(values) {
 }
 const hello = (data, now) => ({ v: 3, mode: 'live', scope: data.scope, now, replay: null });
 // 连上（或重连）时补发的事件只留最近 200 条；开头的 start 和最近一条用户消息（终端区按它分"最近一轮"）另外留着，不被挤掉
+// 也留着最近 100 条"后台任务交回"（returned）：页面靠它们知道哪一席的结果已经被读走、什么时候离开刻度带，
+// 长对话里它们常常不在最后 200 条里，丢了的话那一组会在刻度带上多留 10 分钟
 const backlog = (events) => {
   if (events.length <= 200) return events;
   const start = events.find((ev) => ev.k === 'start'), prompt = events.findLast((ev) => ev.k === 'prompt');
-  const tail = new Set(events.filter((ev) => ev !== start && ev !== prompt).slice(-(200 - (start ? 1 : 0) - (prompt ? 1 : 0))));
+  const kept = new Set([start, prompt, ...events.filter((ev) => ev.k === 'returned').slice(-100)].filter(Boolean));
+  const tail = new Set(events.filter((ev) => !kept.has(ev)).slice(-Math.max(0, 200 - kept.size)));
   // start 在最前（和原来一样），其余保持原来的先后
-  return [...(start ? [start] : []), ...events.filter((ev) => ev !== start && (ev === prompt || tail.has(ev)))];
+  return [...(start ? [start] : []), ...events.filter((ev) => ev !== start && (kept.has(ev) || tail.has(ev)))];
 };
 const RATE_EVENTS_MAX = 20000;
 // 展示截断不能截掉统计分母；统计历史只发计算需要的字段，上限与页面一致。
@@ -215,7 +218,8 @@ async function main() {
       }
     };
     sendPlans();
-    for (const run of data.runs) {
+    // Claude Code 车道先发：各席什么时候离开刻度带要看它的"任务交回"，它排在最后的话，刚结束的组会先画出来再一闪消失
+    for (const run of [...data.runs].sort((a, b) => (b.id === 'cc') - (a.id === 'cc'))) {
       const text = JSON.stringify(run), previous = client.seen.get(run.id), revision = data.revisions[run.id];
       if (previous?.text !== text || previous?.revision !== revision) send(client, 'run', run);
       const events = data.events.filter((ev) => ev.run === run.id && ev.k !== 'dispatch_queue' && ev.k !== 'fplan'), version = data.versions[run.id];

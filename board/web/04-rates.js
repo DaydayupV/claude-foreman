@@ -50,6 +50,23 @@ function usageOf(r) {
 }
 
 // 事件未保留命令 ID，按任务计数，所有并行命令结束才恢复生成。
+// [from, to) 和命令时段有没有重叠。同一个任务的命令时段按开始时间排好、互不重叠（commandSpans 把嵌套的命令并成一段），
+// 结束时间也就跟着有序：二分找最后一个在 to 之前开始的，看它是不是过了 from。逐个比较在命令多的长任务里是平方级
+function overlapsCommand(spans, from, to) {
+  let lo = 0, hi = spans.length;
+  while (lo < hi) { const mid = (lo + hi) >>> 1; if (spans[mid].a < to) lo = mid + 1; else hi = mid; }
+  return lo > 0 && spans[lo - 1].b > from;
+}
+
+// 同一份事件（没有新增）重复算命令时段很费：按数组缓存，条数或首尾变了才重算
+const SPANS = new WeakMap();
+function cachedSpans(events) {
+  const hit = SPANS.get(events);
+  if (hit && hit.n === events.length && hit.first === events[0] && hit.last === events.at(-1)) return hit.spans;
+  const spans = commandSpans(events);
+  SPANS.set(events, { n: events.length, first: events[0], last: events.at(-1), spans });
+  return spans;
+}
 function commandSpans(events) {
   const spans = new Map(), counts = new Map();
   for (const ev of events) {
@@ -89,7 +106,7 @@ function segments(lane) {
   }
   turns.clear();
   const usageEnds = new Map(events.filter((e) => e.k === 'usage' && e.u?.out != null).map((e) => [e.run, e.usage_to ?? e.ts]));
-  const commands = commandSpans(events);
+  const commands = cachedSpans(events);
   const byRun = new Map();
   for (const ev of events) if (ev.k !== 'usage') {
     if (!byRun.has(ev.run)) byRun.set(ev.run, []);
@@ -111,7 +128,8 @@ function segments(lane) {
     times.push(b);
     const gaps = [];
     for (let i = 1; i < times.length; i++) if (times[i] > times[i - 1]) gaps.push({ b: times[i], w: Math.min(times[i] - times[i - 1], GAP_MAX) });
-    let active = gaps.filter((g) => !(commands.get(run) || []).some((c) => c.a < g.b && c.b > g.b - g.w));
+    const runCommands = commands.get(run) || [];
+    let active = gaps.filter((g) => !overlapsCommand(runCommands, g.b - g.w, g.b));
     if (!active.length) active = gaps; // 全被命令覆盖时仍保留原来的 token 摊分。
     if (est) {
       // 只补本任务未覆盖的区间；重叠分段按并集扣掉，其他任务不参与。
@@ -193,19 +211,38 @@ function rateSample(lane, runs, t) {
 }
 
 // 直播在最近一份用量之后只补速度，不回填分段、总量或平均速度。
-function liveRate(lane, t, win = WINDOW) {
-  if (B.clock.mode !== 'live' || B.clock.frozenAt != null || lane.id === 'cc') return 0;
-  const rateEvents = lane.rate_events ?? lane.events, commands = commandSpans(rateEvents);
-  let rate = 0;
+// 车道上每个在跑的任务从哪一刻起按实时估速算（最后一个回合开始或最后一次用量以后），和问的是哪个时刻无关：
+// 事件（车道的事件版本号 lane.ver、条数和首尾）和任务都没变就沿用，速度曲线每个点都要问一次。没有起点（还没开始回合、这一轮已经交了总数、起点之后有字数估算）的不列
+const LIVE_STARTS = new WeakMap();
+function liveStarts(lane, rateEvents) {
+  const hit = LIVE_STARTS.get(lane);
+  if (hit && hit.events === rateEvents && hit.ver === lane.ver && hit.n === rateEvents.length && hit.first === rateEvents[0] && hit.last === rateEvents.at(-1)
+    && hit.runs === lane.runs.length) return hit.map;
+  const map = new Map();
   for (const r of lane.runs) {
-    if (r.status !== 'running' || r.started_at > t || (r.ended_at != null && r.ended_at <= t)) continue;
+    if (r.status !== 'running') continue;
     const events = rateEvents.filter((e) => e.run === r.id);
     const at = events.findLastIndex((e) => e.k === 'turn'), turn = events[at], usage = events.findLast((e) => e.k === 'usage' && e.u?.out != null);
     // 结束标记可能不在末条用量，迟到的分段不能重新开启估速。
     if (!turn || events.slice(at + 1).some((e) => e.k === 'usage' && (e.tot || e.end))) continue;
     const from = Math.max(turn.ts, usage?.ts ?? -Infinity);
-    if (from > t) continue;
     if (events.some((e) => e.ts >= from && (e.k === 'think' || e.k === 'answer') && e.n != null)) continue;
+    map.set(r.id, from);
+  }
+  LIVE_STARTS.set(lane, { events: rateEvents, ver: lane.ver, n: rateEvents.length, first: rateEvents[0], last: rateEvents.at(-1), runs: lane.runs.length, map });
+  return map;
+}
+
+function liveRate(lane, t, win = WINDOW) {
+  if (B.clock.mode !== 'live' || B.clock.frozenAt != null || lane.id === 'cc') return 0;
+  // 先看 t 时有没有在跑的任务：速度曲线对每个点都调一次，结束了的车道不必再扫事件
+  const open = lane.runs.filter((r) => r.status === 'running' && r.started_at <= t && (r.ended_at == null || r.ended_at > t));
+  if (!open.length) return 0;
+  const rateEvents = lane.rate_events ?? lane.events, commands = cachedSpans(rateEvents), starts = liveStarts(lane, rateEvents);
+  let rate = 0;
+  for (const r of open) {
+    const from = starts.get(r.id);
+    if (from == null || from > t) continue;
     const busy = commands.get(r.id) || [];
     if (busy.some((c) => c.a <= t && c.b > t)) continue;
     const sample = rateSample(lane, lane.runs.filter((x) => x.model === r.model && x.started_at <= t), t);
@@ -242,6 +279,9 @@ function recordRate(lane, t, win = WINDOW) {
 
 // 速度曲线：从这条车道第一轮开始到最后一轮结束（还在跑的画到现在），n 个点。结束以后曲线停住，
 // 画的是它在这个对话里的全部时长；每个点取它之前两格宽的平均速度
+// 结束了的车道曲线是定住的：算一次缓存起来。曲线只由速度分段决定（结束的车道没有实时估速），
+// 分段重算了（事件、补发重置、最终用量、回放的最终快照有变化，见 segments 的缓存条件）曲线就跟着重算
+const SPARKS = new WeakMap();
 function sparkline(lane, t, n = 40) {
   const replay = B.clock.mode === 'replay', at = (r, k) => (replay ? r[`original_${k}`] ?? r[k] : r[k]);
   t = recordTime(t);
@@ -249,8 +289,12 @@ function sparkline(lane, t, n = 40) {
   if (!runs.length) return new Array(n).fill(0);
   const start = Math.min(...runs.map((r) => at(r, 'started_at')));
   const open = runs.some((r) => at(r, 'ended_at') == null || at(r, 'ended_at') > t);
-  const end = open ? t : Math.max(...runs.map((r) => at(r, 'ended_at'))), step = Math.max(1, end - start) / n, out = [];
+  const end = open ? t : Math.max(...runs.map((r) => at(r, 'ended_at'))), step = Math.max(1, end - start) / n;
+  const segs = open ? null : segments(lane), key = open ? null : `${n}|${start}|${end}|${runs.length}|${replay}`, hit = SPARKS.get(lane);
+  if (key && hit?.key === key && hit.segs === segs) return hit.out;
+  const out = [];
   for (let i = 1; i <= n; i++) out.push(recordRate(lane, start + i * step, Math.max(1000, step * 2)));
+  if (key) SPARKS.set(lane, { key, segs, out });
   return out;
 }
 
