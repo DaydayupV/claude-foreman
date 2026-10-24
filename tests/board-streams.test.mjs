@@ -9,7 +9,8 @@ const hello = { mode: 'live', now: 1000, replay: null };
 const session = { id: 'conversation', project: 'project', title: 'test', state: 'idle', runs: [] };
 const universe = { projects: [{ key: 'project', name: 'test' }], sessions: [session], agents: [] };
 
-function board({ search = '', replay = false, lang = 'zh', visibility = 'visible' } = {}) {
+// health：卡住提示后再问服务时的结果（refused 是服务已经退出，timeout 是连接被占满）；不给时页面里没有 AbortSignal.timeout，不去问
+function board({ search = '', replay = false, lang = 'zh', visibility = 'visible', health } = {}) {
   let time = 0, timerId = 0, peak = 0, demoStarts = 0, api, channel = null;
   const timers = new Map(), intervals = new Map(), streams = [], notices = [], requests = [], listeners = new Map(), elements = new Map();
   const active = () => streams.filter((es) => es.readyState !== 2);
@@ -43,7 +44,12 @@ function board({ search = '', replay = false, lang = 'zh', visibility = 'visible
     // 后台让出连接后每分钟报到一次：测试里只记下有没有在报到
     setInterval: (fn, ms) => { const id = ++timerId; intervals.set(id, { fn, ms }); return id; }, clearInterval: (id) => intervals.delete(id),
     BroadcastChannel: class { constructor() { channel = this; this.sent = []; } postMessage(m) { this.sent.push(m); } },
-    fetch: async (url) => { requests.push(url); return { json: async () => url.startsWith('sessions?') ? universe : { hello, runs: [], events: [] } }; },
+    fetch: async (url) => {
+      requests.push(url);
+      if (url === 'health' && health) throw health === 'refused' ? new TypeError('Failed to fetch') : Object.assign(new Error('timed out'), { name: 'TimeoutError' });
+      return { json: async () => url.startsWith('sessions?') ? universe : { hello, runs: [], events: [] } };
+    },
+    ...(health ? { AbortSignal: class { static timeout() { return {}; } } } : {}),
     playDemo: () => { demoStarts++; }, $: el, worldEl: el('world'),
     UI: { cards: new Map(), outs: new Map(), heads: new Map(), tableRows: new Map(), open: new Set(), collapsed: new Set() },
     PANEL: { cols: new Map(), fold: new Map(), doneLines: new Map() }, UNI_ROWS: new Map(), REEL: { born: new Map() }, SMOOTH: { vals: new Map() },
@@ -199,4 +205,29 @@ test('前台页面连不上 2 秒就广播，后台的看板页收到后马上�
   // 前台页面自己连不上：2 秒后请别的标签页让出连接
   const front = board(); front.seed(); front.advance(2000);
   assert.deepEqual(front.channel.sent, ['release']);
+});
+
+test('后台放了 30 分钟以后不再报到，回到前台照常重连', () => {
+  const b = board(); b.seed();
+  b.visibility('hidden'); b.advance(600000);
+  assert.equal(b.active().length, 0); assert.equal(b.intervals.size, 1);
+  const ping = () => [...b.intervals.values()][0]?.fn();
+  const pings = () => b.requests.filter((url) => url === 'health?watching=1').length;
+  b.advance(1199000); ping(); assert.equal(pings(), 1);
+  // 隐藏满 30 分钟：这一次不报，计时也停掉
+  b.advance(1000); ping(); assert.equal(pings(), 1); assert.equal(b.intervals.size, 0);
+  b.visibility('visible'); assert.equal(b.active().length, 1);
+  // 再隐藏从头算
+  b.visibility('hidden'); b.advance(600000); assert.equal(b.intervals.size, 1);
+  b.advance(60000); ping(); assert.equal(pings(), 2);
+});
+
+for (const lang of ['zh', 'en']) test(`${lang} 卡住时问一下服务：已经退出就换成一直留着的提示，超时照旧`, async () => {
+  for (const [health, last] of [['refused', 'boardGone'], ['timeout', 'streamStuck']]) {
+    const b = board({ lang, health }); b.seed();
+    b.U.es.emit('error'); b.advance(8000);
+    assert.deepEqual(b.notices, [b.TEXT.streamStuck]);
+    await new Promise(setImmediate);
+    assert.equal(b.notices.at(-1), b.TEXT[last]); assert.equal(b.requests.filter((url) => url === 'health').length, 1);
+  }
 });

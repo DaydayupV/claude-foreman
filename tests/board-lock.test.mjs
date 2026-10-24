@@ -154,6 +154,9 @@ test('build 不同的旧服务被结束并替换，链接随之改变', (t) => w
   // 保留旧服务的实际依赖树，避免共用显示模块新增后只复制入口导致启动失败。
   fs.cpSync(path.dirname(boardDir), path.dirname(oldDir), { recursive: true });
   write(path.join(oldDir, 'index.html'), '<html lang="zh-CN">old</html>');
+  // 旧版服务没有 shutdown 接口（POST 回 405）：board 退回按 pid 结束它
+  const serverFile = path.join(oldDir, 'server.mjs');
+  fs.writeFileSync(serverFile, fs.readFileSync(serverFile, 'utf8').replaceAll("route === 'shutdown'", "route === 'no-shutdown'"));
   const old = startServer(h, children, {}, path.join(oldDir, 'server.mjs'));
   await ready(old);
   const previous = json(lockFile);
@@ -227,4 +230,92 @@ test('别的启动尝试留下的 board.err 不会盖住这次失败的原因', 
   write(path.join(h.runs, 'board.err'), JSON.stringify({ pid: 1, error: 'previous attempt error' }) + '\n');
   const result = await h.bridge(['board'], { env: { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` } });
   failed(result, MESSAGES.zh.boardStartFailed('exit code 7'));
+}));
+
+test('插件文件被换掉或删掉后，服务在自查时退出并删掉自己的锁；只是重写同样的内容不退出', (t) => withBoard(t, async (h, children, lockFile) => {
+  for (const change of ['replace', 'remove']) {
+    const dir = path.join(h.home, `plugin-${change}/scripts/board`);
+    fs.cpSync(path.dirname(boardDir), path.dirname(dir), { recursive: true });
+    const server = startServer(h, children, { env: { FOREMAN_TEST_BOARD_TICK_MS: '100' } }, path.join(dir, 'server.mjs'));
+    await ready(server);
+    // 修改时间变了、内容没变：重算 buildId 后照旧
+    const page = fs.readFileSync(path.join(dir, 'index.html'));
+    fs.writeFileSync(path.join(dir, 'index.html'), page);
+    fs.utimesSync(path.join(dir, 'index.html'), new Date(), new Date(Date.now() + 5000));
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.equal(server.child.exitCode, null);
+    if (change === 'replace') write(path.join(dir, 'index.html'), '<html lang="zh-CN">new</html>');
+    else fs.rmSync(path.dirname(dir), { recursive: true, force: true });
+    await server.done;
+    assert.match(server.stderr, /plugin files were removed or replaced/);
+    assert.equal(fs.existsSync(lockFile), false);
+  }
+}));
+
+for (const lang of ['zh', 'en']) test(`board --stop 关掉直播服务；没在运行时如实说明；dispatch.web 关掉后照样能关 (${lang})`, (t) => withBoard(t, async (h, children, lockFile) => {
+  const options = { env: { FOREMAN_LANG: lang } }, notRunning = { stopped: false, message: MESSAGES[lang].boardNotRunning };
+  assert.deepEqual(output(await h.bridge(['board', '--stop'], options)), notRunning);
+  failed(await h.bridge(['board', '--stop', '--replay', 'all'], options), MESSAGES[lang].badArg('--replay'));
+  assert.equal(output(await h.bridge(['board'], options)).started, true);
+  const lock = json(lockFile), cfg = baseConfig();
+  cfg.dispatch.web = false; h.config(cfg);
+  assert.deepEqual(output(await h.bridge(['board', '--stop'], options)), { stopped: true, pid: lock.pid });
+  assert.equal(alive(lock.pid), false);
+  assert.equal(fs.existsSync(lockFile), false);
+  assert.deepEqual(output(await h.bridge(['board', '--stop'], options)), notRunning);
+}));
+
+test('board --stop 不结束健康检查对不上的进程', (t) => withBoard(t, async (h, children, lockFile) => {
+  // 锁里的 pid 是测试进程自己（活着，但不是看板服务）：健康检查连不上端口，不能结束它
+  const lock = { v: 1, pid: process.pid, port: 1, token: 'e'.repeat(32), started_at: new Date().toISOString(), build: 'x' };
+  write(lockFile, lock);
+  const result = await h.bridge(['board', '--stop']);
+  assert.ok([0, 2].includes(result.code), result.stderr);
+  if (result.code === 2) failed(result, MESSAGES.zh.boardStopUnverified(process.pid));
+  else assert.deepEqual(output(result), { stopped: false, message: MESSAGES.zh.boardNotRunning });
+  assert.equal(alive(process.pid), true);
+  fs.rmSync(lockFile, { force: true });
+}));
+
+test('board 启动的服务把工作目录放在记录目录，不占着插件目录', (t) => withBoard(t, async (h) => {
+  const out = path.join(h.home, 'board-cwd.txt');
+  const preload = write(path.join(h.home, 'cwd-board.mjs'), `
+    import fs from 'node:fs';
+    import path from 'node:path';
+    if (path.basename(process.argv[1]) === 'server.mjs') fs.writeFileSync(${JSON.stringify(out)}, process.cwd());`);
+  assert.equal(output(await h.bridge(['board'], { env: { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` } })).started, true);
+  assert.equal(path.resolve(read(out)), path.resolve(h.runs));
+}));
+
+test('shutdown 只收带令牌的 POST，服务回应后自己退出并删掉锁', (t) => withBoard(t, async (h, children, lockFile) => {
+  const server = startServer(h, children);
+  await ready(server);
+  const lock = json(lockFile), base = `http://127.0.0.1:${lock.port}/${lock.token}/`;
+  assert.equal((await fetch(base + 'shutdown')).status, 405);
+  assert.equal((await fetch(base + 'health', { method: 'POST' })).status, 405);
+  assert.equal((await fetch(`http://127.0.0.1:${lock.port}/${'0'.repeat(32)}/shutdown`, { method: 'POST' })).status, 404);
+  assert.equal(server.child.exitCode, null);
+  const response = await fetch(base + 'shutdown', { method: 'POST' });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { ok: true, pid: lock.pid });
+  await server.done;
+  assert.equal(server.child.exitCode, 0);
+  assert.equal(fs.existsSync(lockFile), false);
+}));
+
+test('启动途中插件文件被换掉（算 buildId 时），第一次自查就退出', (t) => withBoard(t, async (h, children) => {
+  const dir = path.join(h.home, 'plugin-midstart/scripts/board'), page = path.join(dir, 'index.html');
+  fs.cpSync(path.dirname(boardDir), path.dirname(dir), { recursive: true });
+  // 第一次读页面算 buildId 时，磁盘上的页面已经换成新的，读到的还是旧内容
+  const preload = write(path.join(h.home, 'swap-board.mjs'), `
+    import fs from 'node:fs';
+    const page = ${JSON.stringify(page)}, read = fs.readFileSync;
+    let swapped = false;
+    fs.readFileSync = (file, ...rest) => {
+      if (!swapped && file === page) { swapped = true; const old = read(file, ...rest); fs.writeFileSync(page, '<html lang="zh-CN">new</html>'); return old; }
+      return read(file, ...rest);
+    };`);
+  const server = startServer(h, children, { env: { FOREMAN_TEST_BOARD_TICK_MS: '100', NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` } }, path.join(dir, 'server.mjs'));
+  await server.done;
+  assert.match(server.stderr, /plugin files were removed or replaced/);
 }));
