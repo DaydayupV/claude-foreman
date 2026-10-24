@@ -32,7 +32,8 @@ function reelZone(sx) {
   const wx = (sx - VIEW.tx) / VIEW.k;
   return wx >= WL.bandX - 12 && wx <= WL.bandX + WL.bandW + 12;
 }
-const UI = { open: new Set(), collapsed: new Set(), cards: new Map(), outs: new Map(), heads: new Map(), tableRows: new Map() };
+// hot：鼠标停在用量表哪一行（车道 id），画面上突出这条车道、其余的压暗；只是看得清楚，不触发任何操作
+const UI = { open: new Set(), collapsed: new Set(), cards: new Map(), outs: new Map(), heads: new Map(), tableRows: new Map(), hot: null };
 
 function laneStatus(lane, t) {
   const r = currentRun(lane, t);

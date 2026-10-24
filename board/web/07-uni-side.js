@@ -25,7 +25,7 @@ const agentVia = (id) => (/-(codex|opencode|pi)-cli$/.exec(id) || /-(api)$/.exec
 
 function renderSlots() {
   const el = $('uslots');
-  if (!el.firstChild) el.innerHTML = `<header><b>${TEXT.slotsTitle}</b><span class="n"></span></header><div class="rows"></div>`;
+  if (!el.firstChild) { el.innerHTML = `<header><b>${TEXT.slotsTitle}</b><span class="n"></span></header><div class="rows"></div>`; el.firstChild.title = TEXT.slotsHint; }
   // 名额带只在占用变了时重画（每次重画要重建格子）
   const sig = JSON.stringify(U.agents.map((a) => [a.id, a.max_parallel, a.running.map((r) => r.session), a.queued.map((r) => r.run)]));
   if (sig === SIDE.sigSlots) return;

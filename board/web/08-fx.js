@@ -212,7 +212,7 @@ function drawOverlay(t, L, P, lanes, rates, live, bandA) {
   // 滚到刻度带两头的席位跟着渐隐，它的光线也一起淡掉
   // 还没被光点拉到的卡片、正在离开的组，光线也跟着淡入淡出
   L.arrive = arrivals(t);
-  const fadeOf = (id) => (P.get(id).vis ?? 1) * (L.arrive.get(id)?.card ?? 1) * (1 - (L.rows.get(id)?.leave || 0));
+  const fadeOf = (id) => (P.get(id).vis ?? 1) * (L.arrive.get(id)?.card ?? 1) * (1 - (L.rows.get(id)?.leave || 0)) * dimOf(id);
   const each = (fn) => { for (const lane of lanes) { const v = fadeOf(lane.id); if (v < 0.02) continue; ctx.globalAlpha = v; fn(lane); } ctx.globalAlpha = 1; };
   each((lane) => drawBundle(L.core, lane, P.get(lane.id), smooth(`bI|${lane.id}`, glow(rates.get(lane.id) || 0)), live.get(lane.id)));
   drawBand(L.band, t, bandA);

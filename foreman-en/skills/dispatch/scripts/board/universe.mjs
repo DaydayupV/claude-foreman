@@ -189,7 +189,13 @@ export function createUniverse(options) {
   let runNames = new Set(), runsScannedAt = -Infinity;
   let config;
   try { config = JSON.parse(fs.readFileSync(options.config, 'utf8')); } catch { /* 读不到配置就视为没有 */ }
-  config = Object.entries(config?.agents || {}).map(([id, value]) => ({ id, type: value.type ?? null, max_parallel: value.max_parallel ?? 4 }));
+  // 只列四个模块（讨论、执行、审查、图像）的格子里用到的协作方；别的协作方只在它正在跑时出现（agentSlots 会补上）。
+  // 老配置没有 modules 时照旧全列
+  const inModules = new Set();
+  const collect = (v) => { if (Array.isArray(v)) v.forEach(collect); else if (v && typeof v === 'object') { if (typeof v.agent === 'string') inModules.add(v.agent); else Object.values(v).forEach(collect); } };
+  collect(config?.modules);
+  config = Object.entries(config?.agents || {}).filter(([id]) => !inModules.size || inModules.has(id))
+    .map(([id, value]) => ({ id, type: value.type ?? null, max_parallel: value.max_parallel ?? 4 }));
   const readRuns = (now) => {
     const names = new Set(list(options.runs).filter((d) => d.isDirectory() && d.name !== 'plans').map((d) => d.name));
     const full = now - runsScannedAt >= 30000 || names.size !== runNames.size || [...names].some((id) => !runNames.has(id));

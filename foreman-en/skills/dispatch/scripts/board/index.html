@@ -105,6 +105,10 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 .card.queued { border-style: dashed; animation: card-q 1.4s ease-in-out infinite; }
 @keyframes card-q { 0%, 100% { border-color: rgba(255,186,90,.75); } 50% { border-color: rgba(255,186,90,.15); } }
 .card.cancelled { filter: grayscale(1) brightness(.62); }
+/* 用量表悬停的那条车道：卡片描一圈它的颜色，其余卡片和产出框压暗 */
+.card.hot { --cc: var(--tint); border-color: color-mix(in srgb, var(--tint) 70%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--tint) 60%, transparent), 0 0 22px -4px var(--tint); }
+.card.dim, .outbox.dim { opacity: .32; transition: opacity .15s; }
+#usage:not([data-mode="uni"]) .tbody .tr:hover, #usage:not([data-mode="uni"]) .tbody .tr.hot { background: rgba(255,255,255,.05); box-shadow: inset 2px 0 var(--tint); }
 .card.ghost.gap-ready { animation: gap-ready 1.8s ease-in-out infinite; }
 @keyframes gap-ready { 0%, 100% { border-color: rgba(245,245,248,.25); box-shadow: none; } 50% { border-color: rgba(245,245,248,.75); box-shadow: 0 0 16px -4px rgba(245,245,248,.45); } }
 .card.failed { --cc: var(--bad); border-color: color-mix(in srgb, var(--bad) 70%, transparent); box-shadow: 0 0 16px -7px var(--bad); }
@@ -204,7 +208,18 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 /* 用量面板（右上角有往下看终端的提示）和下面的终端区 */
 #usage { display: grid; grid-template-rows: auto 1fr auto; height: 100%; min-height: 0; }
 #hud #more { width: auto; padding: 0 8px; letter-spacing: .08em; }
-#termsec { height: calc(100vh - var(--top-h) - 14px); margin-bottom: 8px; display: grid; grid-template-rows: auto 1fr; gap: 6px; }
+#termsec { height: calc(100vh - var(--top-h) - 14px); margin-bottom: 8px; display: grid; grid-template-rows: auto 1fr auto; gap: 6px; }
+/* 已完成列表：终端区底部，一行一组，最多占三成高度，点开的组在行下面展开成和上面一样的栏 */
+#termdone { max-height: 34vh; overflow-y: auto; border-top: 1px solid rgba(200,200,212,.14); scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
+#termdone[hidden] { display: none; }
+#termdone > header { display: flex; align-items: baseline; gap: 8px; height: 18px; }
+#termdone > header b { color: var(--hi); font-size: 10px; letter-spacing: .16em; }
+#termdone > header .n { color: var(--dim); font-size: 10px; }
+#termdone .dline { cursor: pointer; color: var(--mid); font-size: 10.5px; padding: 2px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#termdone .dline:hover, #termdone .drow.open > .dline { color: var(--text); background: rgba(255,255,255,.04); }
+#termdone .dbody > .tcol { height: auto; max-height: 30vh; margin: 2px 0 6px 14px; }
+#termdone .more { margin: 4px 4px 2px; padding: 1px 8px; font-size: 10px; }
+#termdone .more[hidden] { display: none; }
 #termsec > header { display: flex; align-items: baseline; gap: 12px; height: 18px; border-bottom: 1px solid rgba(200,200,212,.14); }
 #termsec > header b { color: var(--hi); font-size: 10px; letter-spacing: .16em; }
 #termsec > header span { color: var(--dim); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -334,6 +349,7 @@ img { -webkit-user-drag: none; user-select: none; -webkit-user-select: none; }
 <section id="termsec" aria-label="终端：当前对话里各模型的终端对话">
   <header><b>TERMINAL</b><span id="conv"></span></header>
   <div id="terms"></div>
+  <div id="termdone" hidden></div>
 </section>
 <div id="status" role="status"></div>
 <script>window.__LANG__ = 'zh';
@@ -1014,11 +1030,12 @@ const TEXTS = {
     genAvgTitle: '本席各轮累计输出 ÷ 估算的生成时长；已扣掉能识别的跑命令时段，仍可能含等待和读文件的时间',
     usageUnattributed: '用量无法归属到本轮：缺少可信的续接累计基线',
     emptyList: (h) => `最近 ${h} 小时没有派发过任务的对话。派发之后会出现在这里。`,
-    slotsTitle: '名额',
+    slotsTitle: '同时运行',
+    slotsHint: '每个协作方一行，一格是它能同时跑的一个任务（配置里的 max_parallel）。亮起的格子正被某个对话占着，闪烁的在服务商那边排队；点一格飞进那个对话',
     shell: {
       crumb: '当前位置',
       view: '多模型协作视图：滚轮缩放，按住左键拖动，单击卡片放大，双击空白处复位',
-      slots: '协作方并发名额',
+      slots: '各协作方正在同时运行的任务',
       fit: '复位（0）',
       hintBoard: '滚轮缩放（刻度带上是滚动）· 拖动平移 · 单击卡片放大 · 双击复位',
       hintUniverse: '滚轮缩放 · 拖动平移 · 双击复位',
@@ -1056,11 +1073,12 @@ const TEXTS = {
     genAvgTitle: "This seat's total output ÷ estimated generation time; command time that can be recognised is excluded, waiting and file reads may remain",
     usageUnattributed: 'Usage cannot be attributed to this run: a reliable continuation baseline is missing',
     emptyList: (h) => `No conversation has dispatched work in the last ${h} hours. New ones show up here.`,
-    slotsTitle: 'Slots',
+    slotsTitle: 'Running now',
+    slotsHint: 'One row per agent; each cell is one run it can have going at once (max_parallel in the config). Lit cells are taken by a conversation, blinking ones wait in the provider queue; click a cell to fly into that conversation',
     shell: {
       crumb: 'Where you are',
       view: 'Multi-model view: scroll to zoom, drag to pan, click a card to zoom in, double-click empty space to reset',
-      slots: 'Parallel slots per agent',
+      slots: 'Runs going on now, per agent',
       fit: 'Reset (0)',
       hintBoard: 'Scroll to zoom (scrolls the cards over the band) · drag to pan · click a card to zoom in · double-click to reset',
       hintUniverse: 'Scroll to zoom · drag to pan · double-click to reset',
@@ -2270,7 +2288,8 @@ function reelZone(sx) {
   const wx = (sx - VIEW.tx) / VIEW.k;
   return wx >= WL.bandX - 12 && wx <= WL.bandX + WL.bandW + 12;
 }
-const UI = { open: new Set(), collapsed: new Set(), cards: new Map(), outs: new Map(), heads: new Map(), tableRows: new Map() };
+// hot：鼠标停在用量表哪一行（车道 id），画面上突出这条车道、其余的压暗；只是看得清楚，不触发任何操作
+const UI = { open: new Set(), collapsed: new Set(), cards: new Map(), outs: new Map(), heads: new Map(), tableRows: new Map(), hot: null };
 
 function laneStatus(lane, t) {
   const r = currentRun(lane, t);
@@ -2501,6 +2520,8 @@ function boxOf(id) {
 // 世界里的 DOM：Claude Code 卡片、席位卡片、产出框、组头。按车道 id 复用元素，只改变了的文字和位置。
 
 const CHANNEL = { 'codex cli': 'Codex CLI', 'opencode cli': 'opencode', 'pi cli': 'pi', api: 'API', host: 'Claude Code' };
+// 用量表悬停时其余车道压暗的程度（卡片、产出框、光线共用）
+const dimOf = (id) => (UI.hot && id !== UI.hot ? 0.32 : 1);
 const place = (el, b) => { const s = el.style, x = `${b.x}px`, y = `${b.y}px`; if (s.left !== x) s.left = x; if (s.top !== y) s.top = y; };
 
 function cardShell(id) {
@@ -2515,6 +2536,7 @@ function cardShell(id) {
 function fillCard(el, lane, t) {
   const r = currentRun(lane, t) || latest(lane), key = avatarFor(r.model, r.agent_type), st = laneStatus(lane, t), s = laneStats(lane, t), isCC = lane.id === 'cc';
   el.style.setProperty('--tint', rgba(key));
+  el.classList.toggle('hot', UI.hot === lane.id); el.classList.toggle('dim', dimOf(lane.id) < 1);
   el.classList.toggle('running', st.running);
   const img = el.querySelector('.av');
   if (img.dataset.key !== key) { img.src = avatarSrc(key); img.alt = look(key).name; img.dataset.key = key; }
@@ -2602,6 +2624,7 @@ function fillOut(box, title, files, report, lead = [], thumbs = []) {
 // 席位产出框只写最近一次任务的产出（上一轮的已经被 Claude Code 读走了）
 function fillLaneOut(box, lane, t) {
   const live = lane.runs.filter((x) => x.started_at <= t), r = live[live.length - 1] || latest(lane);
+  box.classList.toggle('dim', dimOf(lane.id) < 1);
   box.style.setProperty('--tint', rgba(avatarFor(r.model, r.agent_type)));
   const ended = r.ended_at != null && r.ended_at <= t, files = [];
   if (ended) for (const c of r.changed || []) files.push({ kind: c.kind || 'update', path: c.path });
@@ -2854,7 +2877,12 @@ function renderTable(t) {
   const table = $('usage');
   if (!table.firstChild) {
     table.innerHTML = '<div class="tr th"></div><div class="tbody"></div><div class="tr total"></div>';
-    table.querySelector('.tbody').addEventListener('scroll', (e) => markMore(e.target), { passive: true });
+    const body = table.querySelector('.tbody');
+    body.addEventListener('scroll', (e) => markMore(e.target), { passive: true });
+    // 鼠标停在某一行时突出画面上的这条车道（和宇宙表悬停星系一样），单击不做任何事
+    const hover = (id) => { if (UI.hot !== id) { UI.hot = id; B.version++; wake(); } };
+    body.addEventListener('pointerover', (e) => { if (table.dataset.mode !== 'uni') hover(e.target.closest('.tr[data-lane]')?.dataset.lane || null); });
+    body.addEventListener('pointerleave', () => hover(null));
     for (const h of TABLE_HEAD) { const c = document.createElement('span'); c.textContent = h; table.firstChild.append(c); }
     costHeadTitle(table.firstChild);
   }
@@ -2867,8 +2895,10 @@ function renderTable(t) {
       tr = document.createElement('div');
       tr.className = 'tr';
       tr.innerHTML = '<span class="av"><img alt=""></span>' + '<span></span>'.repeat(TABLE_HEAD.length - 1);
+      tr.dataset.lane = lane.id;
       UI.tableRows.set(lane.id, tr);
     }
+    tr.classList.toggle('hot', UI.hot === lane.id);
     const r = currentRun(lane, t) || latest(lane), key = avatarFor(r.model, r.agent_type), s = laneStats(lane, t), st = laneStatus(lane, t);
     tr.style.setProperty('--tint', rgba(key));
     tr.classList.toggle('running', st.running);
@@ -2938,7 +2968,7 @@ function renderTop(t) {
 //  - Claude Code 自己的对话流单独一栏，放在最前
 // 有新内容时自动滚到底，往上翻看时不打扰。以后做多对话，切换对话就是换一组车道（termUnits）重画，标题跟着换。
 
-const PANEL = { cols: new Map(), open: new Set(), seen: false, numbers: new Map() };
+const PANEL = { cols: new Map(), open: new Set(), seen: false, numbers: new Map(), doneRows: new Map(), openDone: new Set(), allDone: false };
 const groupPlans = (group, t) => [...new Map(B.life.filter((p) => p.k === 'fplan' && p.group === group && p.ts <= t).map((p) => [p.plan, p])).values()];
 function dispatchQueue(t) {
   const snapshot = B.laneById.get('dispatch_queue')?.events.filter((e) => e.ts <= t).at(-1);
@@ -2955,6 +2985,10 @@ addEventListener('scroll', () => {
 }, { passive: true });
 $('more').addEventListener('click', () => $('termsec').scrollIntoView({ behavior: 'smooth' }));
 $('termsec').addEventListener('click', (e) => {
+  // 已完成列表：点一行展开或收起这一组的完整摘要；"更多"列出全部
+  const line = e.target.closest('#termdone .dline');
+  if (line) { const id = line.parentNode.dataset.unit; if (!PANEL.openDone.delete(id)) PANEL.openDone.add(id); B.version++; wake(); return; }
+  if (e.target.closest('#termdone .more')) { PANEL.allDone = true; B.version++; wake(); return; }
   const seat = e.target.closest('.seat');
   if (!seat) return;
   const id = seat.dataset.lane;
@@ -2983,12 +3017,63 @@ function termUnits(t, L) {
   return units;
 }
 
+// 正在跑的组和刚出结果的组展开在上面；全部结束一分钟以后折进下面的"已完成"列表（一行一组，点开是完整摘要），
+// 和刻度带脱钩：结果被 Claude Code 读走、席位离开刻度带以后照样留着
+const DONE_AFTER = 60000, DONE_SHOWN = 20;
+const unitLanes = (u) => (u.group ? u.lanes : [u.lane]);
+const unitEnd = (u, t) => Math.max(0, ...unitLanes(u).map((l) => currentRun(l, t)?.ended_at ?? 0));
+function unitFinished(u, t) {
+  if (u.id === 'cc' || !unitLanes(u).length) return false;
+  if (unitLanes(u).some((l) => laneStatus(l, t).running)) return false;
+  if (u.group && dispatchQueue(t).some((q) => q.group === u.group)) return false;
+  const end = unitEnd(u, t);
+  return end > 0 && t - end > DONE_AFTER;
+}
+function doneLine(u, t) {
+  const lanes = unitLanes(u), runs = lanes.map((l) => currentRun(l, t)), shown = runs.map(Display.displayRun);
+  const title = u.group ? Display.groupTask(shown).text : Display.taskLine(shown[0].meta);
+  const counts = Display.countsText(lanes.map((l, i) => seatStatus(l, runs[i], t)));
+  const cost = runs.reduce((n, r) => n + (r.cost_usd || 0), 0);
+  return [title, counts, `ended ${hhmm(Display.recordedTime(unitEnd(u, t), displayPoints()))}`, cost ? `$${fmtUsd(cost)}` : null].filter(Boolean).join(' · ');
+}
+function renderDone(done, t, seen) {
+  const box = $('termdone');
+  box.hidden = !done.length;
+  if (!done.length) return;
+  if (!box.firstChild) box.innerHTML = '<header><b>FINISHED</b><span class="n"></span></header><div class="rows"></div><button type="button" class="more"></button>';
+  setText(box.querySelector('.n'), String(done.length));
+  const list = box.querySelector('.rows'), shown = PANEL.allDone ? done : done.slice(0, DONE_SHOWN), ids = new Set();
+  shown.forEach((u, i) => {
+    let row = PANEL.doneRows.get(u.id);
+    if (!row) {
+      row = document.createElement('section'); row.className = 'drow'; row.dataset.unit = u.id;
+      row.innerHTML = '<div class="dline"></div><div class="dbody"></div>'; PANEL.doneRows.set(u.id, row);
+    }
+    ids.add(u.id);
+    if (list.children[i] !== row) list.insertBefore(row, list.children[i] || null);
+    const open = PANEL.openDone.has(u.id), body = row.querySelector('.dbody');
+    row.classList.toggle('open', open);
+    setText(row.querySelector('.dline'), `${open ? '▾' : '▸'} ${doneLine(u, t)}`);
+    if (!open) { if (body.firstChild) body.replaceChildren(); return; }
+    let col = PANEL.cols.get(u.id);
+    if (!col) { col = u.group ? groupColumn(u.id) : termColumn(u.id); PANEL.cols.set(u.id, col); }
+    seen.add(u.id);
+    if (col.parentNode !== body) body.replaceChildren(col);
+    if (u.group) fillGroup(col, u, t); else fillColumn(col, u.lane, t);
+  });
+  for (const [id, row] of PANEL.doneRows) if (!ids.has(id)) { row.remove(); PANEL.doneRows.delete(id); }
+  const more = box.querySelector('.more'), rest = done.length - shown.length;
+  more.hidden = rest <= 0;
+  setText(more, `show ${rest} more`);
+}
+
 function renderTerms(t, L) {
   const cc = B.laneById.get('cc'), title = cc && latest(cc) ? latest(cc).title : null;
   setText($('conv'), Display.D.conversation(title));
   if (!termsNear()) return;
-  const box = $('terms'), seen = new Set();
-  termUnits(t, L).forEach((u, i) => {
+  const box = $('terms'), seen = new Set(), units = termUnits(t, L);
+  const done = units.filter((u) => unitFinished(u, t)).sort((a, b) => unitEnd(b, t) - unitEnd(a, t));
+  units.filter((u) => !done.includes(u)).forEach((u, i) => {
     let col = PANEL.cols.get(u.id);
     if (!col) { col = u.group ? groupColumn(u.id) : termColumn(u.id); PANEL.cols.set(u.id, col); }
     seen.add(u.id);
@@ -2996,6 +3081,7 @@ function renderTerms(t, L) {
     if (box.children[i] !== col) box.insertBefore(col, box.children[i] || null);
     if (u.group) fillGroup(col, u, t); else fillColumn(col, u.lane, t);
   });
+  renderDone(done, t, seen);
   for (const [id, col] of PANEL.cols) if (!seen.has(id)) { col.remove(); PANEL.cols.delete(id); }
 }
 
@@ -3179,7 +3265,7 @@ const agentVia = (id) => (/-(codex|opencode|pi)-cli$/.exec(id) || /-(api)$/.exec
 
 function renderSlots() {
   const el = $('uslots');
-  if (!el.firstChild) el.innerHTML = `<header><b>${TEXT.slotsTitle}</b><span class="n"></span></header><div class="rows"></div>`;
+  if (!el.firstChild) { el.innerHTML = `<header><b>${TEXT.slotsTitle}</b><span class="n"></span></header><div class="rows"></div>`; el.firstChild.title = TEXT.slotsHint; }
   // 名额带只在占用变了时重画（每次重画要重建格子）
   const sig = JSON.stringify(U.agents.map((a) => [a.id, a.max_parallel, a.running.map((r) => r.session), a.queued.map((r) => r.run)]));
   if (sig === SIDE.sigSlots) return;
@@ -3820,7 +3906,7 @@ function drawOverlay(t, L, P, lanes, rates, live, bandA) {
   // 滚到刻度带两头的席位跟着渐隐，它的光线也一起淡掉
   // 还没被光点拉到的卡片、正在离开的组，光线也跟着淡入淡出
   L.arrive = arrivals(t);
-  const fadeOf = (id) => (P.get(id).vis ?? 1) * (L.arrive.get(id)?.card ?? 1) * (1 - (L.rows.get(id)?.leave || 0));
+  const fadeOf = (id) => (P.get(id).vis ?? 1) * (L.arrive.get(id)?.card ?? 1) * (1 - (L.rows.get(id)?.leave || 0)) * dimOf(id);
   const each = (fn) => { for (const lane of lanes) { const v = fadeOf(lane.id); if (v < 0.02) continue; ctx.globalAlpha = v; fn(lane); } ctx.globalAlpha = 1; };
   each((lane) => drawBundle(L.core, lane, P.get(lane.id), smooth(`bI|${lane.id}`, glow(rates.get(lane.id) || 0)), live.get(lane.id)));
   drawBand(L.band, t, bandA);
@@ -4866,8 +4952,9 @@ function applyShare(share) {
 function resetBoardView() {
   worldEl.replaceChildren();
   for (const m of [UI.cards, UI.outs, UI.heads, UI.tableRows]) m.clear();
-  UI.open.clear(); UI.collapsed.clear();
-  for (const id of ['usage', 'terms']) { $(id).replaceChildren(); delete $(id).dataset.mode; }
+  UI.open.clear(); UI.collapsed.clear(); UI.hot = null;
+  for (const id of ['usage', 'terms', 'termdone']) { $(id).replaceChildren(); delete $(id).dataset.mode; }
+  PANEL.doneRows.clear(); PANEL.openDone.clear(); PANEL.allDone = false;
   PANEL.cols.clear(); UNI_ROWS.clear();
   Object.assign(REEL, { s: 0, off: 0, anchor: null }); REEL.born.clear();
   for (const key of [...SMOOTH.vals.keys()]) if (!key.startsWith('u')) SMOOTH.vals.delete(key);
@@ -4918,8 +5005,19 @@ function flyIn(id, instant = false) {
   wake();
   return true;
 }
+// 看板核心网（弧线区中心）此刻在屏幕上的位置：看板已经在画时按它的镜头算（数据晚到、重新适配、用户缩放过都跟得上），
+// 还没开始画时按适配后的版面算
+function boardCoreTarget() {
+  const L = FX.layout || computeLayout(now());
+  if (!L?.core) return null;
+  const cam = FX.layout ? VIEW : fitGoal(), sx = cam.tx + L.core.cx * cam.k, sy = cam.ty + L.core.cy * cam.k;
+  return Number.isFinite(sx) && Number.isFinite(sy) ? { sx, sy } : null;
+}
 function flyOut() {
   if (FLY.mode !== 'board' && FLY.mode !== 'in') return;
+  // 收拢从弧线区此刻所在的位置开始，不先跳到飞入时估的那个位置
+  const target = boardCoreTarget();
+  if (target && FLY.to) Object.assign(FLY.to, target);
   // 飞入还没结束就退回：从当前进度倒着走（缓动曲线前后对称，倒放的起点是 1 − 当前进度），不先跳到看板；
   // 远端镜头沿用飞入前的那个，不重新适配（看板里算出来的全貌和宇宙层留出侧栏的全貌不一样，会跳）
   const mirror = FLY.mode === 'in', back = mirror ? 1 - flyU() : 0;
@@ -4934,6 +5032,9 @@ function flyOut() {
 function stepFly() {
   if (FLY.mode !== 'in' && FLY.mode !== 'out') return;
   const u = flyU(), e = ease(u), g = uniLayout().galaxies.find((x) => x.s.id === FLY.id);
+  // 亮核的落点跟着看板核心网的实际位置走（平滑追上，不跳）：炸开结束时弧线区正好就是看板画它的地方
+  const target = FLY.mode === 'in' ? boardCoreTarget() : null;
+  if (target && FLY.to) { FLY.to.sx += (target.sx - FLY.to.sx) * 0.3; FLY.to.sy += (target.sy - FLY.to.sy) * 0.3; }
   if (g) {
     const near = FLY.to, far = FLY.mode === 'in' ? FLY.from : { k: FLY.back.k, sx: g.x * FLY.back.k + FLY.back.tx, sy: g.y * FLY.back.k + FLY.back.ty };
     const v = FLY.mode === 'in' ? e : 1 - e;   // 0 在远处，1 贴近星系
@@ -4941,7 +5042,7 @@ function stepFly() {
     Object.assign(UV, { k, tx: sx - g.x * k, ty: sy - g.y * k, goal: null });
   }
   if (u < 1) return;
-  if (FLY.mode === 'in') FLY.mode = 'board';
+  if (FLY.mode === 'in') { FLY.mode = 'board'; if (target && FLY.to) Object.assign(FLY.to, target); }
   else {
     FLY.mode = 'universe';
     Object.assign(UV, { k: FLY.back.k, tx: FLY.back.tx, ty: FLY.back.ty, auto: FLY.back.auto, goal: null });

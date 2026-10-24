@@ -99,6 +99,10 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 .card.queued { border-style: dashed; animation: card-q 1.4s ease-in-out infinite; }
 @keyframes card-q { 0%, 100% { border-color: rgba(255,186,90,.75); } 50% { border-color: rgba(255,186,90,.15); } }
 .card.cancelled { filter: grayscale(1) brightness(.62); }
+/* 用量表悬停的那条车道：卡片描一圈它的颜色，其余卡片和产出框压暗 */
+.card.hot { --cc: var(--tint); border-color: color-mix(in srgb, var(--tint) 70%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--tint) 60%, transparent), 0 0 22px -4px var(--tint); }
+.card.dim, .outbox.dim { opacity: .32; transition: opacity .15s; }
+#usage:not([data-mode="uni"]) .tbody .tr:hover, #usage:not([data-mode="uni"]) .tbody .tr.hot { background: rgba(255,255,255,.05); box-shadow: inset 2px 0 var(--tint); }
 .card.ghost.gap-ready { animation: gap-ready 1.8s ease-in-out infinite; }
 @keyframes gap-ready { 0%, 100% { border-color: rgba(245,245,248,.25); box-shadow: none; } 50% { border-color: rgba(245,245,248,.75); box-shadow: 0 0 16px -4px rgba(245,245,248,.45); } }
 .card.failed { --cc: var(--bad); border-color: color-mix(in srgb, var(--bad) 70%, transparent); box-shadow: 0 0 16px -7px var(--bad); }
@@ -198,7 +202,18 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 /* 用量面板（右上角有往下看终端的提示）和下面的终端区 */
 #usage { display: grid; grid-template-rows: auto 1fr auto; height: 100%; min-height: 0; }
 #hud #more { width: auto; padding: 0 8px; letter-spacing: .08em; }
-#termsec { height: calc(100vh - var(--top-h) - 14px); margin-bottom: 8px; display: grid; grid-template-rows: auto 1fr; gap: 6px; }
+#termsec { height: calc(100vh - var(--top-h) - 14px); margin-bottom: 8px; display: grid; grid-template-rows: auto 1fr auto; gap: 6px; }
+/* 已完成列表：终端区底部，一行一组，最多占三成高度，点开的组在行下面展开成和上面一样的栏 */
+#termdone { max-height: 34vh; overflow-y: auto; border-top: 1px solid rgba(200,200,212,.14); scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
+#termdone[hidden] { display: none; }
+#termdone > header { display: flex; align-items: baseline; gap: 8px; height: 18px; }
+#termdone > header b { color: var(--hi); font-size: 10px; letter-spacing: .16em; }
+#termdone > header .n { color: var(--dim); font-size: 10px; }
+#termdone .dline { cursor: pointer; color: var(--mid); font-size: 10.5px; padding: 2px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#termdone .dline:hover, #termdone .drow.open > .dline { color: var(--text); background: rgba(255,255,255,.04); }
+#termdone .dbody > .tcol { height: auto; max-height: 30vh; margin: 2px 0 6px 14px; }
+#termdone .more { margin: 4px 4px 2px; padding: 1px 8px; font-size: 10px; }
+#termdone .more[hidden] { display: none; }
 #termsec > header { display: flex; align-items: baseline; gap: 12px; height: 18px; border-bottom: 1px solid rgba(200,200,212,.14); }
 #termsec > header b { color: var(--hi); font-size: 10px; letter-spacing: .16em; }
 #termsec > header span { color: var(--dim); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

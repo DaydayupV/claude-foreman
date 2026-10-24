@@ -17,7 +17,12 @@ function renderTable(t) {
   const table = $('usage');
   if (!table.firstChild) {
     table.innerHTML = '<div class="tr th"></div><div class="tbody"></div><div class="tr total"></div>';
-    table.querySelector('.tbody').addEventListener('scroll', (e) => markMore(e.target), { passive: true });
+    const body = table.querySelector('.tbody');
+    body.addEventListener('scroll', (e) => markMore(e.target), { passive: true });
+    // 鼠标停在某一行时突出画面上的这条车道（和宇宙表悬停星系一样），单击不做任何事
+    const hover = (id) => { if (UI.hot !== id) { UI.hot = id; B.version++; wake(); } };
+    body.addEventListener('pointerover', (e) => { if (table.dataset.mode !== 'uni') hover(e.target.closest('.tr[data-lane]')?.dataset.lane || null); });
+    body.addEventListener('pointerleave', () => hover(null));
     for (const h of TABLE_HEAD) { const c = document.createElement('span'); c.textContent = h; table.firstChild.append(c); }
     costHeadTitle(table.firstChild);
   }
@@ -30,8 +35,10 @@ function renderTable(t) {
       tr = document.createElement('div');
       tr.className = 'tr';
       tr.innerHTML = '<span class="av"><img alt=""></span>' + '<span></span>'.repeat(TABLE_HEAD.length - 1);
+      tr.dataset.lane = lane.id;
       UI.tableRows.set(lane.id, tr);
     }
+    tr.classList.toggle('hot', UI.hot === lane.id);
     const r = currentRun(lane, t) || latest(lane), key = avatarFor(r.model, r.agent_type), s = laneStats(lane, t), st = laneStatus(lane, t);
     tr.style.setProperty('--tint', rgba(key));
     tr.classList.toggle('running', st.running);

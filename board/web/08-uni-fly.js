@@ -80,8 +80,9 @@ function applyShare(share) {
 function resetBoardView() {
   worldEl.replaceChildren();
   for (const m of [UI.cards, UI.outs, UI.heads, UI.tableRows]) m.clear();
-  UI.open.clear(); UI.collapsed.clear();
-  for (const id of ['usage', 'terms']) { $(id).replaceChildren(); delete $(id).dataset.mode; }
+  UI.open.clear(); UI.collapsed.clear(); UI.hot = null;
+  for (const id of ['usage', 'terms', 'termdone']) { $(id).replaceChildren(); delete $(id).dataset.mode; }
+  PANEL.doneRows.clear(); PANEL.openDone.clear(); PANEL.allDone = false;
   PANEL.cols.clear(); UNI_ROWS.clear();
   Object.assign(REEL, { s: 0, off: 0, anchor: null }); REEL.born.clear();
   for (const key of [...SMOOTH.vals.keys()]) if (!key.startsWith('u')) SMOOTH.vals.delete(key);
@@ -132,8 +133,19 @@ function flyIn(id, instant = false) {
   wake();
   return true;
 }
+// 看板核心网（弧线区中心）此刻在屏幕上的位置：看板已经在画时按它的镜头算（数据晚到、重新适配、用户缩放过都跟得上），
+// 还没开始画时按适配后的版面算
+function boardCoreTarget() {
+  const L = FX.layout || computeLayout(now());
+  if (!L?.core) return null;
+  const cam = FX.layout ? VIEW : fitGoal(), sx = cam.tx + L.core.cx * cam.k, sy = cam.ty + L.core.cy * cam.k;
+  return Number.isFinite(sx) && Number.isFinite(sy) ? { sx, sy } : null;
+}
 function flyOut() {
   if (FLY.mode !== 'board' && FLY.mode !== 'in') return;
+  // 收拢从弧线区此刻所在的位置开始，不先跳到飞入时估的那个位置
+  const target = boardCoreTarget();
+  if (target && FLY.to) Object.assign(FLY.to, target);
   // 飞入还没结束就退回：从当前进度倒着走（缓动曲线前后对称，倒放的起点是 1 − 当前进度），不先跳到看板；
   // 远端镜头沿用飞入前的那个，不重新适配（看板里算出来的全貌和宇宙层留出侧栏的全貌不一样，会跳）
   const mirror = FLY.mode === 'in', back = mirror ? 1 - flyU() : 0;
@@ -148,6 +160,9 @@ function flyOut() {
 function stepFly() {
   if (FLY.mode !== 'in' && FLY.mode !== 'out') return;
   const u = flyU(), e = ease(u), g = uniLayout().galaxies.find((x) => x.s.id === FLY.id);
+  // 亮核的落点跟着看板核心网的实际位置走（平滑追上，不跳）：炸开结束时弧线区正好就是看板画它的地方
+  const target = FLY.mode === 'in' ? boardCoreTarget() : null;
+  if (target && FLY.to) { FLY.to.sx += (target.sx - FLY.to.sx) * 0.3; FLY.to.sy += (target.sy - FLY.to.sy) * 0.3; }
   if (g) {
     const near = FLY.to, far = FLY.mode === 'in' ? FLY.from : { k: FLY.back.k, sx: g.x * FLY.back.k + FLY.back.tx, sy: g.y * FLY.back.k + FLY.back.ty };
     const v = FLY.mode === 'in' ? e : 1 - e;   // 0 在远处，1 贴近星系
@@ -155,7 +170,7 @@ function stepFly() {
     Object.assign(UV, { k, tx: sx - g.x * k, ty: sy - g.y * k, goal: null });
   }
   if (u < 1) return;
-  if (FLY.mode === 'in') FLY.mode = 'board';
+  if (FLY.mode === 'in') { FLY.mode = 'board'; if (target && FLY.to) Object.assign(FLY.to, target); }
   else {
     FLY.mode = 'universe';
     Object.assign(UV, { k: FLY.back.k, tx: FLY.back.tx, ty: FLY.back.ty, auto: FLY.back.auto, goal: null });

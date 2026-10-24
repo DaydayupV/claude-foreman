@@ -2,6 +2,8 @@
 // 世界里的 DOM：Claude Code 卡片、席位卡片、产出框、组头。按车道 id 复用元素，只改变了的文字和位置。
 
 const CHANNEL = { 'codex cli': 'Codex CLI', 'opencode cli': 'opencode', 'pi cli': 'pi', api: 'API', host: 'Claude Code' };
+// 用量表悬停时其余车道压暗的程度（卡片、产出框、光线共用）
+const dimOf = (id) => (UI.hot && id !== UI.hot ? 0.32 : 1);
 const place = (el, b) => { const s = el.style, x = `${b.x}px`, y = `${b.y}px`; if (s.left !== x) s.left = x; if (s.top !== y) s.top = y; };
 
 function cardShell(id) {
@@ -16,6 +18,7 @@ function cardShell(id) {
 function fillCard(el, lane, t) {
   const r = currentRun(lane, t) || latest(lane), key = avatarFor(r.model, r.agent_type), st = laneStatus(lane, t), s = laneStats(lane, t), isCC = lane.id === 'cc';
   el.style.setProperty('--tint', rgba(key));
+  el.classList.toggle('hot', UI.hot === lane.id); el.classList.toggle('dim', dimOf(lane.id) < 1);
   el.classList.toggle('running', st.running);
   const img = el.querySelector('.av');
   if (img.dataset.key !== key) { img.src = avatarSrc(key); img.alt = look(key).name; img.dataset.key = key; }
@@ -103,6 +106,7 @@ function fillOut(box, title, files, report, lead = [], thumbs = []) {
 // 席位产出框只写最近一次任务的产出（上一轮的已经被 Claude Code 读走了）
 function fillLaneOut(box, lane, t) {
   const live = lane.runs.filter((x) => x.started_at <= t), r = live[live.length - 1] || latest(lane);
+  box.classList.toggle('dim', dimOf(lane.id) < 1);
   box.style.setProperty('--tint', rgba(avatarFor(r.model, r.agent_type)));
   const ended = r.ended_at != null && r.ended_at <= t, files = [];
   if (ended) for (const c of r.changed || []) files.push({ kind: c.kind || 'update', path: c.path });

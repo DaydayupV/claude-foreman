@@ -7,7 +7,7 @@
 //  - Claude Code 自己的对话流单独一栏，放在最前
 // 有新内容时自动滚到底，往上翻看时不打扰。以后做多对话，切换对话就是换一组车道（termUnits）重画，标题跟着换。
 
-const PANEL = { cols: new Map(), open: new Set(), seen: false, numbers: new Map() };
+const PANEL = { cols: new Map(), open: new Set(), seen: false, numbers: new Map(), doneRows: new Map(), openDone: new Set(), allDone: false };
 const groupPlans = (group, t) => [...new Map(B.life.filter((p) => p.k === 'fplan' && p.group === group && p.ts <= t).map((p) => [p.plan, p])).values()];
 function dispatchQueue(t) {
   const snapshot = B.laneById.get('dispatch_queue')?.events.filter((e) => e.ts <= t).at(-1);
@@ -24,6 +24,10 @@ addEventListener('scroll', () => {
 }, { passive: true });
 $('more').addEventListener('click', () => $('termsec').scrollIntoView({ behavior: 'smooth' }));
 $('termsec').addEventListener('click', (e) => {
+  // 已完成列表：点一行展开或收起这一组的完整摘要；"更多"列出全部
+  const line = e.target.closest('#termdone .dline');
+  if (line) { const id = line.parentNode.dataset.unit; if (!PANEL.openDone.delete(id)) PANEL.openDone.add(id); B.version++; wake(); return; }
+  if (e.target.closest('#termdone .more')) { PANEL.allDone = true; B.version++; wake(); return; }
   const seat = e.target.closest('.seat');
   if (!seat) return;
   const id = seat.dataset.lane;
@@ -52,12 +56,63 @@ function termUnits(t, L) {
   return units;
 }
 
+// 正在跑的组和刚出结果的组展开在上面；全部结束一分钟以后折进下面的"已完成"列表（一行一组，点开是完整摘要），
+// 和刻度带脱钩：结果被 Claude Code 读走、席位离开刻度带以后照样留着
+const DONE_AFTER = 60000, DONE_SHOWN = 20;
+const unitLanes = (u) => (u.group ? u.lanes : [u.lane]);
+const unitEnd = (u, t) => Math.max(0, ...unitLanes(u).map((l) => currentRun(l, t)?.ended_at ?? 0));
+function unitFinished(u, t) {
+  if (u.id === 'cc' || !unitLanes(u).length) return false;
+  if (unitLanes(u).some((l) => laneStatus(l, t).running)) return false;
+  if (u.group && dispatchQueue(t).some((q) => q.group === u.group)) return false;
+  const end = unitEnd(u, t);
+  return end > 0 && t - end > DONE_AFTER;
+}
+function doneLine(u, t) {
+  const lanes = unitLanes(u), runs = lanes.map((l) => currentRun(l, t)), shown = runs.map(Display.displayRun);
+  const title = u.group ? Display.groupTask(shown).text : Display.taskLine(shown[0].meta);
+  const counts = Display.countsText(lanes.map((l, i) => seatStatus(l, runs[i], t)));
+  const cost = runs.reduce((n, r) => n + (r.cost_usd || 0), 0);
+  return [title, counts, `ended ${hhmm(Display.recordedTime(unitEnd(u, t), displayPoints()))}`, cost ? `$${fmtUsd(cost)}` : null].filter(Boolean).join(' · ');
+}
+function renderDone(done, t, seen) {
+  const box = $('termdone');
+  box.hidden = !done.length;
+  if (!done.length) return;
+  if (!box.firstChild) box.innerHTML = '<header><b>FINISHED</b><span class="n"></span></header><div class="rows"></div><button type="button" class="more"></button>';
+  setText(box.querySelector('.n'), String(done.length));
+  const list = box.querySelector('.rows'), shown = PANEL.allDone ? done : done.slice(0, DONE_SHOWN), ids = new Set();
+  shown.forEach((u, i) => {
+    let row = PANEL.doneRows.get(u.id);
+    if (!row) {
+      row = document.createElement('section'); row.className = 'drow'; row.dataset.unit = u.id;
+      row.innerHTML = '<div class="dline"></div><div class="dbody"></div>'; PANEL.doneRows.set(u.id, row);
+    }
+    ids.add(u.id);
+    if (list.children[i] !== row) list.insertBefore(row, list.children[i] || null);
+    const open = PANEL.openDone.has(u.id), body = row.querySelector('.dbody');
+    row.classList.toggle('open', open);
+    setText(row.querySelector('.dline'), `${open ? '▾' : '▸'} ${doneLine(u, t)}`);
+    if (!open) { if (body.firstChild) body.replaceChildren(); return; }
+    let col = PANEL.cols.get(u.id);
+    if (!col) { col = u.group ? groupColumn(u.id) : termColumn(u.id); PANEL.cols.set(u.id, col); }
+    seen.add(u.id);
+    if (col.parentNode !== body) body.replaceChildren(col);
+    if (u.group) fillGroup(col, u, t); else fillColumn(col, u.lane, t);
+  });
+  for (const [id, row] of PANEL.doneRows) if (!ids.has(id)) { row.remove(); PANEL.doneRows.delete(id); }
+  const more = box.querySelector('.more'), rest = done.length - shown.length;
+  more.hidden = rest <= 0;
+  setText(more, `show ${rest} more`);
+}
+
 function renderTerms(t, L) {
   const cc = B.laneById.get('cc'), title = cc && latest(cc) ? latest(cc).title : null;
   setText($('conv'), Display.D.conversation(title));
   if (!termsNear()) return;
-  const box = $('terms'), seen = new Set();
-  termUnits(t, L).forEach((u, i) => {
+  const box = $('terms'), seen = new Set(), units = termUnits(t, L);
+  const done = units.filter((u) => unitFinished(u, t)).sort((a, b) => unitEnd(b, t) - unitEnd(a, t));
+  units.filter((u) => !done.includes(u)).forEach((u, i) => {
     let col = PANEL.cols.get(u.id);
     if (!col) { col = u.group ? groupColumn(u.id) : termColumn(u.id); PANEL.cols.set(u.id, col); }
     seen.add(u.id);
@@ -65,6 +120,7 @@ function renderTerms(t, L) {
     if (box.children[i] !== col) box.insertBefore(col, box.children[i] || null);
     if (u.group) fillGroup(col, u, t); else fillColumn(col, u.lane, t);
   });
+  renderDone(done, t, seen);
   for (const [id, col] of PANEL.cols) if (!seen.has(id)) { col.remove(); PANEL.cols.delete(id); }
 }
 
