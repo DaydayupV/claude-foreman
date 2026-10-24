@@ -327,6 +327,10 @@ const TEXTS = {
     backToUniverse: '回到所有对话（Esc）',
     conversations: (n) => `${n} 个对话`,
     costTitle: '根据模型官方 API 价格计算（插件自带的价格表），和实际扣费不一定相同；+ 表示有的模型不在价格表里，这部分没算进去',
+    nowTitle: '近 10 秒的估算，可能借用同一模型之前的样本',
+    recentTitle: '近 2 分钟的速度曲线（估算）：每个点是约 6 秒内的输出 token 除以这段时间；运行中可能借用实时估速',
+    genAvgTitle: '本席各轮累计输出 ÷ 估算的生成时长；已扣掉能识别的跑命令时段，仍可能含等待和读文件的时间',
+    usageUnattributed: '用量无法归属到本轮：缺少可信的续接累计基线',
     emptyList: (h) => `最近 ${h} 小时没有派发过任务的对话。派发之后会出现在这里。`,
     slotsTitle: '名额',
     shell: {
@@ -367,6 +371,10 @@ const TEXTS = {
     backToUniverse: 'Back to all conversations (Esc)',
     conversations: (n) => `${n} ${n === 1 ? 'conversation' : 'conversations'}`,
     costTitle: "Computed from each model's official API price (the plugin's price table); may differ from what you're actually charged. + means some models aren't in the table and weren't counted",
+    nowTitle: 'Estimate over the last 10 seconds; may borrow earlier samples of the same model',
+    recentTitle: 'Speed over the last 2 minutes (estimated): each point is the output tokens in about 6 seconds divided by that time; while running it may use the live estimate',
+    genAvgTitle: "This seat's total output ÷ estimated generation time; command time that can be recognised is excluded, waiting and file reads may remain",
+    usageUnattributed: 'Usage cannot be attributed to this run: a reliable continuation baseline is missing',
     emptyList: (h) => `No conversation has dispatched work in the last ${h} hours. New ones show up here.`,
     slotsTitle: 'Slots',
     shell: {
@@ -424,7 +432,8 @@ const B = {
   version: 0,             // 数据每变一次加一，面板据此决定要不要重画
   clock: { mode: 'live', start: 0, end: 0, speed: 1, perf0: 0, frozenAt: null },
 };
-const FEED_MAX = 3000, LANE_EVENTS_MAX = 600;
+// 统计用的事件不带正文，留得多一些；超出时这条车道的平均速度显示 —（分子分母不再覆盖同一段）
+const FEED_MAX = 3000, LANE_EVENTS_MAX = 600, RATE_EVENTS_MAX = 20000;
 
 // 现在是记录里的哪个时刻（毫秒）。直播用本机时间（服务在同一台机器上）；回放从连上那一刻起按倍速走；?t= 停在固定时刻。
 function now() {
@@ -453,7 +462,7 @@ function onHello(h) {
 function laneFor(id) {
   let lane = B.laneById.get(id);
   if (!lane) {
-    lane = { id, idx: B.lanes.length, runs: [], events: [], last: null, seed: hash(id) };
+    lane = { id, idx: B.lanes.length, runs: [], events: [], rate_events: [], last: null, seed: hash(id) };
     B.lanes.push(lane);
     B.laneById.set(id, lane);
   }
@@ -470,10 +479,15 @@ function onRun(r) {
   wake();
 }
 
-function onEv(ev) {
+function onEv(ev, stats = true) {
   const lane = laneFor(ev.lane || B.runs.get(ev.run)?.lane || ev.run);
   ev.id = B.total++;
   insertByTs(lane.events, ev, LANE_EVENTS_MAX);
+  // 展示缓存会截断；另存不含正文的统计边界，保证累计输出和生成时长覆盖同一段。
+  if (B.clock.mode === 'live' && stats !== false) {
+    const { run, ts, k, u, n, tot, end, usage_from, usage_to } = ev;
+    insertByTs(lane.rate_events, { run, ts, k, u, n, tot, end, usage_from, usage_to }, RATE_EVENTS_MAX);
+  }
   lane.ver = (lane.ver || 0) + 1;
   insertByTs(B.feed, ev, FEED_MAX);
   if (ev.k === 'fplan' || ev.k === 'verdict') insertByTs(B.life, ev, Infinity);
@@ -486,14 +500,24 @@ function onEv(ev) {
 function onBacklog(b) {
   if (b.reset) {
     const keep = (ev) => ev.run !== b.run;
-    for (const lane of B.lanes) if (lane.events.some((ev) => !keep(ev))) {
+    for (const lane of B.lanes) if (lane.events.some((ev) => !keep(ev)) || lane.rate_events.some((ev) => !keep(ev))) {
       lane.events = lane.events.filter(keep); lane.ver = (lane.ver || 0) + 1;
+      lane.rate_events = lane.rate_events.filter(keep);
       lane.last = lane.events.reduce((last, ev) => (!last || ev.ts >= last.ts ? ev : last), null);
     }
     B.feed = B.feed.filter(keep); B.life = B.life.filter(keep);
     B.version++;
   }
-  b.events.forEach(onEv);
+  b.events.forEach((ev) => onEv(ev, !b.rate_events));
+  if (b.rate_events) replaceRateHistory(b.run, b.rate_events);
+}
+
+function replaceRateHistory(run, events) {
+  const lane = laneFor(B.runs.get(run)?.lane || run);
+  lane.rate_events = lane.rate_events.filter((ev) => ev.run !== run);
+  for (const ev of events) insertByTs(lane.rate_events, ev, RATE_EVENTS_MAX);
+  lane.ver = (lane.ver || 0) + 1; B.version++;
+  wake();
 }
 
 // 直播里派发事件先到、目标任务后出现时，服务端补发一次 ev_link：给原来那条事件补上 target
@@ -517,7 +541,8 @@ function loadSnapshot(s) {
   onHello(s.hello);
   if (B.params.t == null && s.hello.replay) B.clock.frozenAt = s.hello.replay.end; // 内嵌快照没给 t 时停在末尾
   for (const r of s.runs) onRun(r);
-  for (const ev of s.events) onEv(ev);
+  for (const ev of s.events) onEv(ev, !s.rate_events);
+  if (s.rate_events) for (const r of s.runs) replaceRateHistory(r.id, s.rate_events.filter((ev) => ev.run === r.id));
   B.connected = true;
 }
 
@@ -1162,6 +1187,7 @@ function loadFinals() {
 
 // 用量统一成 { input(未命中缓存), cached, cache_write, output }；v1 的 input 含缓存部分
 function usageOf(r) {
+  if (r?.usage_unattributed) return null;
   const u = r && r.usage;
   if (!u) return null;
   if ('cache_write' in u) return { input: u.input || 0, cached: u.cached || 0, cache_write: u.cache_write || 0, output: u.output || 0 };
@@ -1189,8 +1215,9 @@ function commandSpans(events) {
 
 // 一条车道的输出分段：[{ a, b, tokens }]，a/b 是记录时间（毫秒）
 function segments(lane) {
-  const events = FINAL_EV.get(lane.id) || lane.events;
-  const outputs = new Map(lane.runs.map((r) => [r.id, FINAL.get(r.id)?.usage?.output ?? (r.ended_at != null ? r.usage?.output : null)]));
+  const live = B.clock.mode === 'live';
+  const events = FINAL_EV.get(lane.id) || (live ? lane.rate_events ?? lane.events : lane.events);
+  const outputs = new Map(lane.runs.map((r) => [r.id, r.usage_unattributed ? 0 : FINAL.get(r.id)?.usage?.output ?? (r.ended_at != null ? r.usage?.output : null)]));
   const outputKey = JSON.stringify([...outputs]);
   // 分段还依赖车道上的任务（续接的任务会陆续出现），任务数变了也要重算
   const ver = `${FINAL_EV.has(lane.id) ? events.length : (lane.ver || 0)}|${lane.runs.length}`;
@@ -1205,8 +1232,13 @@ function segments(lane) {
     else if (ev.k === 'usage' && !ev.tot && ev.u?.out != null) stepTurns.add(`${ev.run}:${turns.get(ev.run) || 0}`);
   }
   turns.clear();
-  const usageEnds = new Map(events.filter((e) => e.k === 'usage' && e.u?.out != null).map((e) => [e.run, e.ts]));
+  const usageEnds = new Map(events.filter((e) => e.k === 'usage' && e.u?.out != null).map((e) => [e.run, live ? e.usage_to ?? e.ts : e.ts]));
   const commands = commandSpans(events);
+  const byRun = new Map();
+  for (const ev of events) if (ev.k !== 'usage') {
+    if (!byRun.has(ev.run)) byRun.set(ev.run, []);
+    byRun.get(ev.run).push(ev);
+  }
   const counted = new Map(); // run id → 已经由分段用量或字数算到的 token
   const starts = new Map(lane.runs.map((r) => [r.id, r.started_at]));
   // 按任务内事件的空档摊开，去掉命令时间后，单个空档最多算 GAP_MAX。
@@ -1215,7 +1247,12 @@ function segments(lane) {
   const spread = (run, a, b, tokens, est) => {
     if (!(tokens > 0) || !(b > a)) return;
     counted.set(run, (counted.get(run) || 0) + tokens);
-    const times = [a, ...events.filter((e) => e.run === run && e.k !== 'usage' && e.ts > a && e.ts < b).map((e) => e.ts), b];
+    // 按任务分桶并直接定位区间，长会话不能为每份用量重新扫描全部历史。
+    const own = byRun.get(run) || [], times = [a];
+    let lo = 0, hi = own.length;
+    while (lo < hi) { const mid = (lo + hi) >>> 1; if (own[mid].ts <= a) lo = mid + 1; else hi = mid; }
+    for (let i = lo; i < own.length && own[i].ts < b; i++) times.push(own[i].ts);
+    times.push(b);
     const gaps = [];
     for (let i = 1; i < times.length; i++) if (times[i] > times[i - 1]) gaps.push({ b: times[i], w: Math.min(times[i] - times[i - 1], GAP_MAX) });
     let active = gaps.filter((g) => !(commands.get(run) || []).some((c) => c.a < g.b && c.b > g.b - g.w));
@@ -1232,20 +1269,21 @@ function segments(lane) {
       if (ev.tot && stepTurns.has(`${ev.run}:${turns.get(ev.run) || 0}`)) continue;
       const before = counted.get(ev.run) || 0, limit = outputs.get(ev.run);
       const tokens = ev.tot ? Math.max(0, Math.min(ev.u.out - (turnUsage.get(ev.run) || 0), limit == null ? Infinity : limit - before)) : ev.u.out;
-      const prev = lastUsage.get(ev.run) ?? (lane.id === 'cc' ? ev.ts - 20000 : starts.get(ev.run) ?? ev.ts - 20000);
+      const end = live ? ev.usage_to ?? ev.ts : ev.ts;
+      const prev = lastUsage.get(ev.run) ?? (live ? ev.usage_from : null) ?? (lane.id === 'cc' ? end - 20000 : starts.get(ev.run) ?? end - 20000);
       const previous = usageSegs.get(ev.run);
-      if (tokens > 0 && ev.ts <= prev && previous?.length) {
+      if (tokens > 0 && end <= prev && previous?.length) {
         // 同时收到的用量共用上一份生成区间，不能丢 token 或制造极短分段。
         const duration = previous.reduce((n, s) => n + s.b - s.a, 0);
         for (const s of previous) s.tokens += tokens * (s.b - s.a) / duration;
         counted.set(ev.run, before + tokens);
       } else {
-        const at = segs.length, from = ev.ts <= prev ? starts.get(ev.run) ?? ev.ts - 20000 : prev;
-        spread(ev.run, lane.id === 'cc' ? Math.max(from, ev.ts - SEG_MAX) : from, ev.ts, tokens, false);
+        const at = segs.length, from = end <= prev ? starts.get(ev.run) ?? end - 20000 : prev;
+        spread(ev.run, lane.id === 'cc' ? Math.max(from, end - SEG_MAX) : from, end, tokens, false);
         if (segs.length > at) usageSegs.set(ev.run, segs.slice(at));
       }
       turnUsage.set(ev.run, (turnUsage.get(ev.run) || 0) + (counted.get(ev.run) || 0) - before);
-      lastUsage.set(ev.run, Math.max(lastUsage.get(ev.run) ?? ev.ts, ev.ts));
+      lastUsage.set(ev.run, Math.max(lastUsage.get(ev.run) ?? end, end));
     } else if ((ev.k === 'think' || ev.k === 'answer') && ev.n != null) {
       const key = `${ev.run}:${ev.k}`, prev = lastChars[key];
       // 用量覆盖此前的字数估算，跨过用量边界的字数也不带到下一段。
@@ -1281,11 +1319,11 @@ function rateSample(lane, runs, t) {
 // 直播在最近一份用量之后只补速度，不回填分段、总量或平均速度。
 function liveRate(lane, t, win = WINDOW) {
   if (B.clock.mode !== 'live' || B.clock.frozenAt != null || lane.id === 'cc') return 0;
-  const commands = commandSpans(lane.events);
+  const rateEvents = lane.rate_events ?? lane.events, commands = commandSpans(rateEvents);
   let rate = 0;
   for (const r of lane.runs) {
     if (r.status !== 'running' || r.started_at > t || (r.ended_at != null && r.ended_at <= t)) continue;
-    const events = lane.events.filter((e) => e.run === r.id);
+    const events = rateEvents.filter((e) => e.run === r.id);
     const at = events.findLastIndex((e) => e.k === 'turn'), turn = events[at], usage = events.findLast((e) => e.k === 'usage' && e.u?.out != null);
     // 结束标记可能不在末条用量，迟到的分段不能重新开启估速。
     if (!turn || events.slice(at + 1).some((e) => e.k === 'usage' && (e.tot || e.end))) continue;
@@ -1332,10 +1370,11 @@ function sparkline(lane, t, span = 120000, n = 40) {
 // 一条车道到时刻 t 的统计：已结束的任务用最终用量，进行中的按分段估到 t
 function laneStats(lane, t) {
   const sum = { input: 0, cached: 0, cache_write: 0, output: 0 };
-  let cost = 0, costKnown = false, costPartial = false, est = false;
+  let cost = 0, costKnown = false, costPartial = false, est = false, usage_unattributed = false;
   let gen = 0, first = null, last = null, running = false;
   for (const r of lane.runs) {
     if (r.started_at > t) continue;
+    if (r.usage_unattributed) usage_unattributed = true;
     first = Math.min(first ?? r.started_at, r.started_at);
     const ended = r.ended_at != null && r.ended_at <= t;
     last = Math.max(last ?? 0, ended ? r.ended_at : t);
@@ -1355,18 +1394,31 @@ function laneStats(lane, t) {
   let liveOut = 0;
   for (const s of segments(lane)) {
     if (s.a >= t) break;
-    const runOpen = lane.runs.some((r) => r.started_at <= s.b && (r.ended_at == null || r.ended_at > t));
+    const runOpen = lane.runs.some((r) => (B.clock.mode !== 'live' || r.id === SEG_RUN.get(s)) && r.started_at <= s.b && (r.ended_at == null || r.ended_at > t));
     if (!runOpen) continue;
     liveOut += (s.tokens * (Math.min(s.b, t) - s.a)) / (s.b - s.a);
     if (s.est) est = true;
   }
-  for (const s of segments(lane)) { if (s.a >= t) break; gen += Math.min(s.b, t) - s.a; if (s.est) est = true; }
+  const covered = new Map();
+  for (const s of segments(lane)) {
+    if (s.a >= t) break;
+    const ms = Math.min(s.b, t) - s.a, run = SEG_RUN.get(s);
+    gen += ms; covered.set(run, (covered.get(run) || 0) + s.tokens * ms / (s.b - s.a));
+    if (s.est) est = true;
+  }
   const hostLive = lane.runs.some((r) => r.kind === 'host');
   const out = sum.output + (running && !hostLive ? liveOut : 0);
+  // 最终输出没有完整分段时，不能拿总输出除以局部生成时长。
+  // Claude Code 的同消息用量会原位修订，未替换的事件只用于估时，不能据此判覆盖失败。
+  const complete = B.clock.mode !== 'live' || lane.id === 'cc' || lane.runs.every((r) => {
+    if (r.started_at > t || !(r.ended_at != null && r.ended_at <= t || r.kind === 'host')) return true;
+    const u = usageOf(r), tokens = covered.get(r.id) || 0;
+    return u ? Math.abs(u.output - tokens) <= 1e-6 * Math.max(1, u.output) : tokens === 0;
+  });
   if (liveRate(lane, t) > 0) est = true;
   return {
-    ...sum, output: out, cost: costKnown ? cost : null, costPartial, est, running,
-    rate: rateAt(lane, t), avg: gen > 0 ? out / (gen / 1000) : null,
+    ...sum, output: usage_unattributed ? null : out, usage_unattributed, cost: costKnown ? cost : null, costPartial, est, running,
+    rate: rateAt(lane, t), avg: gen > 0 && complete && !usage_unattributed ? out / (gen / 1000) : null,
     elapsed: first != null ? (last - first) / 1000 : 0,
   };
 }
@@ -1667,14 +1719,15 @@ function fillCard(el, lane, t) {
   const round = Math.max(...lane.runs.filter((x) => x.started_at <= t).map((x) => x.round || 1));
   setText(el.querySelector('.tl'), isCC ? [shortModel(r.model), r.title].filter(Boolean).join(' · ')
     : [r.kind, r.role ? `[${r.role}]` : null, r.title, r.level, round > 1 ? `round ${round}` : null].filter(Boolean).join(' · '));
-  const rate = el.querySelector('.rate'), sig = `${Math.round(s.rate)}|${Math.round(s.avg || 0)}|${fmtTok(s.output)}`;
+  const rate = el.querySelector('.rate'), sig = `${Math.round(s.rate)}|${s.avg == null ? '—' : Math.round(s.avg)}|${s.output}`;
+  rate.title = s.usage_unattributed ? TEXT.usageUnattributed : '';
   if (rate.dataset.sig !== sig) {
     rate.dataset.sig = sig;
     rate.innerHTML = '';
     const now = document.createElement('span');
     now.className = 'now';
-    now.textContent = `≈ ${Math.round(s.rate)} tok/s`;
-    rate.append(now, ` · avg ${s.avg != null ? Math.round(s.avg) : '—'} · out ${fmtTok(s.output)}`);
+    now.textContent = `now ≈ ${Math.round(s.rate)} tok/s`;
+    rate.append(now, ` · gen avg ≈ ${s.avg != null ? Math.round(s.avg) : '—'} · out ${s.output == null ? '—' : fmtTok(s.output)}`);
   }
   // 详情档位给完整的对话流（最近 40 行），摘要档位给最后几行
   const lod = VIEW_LOD();
@@ -1976,15 +2029,18 @@ function scopeLead(lane, t) {
 'use strict';
 // 底部用量表（每个模型一行，Claude Code 在最前，最后一行合计）和顶栏。
 
-const TABLE_HEAD = ['', 'model', 'status', 'now ≈tok/s', 'last 2 min', 'avg tok/s', 'input · cache', 'output', 'cost', 'time'];
+const TABLE_HEAD = ['', 'model', 'status', 'now ≈tok/s', 'last 2 min', 'gen avg ≈tok/s', 'input · cache', 'output', 'cost', 'time'];
 // 费用：一律按模型官方 API 价格算（插件自带的价格表），悬停在表头和单元格上有说明；+ 表示有的模型不在价格表里
 // 不到 1 美分的按两位有效数字写（便宜的 API 模型一次常常只有零点零几美分），免得显示成 $0.00
 const fmtUsd = (n) => (n > 0 && n < 0.01 ? n.toPrecision(2) : n.toFixed(2));
 const fmtCost = (cost, partial = false) => (cost == null ? '—' : `$${fmtUsd(cost)}${partial ? '+' : ''}`);
 // 面板里下面还有没露出来的行时，最后一行淡出
 const markMore = (body) => body.classList.toggle('more', body.scrollHeight - body.scrollTop - body.clientHeight > 2);
-// 表头的费用列加说明
-function costHeadTitle(head) { const c = [...head.children].find((x) => x.textContent === 'cost'); if (c) c.title = TEXT.costTitle; }
+// 速度的估算窗口不同，和费用一样把口径放在表头悬停说明里。
+function costHeadTitle(head) {
+  const titles = { cost: TEXT.costTitle, 'now ≈tok/s': TEXT.nowTitle, 'last 2 min': TEXT.recentTitle, 'gen avg ≈tok/s': TEXT.genAvgTitle };
+  for (const c of head.children) if (titles[c.textContent]) c.title = titles[c.textContent];
+}
 function renderTable(t) {
   const table = $('usage');
   if (!table.firstChild) {
@@ -1995,7 +2051,7 @@ function renderTable(t) {
   }
   const lanes = [B.laneById.get('cc'), ...seatLanes(t)].filter((l) => l && latest(l) && latest(l).started_at <= t);
   const body = table.querySelector('.tbody');
-  const tot = { input: 0, cached: 0, output: 0, cost: null, partial: false, rate: 0 };
+  const tot = { input: 0, cached: 0, output: 0, usage_unattributed: false, cost: null, partial: false, rate: 0 };
   lanes.forEach((lane, i) => {
     let tr = UI.tableRows.get(lane.id);
     if (!tr) {
@@ -2015,25 +2071,30 @@ function renderTable(t) {
     setText(c[3], s.rate >= 0.5 ? `≈ ${Math.round(s.rate)}` : '—');
     sparkSvg(c[4], sparkline(lane, t));
     setText(c[5], s.avg != null ? `≈ ${Math.round(s.avg)}` : '—');
-    setText(c[6], inAll ? `${fmtTok(inAll)} · ${Math.round((100 * s.cached) / inAll)}%` : '—');
+    setText(c[6], !s.usage_unattributed && inAll ? `${fmtTok(inAll)} · ${Math.round((100 * s.cached) / inAll)}%` : '—');
+    c[6].title = s.usage_unattributed ? TEXT.usageUnattributed : '';
     setText(c[7], s.output ? fmtTok(s.output) : '—');
+    c[7].title = s.usage_unattributed ? TEXT.usageUnattributed : '';
     setText(c[8], fmtCost(s.cost, s.costPartial)); c[8].title = TEXT.costTitle;
     setText(c[9], fmtDur(s.elapsed));
     if (body.children[i] !== tr) body.insertBefore(tr, body.children[i] || null);
     tot.input += inAll; tot.cached += s.cached; tot.output += s.output; tot.rate += s.rate;
+    tot.usage_unattributed ||= s.usage_unattributed;
     if (s.cost != null) tot.cost = (tot.cost ?? 0) + s.cost;
     if (s.costPartial) tot.partial = true;
   });
   while (body.children.length > lanes.length) body.lastChild.remove();
   markMore(body);
   const total = table.querySelector('.total');
-  const sig = `${lanes.length}|${Math.round(tot.rate)}|${tot.input}|${tot.output}|${fmtCost(tot.cost, tot.partial)}`;
+  const sig = `${lanes.length}|${Math.round(tot.rate)}|${tot.input}|${tot.output}|${tot.usage_unattributed}|${fmtCost(tot.cost, tot.partial)}`;
   if (total.dataset.sig !== sig) {
     total.dataset.sig = sig;
     total.innerHTML = '';
-    const cells = ['', 'total', `${lanes.length} lanes`, `≈ ${Math.round(tot.rate)}`, '', '', tot.input ? `${fmtTok(tot.input)} · ${Math.round((100 * tot.cached) / tot.input)}%` : '—', fmtTok(tot.output), fmtCost(tot.cost, tot.partial), ''];
+    const cells = ['', 'total', `${lanes.length} lanes`, `≈ ${Math.round(tot.rate)}`, '', '', !tot.usage_unattributed && tot.input ? `${fmtTok(tot.input)} · ${Math.round((100 * tot.cached) / tot.input)}%` : '—', tot.usage_unattributed ? '—' : fmtTok(tot.output), fmtCost(tot.cost, tot.partial), ''];
     for (const x of cells) { const s = document.createElement('span'); s.textContent = x; total.append(s); }
     total.children[8].title = TEXT.costTitle;
+    total.children[7].title = tot.usage_unattributed ? TEXT.usageUnattributed : '';
+    total.children[6].title = tot.usage_unattributed ? TEXT.usageUnattributed : '';
   }
 }
 

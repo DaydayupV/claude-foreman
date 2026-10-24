@@ -27,14 +27,15 @@ function fillCard(el, lane, t) {
   const round = Math.max(...lane.runs.filter((x) => x.started_at <= t).map((x) => x.round || 1));
   setText(el.querySelector('.tl'), isCC ? [shortModel(r.model), r.title].filter(Boolean).join(' · ')
     : [r.kind, r.role ? `[${r.role}]` : null, r.title, r.level, round > 1 ? `round ${round}` : null].filter(Boolean).join(' · '));
-  const rate = el.querySelector('.rate'), sig = `${Math.round(s.rate)}|${Math.round(s.avg || 0)}|${fmtTok(s.output)}`;
+  const rate = el.querySelector('.rate'), sig = `${Math.round(s.rate)}|${s.avg == null ? '—' : Math.round(s.avg)}|${s.output}`;
+  rate.title = s.usage_unattributed ? TEXT.usageUnattributed : '';
   if (rate.dataset.sig !== sig) {
     rate.dataset.sig = sig;
     rate.innerHTML = '';
     const now = document.createElement('span');
     now.className = 'now';
-    now.textContent = `≈ ${Math.round(s.rate)} tok/s`;
-    rate.append(now, ` · avg ${s.avg != null ? Math.round(s.avg) : '—'} · out ${fmtTok(s.output)}`);
+    now.textContent = `now ≈ ${Math.round(s.rate)} tok/s`;
+    rate.append(now, ` · gen avg ≈ ${s.avg != null ? Math.round(s.avg) : '—'} · out ${s.output == null ? '—' : fmtTok(s.output)}`);
   }
   // 详情档位给完整的对话流（最近 40 行），摘要档位给最后几行
   const lod = VIEW_LOD();

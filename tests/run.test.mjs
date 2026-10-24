@@ -70,6 +70,10 @@ test('小数分钟超时终止未结束的执行', async (t) => {
   const r = output(await h.bridge(taskArgs(h, 'run', ['--no-snapshot', '--timeout', '0.02']), { env: s.env }), 1);
   assert.equal(r.status, 'timeout');
   assert.equal(json(path.join(r.run_dir, 'meta.json')).status, 'timeout');
+  // 第一条错误写明是超时，而不是 stderr 里别的报错；一次请求都没完成时用量为 null 并有说明
+  assert.equal(r.errors[0], M.timedOut(0.02));
+  assert.equal(r.usage, null);
+  assert.ok(r.notes.includes(M.timeoutUsageMissing), r.notes.join('\n'));
 });
 
 test('卡死检测终止无活动任务，执行中的命令不判卡死', { timeout: 65000 }, async (t) => {
@@ -110,7 +114,7 @@ test('额度用完保留会话、恢复时间和额度提示', async (t) => {
   assert.equal(r.status, 'quota_exhausted');
   assert.equal(r.session_id, 'synthetic-session');
   assert.equal(r.quota_resets_at, new Date(2000000000 * 1000).toISOString());
-  assert.ok(r.errors.includes(M.quotaExhausted('2033-05-18 03:33')));
+  assert.ok(r.errors.includes(M.quotaExhausted(r.model_shown, '2033-05-18 03:33')));
 });
 
 test('断线重连事件只记警告不导致任务失败', async (t) => {
@@ -206,7 +210,7 @@ test('报告里写成目录的改动按前缀归属：目录下被追踪的文�
   assert.deepEqual(Object.fromEntries(r.changes.files.map((f) => [f.path, f.by])),
     { 'gen/c.txt': 'reported', 'out/a.txt': 'reported', 'out/sub/b.txt': 'reported', 'output.txt': 'unknown' });
   assert.deepEqual([r.changes.reported_total, r.changes.unknown_total], [3, 1]);
-  assert.ok(r.notes.includes(M.reportedNotTracked(['empty', 'gone.txt'])), r.notes.join('\n'));
+  assert.ok(r.notes.includes(M.reportedNotTracked(r.model_shown, ['empty', 'gone.txt'])), r.notes.join('\n'));
   assert.ok(r.notes.includes(M.unattributedChanges(1)));
 });
 
@@ -240,4 +244,14 @@ test('失败命令的输出证明不了沙箱坏了时不提示：打印出的�
   const broken = h.scenario({ steps: [{ event: { type: 'item.completed', item: { id: 'cmd-9', type: 'command_execution', command: 'git status', exit_code: 1, status: 'failed', aggregated_output: `${error}\n` } } }] });
   const r2 = output(await h.bridge(taskArgs(h), { env: broken.env }));
   assert.ok(r2.notes.includes(M.codexSandboxFailed(error)), r2.notes.join('\n'));
+});
+
+test('没有改动快照时，自称改过的文件换一种说法，不说"两次快照之间没变"', async (t) => {
+  const h = sandbox(t);
+  const claimed = { ...report, files_changed: [{ path: 'a.txt', change: '合成' }] };
+  const s = h.scenario({ last_message: claimed, files: { 'a.txt': 'a\n' } });
+  const r = output(await h.bridge(taskArgs(h, 'run', ['--no-snapshot']), { env: s.env }));
+  assert.equal(r.changes.available, false);
+  assert.ok(r.notes.includes(M.reportedNoSnapshot(r.model_shown, ['a.txt'])), r.notes.join('\n'));
+  assert.ok(!r.notes.includes(M.reportedNotTracked(r.model_shown, ['a.txt'])));
 });

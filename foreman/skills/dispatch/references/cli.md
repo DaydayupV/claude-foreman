@@ -54,13 +54,13 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
 `run`、`image`、`resume`、`discuss`、`review` 的结果以 JSON 打印到 stdout，主要字段：
 - `report`：协作方的结构化报告：执行报告、讨论报告或审查报告。审查报告有 `verdict`（`issues_found` / `no_issues` / `incomplete`）、`findings`（每条有 `id`、`location`、`issue`、`trigger`、`severity`、`evidence`、`suggestion`，为空是合法结果）、`coverage`（`checked`、`not_checked`）和 `unverified`。Codex 原生审查（审 `diff`、不带说明也不带 `--file`）没有结构化报告：`report` 为 `null`，意见是 `last_message` 里的英文文字。报告不是合法 JSON 时（opencode、pi、API 修复一次后仍不合格），也只有 `last_message`。
 - `last_message`：没有 `report` 时，协作方最后一条回复的原文，只保留前 8000 字，全文在 `run_dir/last-message.txt`。
-- `changes`：脚本追踪到的工作目录内改动。每个文件标有 `by`：`agent` 表示有工具事件证明是执行的协作方改的（改名前的记录里写作 `codex`）；`reported` 表示只有它在报告里自称改过，常见于用命令或脚本写的文件；`unknown` 表示两样都没有。报告里写成目录的（以 `/` 结尾，或者在磁盘上是目录）按前缀算，目录下被追踪的文件都记 `reported`；只有这个前缀下一个被追踪的文件都没有时，`notes` 才提示它不在追踪范围内（工作目录本身不算）。标了 `group_run` 的落在同一工作目录下另一个执行任务的写入范围里（不分组和会话），不在这个任务自己的范围和 `--track` 里，而且那个任务的运行时间和这个任务有重叠（区间是开始到结束，还在跑的算到现在，旧记录没有结束时间的按最后活动时间算；这个任务开始前就结束了的不认领）；两边的范围都覆盖、或者有几个别的任务都覆盖的，仍记 `unknown`。个数在 `group_total`；实时查看的结束行和组面板不把它们算进"of unknown origin"，另写"N from other runs in the group"。
+- `changes`：脚本追踪到的工作目录内改动。每个文件标有 `by`：`agent` 表示有工具事件证明是执行的协作方改的（改名前的记录里写作 `codex`）；`reported` 表示只有它在报告里自称改过，常见于用命令或脚本写的文件；`unknown` 表示两样都没有。报告里写成目录的（以 `/` 结尾，或者在磁盘上是目录）按前缀算，目录下被追踪的文件都记 `reported`；只有这个前缀下一个被追踪的文件都没有时，`notes` 才提示它不在追踪范围内（工作目录本身不算）。标了 `group_run` 的落在同一工作目录下另一个执行任务的写入范围里（不分组和会话），不在这个任务自己的范围和 `--track` 里，而且那个任务的运行时间和这个任务有重叠（区间是开始到结束，还在跑的算到现在，旧记录没有结束时间的按最后活动时间算；这个任务开始前就结束了的不认领）；两边的范围都覆盖、或者有几个别的任务都覆盖的，仍记 `unknown`；同一席的几轮（续接、同一计划同一席重启）算一个任务，记到它最新的一轮上。个数在 `group_total`；实时查看的结束行和组面板不把它们算进"of unknown origin"，另写"N from other runs in the group"。
 - `notes`：提示信息，比如归属未知的改动、协作方报告了但没追踪到的文件、Codex 的沙箱启动不了命令、opencode 中途报错后自动重试并正常结束（见下）。
 - opencode 中途报错（比如流超时 "Timed out waiting for response data"）、自己重试后最后一步正常结束（`step_finish` 的 reason 是 `stop`），或者事件流以一段写完的回复结尾（opencode 有时写完回复就退出、不发 `step_finish`）时，不算失败：错误原文写进 `notes`，不进 `errors`，opencode 的退出码不是 0 也一样。这时回复可能被拆成了几段，最后一段不是合格的报告，就照常发一次修复请求，让它把完整报告重发一遍；不拼接几段消息。错误之后没有正常结束的，照旧记成 `failed`；恢复之后修复请求又失败、或者任务被取消、超时的，恢复过的错误也照实写进 `errors`，不写这条提示。
 - `warnings`：要注意的问题，比如审查期间材料又变了；普通执行任务出了图（"出图没有走图像模块"）；路线 ③、④ 的手画任务出了位图（路线 ③ 的位图只该在出图那一步出参考图）；路线 ③、④ 的手画任务新写或改过的 SVG 里嵌了位图（`<image>`，带命名空间前缀的 `<svg:image>` 也算；只查这一席自己的改动；没有快照、或者 `--scope` 在工作目录外时，追踪不到的地方只查执行事件和报告里列出的 SVG，`notes` 里会说明）；收尾时 `meta.json` 一直写不进（多半是备份或同步软件占着它，约 15 秒后放弃），这时它停在上一次写好的内容，结果照常在 `result.json` 里（这条提示只在打印出来的结果里，`result.json` 里没有）。
 - `questions` 和 `needs_decision`：协作方要人回答的事，见 SKILL.md 的"协作方要人回答时"。
-- `session_id`、`run_dir`：`run_dir/diff.patch` 是这个任务的补丁（`by` 为 `agent`、`reported`、`unknown` 的文件），`run_dir/diff.all.patch` 是两次快照之间观测到的全部改动（另含标了 `group_run` 的文件）；`changes` 里的 `shortstat`、`patch_bytes` 对应前者，`all_shortstat`、`all_patch_bytes` 对应后者。审查的补丁在 `run_dir/review.patch`。`changes.unstable_files` 列出拍快照时一直在被改写、没能放进开工或结束快照的文件（`path`、`phase`）：它们的改动没法比较，不在两份补丁里。拍快照总共最多用 60 秒，到时还没确认完的文件也列进 `unstable_files`，并且 `changes.incomplete` 为 true；只读审计的任务要求快照完整，开工快照不完整时不启动，结束快照不完整时记为失败。
-- token 消耗：`usage` 是本次调用的输入、缓存、输出 token（`usage_scope` 为 `session_total` 时是整个会话的累计量）；`last_request` 是最近一次请求的用量和模型上下文窗口；`rate_limit` 是 Codex 额度的已用比例；`quota_resets_at` 是额度预计恢复的时间。Codex 的用量读自它自己的会话记录，每次请求一完成就有累计值，所以命令执行期间取消也记得到。被取消的任务只记得到取消前已经完成的请求的用量（正在进行的那次，厂商不报用量），一次都没完成时 `usage` 为 `null`，`notes` 里有说明；`errors` 写明是 `cancel` 命令、用户在实时查看里按 x，还是调度进程收到了终止信号。`cancel` 怎么处理各种任务见下面的"cancel 和 status"。API 协作方的厂商一次都没返回用量时，`usage` 和 `usage_scope` 都是 `null`，`notes` 里有说明，`stats` 把这一轮计入 `missing_runs`。`output_tokens_per_s` 是这一轮的平均输出速度：输出 token 除以 `duration_s`，含拍快照、跑命令和等厂商响应的时间（本地排队等名额的时间不算），所以比实时查看里只算生成时间的速度低；只在 `usage_scope` 为 `this_run`、有输出、时长不为 0 时给出，否则为 `null`。
+- `session_id`、`run_dir`：`run_dir/diff.patch` 是这个任务的补丁（`by` 为 `agent`、`reported`、`unknown` 的文件），`run_dir/diff.all.patch` 是两次快照之间观测到的全部改动（另含标了 `group_run` 的文件）；`changes` 里的 `shortstat`、`patch_bytes` 对应前者，`all_shortstat`、`all_patch_bytes` 对应后者。审查的补丁在 `run_dir/review.patch`。`changes.unstable_files` 列出拍快照时一直在被改写、没能放进开工或结束快照的文件（`path`、`phase`）：它们的改动没法比较，不在两份补丁里。拍快照总共最多用 60 秒，到时还没确认完的文件也列进 `unstable_files`，并且 `changes.incomplete` 为 true；只读审计的任务要求快照完整（有拍不稳的文件、或者用完了 60 秒，都算不完整），开工快照不完整时不启动，结束快照不完整时记为失败。
+- token 消耗：`usage` 是本次调用的输入、缓存、输出 token（`usage_scope` 为 `session_total` 时是整个会话的累计量）；`last_request` 是最近一次请求的用量和模型上下文窗口；`rate_limit` 是 Codex 额度的已用比例；`quota_resets_at` 是额度预计恢复的时间。Codex 的用量读自它自己的会话记录，每次请求一完成就有累计值，所以命令执行期间取消也记得到。被取消或超时的任务只记得到终止前已经完成的请求的用量（正在进行的那次，厂商不报用量），一次都没完成时 `usage` 为 `null`，`notes` 里有说明；超时的任务 `errors` 第一条写明超过了几分钟的总时限；`errors` 写明是 `cancel` 命令、用户在实时查看里按 x，还是调度进程收到了终止信号。`cancel` 怎么处理各种任务见下面的"cancel 和 status"。API 协作方的厂商一次都没返回用量时，`usage` 和 `usage_scope` 都是 `null`，`notes` 里有说明，`stats` 把这一轮计入 `missing_runs`。`output_tokens_per_s` 是这一轮的平均输出速度：这一轮的输出 token（含推理）除以这一轮的用时 `duration_s`，含拍快照、跑命令、等厂商响应和报告修复请求的时间，不含本地排队等名额的时间。它和网页看板上的生成估速（只估算生成时间）口径不同，两者不能直接比。终端用量行写成 `run avg N tok/s`；取消、超时、卡死的轮次只记到最后一次完成的请求，速度偏低，后面标 `(partial usage)`。只在 `usage_scope` 为 `this_run`、有输出、时长不为 0 时给出，否则为 `null`。
 - `agent`、`model_shown`、`effort`：这次交给了哪个协作方、实际用的模型和推理强度。`model_overridden` 为 `true` 表示这次用 `--model` 换了模型；`outside_cell` 为 `true` 表示格子是 `"claude code"`、这次是用 `--agent` 点名派出的。
 - `module`、`cell`、`plan`、`seat`、`role`：这次属于哪个模块和格子；用计划启动的，还有计划的 `plan_id`、席位序号和角色（不是计划派出的为 `null`）。图像任务另有 `step`（generate 或 draw）和 `route`（1–4），`level` 为 `null`。API、opencode 和 pi 协作方的讨论和审查结果没有改动追踪（`changes.available` 为 `false`）；API 协作方的 `files` 列出附带了哪些文件，所有协作方的结果都有 `cost_usd`（按模型官方 API 价格算的美元费用，模型不在价格表里时为 `null`）和 `cost_source`（`api_price` 或 `unknown`），`status` 和实时查看会把它接在 token 用量后面显示；opencode 和 pi 自己报的费用另存在 `reported_cost_usd`，只留档。
 - `isolation`、`run_access`：opencode 和 pi 做执行时，写明没有系统沙箱（`tools`）和这次的权限档位。
@@ -91,7 +91,7 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
 
 ```bash
 node "<脚本路径>" judge --run <run_id> [--accept "F1,F3"] [--partial "F4"] [--reject "F2"] [--same "F1=<run_id>:F3,…"] [--clear "F5,…"]
-node "<脚本路径>" stats [--module discuss|run|review|image] [--since <天数>]
+node "<脚本路径>" stats [--module discuss|run|review|image] [--since <天数>] [--group <组名>] [--plan <plan_id>]
 ```
 
 **judge**
@@ -104,7 +104,7 @@ node "<脚本路径>" stats [--module discuss|run|review|image] [--since <天数
 
 **stats**
 - 不改任何记录，读记录目录里的全部任务。读不了 `meta.json` 的任务，以及父任务读不了、归不了席位的续接，记在 `totals.unreadable`；还在运行的轮次记在 `totals.running_skipped`；根本没调用协作方就失败的席位（结果里 `not_started` 为 true，比如开工前拍快照失败）记在 `totals.not_started`（没有时不出现）；这些都不进统计，根任务还在运行的整个席位不算。
-- 席位：一个没有父任务的任务，加上它所有的续接（讨论的后续轮次、返工、回答问题），算一个席位。`--since <天数>` 按这个根任务的开始时间过滤，`--module` 按根任务的模块过滤（旧记录没有 `module` 的按 `kind` 推断）。
+- 席位：一个没有父任务的任务，加上它所有的续接（讨论的后续轮次、返工、回答问题），算一个席位。`--since <天数>` 按这个根任务的开始时间过滤，`--module` 按根任务的模块过滤（旧记录没有 `module` 的按 `kind` 推断），`--group`、`--plan` 按根任务的组名和计划过滤（几个会话并行时只看一批；这时 `totals.running_skipped` 也只数这一批，`totals.unreadable` 分不出组，照旧全数）。
 - 按（基础模型，模块）分行。基础模型是模型名去掉最后一个 `/` 以前的提供方前缀、再转小写，所以经 opencode、pi、api 接入的同一个模型合成一行。席位数和返工记在根任务的模型上；每一轮的用时、用量、费用和去留记在那一轮自己的模型上（返工升级时可能换了模型）。Claude Code 席的报告单独成行（`participant: "host"`、`self_judged: true`，有自报模型时一并列出），按"计划 + 席位 0"算一席，不和外部模型行合并，不计用量、费用和 `missing_runs`；算"只有它发现"时它照常参与重叠判断，外部席位的这项数字因此更真实。`notes` 里写明它的去留是自评，不能和外部席位直接比，也不要据此改模型档位。
 - 每行的字段：
   - `seats`、`runs`：席位数和轮数。
@@ -113,7 +113,8 @@ node "<脚本路径>" stats [--module discuss|run|review|image] [--since <天数
   - `rework`（只对执行和图像，其他模块为 `null`）：`seats`、`reworked`、`rate`。正常交回报告（报告是 partial 的也算）后又被 `resume` 续接的席位才算返工过；回答问题、卡死、失败或没交回有效结果后的续接不算。同一计划同一席重新启动的几条记录算同一个席位。
   - `duration_s`：`total`（各轮用时之和）、`median_per_seat`（没有运行中的轮次、每一轮都有用时的席位，按席位总用时取中位数）、`missing_runs`（没有用时的轮数）。
   - `tokens`：`input`、`cached_input`、`output`，有用量的轮数 `runs`，缺失的轮数 `missing_runs`。记的是会话累计（`usage_scope` 为 `session_total`）的续接，只算这一轮新增的部分。Codex 的轮次没记用量、又是这个会话的最后一轮（后面没有任何续接，正在运行的也算）时，从 Codex 自己的会话记录补读；读不到的计入 `missing_runs`，不当成 0。
-  - `output_tokens_per_s`：平均输出速度，只用同时有用量和用时的轮次（输出 token 之和除以用时之和），含跑命令和等待的时间；没有这样的轮次时为 `null`。
+  - `output_tokens_per_s`：平均输出速度，只用同时有用量和用时的轮次（输出 token 之和除以用时之和），口径和结果里的同名字段一样（含跑命令和等待的时间，和网页看板的生成估速不能直接比）；没有这样的轮次时为 `null`。
+  - `speed_basis`：速度用到的轮数 `runs`、秒数 `seconds`、输出 token `output_tokens`，以及排除的轮数 `excluded`：`no_usage`（没记用量）、`no_duration`（没有用时）、`mixed_session_total`（前一轮缺用量，这一轮的会话累计差值里混着那一轮的输出）。取消、超时的轮次不排除，它们的速度偏低。
   - `cost_usd`：`total`、`runs`、`missing_runs`。一律按模型官方 API 价格算（插件自带的价格表 `scripts/prices.json`），和实际扣费不一定相同。表里没有的模型算不出费用，计入 `missing_runs`（Claude Code 席不算）。
-- 输出 JSON：`runs_dir`、`module`、`since_days`、`generated_at`、`totals`（`runs`、`seats`、`judged_runs`、`running_skipped`、`unreadable`、`unreadable_verdicts`）、`rows`（按讨论、审查、执行、图像的顺序，同一模块里席位多的在前）和 `notes`（上面几条口径的说明）。
+- 输出 JSON：`runs_dir`、`module`、`since_days`、`group`、`plan`、`generated_at`、`totals`（`runs`、`seats`、`judged_runs`、`running_skipped`、`unreadable`、`unreadable_verdicts`）、`rows`（按讨论、审查、执行、图像的顺序，同一模块里席位多的在前）和 `notes`（上面几条口径的说明）。
 - 怎么用：偏好文件可以引用这份统计改某个模型的档位（比如"本地实测里 deepseek-v4.1-flash 审查的独有发现多，审查时按强档用"），以偏好文件为准；脚本不自动排名，也不改配置和档位。记过去留的轮数少时（看 `judged_runs` 和 `unique_basis_runs`），这些数字只作参考。

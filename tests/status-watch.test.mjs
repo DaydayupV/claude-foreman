@@ -207,3 +207,13 @@ test('单任务查看的结尾行把部分完成标成 ◐，和组视图、stat
   assert.match(text, /◐ partly done/);
   assert.doesNotMatch(text, /✗/);
 });
+
+test('用量行写 run avg，取消、超时、卡死的轮次标 partial usage', async (t) => {
+  const h = sandbox(t), group = 'speed-label', usage = { input_tokens: 100, cached_input_tokens: 0, output_tokens: 400 };
+  seedRun(h, 'speed-done', { group }, { status: 'done', report: { status: 'completed' }, usage, duration_s: 10, output_tokens_per_s: 40 });
+  seedRun(h, 'speed-cancelled', { group, status: 'cancelled' }, { status: 'cancelled', usage, duration_s: 100, output_tokens_per_s: 4 });
+  const r = await h.bridge(['status', '--group', group]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.ok(r.stdout.includes('run avg 40 tok/s') && !r.stdout.includes('run avg 40 tok/s (partial usage)'), r.stdout);
+  assert.ok(r.stdout.includes('run avg 4 tok/s (partial usage)'), r.stdout);
+});

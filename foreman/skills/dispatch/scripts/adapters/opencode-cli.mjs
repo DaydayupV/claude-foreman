@@ -206,6 +206,8 @@ async function opencodeSession(run, schema, agentId) {
   let repairing = false;
   const fileChanges = new Set();
   let commands = 0, items = 0, seenSession = false, last = '', report = null;
+  const sentUsage = {};
+  let lastUsageAt = null, pendingStepAt = null, usageTo = started;
   // 翻译成 Codex 的事件形状，让 watch 和 status 共用现有的时间线、命令和报告显示。
   const translate = (ev) => {
     if (ev.sessionID && !seenSession) {
@@ -214,17 +216,23 @@ async function opencodeSession(run, schema, agentId) {
       writeMeta();
       event({ type: 'thread.started', thread_id: ev.sessionID });
     }
+    // 修复请求仍可能没有 step_finish，最早未结算的生成起点必须保留。
+    if (ev.type === 'step_start') pendingStepAt ??= Date.now();
     if (ev.type === 'reasoning' || ev.type === 'text') {
       if (ev.type === 'text') last = ev.part?.text || '';
       event({ type: 'item.completed', item: { type: ev.type === 'reasoning' ? 'reasoning' : 'agent_message', text: ev.part?.text || '' } });
     } else if (ev.type === 'step_finish' && ev.part?.tokens) {
       const t = ev.part.tokens;
-      event({ type: 'step.usage', ...(ev.part.reason === 'stop' ? { final: true } : {}), usage: {
+      const usage = {
         input_tokens: (t.input || 0) + (t.cache?.read || 0) + (t.cache?.write || 0),
         cached_input_tokens: t.cache?.read || 0,
         ...(t.cache?.write != null ? { cache_write_input_tokens: t.cache.write } : {}),
         output_tokens: (t.output || 0) + (t.reasoning || 0), reasoning_output_tokens: t.reasoning || 0,
-      } });
+      };
+      for (const [key, value] of Object.entries(usage)) sentUsage[key] = (sentUsage[key] || 0) + value;
+      lastUsageAt = Date.now();
+      event({ type: 'step.usage', ...(ev.part.reason === 'stop' ? { final: true } : {}), usage });
+      pendingStepAt = null;
     } else if (ev.type === 'tool_use') {
       const { tool, state = {} } = ev.part || {};
       const input = state.input || {};
@@ -257,6 +265,7 @@ async function opencodeSession(run, schema, agentId) {
     args.push('--title', meta.title || `foreman ${ctx.kind}`);
     const out = await runOpencode({ agent, args, cwd, agentId: currentAgent, prompt: nextPrompt, runDir: dir, onEvent: translate,
       timeoutMs: deadline - Date.now(), stallMin });
+    usageTo = Date.now();
     errors.push(...out.errors);
     for (const error of out.recovered) recovered.add(error);
     observed.questions.push(...out.questions);
@@ -295,6 +304,13 @@ async function opencodeSession(run, schema, agentId) {
         cost += m.cost || 0;
       }
     } catch (e) { usage = null; cost = null; notes.push(M.opencodeExportFailed(e.message)); }
+  }
+  if (usage) {
+    const rest = Object.fromEntries(Object.entries(usage).map(([key, value]) => [key, Math.max(0, value - (sentUsage[key] || 0))]));
+    const from = lastUsageAt ?? pendingStepAt ?? started;
+    // 末步可能没有 step_finish；用真实结束时刻补齐，避免把导出耗时算进生成区间。
+    if (Object.values(rest).some((n) => n > 0)) event({ type: 'step.usage', final: true, usage: rest,
+      usage_from: from, usage_to: Math.max(usageTo, from + 1) });
   }
   fs.writeFileSync(path.join(dir, 'last-message.txt'), last);
   return { usage, usage_scope: 'this_run', cost, commands, errors, notes, warnings, report, last, observed,

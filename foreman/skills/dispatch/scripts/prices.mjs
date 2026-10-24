@@ -46,7 +46,7 @@ function rateOf(model, prices) {
 }
 
 // 金额留到 1e-10 美元：浮点乘除的尾巴（0.43190959999999995）不写进记录
-const usd = (value) => Math.round(value * 1e10) / 1e10;
+export const usd = (value) => Math.round(value * 1e10) / 1e10;
 
 export function priceFor(model, usage, prices) {
   const rate = rateOf(model, prices);

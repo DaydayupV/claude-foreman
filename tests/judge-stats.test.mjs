@@ -643,3 +643,20 @@ test('stats 不把没开始就失败的任务算成一席', async (t) => {
   assert.deepEqual(r.rows.map((row) => [row.model, row.seats, row.rework.seats]), [['minimax-m3', 1, 1]]);
   assert.equal(r.totals.not_started, 1); assert.equal(r.totals.seats, 1);
 });
+test('stats 按 --group、--plan 只看一批，speed_basis 写明速度用到和排除的轮次', async (t) => {
+  const h = sandbox(t), at = (i) => new Date(1700000000000 + i * 10000).toISOString();
+  seedRun(h, 'g1', { group: 'mine', plan: 'plan-a', seat: 1, model: 'alpha', started_at: at(0), ended_at: undefined, session_id: null }, { status: 'done', duration_s: 10, usage: usage(100, 0, 50) });
+  seedRun(h, 'g2', { group: 'mine', plan: 'plan-b', seat: 1, model: 'alpha', started_at: at(1), ended_at: undefined, session_id: null }, { status: 'done', duration_s: 5, usage: null });
+  seedRun(h, 'o1', { group: 'other', model: 'alpha', started_at: at(2), ended_at: undefined, session_id: null }, { status: 'done', duration_s: 20, usage: usage(100, 0, 400) });
+  const mine = output(await h.bridge(['stats', '--group', 'mine']));
+  assert.deepEqual([mine.group, mine.plan, mine.rows.length, mine.rows[0].seats], ['mine', null, 1, 2]);
+  assert.equal(mine.rows[0].output_tokens_per_s, 5);
+  assert.deepEqual(mine.rows[0].speed_basis, { runs: 1, seconds: 10, output_tokens: 50, excluded: { no_usage: 1, no_duration: 0, mixed_session_total: 0 } });
+  const plan = output(await h.bridge(['stats', '--plan', 'plan-b']));
+  assert.deepEqual([plan.plan, plan.rows[0].seats, plan.rows[0].output_tokens_per_s], ['plan-b', 1, null]);
+  const all = output(await h.bridge(['stats']));
+  assert.deepEqual([all.rows[0].seats, all.rows[0].output_tokens_per_s], [3, 15]);
+  // 别的组还在跑的任务，按组过滤时不算进 running_skipped
+  seedRun(h, 'o2', { group: 'other', model: 'alpha', status: 'running', pid: process.pid, ended_at: undefined });
+  assert.deepEqual([output(await h.bridge(['stats', '--group', 'mine'])).totals.running_skipped, output(await h.bridge(['stats'])).totals.running_skipped], [0, 1]);
+});

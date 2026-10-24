@@ -27,7 +27,8 @@ const B = {
   version: 0,             // 数据每变一次加一，面板据此决定要不要重画
   clock: { mode: 'live', start: 0, end: 0, speed: 1, perf0: 0, frozenAt: null },
 };
-const FEED_MAX = 3000, LANE_EVENTS_MAX = 600;
+// 统计用的事件不带正文，留得多一些；超出时这条车道的平均速度显示 —（分子分母不再覆盖同一段）
+const FEED_MAX = 3000, LANE_EVENTS_MAX = 600, RATE_EVENTS_MAX = 20000;
 
 // 现在是记录里的哪个时刻（毫秒）。直播用本机时间（服务在同一台机器上）；回放从连上那一刻起按倍速走；?t= 停在固定时刻。
 function now() {
@@ -56,7 +57,7 @@ function onHello(h) {
 function laneFor(id) {
   let lane = B.laneById.get(id);
   if (!lane) {
-    lane = { id, idx: B.lanes.length, runs: [], events: [], last: null, seed: hash(id) };
+    lane = { id, idx: B.lanes.length, runs: [], events: [], rate_events: [], last: null, seed: hash(id) };
     B.lanes.push(lane);
     B.laneById.set(id, lane);
   }
@@ -73,10 +74,15 @@ function onRun(r) {
   wake();
 }
 
-function onEv(ev) {
+function onEv(ev, stats = true) {
   const lane = laneFor(ev.lane || B.runs.get(ev.run)?.lane || ev.run);
   ev.id = B.total++;
   insertByTs(lane.events, ev, LANE_EVENTS_MAX);
+  // 展示缓存会截断；另存不含正文的统计边界，保证累计输出和生成时长覆盖同一段。
+  if (B.clock.mode === 'live' && stats !== false) {
+    const { run, ts, k, u, n, tot, end, usage_from, usage_to } = ev;
+    insertByTs(lane.rate_events, { run, ts, k, u, n, tot, end, usage_from, usage_to }, RATE_EVENTS_MAX);
+  }
   lane.ver = (lane.ver || 0) + 1;
   insertByTs(B.feed, ev, FEED_MAX);
   if (ev.k === 'fplan' || ev.k === 'verdict') insertByTs(B.life, ev, Infinity);
@@ -89,14 +95,24 @@ function onEv(ev) {
 function onBacklog(b) {
   if (b.reset) {
     const keep = (ev) => ev.run !== b.run;
-    for (const lane of B.lanes) if (lane.events.some((ev) => !keep(ev))) {
+    for (const lane of B.lanes) if (lane.events.some((ev) => !keep(ev)) || lane.rate_events.some((ev) => !keep(ev))) {
       lane.events = lane.events.filter(keep); lane.ver = (lane.ver || 0) + 1;
+      lane.rate_events = lane.rate_events.filter(keep);
       lane.last = lane.events.reduce((last, ev) => (!last || ev.ts >= last.ts ? ev : last), null);
     }
     B.feed = B.feed.filter(keep); B.life = B.life.filter(keep);
     B.version++;
   }
-  b.events.forEach(onEv);
+  b.events.forEach((ev) => onEv(ev, !b.rate_events));
+  if (b.rate_events) replaceRateHistory(b.run, b.rate_events);
+}
+
+function replaceRateHistory(run, events) {
+  const lane = laneFor(B.runs.get(run)?.lane || run);
+  lane.rate_events = lane.rate_events.filter((ev) => ev.run !== run);
+  for (const ev of events) insertByTs(lane.rate_events, ev, RATE_EVENTS_MAX);
+  lane.ver = (lane.ver || 0) + 1; B.version++;
+  wake();
 }
 
 // 直播里派发事件先到、目标任务后出现时，服务端补发一次 ev_link：给原来那条事件补上 target
@@ -120,7 +136,8 @@ function loadSnapshot(s) {
   onHello(s.hello);
   if (B.params.t == null && s.hello.replay) B.clock.frozenAt = s.hello.replay.end; // 内嵌快照没给 t 时停在末尾
   for (const r of s.runs) onRun(r);
-  for (const ev of s.events) onEv(ev);
+  for (const ev of s.events) onEv(ev, !s.rate_events);
+  if (s.rate_events) for (const r of s.runs) replaceRateHistory(r.id, s.rate_events.filter((ev) => ev.run === r.id));
   B.connected = true;
 }
 

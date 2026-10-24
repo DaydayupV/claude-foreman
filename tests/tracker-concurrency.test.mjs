@@ -203,7 +203,8 @@ fs.statSync = (file, ...args) => {
   const s = h.scenario({ last_message: { ...(kind === 'run' ? report : discussion), files_changed: [{ path: 'src/', change: 'reported write' }] } });
   const r = output(await h.bridge(taskArgs(h, kind, ['--track', 'src']), { env: { ...s.env, NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` } }), kind === 'run' ? 0 : 1);
   assert.equal(r.changes.available, kind === 'run');
-  assert.equal(r.changes.incomplete, true);
+  // incomplete 只表示 60 秒用完；拍不稳的文件只进 unstable_files，只读审计照样拒绝开始（下面 discuss 没有调用模型）
+  assert.equal(r.changes.incomplete, undefined);
   assert.deepEqual(r.changes.unstable_files, (kind === 'run' ? ['before', 'after'] : ['before']).map((phase) => ({ path: 'src/不稳定.txt', phase })));
   assert.ok(r.notes.includes(M.unstableFiles(['src/不稳定.txt'], 'before')));
   if (kind === 'run') assert.ok(r.notes.includes(M.unstableFiles(['src/不稳定.txt'], 'after')));
@@ -361,4 +362,21 @@ test('开工时活动集合里的旧 id 任务，期间结束并移出活动集�
   assert.equal(r.changes.files[0].group_run, id);
   assert.equal(read(path.join(r.run_dir, 'diff.patch')), '');
   assert.ok(read(path.join(r.run_dir, 'diff.all.patch')).includes('peer/foreign.txt'));
+});
+
+test('同一席的原轮和续接轮（或同席重启）算一个任务，文件记到最新一轮，不判成分不清', async (t) => {
+  const h = sandbox(t), peer = { status: 'running', pid: process.pid, ended_at: undefined, claude_session: 'foreign', group: 'peer', agent: 'peer-agent' }; // 别的协作方，不占本任务协作方的名额
+  seedRun(h, '20000101-1-root', { ...peer, scope: ['chain'] });
+  seedRun(h, '20000101-2-resume', { ...peer, scope: ['chain'], parent: '20000101-1-root', mode: 'resume' });
+  seedRun(h, '20000101-seat-a', { ...peer, scope: ['seat'], plan: 'peer-plan', seat: 2 });
+  seedRun(h, '20000101-seat-b', { ...peer, scope: ['seat'], plan: 'peer-plan', seat: 2 });
+  const s = h.scenario({ files: { 'chain/x.txt': 'x\n', 'seat/y.txt': 'y\n' } });
+  const r = output(await h.bridge(taskArgs(h, 'run', ['--group', 'own', '--scope', 'mine']), { env: s.env }));
+  const files = Object.fromEntries(r.changes.files.map((f) => [f.path, f]));
+  assert.equal(files['chain/x.txt'].group_run, '20000101-2-resume');
+  assert.equal(files['seat/y.txt'].group_run, '20000101-seat-b');
+  const own = read(path.join(r.run_dir, 'diff.patch'));
+  assert.ok(!own.includes('chain/x.txt') && !own.includes('seat/y.txt'), own);
+  assert.ok(!r.notes.some((n) => n.includes('chain/x.txt')), r.notes.join('\n'));
+  assert.equal(r.changes.group_total, 2);
 });

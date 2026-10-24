@@ -12,7 +12,7 @@ const TEST_KEYS = !!process.env.FOREMAN_TEST_KEYS;
 const interactive = () => liveCapable() && (!!process.stdin.isTTY || TEST_KEYS);
 // 开始和停止读按键：终端切到原始模式，测试的管道输入照原样读（停下后不再拖着进程不退出）
 const listenKeys = (fn) => { if (process.stdin.isTTY) process.stdin.setRawMode(true); else process.stdin.ref?.(); process.stdin.resume(); process.stdin.on('data', fn); };
-const stopKeys = (fn) => { process.stdin.off('data', fn); if (process.stdin.isTTY) process.stdin.setRawMode(false); else process.stdin.unref?.(); process.stdin.pause(); };
+const stopKeys = (fn) => { process.stdin.off('data', fn); fn.stop?.(); if (process.stdin.isTTY) process.stdin.setRawMode(false); else process.stdin.unref?.(); process.stdin.pause(); };
 
 // 在终端的备用屏幕里整屏重画。关闭自动换行，超出窗口的部分直接截掉，不会折到下一行把画面挤乱；
 // 每行先定位光标再写。窗口大小变化时清屏重画，停下来 0.2 秒后再补画一次：
@@ -57,7 +57,40 @@ function liveScreen(render) {
 }
 
 // 把一段键盘输入拆成单个按键（方向键、翻页键是 ESC 开头的一串）
-const splitKeys = (s) => s.match(/\x1b\[[0-9;]*[A-Za-z~]|\x1bO[A-Za-z]|[\s\S]/g) || [];
+const splitKeys = (s) => s.match(/\x1b\[[0-?]*[ -/]*[@-~]|\x1bO[@-~]|[\s\S]/gu) || [];
+
+function readKeys(fn) {
+  let pending = '', pasting = false, timer = null;
+  const read = (data) => {
+    clearTimeout(timer);
+    const text = pending + data.toString('utf8');
+    // 留住块尾的半截转义序列，避免把鼠标参数或粘贴标记拆成快捷键。
+    pending = text.match(/\x1b(?:\[[0-?]*[ -/]*|O)?$/u)?.[0] || '';
+    const keys = [];
+    let ignore = pasting;
+    for (const k of splitKeys(text.slice(0, text.length - pending.length))) {
+      if (k === '\x1b[200~' || k === '\x1b[201~') { pasting = k === '\x1b[200~'; ignore = true; }
+      else if (!pasting) keys.push(k);
+    }
+    ignore ||= keys.filter((k) => /^[^\x00-\x1f\x7f-\x9f]$/u.test(k)).length >= 3;
+    // 单独按 Esc 也会像半截序列；只等 50 ms，粘贴中则留着等结束标记。
+    if (pending && !pasting) timer = setTimeout(() => { pending = ''; if (!ignore) fn(['\x1b']); }, 50);
+    // 终端只发了开始标记、结束标记一直没来时，1 秒没有新输入就当粘贴结束，免得之后的按键全被吞掉
+    else if (pasting) timer = setTimeout(() => { pasting = false; pending = ''; }, 1000);
+    if (ignore) return;
+    let sawX = false;
+    const accepted = keys.filter((k) => {
+      if (k !== 'x' && k !== 'X') return true;
+      // 确认必须来自下一块输入，避免同块的 xx 直接终止排队任务。
+      if (sawX) return false;
+      sawX = true;
+      return true;
+    });
+    if (accepted.length) fn(accepted);
+  };
+  read.stop = () => { clearTimeout(timer); pending = ''; pasting = false; };
+  return read;
+}
 
 // 翻看：offset 是离"默认位置"有多少行。时间线默认跟着最新的内容（从底部往回数），组视图默认在顶上（从顶部往下数）
 function scroller({ fromBottom }) {
@@ -96,4 +129,4 @@ const introWanted = (o, metas, loadCfg) => liveCapable() && !process.env.NO_COLO
   && metas.some((m) => isRunning(m) && !m.parent && !m.dismissed_at) && loadCfg(metas[0].cwd).dispatch.intro !== false;
 const introOf = (m) => ({ key: avatarFor(m.model_name ?? m.model, agentTypeOf(m)), model: shortModel(modelOf(m)), who: modelLabel(m) });
 
-export { liveCapable, interactive, listenKeys, stopKeys, liveScreen, splitKeys, scroller, LEAVE_SCREEN, kindOf, introWanted, introOf };
+export { liveCapable, interactive, listenKeys, stopKeys, liveScreen, splitKeys, readKeys, scroller, LEAVE_SCREEN, kindOf, introWanted, introOf };

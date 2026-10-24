@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import vm from 'node:vm';
 import { sandbox, baseConfig, opencodeAgent, apiAgent, taskArgs, output, failed, json, read, write, poll, seedRun, ROOT, MESSAGES } from './helpers.mjs';
 import { report } from './fixtures/reports.mjs';
 import { normalize } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
@@ -52,6 +53,59 @@ test('opencode stop 用量标记 final 并归一化为 end', async (t) => {
     assert.deepEqual(step.usage, { input_tokens: 1, cached_input_tokens: 0, output_tokens: 5, reasoning_output_tokens: 3 });
     assert.equal(step.final, reason === 'stop' ? true : undefined);
     assert.equal(normalize(step, { id: r.run_id }, {})[0].end, reason === 'stop' ? 1 : undefined);
+  }
+});
+
+test('opencode 末步缺 step_finish 时从导出补齐各项用量并保留生成区间', async (t) => {
+  const h = sandbox(t); configure(h); h.initGit();
+  const s = h.scenario({ last_message: report, steps: [
+    { event: { type: 'step_finish', part: { reason: 'tool-calls', tokens: { input: 70, output: 60, reasoning: 40, cache: { read: 10, write: 5 } } } } },
+    { event: { type: 'step_start' } }, { delay_ms: 40 },
+  ], export_messages: [{ type: 'assistant', tokens: { input: 120, output: 140, reasoning: 80, cache: { read: 20, write: 8 } } }] });
+  const r = output(await h.bridge(taskArgs(h), { env: s.env }));
+  const raw = read(path.join(r.run_dir, 'opencode.jsonl')).trim().split('\n').map(JSON.parse);
+  assert.equal(raw.filter((e) => e.type === 'step_start').length, 2);
+  assert.equal(raw.filter((e) => e.type === 'step_finish').length, 1);
+  const steps = h.events(r.run_id).filter((e) => e.type === 'step.usage'), final = steps.at(-1);
+  assert.equal(steps.length, 2); assert.equal(final.final, true);
+  assert.deepEqual(final.usage, { input_tokens: 63, cached_input_tokens: 10, cache_write_input_tokens: 3, output_tokens: 120, reasoning_output_tokens: 40 });
+  for (const key of Object.keys(r.usage)) assert.equal(steps.reduce((n, e) => n + (e.usage[key] || 0), 0), r.usage[key]);
+  assert.ok(final.usage_from <= Date.parse(steps[0].ts));
+  assert.ok(final.usage_to > final.usage_from); assert.ok(final.usage_to <= Date.parse(final.ts));
+  const ev = normalize(final, { id: r.run_id }, {})[0];
+  assert.equal(ev.end, 1); assert.equal(ev.usage_from, final.usage_from); assert.equal(ev.usage_to, final.usage_to);
+});
+
+test('opencode 原请求和修复请求都缺 step_finish 时保留最早起点，同毫秒补量仍有区间', async () => {
+  const source = read(path.join(ROOT, 'foreman/skills/dispatch/scripts/adapters/opencode-cli.mjs'));
+  const session = source.slice(source.indexOf('async function opencodeSession('), source.indexOf('// 本机 opencode'));
+  for (const durations of [[10000, 1000], [0]]) {
+    let clock = 0, requests = 0; const events = [];
+    const context = vm.createContext({ path, Date: class extends Date { static now() { return clock; } },
+      fs: { appendFileSync() {}, writeFileSync() {} }, capabilities: {}, M: { reportRepairPrompt: () => 'repair' },
+      isCancelled: () => false, runLimits: () => ({ deadline: 100000, stallMin: 0 }), validateSchema() {},
+      eventWriter: () => (ev) => events.push(ev), opencodeArgs: () => ['run'],
+      reportWithRepair: async ({ request, repair }) => {
+        let result;
+        for (let i = 0; i < durations.length; i++) { if (i) repair(['invalid']); result = await request(); }
+        return result;
+      },
+      runOpencode: async ({ args, onEvent }) => {
+        if (args[0] === 'session') return { status: 'done', stdout: JSON.stringify({ messages: [
+          { type: 'assistant', time: { created: 0 }, tokens: { output: durations.length === 2 ? 1100 : 1 } },
+        ] }) };
+        onEvent({ type: 'step_start', sessionID: 'synthetic' }); clock += durations[requests++];
+        onEvent({ type: 'text', part: { text: requests === 1 ? 'invalid' : '{}' } });
+        return { status: 'done', errors: [], recovered: [], messages: [], questions: [] };
+      } });
+    vm.runInContext(`${session}\nglobalThis.runSession = opencodeSession;`, context);
+    await context.runSession({ started: 0, ctx: { dir: 'synthetic', agent: {}, kind: 'exec', model: 'model' }, meta: {}, writeMeta() {} }, {}, 'foreman-run');
+    const usage = events.filter((ev) => ev.type === 'step.usage');
+    assert.equal(requests, durations.length); assert.equal(usage.length, 1); assert.equal(usage[0].final, true);
+    assert.equal(usage[0].usage_from, 0);
+    assert.equal(usage[0].usage_to, durations.length === 2 ? 11000 : 1);
+    assert.equal(usage[0].usage.output_tokens, durations.length === 2 ? 1100 : 1);
+    if (durations.length === 2) assert.equal(usage[0].usage.output_tokens / ((usage[0].usage_to - usage[0].usage_from) / 1000), 100);
   }
 });
 

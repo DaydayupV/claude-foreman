@@ -4,7 +4,7 @@ import path from 'node:path';
 import { RUNS_ROOT, listRuns, findRun, readMeta, checkRunners, isRunning, runOutcome, resultValid } from './records.mjs';
 import { M, die, need, isObject, modelOf, agentTypeOf, replaceFile } from './util.mjs';
 import { acquireLock } from './locks.mjs';
-import { costOf, loadPrices, modelIdentity } from './prices.mjs';
+import { costOf, loadPrices, modelIdentity, usd } from './prices.mjs';
 
 const MODULES = ['discuss', 'review', 'run', 'image'];
 const VERDICTS = ['accept', 'partial', 'reject'];
@@ -199,10 +199,11 @@ function cmdStats(o, statsOf) {
   const runs = loaded.map(({ id, dir, meta }) => {
     const running = isRunning(meta);
     if (!meta) totals.unreadable++;
-    if (running) totals.running_skipped++;
+    // 按组或计划过滤时，跳过的运行中任务也只数这一批（读不了 meta.json 的分不出组，照旧全数）
+    if (running && (o.group == null || meta.group === o.group) && (o.plan == null || meta.plan === o.plan)) totals.running_skipped++;
     return { id, dir, meta, running, result: meta && !running ? readRecord(dir, 'result.json') : null };
   });
-  const rows = new Map(), seatTimes = new Map(), speeds = new Map(), groups = new Map();
+  const rows = new Map(), seatTimes = new Map(), groups = new Map();
   const rowFor = (meta, result, module) => {
     const host = meta.participant === 'host', model = host ? meta.model ?? 'claude-code' : baseModel(meta, result);
     const key = JSON.stringify([host, model, module]);
@@ -213,15 +214,19 @@ function cmdStats(o, statsOf) {
         duration_s: { total: 0, median_per_seat: null, missing_runs: 0 },
         tokens: { input: null, cached_input: null, output: null, runs: 0, missing_runs: 0 },
         output_tokens_per_s: null,
+        // 速度用到了哪些轮次、排除了多少轮和原因，方便判断这个数字有多可靠
+        speed_basis: { runs: 0, seconds: 0, output_tokens: 0, excluded: { no_usage: 0, no_duration: 0, mixed_session_total: 0 } },
         cost_usd: { total: null, runs: 0, missing_runs: 0 } };
       rows.set(key, row);
       seatTimes.set(row, []);
-      speeds.set(row, { output: 0, seconds: 0 });
+
     }
     return rows.get(key);
   };
   for (const { root, module, rounds } of seatChains(runs, totals)) {
     if (root.running || o.module != null && module !== o.module || cutoff != null && !(Date.parse(root.meta.started_at) >= cutoff)) continue;
+    // 按组或计划只看一批（几个会话并行时核对用）；续接沿用根任务的组和计划
+    if (o.group != null && root.meta.group !== o.group || o.plan != null && root.meta.plan !== o.plan) continue;
     // 根本没调用协作方就失败的（比如开工前拍快照失败）不算一席：模型什么也没做，算进来会把返工率和失败数算错
     if (rounds.every((run) => run.result?.not_started)) { totals.not_started = (totals.not_started || 0) + 1; continue; }
     totals.seats++;
@@ -269,12 +274,15 @@ function cmdStats(o, statsOf) {
           cumulative = scope === 'session_total' ? values : cumulative.map((n, j) => n + values[j]);
           if (usage.some((n) => n < 0)) usage = null;
         }
-        if (usage == null) row.tokens.missing_runs++;
+        const basis = row.speed_basis;
+        if (usage == null) { row.tokens.missing_runs++; basis.excluded.no_usage++; }
         else {
           for (const [j, key] of ['input', 'cached_input', 'output'].entries()) row.tokens[key] = (row.tokens[key] ?? 0) + usage[j];
           row.tokens.runs++;
           // 速度只算用量和用时都有的轮次，两边缺的轮次不一样，不能拿两个总数直接相除。
-          if (durations[i] > 0 && !shared) { speeds.get(row).output += usage[2]; speeds.get(row).seconds += durations[i]; }
+          if (!(durations[i] > 0)) basis.excluded.no_duration++;
+          else if (shared) basis.excluded.mixed_session_total++;
+          else { basis.runs++; basis.output_tokens += usage[2]; basis.seconds += durations[i]; }
         }
         const cost = costOf({ ...meta, ...result, agent_type: agentTypeOf(meta) }, prices);
         if (cost.cost_source === 'unknown') {
@@ -309,11 +317,13 @@ function cmdStats(o, statsOf) {
   countUnique(groups);
   for (const row of rows.values()) {
     row.duration_s.median_per_seat = median(seatTimes.get(row));
-    const speed = speeds.get(row);
-    if (speed.seconds > 0) row.output_tokens_per_s = Math.round(speed.output / speed.seconds * 10) / 10;
+    const basis = row.speed_basis;
+    if (basis.seconds > 0) row.output_tokens_per_s = Math.round(basis.output_tokens / basis.seconds * 10) / 10;
+    // 加起来的金额去掉浮点尾巴（单条结果的金额本来就是取整过的）
+    if (row.cost_usd.total != null) row.cost_usd.total = usd(row.cost_usd.total);
     if (row.rework?.seats) row.rework.rate = Number((row.rework.reworked / row.rework.seats).toFixed(2));
   }
-  print({ runs_dir: RUNS_ROOT, module: o.module ?? null, since_days: since, generated_at: new Date().toISOString(), totals,
+  print({ runs_dir: RUNS_ROOT, module: o.module ?? null, since_days: since, group: o.group ?? null, plan: o.plan ?? null, generated_at: new Date().toISOString(), totals,
     rows: [...rows.values()].sort((a, b) => MODULES.indexOf(a.module) - MODULES.indexOf(b.module) || b.seats - a.seats || a.model.localeCompare(b.model)),
     notes: M.statsNotes });
 }

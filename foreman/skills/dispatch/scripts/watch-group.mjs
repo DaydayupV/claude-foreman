@@ -8,7 +8,7 @@ import { describePlans } from './plan.mjs';
 import { M, die, sleep, oneLine, needsDecision, modelOf, textWidth, fitWidth, wrapWidth } from './util.mjs';
 import { D, C, termCols, termRows, visibleWidth, shortModel, modelLabel, moduleOf, taskLine, seatLine, identityLine, clock, outcomeStyle,
   changedFor, usageLine, foldText, paintPlanWord, replayCommand } from './format.mjs';
-import { liveCapable, interactive, listenKeys, stopKeys, liveScreen, splitKeys, scroller, LEAVE_SCREEN, kindOf, introWanted, introOf } from './watch-screen.mjs';
+import { liveCapable, interactive, listenKeys, stopKeys, liveScreen, readKeys, scroller, LEAVE_SCREEN, kindOf, introWanted, introOf } from './watch-screen.mjs';
 import { createTimeline, reviewConclusion, realErrors, durationOf, liveStatus, eventReader, wrapAtDots, hhmm } from './watch-timeline.mjs';
 import { introScene, playIntro } from './watch-intro.mjs';
 
@@ -264,7 +264,8 @@ async function watchGroup(group, o, loadCfg) {
   let runs;
   // 等待期间按 q 或 Ctrl+C 也要认：记下来，等完直接写汇总退出，不进画面
   let early = null;
-  const earlyKeys = (d) => { for (const k of splitKeys(d.toString('utf8'))) if (k === 'q' || k === '\x03') early = k === '\x03' ? 130 : 0; };
+  let keysHandler = (keys) => { for (const k of keys) if (k === 'q' || k === '\x03') early = k === '\x03' ? 130 : 0; };
+  const earlyKeys = readKeys((keys) => keysHandler(keys));
   const listenEarly = interactive();
   let settlingShown = false;
   if (listenEarly) listenKeys(earlyKeys);
@@ -472,9 +473,11 @@ async function watchGroup(group, o, loadCfg) {
       digits = '';
       clearTimeout(digitTimer);
     };
-    const onKeys = (d) => {
+    // 等待阶段和面板沿用读键状态，跨阶段到达的粘贴内容也不能变成快捷键。
+    const onKeys = earlyKeys;
+    keysHandler = (keys) => {
       const page = Math.max(1, termRows() - 4);
-      for (const k of splitKeys(d.toString('utf8'))) {
+      for (const k of keys) {
         if (k === '\x03' || k === 'q') { quit(k === '\x03' ? 130 : 0); return; }
         // 除了接着输入的数字，任何键都取消还在等第二位的席位号
         if (!/^[0-9]$/.test(k) || focus != null) { digits = ''; clearTimeout(digitTimer); }

@@ -61,6 +61,36 @@ test('结果和用量事件分开显示普通输入、缓存命中及写入，�
   }
 });
 
+test('续接累计量沿链还原基线，遇到缺轮次、不同会话或累计倒退时不归属', () => {
+  const record = (id, n, usage_scope, parent = null, session_id = 'same') => ({ id, tail: { state: {} },
+    meta: { parent, session_id, mode: parent ? 'resume' : 'exec' },
+    result: { usage_scope, usage: { input_tokens: n * 3, cached_input_tokens: n, cache_write_input_tokens: 0, output_tokens: n } } });
+  const first = record('first', 100, 'this_run'), middle = record('middle', 60, 'this_run', 'first');
+  const next = record('next', 230, 'session_total', 'middle');
+  const byId = new Map([first, middle, next].map((r) => [r.id, r]));
+  const message = () => runMessage(next, 'first', undefined, byId);
+  assert.deepEqual(message().usage, { input: 140, cached: 70, cache_write: 0, output: 70 });
+  assert.equal(message().usage_scope, 'this_run'); assert.equal(message().usage_unattributed, undefined);
+  byId.delete('first');
+  assert.equal(message().usage, null); assert.equal(message().usage_unattributed, true);
+  middle.result = record('middle', 160, 'session_total').result;
+  assert.equal(message().usage.output, 70);
+  middle.meta.session_id = 'different';
+  assert.equal(message().usage, null); assert.equal(message().usage_unattributed, true);
+  middle.meta.session_id = 'same'; next.result.usage.output_tokens = 150;
+  assert.equal(message().usage, null); assert.equal(message().usage_unattributed, true);
+});
+
+test('没有 parent 的 session_total 根轮次按零基线归属，有 parent 却缺祖先时仍不归属', () => {
+  const record = { id: 'root', meta: { model: 'model', agent_type: 'codex cli' }, tail: { state: {} },
+    result: { usage_scope: 'session_total', usage: { input_tokens: 300, cached_input_tokens: 100, cache_write_input_tokens: 0, output_tokens: 100 } } };
+  const root = runMessage(record, 'root');
+  assert.equal(root.usage_scope, 'this_run'); assert.equal(root.usage_unattributed, undefined);
+  assert.deepEqual(root.usage, { input: 200, cached: 100, cache_write: 0, output: 100 });
+  const missing = runMessage({ ...record, meta: { ...record.meta, parent: 'missing' } }, 'root', undefined, new Map());
+  assert.equal(missing.usage_scope, 'session_total'); assert.equal(missing.usage_unattributed, true); assert.equal(missing.usage, null);
+});
+
 test('streaming sources keep the latest count in each 400 ms window', () => {
   const state = {}, events = [];
   for (const [type, dt, n, phase] of [['api.reasoning', 0, 1], ['api.reasoning', 100, 20], ['api.reasoning', 399, 30], ['api.reasoning', 400, 40], ['api.content', 650, 50], ['pi.progress', 800, 60, 'thinking'], ['pi.progress', 900, 70, 'answer']]) {

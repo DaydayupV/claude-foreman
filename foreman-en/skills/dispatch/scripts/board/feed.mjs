@@ -86,7 +86,8 @@ export function normalize(raw, run, state) {
     const usage = raw.usage || {}, input = usage.input_tokens || 0, output = usage.output_tokens || 0;
     const u = usageOf(usage);
     emit('usage', { n: input + output, t: `${input}/${output}`, u: { in: u.input, cached: u.cached, cache_write: u.cache_write, out: u.output },
-      ...(raw.type === 'turn.completed' ? { tot: 1 } : {}), ...(raw.type === 'step.usage' && raw.final ? { end: 1 } : {}) });
+      ...(raw.type === 'turn.completed' ? { tot: 1 } : {}), ...(raw.type === 'step.usage' && raw.final ? { end: 1 } : {}),
+      ...(raw.usage_from != null ? { usage_from: ms(raw.usage_from), usage_to: ms(raw.usage_to) } : {}) });
   } else if (['api.error', 'turn.failed', 'error'].includes(raw.type)) emit('error', { t: raw.message ?? raw.error?.message ?? '' });
   else if (raw.type === 'image.generated' || raw.type === 'image.viewed') emit('image', { t: path.win32.basename(raw.path || '') });
   return out;
@@ -137,17 +138,41 @@ export function imagesOf(meta, result) {
   return [...new Set(out)].slice(0, 12);
 }
 
-export function runMessage(run, lane, prices) {
+export function runMessage(run, lane, prices, byId) {
   const m = run.meta, r = run.result, kind = m.module === 'image' ? 'image' : m.kind || (['discuss', 'review'].includes(m.mode) ? m.mode : 'exec');
   const message = { id: clip(run.id), lane: clip(lane), parent: clip(m.parent), kind, model: clip(m.model_shown || m.model) };
   for (const key of ['mode', 'agent', 'agent_type', 'level', 'effort', 'group', 'round', 'plan', 'seat', 'role', 'title', 'status']) message[key] = typeof m[key] === 'string' ? clip(m[key]) : m[key] ?? null;
   // 派出它的 Claude Code 对话：页面拿老格式的地址（只给组或任务）找到要飞进去的对话
   message.session = typeof m.claude_session === 'string' ? clip(m.claude_session) : null;
   if (m.participant === 'host') { message.kind = 'answer'; if (message.status === 'running') message.status = 'idle'; }
-  const usage = r?.usage ? usageOf(r.usage) : null, cost = costOf({ ...m, ...r }, prices);
+  let rawUsage = r?.usage, usage_scope = r?.usage_scope, usage_unattributed = false;
+  const cumulative = usage_scope === 'session_total';
+  if (rawUsage && cumulative) {
+    const baseline = {}, seen = new Set([run.id]);
+    let parent = m.parent, known = !parent;
+    // 只沿续接链还原累计基线；中间缺轮次时不能把会话总量冒充本轮增量。
+    while (parent && byId?.has(parent) && !seen.has(parent)) {
+      seen.add(parent);
+      const previous = byId.get(parent), u = previous.result?.usage;
+      if (u?.output_tokens == null || (m.session_id && previous.meta.session_id && m.session_id !== previous.meta.session_id)) break;
+      for (const [key, value] of Object.entries(u)) baseline[key] = (baseline[key] || 0) + (value || 0);
+      const scope = previous.result.usage_scope;
+      if (scope === 'session_total' || !previous.meta.parent) { known = true; break; }
+      if (scope !== 'this_run') break;
+      parent = previous.meta.parent;
+    }
+    const delta = Object.fromEntries(Object.entries(rawUsage).map(([key, value]) => [key, value == null ? null : value - (baseline[key] || 0)]));
+    usage_unattributed = !known || rawUsage.output_tokens == null || Object.values(delta).some((n) => n < 0);
+    rawUsage = usage_unattributed ? null : delta;
+    if (!usage_unattributed) usage_scope = 'this_run';
+  }
+  const usage = rawUsage ? usageOf(rawUsage) : null;
+  const cost = costOf({ ...m, ...r, usage: rawUsage, usage_scope,
+    ...(cumulative ? { cost_source: undefined } : {}) }, prices);
   const head = kind === 'discuss' ? r?.report?.position ?? first(r?.last_message) : kind === 'review' ? r?.report && `${r.report.verdict} · ${(r.report.findings || []).length} findings` : ['exec', 'image'].includes(kind) ? r?.report?.summary ?? first(r?.last_message) : null;
   return { ...message, started_at: ms(m.started_at), ended_at: ms(m.ended_at), duration_s: r?.duration_s ?? null,
-    usage, ...costFields(cost.cost_usd, cost.cost_source), report_head: head ? String(head).slice(0, 160) : null,
+    usage, ...(r?.usage_scope != null ? { usage_scope } : {}), ...(usage_unattributed ? { usage_unattributed: true } : {}),
+    ...costFields(cost.cost_usd, cost.cost_source), report_head: head ? String(head).slice(0, 160) : null,
     changed: (r?.changes?.files || []).slice(0, 40).map((f) => Object.fromEntries(['path', 'kind', 'added', 'removed'].filter((k) => k in f).map((k) => [k, f[k]]))),
     review: kind === 'review' && r?.report ? { verdict: clip(r.report.verdict, 120),
       // 审查报告的字段名见 foreman 的 review.schema.json：位置是 location，问题是 issue
@@ -434,7 +459,7 @@ export function createFeed(root, options = {}) {
     const runs = [], events = [], versions = {}, revisions = {};
     for (const run of selected.runs) {
       run.lane = laneOf(run, cache); readTail(run, now, onEvent && ((raw) => onEvent(run, raw)));
-      const message = runMessage(run, run.lane, options.prices); runs.push(message); versions[run.id] = run.tail.version;
+      const message = runMessage(run, run.lane, options.prices, cache); runs.push(message); versions[run.id] = run.tail.version;
       revisions[run.id] = `${run.signatures.meta}:${run.signatures.result}`;
       const history = [{ run: run.id, lane: run.lane, ts: message.started_at, k: 'start', t: clip(message.kind) }, ...run.tail.events.map((e) => ({ ...e, lane: run.lane }))];
       if (message.ended_at != null) history.push({ run: run.id, lane: run.lane, ts: message.ended_at, k: 'end', t: clip(message.status) });

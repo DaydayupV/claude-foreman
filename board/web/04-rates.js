@@ -30,6 +30,7 @@ function loadFinals() {
 
 // 用量统一成 { input(未命中缓存), cached, cache_write, output }；v1 的 input 含缓存部分
 function usageOf(r) {
+  if (r?.usage_unattributed) return null;
   const u = r && r.usage;
   if (!u) return null;
   if ('cache_write' in u) return { input: u.input || 0, cached: u.cached || 0, cache_write: u.cache_write || 0, output: u.output || 0 };
@@ -57,8 +58,9 @@ function commandSpans(events) {
 
 // 一条车道的输出分段：[{ a, b, tokens }]，a/b 是记录时间（毫秒）
 function segments(lane) {
-  const events = FINAL_EV.get(lane.id) || lane.events;
-  const outputs = new Map(lane.runs.map((r) => [r.id, FINAL.get(r.id)?.usage?.output ?? (r.ended_at != null ? r.usage?.output : null)]));
+  const live = B.clock.mode === 'live';
+  const events = FINAL_EV.get(lane.id) || (live ? lane.rate_events ?? lane.events : lane.events);
+  const outputs = new Map(lane.runs.map((r) => [r.id, r.usage_unattributed ? 0 : FINAL.get(r.id)?.usage?.output ?? (r.ended_at != null ? r.usage?.output : null)]));
   const outputKey = JSON.stringify([...outputs]);
   // 分段还依赖车道上的任务（续接的任务会陆续出现），任务数变了也要重算
   const ver = `${FINAL_EV.has(lane.id) ? events.length : (lane.ver || 0)}|${lane.runs.length}`;
@@ -73,8 +75,13 @@ function segments(lane) {
     else if (ev.k === 'usage' && !ev.tot && ev.u?.out != null) stepTurns.add(`${ev.run}:${turns.get(ev.run) || 0}`);
   }
   turns.clear();
-  const usageEnds = new Map(events.filter((e) => e.k === 'usage' && e.u?.out != null).map((e) => [e.run, e.ts]));
+  const usageEnds = new Map(events.filter((e) => e.k === 'usage' && e.u?.out != null).map((e) => [e.run, live ? e.usage_to ?? e.ts : e.ts]));
   const commands = commandSpans(events);
+  const byRun = new Map();
+  for (const ev of events) if (ev.k !== 'usage') {
+    if (!byRun.has(ev.run)) byRun.set(ev.run, []);
+    byRun.get(ev.run).push(ev);
+  }
   const counted = new Map(); // run id → 已经由分段用量或字数算到的 token
   const starts = new Map(lane.runs.map((r) => [r.id, r.started_at]));
   // 按任务内事件的空档摊开，去掉命令时间后，单个空档最多算 GAP_MAX。
@@ -83,7 +90,12 @@ function segments(lane) {
   const spread = (run, a, b, tokens, est) => {
     if (!(tokens > 0) || !(b > a)) return;
     counted.set(run, (counted.get(run) || 0) + tokens);
-    const times = [a, ...events.filter((e) => e.run === run && e.k !== 'usage' && e.ts > a && e.ts < b).map((e) => e.ts), b];
+    // 按任务分桶并直接定位区间，长会话不能为每份用量重新扫描全部历史。
+    const own = byRun.get(run) || [], times = [a];
+    let lo = 0, hi = own.length;
+    while (lo < hi) { const mid = (lo + hi) >>> 1; if (own[mid].ts <= a) lo = mid + 1; else hi = mid; }
+    for (let i = lo; i < own.length && own[i].ts < b; i++) times.push(own[i].ts);
+    times.push(b);
     const gaps = [];
     for (let i = 1; i < times.length; i++) if (times[i] > times[i - 1]) gaps.push({ b: times[i], w: Math.min(times[i] - times[i - 1], GAP_MAX) });
     let active = gaps.filter((g) => !(commands.get(run) || []).some((c) => c.a < g.b && c.b > g.b - g.w));
@@ -100,20 +112,21 @@ function segments(lane) {
       if (ev.tot && stepTurns.has(`${ev.run}:${turns.get(ev.run) || 0}`)) continue;
       const before = counted.get(ev.run) || 0, limit = outputs.get(ev.run);
       const tokens = ev.tot ? Math.max(0, Math.min(ev.u.out - (turnUsage.get(ev.run) || 0), limit == null ? Infinity : limit - before)) : ev.u.out;
-      const prev = lastUsage.get(ev.run) ?? (lane.id === 'cc' ? ev.ts - 20000 : starts.get(ev.run) ?? ev.ts - 20000);
+      const end = live ? ev.usage_to ?? ev.ts : ev.ts;
+      const prev = lastUsage.get(ev.run) ?? (live ? ev.usage_from : null) ?? (lane.id === 'cc' ? end - 20000 : starts.get(ev.run) ?? end - 20000);
       const previous = usageSegs.get(ev.run);
-      if (tokens > 0 && ev.ts <= prev && previous?.length) {
+      if (tokens > 0 && end <= prev && previous?.length) {
         // 同时收到的用量共用上一份生成区间，不能丢 token 或制造极短分段。
         const duration = previous.reduce((n, s) => n + s.b - s.a, 0);
         for (const s of previous) s.tokens += tokens * (s.b - s.a) / duration;
         counted.set(ev.run, before + tokens);
       } else {
-        const at = segs.length, from = ev.ts <= prev ? starts.get(ev.run) ?? ev.ts - 20000 : prev;
-        spread(ev.run, lane.id === 'cc' ? Math.max(from, ev.ts - SEG_MAX) : from, ev.ts, tokens, false);
+        const at = segs.length, from = end <= prev ? starts.get(ev.run) ?? end - 20000 : prev;
+        spread(ev.run, lane.id === 'cc' ? Math.max(from, end - SEG_MAX) : from, end, tokens, false);
         if (segs.length > at) usageSegs.set(ev.run, segs.slice(at));
       }
       turnUsage.set(ev.run, (turnUsage.get(ev.run) || 0) + (counted.get(ev.run) || 0) - before);
-      lastUsage.set(ev.run, Math.max(lastUsage.get(ev.run) ?? ev.ts, ev.ts));
+      lastUsage.set(ev.run, Math.max(lastUsage.get(ev.run) ?? end, end));
     } else if ((ev.k === 'think' || ev.k === 'answer') && ev.n != null) {
       const key = `${ev.run}:${ev.k}`, prev = lastChars[key];
       // 用量覆盖此前的字数估算，跨过用量边界的字数也不带到下一段。
@@ -149,11 +162,11 @@ function rateSample(lane, runs, t) {
 // 直播在最近一份用量之后只补速度，不回填分段、总量或平均速度。
 function liveRate(lane, t, win = WINDOW) {
   if (B.clock.mode !== 'live' || B.clock.frozenAt != null || lane.id === 'cc') return 0;
-  const commands = commandSpans(lane.events);
+  const rateEvents = lane.rate_events ?? lane.events, commands = commandSpans(rateEvents);
   let rate = 0;
   for (const r of lane.runs) {
     if (r.status !== 'running' || r.started_at > t || (r.ended_at != null && r.ended_at <= t)) continue;
-    const events = lane.events.filter((e) => e.run === r.id);
+    const events = rateEvents.filter((e) => e.run === r.id);
     const at = events.findLastIndex((e) => e.k === 'turn'), turn = events[at], usage = events.findLast((e) => e.k === 'usage' && e.u?.out != null);
     // 结束标记可能不在末条用量，迟到的分段不能重新开启估速。
     if (!turn || events.slice(at + 1).some((e) => e.k === 'usage' && (e.tot || e.end))) continue;
@@ -200,10 +213,11 @@ function sparkline(lane, t, span = 120000, n = 40) {
 // 一条车道到时刻 t 的统计：已结束的任务用最终用量，进行中的按分段估到 t
 function laneStats(lane, t) {
   const sum = { input: 0, cached: 0, cache_write: 0, output: 0 };
-  let cost = 0, costKnown = false, costPartial = false, est = false;
+  let cost = 0, costKnown = false, costPartial = false, est = false, usage_unattributed = false;
   let gen = 0, first = null, last = null, running = false;
   for (const r of lane.runs) {
     if (r.started_at > t) continue;
+    if (r.usage_unattributed) usage_unattributed = true;
     first = Math.min(first ?? r.started_at, r.started_at);
     const ended = r.ended_at != null && r.ended_at <= t;
     last = Math.max(last ?? 0, ended ? r.ended_at : t);
@@ -223,18 +237,31 @@ function laneStats(lane, t) {
   let liveOut = 0;
   for (const s of segments(lane)) {
     if (s.a >= t) break;
-    const runOpen = lane.runs.some((r) => r.started_at <= s.b && (r.ended_at == null || r.ended_at > t));
+    const runOpen = lane.runs.some((r) => (B.clock.mode !== 'live' || r.id === SEG_RUN.get(s)) && r.started_at <= s.b && (r.ended_at == null || r.ended_at > t));
     if (!runOpen) continue;
     liveOut += (s.tokens * (Math.min(s.b, t) - s.a)) / (s.b - s.a);
     if (s.est) est = true;
   }
-  for (const s of segments(lane)) { if (s.a >= t) break; gen += Math.min(s.b, t) - s.a; if (s.est) est = true; }
+  const covered = new Map();
+  for (const s of segments(lane)) {
+    if (s.a >= t) break;
+    const ms = Math.min(s.b, t) - s.a, run = SEG_RUN.get(s);
+    gen += ms; covered.set(run, (covered.get(run) || 0) + s.tokens * ms / (s.b - s.a));
+    if (s.est) est = true;
+  }
   const hostLive = lane.runs.some((r) => r.kind === 'host');
   const out = sum.output + (running && !hostLive ? liveOut : 0);
+  // 最终输出没有完整分段时，不能拿总输出除以局部生成时长。
+  // Claude Code 的同消息用量会原位修订，未替换的事件只用于估时，不能据此判覆盖失败。
+  const complete = B.clock.mode !== 'live' || lane.id === 'cc' || lane.runs.every((r) => {
+    if (r.started_at > t || !(r.ended_at != null && r.ended_at <= t || r.kind === 'host')) return true;
+    const u = usageOf(r), tokens = covered.get(r.id) || 0;
+    return u ? Math.abs(u.output - tokens) <= 1e-6 * Math.max(1, u.output) : tokens === 0;
+  });
   if (liveRate(lane, t) > 0) est = true;
   return {
-    ...sum, output: out, cost: costKnown ? cost : null, costPartial, est, running,
-    rate: rateAt(lane, t), avg: gen > 0 ? out / (gen / 1000) : null,
+    ...sum, output: usage_unattributed ? null : out, usage_unattributed, cost: costKnown ? cost : null, costPartial, est, running,
+    rate: rateAt(lane, t), avg: gen > 0 && complete && !usage_unattributed ? out / (gen / 1000) : null,
     elapsed: first != null ? (last - first) / 1000 : 0,
   };
 }

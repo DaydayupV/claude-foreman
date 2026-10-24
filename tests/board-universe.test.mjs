@@ -164,7 +164,7 @@ test('run summaries cap at 16 / ten minutes, omit host, count the window, dedupl
   assert.equal(s.runs.some((r) => Object.hasOwn(r, 'report_head')), false);
 });
 
-test('费用摘要只汇总 API 价格，旧来源重新计价，累计用量留为未知', (t) => {
+test('费用摘要只汇总 API 价格，旧来源重新计价，缺基线的累计用量留为未知', (t) => {
   const f = temp(t);
   f.session('s', [answer(now - 30000, { usage: { input_tokens: 100, cache_read_input_tokens: 200, cache_creation_input_tokens: 30, output_tokens: 40 } })]);
   f.run('reported', {}, 2);
@@ -173,7 +173,8 @@ test('费用摘要只汇总 API 价格，旧来源重新计价，累计用量留
   f.write(path.join(f.options.runs, 'api/result.json'), { status: 'done', usage: { input_tokens: 100, cached_input_tokens: 20, output_tokens: 40 }, usage_scope: 'this_run' });
   f.run('subscription', { agent_type: 'codex cli' }, 5);
   f.write(path.join(f.options.runs, 'subscription/result.json'), { status: 'done', cost_usd: 5, cost_source: 'subscription', usage: { input_tokens: 100, cached_input_tokens: 20, output_tokens: 40 } });
-  f.run('cumulative', { agent_type: 'codex cli', model: 'gpt-6-demo' }, null);
+  // 续接的父任务已经不在：会话累计量扣不出这一轮的增量，费用算不出（没有父任务的根轮次按零基线换算，见 board-feed 的测试）
+  f.run('cumulative', { agent_type: 'codex cli', model: 'gpt-6-demo', parent: 'gone-parent' }, null);
   f.write(path.join(f.options.runs, 'cumulative/result.json'), { status: 'done', usage: { input_tokens: 100, output_tokens: 40 }, usage_scope: 'session_total' });
   f.run('host', { participant: 'host' }, null);
   const summary = createUniverse(f.options).read().sessions[0];

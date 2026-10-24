@@ -207,16 +207,18 @@ test('stats 只有 API 费用总额，累计和仅自报费用计缺失，主持
 
 test('看板老来源重新计价，新来源保留，不输出自报和拆分费用', () => {
   const run = { id: 'synthetic', meta: { ...base, usage: null }, tail: { state: {} } };
-  for (const [result, source, cost] of [
+  for (const [result, source, cost, meta = {}] of [
     [{ usage, usage_scope: 'this_run' }, 'api_price', 2.62],
     [{ agent_type: 'api', usage, usage_scope: 'this_run' }, 'api_price', 2.62],
     [{ agent_type: 'opencode cli', cost_usd: 0.25 }, 'unknown', null],
-    [{ usage, usage_scope: 'session_total' }, 'unknown', null],
+    // 没有父任务的根轮次：会话累计量就是这一轮的用量；父任务已经不在的续接扣不出增量，费用未知
+    [{ usage, usage_scope: 'session_total' }, 'api_price', 2.62],
+    [{ usage, usage_scope: 'session_total' }, 'unknown', null, { parent: 'gone-parent' }],
     [{ cost_source: 'api', cost_usd: 7 }, 'unknown', null],
     [{ cost_source: 'api', cost_usd: 7, usage }, 'api_price', 2.62],
     [{ cost_source: 'api_price', cost_usd: 7 }, 'api_price', 7],
   ]) {
-    const message = runMessage({ ...run, result: { ...result, reported_cost_usd: 99 } }, run.id, prices);
+    const message = runMessage({ ...run, meta: { ...run.meta, ...meta }, result: { ...result, reported_cost_usd: 99 } }, run.id, prices);
     assert.equal(message.cost_source, source); assert.equal(message.cost_usd, cost);
     assert.equal(Object.hasOwn(message, 'cost_paid_usd'), false);
     assert.equal(Object.hasOwn(message, 'cost_subscription_usd'), false);

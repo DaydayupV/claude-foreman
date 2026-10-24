@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { RUNS_ROOT, requestCancel, listRuns, findRun, readMeta, checkRunners, isRunning } from './records.mjs';
 import { M, die, sleep, clip, oneLine, plainCommand, RECONNECT, modelOf, agentTypeOf, fitWidth, textWidth } from './util.mjs';
 import { D, C, termCols, termRows, shortModel, fullModel, modelLabel, taskLine, identityLine, clock, outcomeStyle, changedFor, usageLine, commandAction } from './format.mjs';
-import { liveCapable, interactive, listenKeys, stopKeys, liveScreen, splitKeys, scroller, LEAVE_SCREEN, kindOf, introWanted, introOf } from './watch-screen.mjs';
+import { liveCapable, interactive, listenKeys, stopKeys, liveScreen, readKeys, scroller, LEAVE_SCREEN, kindOf, introWanted, introOf } from './watch-screen.mjs';
 import { createTimeline, reviewConclusion, resultOutcome, durationOf, finishedParts, liveStatus, eventReader, hhmm } from './watch-timeline.mjs';
 import { introScene, playIntro } from './watch-intro.mjs';
 import { watchGroup } from './watch-group.mjs';
@@ -251,9 +251,9 @@ function singleView(meta, tl, dir, latest) {
     process.stdout.write(`${C.dim(D.watchDetached)}\n`);
     process.exit(code);
   };
-  function onKeys(d) {
+  const onKeys = readKeys((keys) => {
     const page = Math.max(1, termRows() - 5);
-    for (const k of splitKeys(d.toString('utf8'))) {
+    for (const k of keys) {
       if (k === '\x03' || k === 'q') { quit(k === '\x03' ? 130 : 0); return; }
       if ((k === 'n' || k === 'N') && next && !following) { follow(); return; }
       // 排队时按 x 终止：第一次按要求确认，第二次才写终止标记
@@ -266,7 +266,7 @@ function singleView(meta, tl, dir, latest) {
       sc.key(k, page);
     }
     screen.draw();
-  }
+  });
   const start = () => {
     if (started) return;
     started = true;

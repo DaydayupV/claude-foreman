@@ -33,6 +33,10 @@ const TEXTS = {
     backToUniverse: '回到所有对话（Esc）',
     conversations: (n) => `${n} 个对话`,
     costTitle: '根据模型官方 API 价格计算（插件自带的价格表），和实际扣费不一定相同；+ 表示有的模型不在价格表里，这部分没算进去',
+    nowTitle: '近 10 秒的估算，可能借用同一模型之前的样本',
+    recentTitle: '近 2 分钟的速度曲线（估算）：每个点是约 6 秒内的输出 token 除以这段时间；运行中可能借用实时估速',
+    genAvgTitle: '本席各轮累计输出 ÷ 估算的生成时长；已扣掉能识别的跑命令时段，仍可能含等待和读文件的时间',
+    usageUnattributed: '用量无法归属到本轮：缺少可信的续接累计基线',
     emptyList: (h) => `最近 ${h} 小时没有派发过任务的对话。派发之后会出现在这里。`,
     slotsTitle: '名额',
     shell: {
@@ -73,6 +77,10 @@ const TEXTS = {
     backToUniverse: 'Back to all conversations (Esc)',
     conversations: (n) => `${n} ${n === 1 ? 'conversation' : 'conversations'}`,
     costTitle: "Computed from each model's official API price (the plugin's price table); may differ from what you're actually charged. + means some models aren't in the table and weren't counted",
+    nowTitle: 'Estimate over the last 10 seconds; may borrow earlier samples of the same model',
+    recentTitle: 'Speed over the last 2 minutes (estimated): each point is the output tokens in about 6 seconds divided by that time; while running it may use the live estimate',
+    genAvgTitle: "This seat's total output ÷ estimated generation time; command time that can be recognised is excluded, waiting and file reads may remain",
+    usageUnattributed: 'Usage cannot be attributed to this run: a reliable continuation baseline is missing',
     emptyList: (h) => `No conversation has dispatched work in the last ${h} hours. New ones show up here.`,
     slotsTitle: 'Slots',
     shell: {

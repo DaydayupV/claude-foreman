@@ -114,6 +114,10 @@ function scopeOptions(values) {
 }
 const hello = (data, now) => ({ v: 3, mode: 'live', scope: data.scope, now, replay: null });
 const backlog = (events) => events.length <= 200 ? events : events.some((ev) => ev.k === 'start') ? [events.find((ev) => ev.k === 'start'), ...events.filter((ev) => ev.k !== 'start').slice(-199)] : events.slice(-200);
+const RATE_EVENTS_MAX = 20000;
+// 展示截断不能截掉统计分母；统计历史只发计算需要的字段，上限与页面一致。
+const rateHistory = (events) => events.slice(-RATE_EVENTS_MAX).map(({ run, ts, k, u, n, tot, end, usage_from, usage_to }) =>
+  ({ run, ts, k, u, n, tot, end, usage_from, usage_to }));
 
 function replaySessions(target, root, claudeDir) {
   if (target === 'all') return undefined;
@@ -196,7 +200,7 @@ async function main() {
       const keyOf = (ev) => ev.messageId || JSON.stringify({ ...ev, target: undefined });
       const links = run.id === 'cc' ? new Map(events.map((ev) => [keyOf(ev), ev.target])) : null;
       // 记录被从头重读了（文件被替换、截短后重写，版本变了）：整份重发并让页面先清掉这个任务的旧事件，不能把新旧两份叠在一起
-      if (!previous || previous.version !== version) send(client, 'backlog', { run: run.id, events: backlog(events), ...(previous ? { reset: true } : {}) });
+      if (!previous || previous.version !== version) send(client, 'backlog', { run: run.id, events: backlog(events), rate_events: rateHistory(events), ...(previous ? { reset: true } : {}) });
       else if (links) for (const ev of events) {
         const key = keyOf(ev);
         if (!previous.links.has(key)) send(client, 'ev', ev);
@@ -318,7 +322,8 @@ async function main() {
         const t = url.searchParams.has('t') ? Number(url.searchParams.get('t')) : Infinity;
         if (replay && (!Number.isFinite(t) && t !== Infinity || t < 0)) return end(400);
         const snapshot = replay ? snapshotAt(replay, t) : { hello: hello(data, opened), runs: data.runs,
-          events: data.runs.flatMap((run) => backlog(data.events.filter((ev) => ev.run === run.id))) };
+          events: data.runs.flatMap((run) => backlog(data.events.filter((ev) => ev.run === run.id))),
+          rate_events: data.runs.flatMap((run) => rateHistory(data.events.filter((ev) => ev.run === run.id))) };
         return end(200, 'application/json', JSON.stringify(snapshot));
       }
       res.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive' }); res.flushHeaders();

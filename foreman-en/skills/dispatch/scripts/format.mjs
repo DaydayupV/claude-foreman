@@ -107,7 +107,8 @@ function usageLine(result, meta) {
   const cost = costOf({ ...meta, ...result }, loadPrices());
   return [result?.usage ? D.tokenSummary(result.usage, result.last_request ?? result.context, D.tokenCount,
     (result.usage_scope ?? (meta?.mode === 'resume' ? 'session_total' : 'this_run')) === 'session_total') : '',
-  result?.output_tokens_per_s != null ? D.outputSpeed(result.output_tokens_per_s) : '',
+  // 取消、超时、卡死的轮次只记到最后一次完成的请求，速度偏低，标出来
+  result?.output_tokens_per_s != null ? D.outputSpeed(result.output_tokens_per_s, ['cancelled', 'timeout', 'stalled'].includes(result.status)) : '',
   cost.cost_usd != null && cost.cost_source !== 'unknown' ? D.costUsd(formatUsd(cost.cost_usd)) : ''].filter(Boolean).join(' · ');
 }
 

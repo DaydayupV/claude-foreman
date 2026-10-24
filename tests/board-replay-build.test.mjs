@@ -49,8 +49,9 @@ test('replay output matches SHA256 captured from the original fixture implementa
     timeline: 'dd05a625e22f2694ae5b60f5e4c0803f7ac69a1d5db900f662be2cd87605a467',
     clock: '894339a63063571c0eb39a67791ad95186278ce186ac0f01ad4a47bbcec7f7a5',
     detail: '97fdacb19bec3ad255bab55f7094aa1dc29ef664b28d26a5a56e02c6183d5600',
-    buildReplay: 'b032f0169aa69d1a520fc0e9a686671bf03286c0610bd2c4ba980bd73c7c02a2',
-    snapshots: '413e3893826e4392ee7946a2bad889444d8f670e6dba3432b2a689b45b4db6ce',
+    // run 消息加了 usage_scope（看板换算续接累计用量用），只多这一个字段，别的输出没变（和改前逐行比对过）
+    buildReplay: '8a354e29a59dd2ac3c777501f0bed58e5bdf61549634a1709e2961d057c48659',
+    snapshots: '3359cbeb03ad2acafc1fefab4d28243528ea8d92522766e3e10b70c3129e0383', // 取自上面同一批 run 消息，原因相同
   });
 });
 

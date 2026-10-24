@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { CLAUDE_SESSION, registerRun, concurrentExecRuns, absolute, isCancelled, cancelSource, saveMeta, metaWriteWarning } from './records.mjs';
+import { RUNS_ROOT, CLAUDE_SESSION, registerRun, concurrentExecRuns, absolute, isCancelled, cancelSource, saveMeta, metaWriteWarning, readMeta } from './records.mjs';
 import { makeTracker } from './tracker.mjs';
 import { computeReviewMaterial } from './review-scope.mjs';
 import { M, die, notice, relativePath, pathKey, modelOf, replaceFile, killTree, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision } from './util.mjs';
@@ -141,11 +141,14 @@ function finishRun(run, result, code = result.exit_code, observed = {}) {
       if (result.stale) result.warnings.push(M.reviewScopeChanged);
     }
   }
-  // 取消时只记得到已经完成的请求的用量：正在进行的那次请求，厂商不报用量。一次都没完成时记为 null，不写成 0。
-  if (result.status === 'cancelled') {
+  // 超过总时限：先写明原因，免得把 stderr 里别的报错（比如 MCP 连接失败）当成失败原因
+  if (result.status === 'timeout') result.errors.unshift(M.timedOut(runLimits(run.ctx, 0).timeoutMin));
+  // 取消和超时都只记得到已经完成的请求的用量：正在进行的那次请求，厂商不报用量。一次都没完成时记为 null，不写成 0。
+  if (['cancelled', 'timeout'].includes(result.status)) {
     const spent = !!result.usage && Object.values(result.usage).some((n) => n > 0);
     if (!spent) Object.assign(result, { usage: null, usage_scope: null });
-    result.notes.push(spent ? M.cancelledUsagePartial : M.cancelledUsageMissing);
+    const cancelled = result.status === 'cancelled';
+    result.notes.push(spent ? (cancelled ? M.cancelledUsagePartial : M.timeoutUsagePartial) : (cancelled ? M.cancelledUsageMissing : M.timeoutUsageMissing));
   }
   Object.assign(result, costOf({ ...run.meta, ...result }, loadPrices()));
   // 平均输出速度按这一轮的整段时间算（含跑命令和等待），只用这一轮自己的用量：会话累计量除以这一轮的时长没有意义。
@@ -293,7 +296,8 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
     let incomplete = false;
     const unstableFiles = [];
     const noteUnstable = (snap, phase) => {
-      incomplete ||= snap.incomplete;
+      // changes.incomplete 只表示拍快照用完了 60 秒；拍不稳的文件另列在 unstable_files（只读审计照样按快照不完整处理）
+      incomplete ||= snap.timed_out;
       if (snap.timed_out) notes.push(M.snapshotDeadlineNote(phase));
       if (!snap.unstable.length) return;
       unstableFiles.push(...snap.unstable.map((path) => ({ path, phase })));
@@ -395,12 +399,25 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
     const otherRuns = tracked.some((f) => f.by === 'unknown') ? concurrentExecRuns(meta, concurrentAtStart) : [];
     const ownRoots = [...opts.scope, ...track].map((root) => absolute(cwd, root));
     const ambiguous = [];
+    // 同一席的几轮（续接、同一计划同一席重启）算一个任务：原轮和续接轮的范围一样，不能因为"有两个任务都覆盖"就判成分不清
+    // 一次收尾里别的任务是固定的：按 run id 记下链头，文件多时不用一遍遍读同一批 meta.json
+    const chains = new Map();
+    const chainOf = (r) => {
+      if (r.meta.plan != null && r.meta.seat != null) return `${r.meta.plan}:${r.meta.seat}`;
+      if (!chains.has(r.id)) {
+        let id = r.id;
+        for (let parent = r.meta.parent, hops = 0; parent && hops < 100; hops++) { id = parent; parent = readMeta(path.join(RUNS_ROOT, parent))?.parent; }
+        chains.set(r.id, id);
+      }
+      return chains.get(r.id);
+    };
     const ownerOf = (file) => {
       const a = absolute(cwd, file);
       const owners = otherRuns.filter((r) => (r.meta.scope || []).some((s) => { const b = absolute(r.meta.cwd, s); return a === b || a.startsWith(`${b}/`); }));
       if (!owners.length) return null;
-      if (owners.length > 1 || ownRoots.some((root) => a === root || a.startsWith(`${root}/`))) { ambiguous.push(file); return null; }
-      return owners[0].id;
+      if (new Set(owners.map(chainOf)).size > 1 || ownRoots.some((root) => a === root || a.startsWith(`${root}/`))) { ambiguous.push(file); return null; }
+      // 记到这一席最新的一轮上
+      return owners.reduce((latest, r) => (r.id > latest.id ? r : latest)).id;
     };
     const groupOwned = tracked.filter((f) => f.by === 'unknown').map((f) => ({ f, owner: ownerOf(relativePath(cwd, f.path)) })).filter((x) => x.owner);
     for (const { f, owner } of groupOwned) f.group_run = owner;
@@ -421,7 +438,8 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
     const trackedKeys = tracked.map((f) => pathKey(relativePath(cwd, f.path)));
     const untracked = [...new Map(claims.filter((c) => !c.root && !trackedKeys.includes(c.key) && !(c.dir && trackedKeys.some((k) => k.startsWith(`${c.key}/`))))
       .map((c) => [c.key, c.rel])).values()];
-    if (untracked.length) notes.push(M.reportedNotTracked(untracked));
+    // 没有快照（--no-snapshot、拍快照失败）时谈不上"两次快照之间没变"，换一种说法
+    if (untracked.length) notes.push(changes.available ? M.reportedNotTracked(modelShown, untracked) : M.reportedNoSnapshot(modelShown, untracked));
 
     if (kind === 'exec' && ctx.module !== 'image' && r.images.length) warnings.push(M.imageOutsideModule);
     if (ctx.module === 'image' && ctx.cell === 'draw') {
@@ -467,7 +485,7 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
       const date = quotaResetsAt && new Date(quotaResetsAt);
       const pad = (n) => String(n).padStart(2, '0');
       const local = date && `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-      r.errors.push(M.quotaExhausted(local));
+      r.errors.push(M.quotaExhausted(modelShown, local));
     }
 
     const result = {

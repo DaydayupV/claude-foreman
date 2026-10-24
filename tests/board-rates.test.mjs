@@ -278,7 +278,7 @@ test('events beyond the 600-event limit refresh cached rates, output and average
   assert.equal(l.events.length, 600); assert.equal(l.ver, 601); assert.equal(l.events[0].ts, 1000);
   assert.notEqual(b.segments(l), cached); assert.equal(l.segsAt, `${l.ver}|${l.runs.length}`);
   const after = b.laneStats(l, 600000);
-  near(after.rate, 10.9); near(after.output, 698); near(after.avg, 698 / 599);
+  near(after.rate, 10.9); near(after.output, 699); near(after.avg, 699 / 600);
 });
 
 test('final replay events continue to cache by length rather than the live event counter', () => {

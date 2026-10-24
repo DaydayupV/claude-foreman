@@ -218,8 +218,12 @@ export function createUniverse(options) {
       run.message = null;
       runs.set(id, run);
     }
-    return [...runs.values()].map((run) => run.message ??= { ...runMessage(run, laneOf(run, runs), options.prices),
-      session: run.meta.claude_session, host: run.meta.participant === 'host', since: run.tail.state.since ?? null });
+    return [...runs.values()].map((run) => {
+      // 基线结果可能迟到，累计用量不能沿用缺基线时缓存的消息。
+      if (run.result?.usage_scope === 'session_total') run.message = null;
+      return run.message ??= { ...runMessage(run, laneOf(run, runs), options.prices, runs),
+        session: run.meta.claude_session, host: run.meta.participant === 'host', since: run.tail.state.since ?? null };
+    });
   };
   const read = (now = options.now?.() ?? Date.now()) => {
     const cutoff = now - hours * 3600000, found = new Set(), older = new Map();
