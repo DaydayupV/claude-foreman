@@ -9,6 +9,8 @@ import { M, die, isObject, readAttachments, MAX_MATERIAL_CHARS, modelOf } from '
 import { reviewPatchText } from '../review-scope.mjs';
 import { D, modelLabel } from '../format.mjs';
 
+export const API_BRIEF_RESERVE = 20000;
+
 // 回答和报错里出现 key 时打码。key 太短时不替换，否则会把正文里的普通字母也换掉，弄坏 JSON 报告。
 const redactKey = (s, key) => (key && key.length >= 8 ? s.replaceAll(key, '[REDACTED]') : s);
 
@@ -30,6 +32,21 @@ const apiKeyOf = (agent) => (agent.api_key ? { key: agent.api_key, source: 'conf
 
 const readonlyLevel = (agent, kind) => 'tools';
 
+// 建计划和启动共用完整审查提示，避免材料能放下但包装后超限。
+export function apiReviewPrompt({ cwd, target, scope, brief, files, parent }) {
+  let prompt = `${target === 'diff' && !scope ? M.reviewPromptPlain(cwd) : M.apiReviewPrompt[target](scope?.description)}\n\n${brief}`, material;
+  if (scope?.target === 'diff') {
+    material = reviewPatchText(scope, { budget: MAX_MATERIAL_CHARS, readsFiles: false });
+    prompt += `\n\n${M.reviewMaterial(material.fileList, material.patch, material.fence, material.note)}`;
+  }
+  if (!parent || files.length) {
+    const git = spawnSync('git', ['ls-files', '-z'], { cwd, encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+    const list = git.status === 0 ? git.stdout.split('\0').filter(Boolean) : [];
+    if (list.length || files.length) prompt += `\n\n${M.apiMaterials(list.slice(0, 300).join('\n'), list.length, files)}`;
+  }
+  return { prompt, material };
+}
+
 async function executeApi(ctx) {
   const { cfg, agentName, agent, model, effort, level, cwd, brief, mode, opts } = ctx;
   const apiKey = apiKeyOf(agent).key;
@@ -46,20 +63,15 @@ async function executeApi(ctx) {
   }
   const files = readAttachments(opts.file, cwd, true);
   let prompt = brief, material;
-  if (review) {
-    prompt = `${target === 'diff' && !scope ? M.reviewPromptPlain(cwd) : M.apiReviewPrompt[target](scope?.description)}\n\n${brief}`;
-    if (scope?.target === 'diff') {
-      material = reviewPatchText(scope, { budget: MAX_MATERIAL_CHARS, readsFiles: false });
-      prompt += `\n\n${M.reviewMaterial(material.fileList, material.patch, material.fence, material.note)}`;
-    }
-  }
-  if (!ctx.parent || files.length) {
+  if (review) ({ prompt, material } = apiReviewPrompt({ cwd, target, scope, brief, files, parent: ctx.parent }));
+  if (!review && (!ctx.parent || files.length)) {
     const git = spawnSync('git', ['ls-files', '-z'], { cwd, encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
     const list = git.status === 0 ? git.stdout.split('\0').filter(Boolean) : [];
     if (list.length || files.length) prompt +=`\n\n${M.apiMaterials(list.slice(0, 300).join('\n'), list.length, files)}`;
   }
-  if (material?.tooLarge || prompt.length > MAX_MATERIAL_CHARS) die(review && target === 'diff' ? M.reviewTooLarge(prompt.length, MAX_MATERIAL_CHARS)
-    : M.materialsTooLarge(prompt.length, MAX_MATERIAL_CHARS, M.list(files.map((f) => `${f.shown}: ${f.chars}`))));
+  if (material?.tooLarge) die(scope.kind === 'commit' ? M.reviewCommitTooLarge(material.chars, MAX_MATERIAL_CHARS)
+    : M.reviewTooLarge(material.chars, MAX_MATERIAL_CHARS));
+  if (prompt.length > MAX_MATERIAL_CHARS) die(M.materialsTooLarge(prompt.length, MAX_MATERIAL_CHARS, M.list(files.map((f) => `${f.shown}: ${f.chars}`))));
   if (ctx.parent) prompt += `\n\n${M.apiResumeFooter}`;
   history = [...history, { role: 'user', content: prompt }];
   const { id, dir, release } = await newRunDir(ctx);

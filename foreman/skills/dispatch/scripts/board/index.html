@@ -1096,7 +1096,7 @@ const TEXTS = {
     legacyNotFound: (kind, value) => `记录里找不到这个地址里的${kind === 'run' ? '任务' : '组'}：${value}`,
     serverLost: '连不上看板服务了（它可能已经退出，或者换了新的地址）：在 Claude Code 里运行 /foreman:watch，或者让它重新给看板链接',
     streamStuck: '连不上看板服务：可能同一个浏览器里开着很多看板标签页（关掉几个，再刷新这一页），也可能看板服务已经退出（在 Claude Code 里运行 /foreman:watch，或者让它重新给看板链接）',
-    boardGone: '看板服务已经退出（没人看、也没有任务在跑 30 分钟后会自己退出，插件更新后也会退出）。在 Claude Code 里运行 /foreman:watch，或者让它重新给看板链接；新链接和这一页的不一样',
+    boardGone: '看板服务已经退出，这一页的链接不能再用了。在 Claude Code 里运行 /foreman:watch，或者让它重新给看板链接',
     plan: (module, cell, seats) => `派发计划 · ${module} ${cell} · ${seats} 席`,
     gateWaiting: '外部席准入 · 等 Claude Code 席先交报告',
     gateOpen: '已开闸',
@@ -1141,7 +1141,7 @@ const TEXTS = {
     legacyNotFound: (kind, value) => `No records were found for the ${kind === 'run' ? 'run' : 'group'} in this link: ${value}`,
     serverLost: 'Lost the connection to the board server (it may have exited or moved to a new address): run /foreman-en:watch in Claude Code, or ask it for the board link again',
     streamStuck: "Can't reach the board service: too many board tabs may be open in this browser (close a few, then reload this page), or the board service may have exited (run /foreman-en:watch in Claude Code, or ask it for the board link again)",
-    boardGone: "The board service has exited (it exits by itself after 30 minutes with nobody watching and no task running, and after a plugin update). Run /foreman-en:watch in Claude Code or ask it for the board link again; the new link is different from this page's",
+    boardGone: "The board service has exited and this page's link no longer works. Run /foreman-en:watch in Claude Code or ask it for the board link again",
     plan: (module, cell, seats) => `dispatch plan · ${module} ${cell} · ${seats} ${seats === 1 ? 'seat' : 'seats'}`,
     gateWaiting: 'external seats wait · Claude Code seat reports first',
     gateOpen: 'gate open',
@@ -1298,9 +1298,13 @@ function onBacklog(b) {
 }
 
 function replaceRateHistory(run, events) {
-  const lane = laneFor(B.runs.get(run)?.lane || run);
-  lane.rate_events = lane.rate_events.filter((ev) => ev.run !== run);
-  for (const ev of events) insertByTs(lane.rate_events, ev, RATE_EVENTS_MAX);
+  const lane = laneFor(B.runs.get(run)?.lane || run), rest = lane.rate_events.filter((ev) => ev.run !== run);
+  // 两边都按时间排好：一次合并，不逐条插入（Claude Code 车道一次就有上万条）；时间相同时原有的在前，和逐条插入一样
+  const incoming = events.every((ev, i) => !i || events[i - 1].ts <= ev.ts) ? events : [...events].sort((a, b) => a.ts - b.ts), merged = [];
+  for (let i = 0, j = 0; i < rest.length || j < incoming.length;) {
+    merged.push(j >= incoming.length || i < rest.length && rest[i].ts <= incoming[j].ts ? rest[i++] : incoming[j++]);
+  }
+  lane.rate_events = merged.length > RATE_EVENTS_MAX ? merged.slice(-RATE_EVENTS_MAX) : merged;
   lane.ver = (lane.ver || 0) + 1; B.version++;
   wake();
 }
@@ -1387,7 +1391,8 @@ function connect() {
 // 换看的对话之前关掉原来的数据流（宇宙层同一时刻只挂一个完整看板）
 function disconnect() {
   if (B.es) { B.es.close(); B.es = null; }
-  clearTimeout(B.stuckTimer); B.stuckTimer = null; B.stuckNoticed = false;
+  // 两个计时器都清掉：留着的"请别的标签页让出"会在重连后迟到地触发
+  clearTimeout(B.stuckTimer); clearTimeout(B.askTimer); B.stuckTimer = B.askTimer = null; B.stuckNoticed = false;
   B.connected = false; B.error = null;
 }
 
@@ -1508,7 +1513,7 @@ function connectUniverse() {
 
 function disconnectUniverse() {
   if (U.es) { U.es.close(); U.es = null; }
-  clearTimeout(U.stuckTimer); U.stuckTimer = null; U.stuckNoticed = false;
+  clearTimeout(U.stuckTimer); clearTimeout(U.askTimer); U.stuckTimer = U.askTimer = null; U.stuckNoticed = false;
   // 主动让出连接不算服务失联，飞进看板和后台暂停时都不能触发 serverLost。
   U.error = null; U.lostAt = null; U.lostNoticed = false;
 }
@@ -2164,6 +2169,23 @@ function usageOf(r) {
 }
 
 // 事件未保留命令 ID，按任务计数，所有并行命令结束才恢复生成。
+// [from, to) 和命令时段有没有重叠。同一个任务的命令时段按开始时间排好、互不重叠（commandSpans 把嵌套的命令并成一段），
+// 结束时间也就跟着有序：二分找最后一个在 to 之前开始的，看它是不是过了 from。逐个比较在命令多的长任务里是平方级
+function overlapsCommand(spans, from, to) {
+  let lo = 0, hi = spans.length;
+  while (lo < hi) { const mid = (lo + hi) >>> 1; if (spans[mid].a < to) lo = mid + 1; else hi = mid; }
+  return lo > 0 && spans[lo - 1].b > from;
+}
+
+// 同一份事件（没有新增）重复算命令时段很费：按数组缓存，条数或首尾变了才重算
+const SPANS = new WeakMap();
+function cachedSpans(events) {
+  const hit = SPANS.get(events);
+  if (hit && hit.n === events.length && hit.first === events[0] && hit.last === events.at(-1)) return hit.spans;
+  const spans = commandSpans(events);
+  SPANS.set(events, { n: events.length, first: events[0], last: events.at(-1), spans });
+  return spans;
+}
 function commandSpans(events) {
   const spans = new Map(), counts = new Map();
   for (const ev of events) {
@@ -2203,7 +2225,7 @@ function segments(lane) {
   }
   turns.clear();
   const usageEnds = new Map(events.filter((e) => e.k === 'usage' && e.u?.out != null).map((e) => [e.run, e.usage_to ?? e.ts]));
-  const commands = commandSpans(events);
+  const commands = cachedSpans(events);
   const byRun = new Map();
   for (const ev of events) if (ev.k !== 'usage') {
     if (!byRun.has(ev.run)) byRun.set(ev.run, []);
@@ -2225,7 +2247,8 @@ function segments(lane) {
     times.push(b);
     const gaps = [];
     for (let i = 1; i < times.length; i++) if (times[i] > times[i - 1]) gaps.push({ b: times[i], w: Math.min(times[i] - times[i - 1], GAP_MAX) });
-    let active = gaps.filter((g) => !(commands.get(run) || []).some((c) => c.a < g.b && c.b > g.b - g.w));
+    const runCommands = commands.get(run) || [];
+    let active = gaps.filter((g) => !overlapsCommand(runCommands, g.b - g.w, g.b));
     if (!active.length) active = gaps; // 全被命令覆盖时仍保留原来的 token 摊分。
     if (est) {
       // 只补本任务未覆盖的区间；重叠分段按并集扣掉，其他任务不参与。
@@ -2307,19 +2330,38 @@ function rateSample(lane, runs, t) {
 }
 
 // 直播在最近一份用量之后只补速度，不回填分段、总量或平均速度。
-function liveRate(lane, t, win = WINDOW) {
-  if (B.clock.mode !== 'live' || B.clock.frozenAt != null || lane.id === 'cc') return 0;
-  const rateEvents = lane.rate_events ?? lane.events, commands = commandSpans(rateEvents);
-  let rate = 0;
+// 车道上每个在跑的任务从哪一刻起按实时估速算（最后一个回合开始或最后一次用量以后），和问的是哪个时刻无关：
+// 事件（车道的事件版本号 lane.ver、条数和首尾）和任务都没变就沿用，速度曲线每个点都要问一次。没有起点（还没开始回合、这一轮已经交了总数、起点之后有字数估算）的不列
+const LIVE_STARTS = new WeakMap();
+function liveStarts(lane, rateEvents) {
+  const hit = LIVE_STARTS.get(lane);
+  if (hit && hit.events === rateEvents && hit.ver === lane.ver && hit.n === rateEvents.length && hit.first === rateEvents[0] && hit.last === rateEvents.at(-1)
+    && hit.runs === lane.runs.length) return hit.map;
+  const map = new Map();
   for (const r of lane.runs) {
-    if (r.status !== 'running' || r.started_at > t || (r.ended_at != null && r.ended_at <= t)) continue;
+    if (r.status !== 'running') continue;
     const events = rateEvents.filter((e) => e.run === r.id);
     const at = events.findLastIndex((e) => e.k === 'turn'), turn = events[at], usage = events.findLast((e) => e.k === 'usage' && e.u?.out != null);
     // 结束标记可能不在末条用量，迟到的分段不能重新开启估速。
     if (!turn || events.slice(at + 1).some((e) => e.k === 'usage' && (e.tot || e.end))) continue;
     const from = Math.max(turn.ts, usage?.ts ?? -Infinity);
-    if (from > t) continue;
     if (events.some((e) => e.ts >= from && (e.k === 'think' || e.k === 'answer') && e.n != null)) continue;
+    map.set(r.id, from);
+  }
+  LIVE_STARTS.set(lane, { events: rateEvents, ver: lane.ver, n: rateEvents.length, first: rateEvents[0], last: rateEvents.at(-1), runs: lane.runs.length, map });
+  return map;
+}
+
+function liveRate(lane, t, win = WINDOW) {
+  if (B.clock.mode !== 'live' || B.clock.frozenAt != null || lane.id === 'cc') return 0;
+  // 先看 t 时有没有在跑的任务：速度曲线对每个点都调一次，结束了的车道不必再扫事件
+  const open = lane.runs.filter((r) => r.status === 'running' && r.started_at <= t && (r.ended_at == null || r.ended_at > t));
+  if (!open.length) return 0;
+  const rateEvents = lane.rate_events ?? lane.events, commands = cachedSpans(rateEvents), starts = liveStarts(lane, rateEvents);
+  let rate = 0;
+  for (const r of open) {
+    const from = starts.get(r.id);
+    if (from == null || from > t) continue;
     const busy = commands.get(r.id) || [];
     if (busy.some((c) => c.a <= t && c.b > t)) continue;
     const sample = rateSample(lane, lane.runs.filter((x) => x.model === r.model && x.started_at <= t), t);
@@ -2356,6 +2398,9 @@ function recordRate(lane, t, win = WINDOW) {
 
 // 速度曲线：从这条车道第一轮开始到最后一轮结束（还在跑的画到现在），n 个点。结束以后曲线停住，
 // 画的是它在这个对话里的全部时长；每个点取它之前两格宽的平均速度
+// 结束了的车道曲线是定住的：算一次缓存起来。曲线只由速度分段决定（结束的车道没有实时估速），
+// 分段重算了（事件、补发重置、最终用量、回放的最终快照有变化，见 segments 的缓存条件）曲线就跟着重算
+const SPARKS = new WeakMap();
 function sparkline(lane, t, n = 40) {
   const replay = B.clock.mode === 'replay', at = (r, k) => (replay ? r[`original_${k}`] ?? r[k] : r[k]);
   t = recordTime(t);
@@ -2363,8 +2408,12 @@ function sparkline(lane, t, n = 40) {
   if (!runs.length) return new Array(n).fill(0);
   const start = Math.min(...runs.map((r) => at(r, 'started_at')));
   const open = runs.some((r) => at(r, 'ended_at') == null || at(r, 'ended_at') > t);
-  const end = open ? t : Math.max(...runs.map((r) => at(r, 'ended_at'))), step = Math.max(1, end - start) / n, out = [];
+  const end = open ? t : Math.max(...runs.map((r) => at(r, 'ended_at'))), step = Math.max(1, end - start) / n;
+  const segs = open ? null : segments(lane), key = open ? null : `${n}|${start}|${end}|${runs.length}|${replay}`, hit = SPARKS.get(lane);
+  if (key && hit?.key === key && hit.segs === segs) return hit.out;
+  const out = [];
   for (let i = 1; i <= n; i++) out.push(recordRate(lane, start + i * step, Math.max(1000, step * 2)));
+  if (key) SPARKS.set(lane, { key, segs, out });
   return out;
 }
 
@@ -3699,7 +3748,8 @@ function fillUniState(cell, s) {
   const sig = `${word}|${issues.map((x) => `${x.run}:${x.status}:${x.model}`).join(',')}`;
   if (cell.dataset.sig === sig) return;
   cell.dataset.sig = sig; cell.replaceChildren(word);
-  for (const x of issues) { const dot = document.createElement('i'); dot.className = 'issue'; dot.dataset.tone = 'bad'; cell.append(dot); }
+  // 等人回答是黄点，其余红点
+  for (const x of issues) { const dot = document.createElement('i'); dot.className = 'issue'; dot.dataset.tone = Display.toneOf(x.status === 'needs_input' ? 'blocked' : 'failed'); cell.append(dot); }
   cell.title = issues.map((x) => `${Display.D.statusName(x.status)} · ${shortModel(x.model) || '?'}`).join('\n');
 }
 
@@ -5819,7 +5869,7 @@ viewEl.addEventListener('dblclick', () => { if (inUniverse()) { uniFit(); wake()
 // 限帧：画面里的动作都很慢，静止时约 30 帧；拖动、缩放、镜头在走、飞入飞出时约 60 帧。
 // 不限的话会跟着显示器刷新率跑（144Hz 屏一秒重画 144 次），整页都卡。
 
-let raf = 0, drawnVersion = -1, lastDom = 0, lastFx = 0, started = false, lastFrame = 0, busyUntil = 0;
+let raf = 0, drawnVersion = -1, tablesDeferred = false, lastDom = 0, lastFx = 0, started = false, lastFrame = 0, busyUntil = 0;
 const FRAME_IDLE = 33, FRAME_BUSY = 16;
 function wake() { if (!raf) raf = requestAnimationFrame(frame); }
 // 用户在操作：接下来一小段时间按忙时的帧率画
@@ -5846,7 +5896,8 @@ function step() {
   UV.fitCache = null; UV.frame++;
   // 连不上看板服务超过 20 秒：多半是服务退出了或者换了新地址，重连旧地址没有用，提示去拿新链接（只说一次，连上后重置）。
   // 每帧都查：飞进看板以后星图那一层不再画，也要能提示
-  if (U.lostAt != null && !U.lostNoticed && !U.done && nowMs - U.lostAt > 20000) { U.lostNoticed = true; showNotice(TEXT.serverLost); }
+  // 已经确认服务退出、显示着一直留着的提示时，不拿这条会淡出的盖掉
+  if (U.lostAt != null && !U.lostNoticed && !U.done && nowMs - U.lostAt > 20000) { U.lostNoticed = true; if (!showNotice.kept) showNotice(TEXT.serverLost); }
   if (U.on) {
     // 宇宙层：飞入飞出的过渡里两边都画，按各自占的份额淡入淡出
     stepFly();
@@ -5863,14 +5914,16 @@ function step() {
   const L = computeLayout(t);
   if (!started) { started = true; VIEW.H = L.H; fitView(true); }
   const viewMoving = stepView(L.H);
-  if (B.version !== drawnVersion || nowMs - lastDom > 500) {
+  // 飞入动画进行中：用量表和终端区在画面下方还没露出来，先不搭（一次要算整份统计、建整块 DOM），落地以后马上补上，免得和动画抢同一帧
+  const landing = FLY.mode === 'in';
+  if (B.version !== drawnVersion || nowMs - lastDom > 500 || tablesDeferred && !landing) {
     drawnVersion = B.version;
     lastDom = nowMs;
     loadFinals();
     renderTop(t);
     renderWorld(t, L);
-    renderTable(t);
-    renderTerms(t, L);
+    tablesDeferred = landing;
+    if (!landing) { renderTable(t); renderTerms(t, L); }
   }
   placeWorld(L, t);
   // 往下滚到终端、星图整个移出屏幕时不画画布
@@ -5917,6 +5970,7 @@ function showNotice(text, keep = false) {
   const el = $('notice');
   el.textContent = text; el.classList.remove('faded');
   clearTimeout(showNotice.timer); showNotice.timer = keep ? null : setTimeout(() => el.classList.add('faded'), 12000);
+  showNotice.kept = keep;
 }
 
 // 后台标签页让出数据流：浏览器对同一主机只开 6 条连接，看板标签页多了，前台的页面会连不上。
@@ -5947,6 +6001,8 @@ function onVisibilityChange() {
   if (streamPaused()) return;
   if (document.visibilityState === 'hidden') { hiddenSince = performance.now(); hiddenReleaseTimer = setTimeout(releaseStreams, HIDDEN_RELEASE_MS); return; }
   hiddenSince = null;
+  // 回到前台时流还卡在连接中（在后台时连接被占满了）：请其他看板标签页让出，不用等它们自己隐藏满 10 分钟
+  if (!streamsReleased && [B.es, U.es].some((es) => es?.readyState === 0)) askForStream();
   if (streamsReleased) {
     streamsReleased = false;
     clearInterval(watchingTimer); watchingTimer = null;

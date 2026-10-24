@@ -143,6 +143,8 @@ export function stateOf(session, runs, now, queued = []) {
   return { state, waiting };
 }
 // 输入和输出都明确是 0（一次请求都没完成）；没报用量的不算（和 board/web/04-rates.js 同一条规则）
+// 宇宙表的问题点：同一个组里前后相隔不超过这么久的任务算同一批（见 summaryOf 的 batchStart）
+const BATCH_GAP = 10 * 60000;
 const zeroUsage = (u) => !!u && u.input === 0 && u.output === 0 && Object.values(u).every((v) => v === 0 || v == null);
 function summaryOf(session, all, now, hours, prices, meter, waiting = []) {
   const cutoff = now - hours * 3600000, own = all.filter((r) => r.session === session.id && !r.host);
@@ -169,9 +171,22 @@ function summaryOf(session, all, now, hours, prices, meter, waiting = []) {
   const sameSeat = (a, b) => laneOf(a) === laneOf(b) || a.plan != null && a.seat != null && a.plan === b.plan && a.seat === b.seat;
   const live = new Set(own.filter((r) => r.status === 'running' || queued.some((q) => q.group != null
     ? q.group === r.group : q.plan != null && q.plan === r.plan)).map(unitOf));
-  const issues = own.filter((r) => r.status !== 'running' && r.status !== 'done' && r.ended_at != null && live.has(unitOf(r))
+  // 每个还在进行的组现在这一批从哪里开始：从还在跑的任务和排队票往前接，前后相隔不超过 BATCH_GAP 的都算同一批。
+  // 只列这一批里出了问题的席位：同一个对话很久以后又用了同一个组名时，旧的失败不再亮；进行中用户又发了消息、
+  // 或者失败以后过一会儿又在同组派了新的，这一批的失败照样亮
+  const batchStart = new Map(), ticketOf = (q, r) => (q.group != null ? q.group === r.group : q.plan != null && q.plan === r.plan);
+  for (const unit of live) {
+    const runs = own.filter((r) => unitOf(r) === unit);
+    const tickets = queued.filter((q) => runs.some((r) => ticketOf(q, r)) && Number.isFinite(ms(q.queued_at)));
+    let start = Math.min(...runs.filter((r) => r.status === 'running').map((r) => r.started_at), ...tickets.map((q) => ms(q.queued_at)));
+    const ended = runs.filter((r) => r.status !== 'running' && r.ended_at != null);
+    for (let grew = true; grew;) { grew = false; for (const r of ended) if (r.ended_at >= start - BATCH_GAP && r.started_at < start) { start = r.started_at; grew = true; } }
+    batchStart.set(unit, start);
+  }
+  // 超过 12 个时留最新的 12 个，仍按结束的先后排
+  const issues = own.filter((r) => r.status !== 'running' && r.status !== 'done' && r.ended_at != null && r.ended_at >= (batchStart.get(unitOf(r)) ?? Infinity) && live.has(unitOf(r))
     && !own.some((x) => x !== r && sameSeat(x, r) && x.started_at > r.started_at))
-    .sort((a, b) => a.ended_at - b.ended_at).slice(0, 12).map((r) => ({ status: r.status, run: r.id, model: r.model }));
+    .sort((a, b) => b.ended_at - a.ended_at).slice(0, 12).reverse().map((r) => ({ status: r.status, run: r.id, model: r.model }));
   const state = stateOf(session, runs, now, queued);
   return { id: session.id, project: keyOf(projectOf(session)), cwd: session.cwd, title: session.title ?? session.firstPrompt, model: session.model,
     // prompt_at：最近一条用户消息的时间，宇宙列表里进行中的对话按它排（新的在上），不随动静跳来跳去
