@@ -8,7 +8,17 @@
 const WINDOW = 10000, SEG_MAX = 90000, GAP_MAX = 300000, CHARS_PER_TOKEN = 4;
 const FINAL = new Map(); // run id → 回放结束时的 run 消息（总用量）
 const FINAL_EV = new Map(); // 车道 id → 回放的全部事件（估算速度用，不随回放进度变化）
-const SEG_RUN = new WeakMap(); // 分段归属仅供直播采样，不增加对外字段
+const SEG_RUN = new WeakMap(); // 分段归属供任务内去重和直播采样，不增加对外字段
+
+// 画面仍用压缩时钟；统计窗口插值回原始时间，倍速只改变播放调度。
+function recordTime(t) {
+  const points = B.clock.mode === 'replay' ? B.hello?.replay?.time_map : null;
+  if (!points?.length) return t;
+  let lo = 0, hi = points.length;
+  while (lo < hi) { const mid = (lo + hi) >>> 1; if (points[mid][0] <= t) lo = mid + 1; else hi = mid; }
+  const a = points[Math.max(0, lo - 1)], b = points[lo];
+  return b && t >= a[0] ? a[1] + (t - a[0]) * (b[1] - a[1]) / (b[0] - a[0]) : a[1] + t - a[0];
+}
 
 // 回放：取一次结束时的快照，拿到每个任务最后的用量
 function loadFinals() {
@@ -59,13 +69,14 @@ function commandSpans(events) {
 // 一条车道的输出分段：[{ a, b, tokens }]，a/b 是记录时间（毫秒）
 function segments(lane) {
   const live = B.clock.mode === 'live';
-  const events = FINAL_EV.get(lane.id) || (live ? lane.rate_events ?? lane.events : lane.events);
+  let events = FINAL_EV.get(lane.id) || (live ? lane.rate_events ?? lane.events : lane.events);
   const outputs = new Map(lane.runs.map((r) => [r.id, r.usage_unattributed ? 0 : FINAL.get(r.id)?.usage?.output ?? (r.ended_at != null ? r.usage?.output : null)]));
   const outputKey = JSON.stringify([...outputs]);
   // 分段还依赖车道上的任务（续接的任务会陆续出现），任务数变了也要重算
   const ver = `${FINAL_EV.has(lane.id) ? events.length : (lane.ver || 0)}|${lane.runs.length}`;
   // 最终用量晚于事件到达，上限更新后也要重算。
   if (lane.segs && lane.segsAt === ver && lane.segsUsage === outputKey) return lane.segs;
+  if (!live) events = events.map((e) => ({ ...e, ts: e.original_ts ?? e.ts }));
   const segs = [];
   const lastUsage = new Map(), turnUsage = new Map(), usageSegs = new Map(), lastChars = {};
   const turns = new Map(), stepTurns = new Set();
@@ -75,7 +86,7 @@ function segments(lane) {
     else if (ev.k === 'usage' && !ev.tot && ev.u?.out != null) stepTurns.add(`${ev.run}:${turns.get(ev.run) || 0}`);
   }
   turns.clear();
-  const usageEnds = new Map(events.filter((e) => e.k === 'usage' && e.u?.out != null).map((e) => [e.run, live ? e.usage_to ?? e.ts : e.ts]));
+  const usageEnds = new Map(events.filter((e) => e.k === 'usage' && e.u?.out != null).map((e) => [e.run, e.usage_to ?? e.ts]));
   const commands = commandSpans(events);
   const byRun = new Map();
   for (const ev of events) if (ev.k !== 'usage') {
@@ -83,7 +94,7 @@ function segments(lane) {
     byRun.get(ev.run).push(ev);
   }
   const counted = new Map(); // run id → 已经由分段用量或字数算到的 token
-  const starts = new Map(lane.runs.map((r) => [r.id, r.started_at]));
+  const starts = new Map(lane.runs.map((r) => [r.id, !live ? r.original_started_at ?? r.started_at : r.started_at]));
   // 按任务内事件的空档摊开，去掉命令时间后，单个空档最多算 GAP_MAX。
   // 推理模型一次请求里可以长时间不出事件（只在想），按 60 秒截断会把生成时间算少、速度估高（实测一个 Codex 记录高 84%）；
   // 命令时间已经单独扣掉，这里只防真正的空闲（比如排队、等人），所以放宽到 5 分钟
@@ -100,6 +111,26 @@ function segments(lane) {
     for (let i = 1; i < times.length; i++) if (times[i] > times[i - 1]) gaps.push({ b: times[i], w: Math.min(times[i] - times[i - 1], GAP_MAX) });
     let active = gaps.filter((g) => !(commands.get(run) || []).some((c) => c.a < g.b && c.b > g.b - g.w));
     if (!active.length) active = gaps; // 全被命令覆盖时仍保留原来的 token 摊分。
+    if (est) {
+      // 只补本任务未覆盖的区间；重叠分段按并集扣掉，其他任务不参与。
+      const covered = segs.filter((s) => SEG_RUN.get(s) === run).sort((x, y) => x.a - y.a), uncovered = [];
+      for (const g of active) {
+        let a = g.b - g.w;
+        for (const s of covered) {
+          if (s.b <= a) continue;
+          if (s.a >= g.b) break;
+          if (s.a > a) uncovered.push({ b: s.a, w: s.a - a });
+          a = Math.max(a, s.b);
+        }
+        if (a < g.b) uncovered.push({ b: g.b, w: g.b - a });
+      }
+      if (!uncovered.length && covered.length) {
+        const total = covered.reduce((sum, s) => sum + s.tokens, 0);
+        for (const s of covered) { s.tokens += tokens * s.tokens / total; s.est = true; }
+        return;
+      }
+      active = uncovered;
+    }
     const total = active.reduce((s, g) => s + g.w, 0);
     for (const g of active) {
       const s = { a: g.b - g.w, b: g.b, tokens: (tokens * g.w) / total, est };
@@ -112,8 +143,8 @@ function segments(lane) {
       if (ev.tot && stepTurns.has(`${ev.run}:${turns.get(ev.run) || 0}`)) continue;
       const before = counted.get(ev.run) || 0, limit = outputs.get(ev.run);
       const tokens = ev.tot ? Math.max(0, Math.min(ev.u.out - (turnUsage.get(ev.run) || 0), limit == null ? Infinity : limit - before)) : ev.u.out;
-      const end = live ? ev.usage_to ?? ev.ts : ev.ts;
-      const prev = lastUsage.get(ev.run) ?? (live ? ev.usage_from : null) ?? (lane.id === 'cc' ? end - 20000 : starts.get(ev.run) ?? end - 20000);
+      const end = ev.usage_to ?? ev.ts;
+      const prev = lastUsage.get(ev.run) ?? ev.usage_from ?? (lane.id === 'cc' ? end - 20000 : starts.get(ev.run) ?? end - 20000);
       const previous = usageSegs.get(ev.run);
       if (tokens > 0 && end <= prev && previous?.length) {
         // 同时收到的用量共用上一份生成区间，不能丢 token 或制造极短分段。
@@ -134,13 +165,13 @@ function segments(lane) {
       lastChars[key] = { ts: ev.ts, n: ev.n };
     }
   }
-  // 回放估算：最终总输出减去已经算到的，摊到这个任务从开始到结束的空档上
+  // 回放估算只补尚未覆盖的生成区间，全部覆盖时增加 token 而不增加时长。
   for (const r of lane.runs) {
     const f = usageOf(FINAL.get(r.id));
     if (!f) continue;
     const rest = f.output - (counted.get(r.id) || 0);
-    const end = FINAL.get(r.id).ended_at || r.ended_at;
-    if (rest > 0 && end != null) spread(r.id, r.started_at, end, rest, true);
+    const final = FINAL.get(r.id), end = final.original_ended_at ?? final.ended_at ?? r.original_ended_at ?? r.ended_at;
+    if (rest > 0 && end != null) spread(r.id, starts.get(r.id), end, rest, true);
   }
   segs.sort((x, y) => x.a - y.a);
   lane.segs = segs;
@@ -194,6 +225,10 @@ function liveRate(lane, t, win = WINDOW) {
 
 // 时刻 t 前 WINDOW 内的平均输出速度（token/秒）
 function rateAt(lane, t, win = WINDOW) {
+  return recordRate(lane, recordTime(t), win);
+}
+
+function recordRate(lane, t, win = WINDOW) {
   let tokens = 0;
   for (const s of segments(lane)) {
     if (s.a >= t) break;
@@ -206,16 +241,20 @@ function rateAt(lane, t, win = WINDOW) {
 // 最近 span 毫秒的速度曲线，n 个点
 function sparkline(lane, t, span = 120000, n = 40) {
   const out = [];
-  for (let i = n - 1; i >= 0; i--) out.push(rateAt(lane, t - (i * span) / n, span / n * 2));
+  t = recordTime(t);
+  for (let i = n - 1; i >= 0; i--) out.push(recordRate(lane, t - (i * span) / n, span / n * 2));
   return out;
 }
 
 // 一条车道到时刻 t 的统计：已结束的任务用最终用量，进行中的按分段估到 t
 function laneStats(lane, t) {
+  const replay = B.clock.mode === 'replay', runs = replay ? lane.runs.map((r) => ({ ...r,
+    started_at: r.original_started_at ?? r.started_at, ended_at: r.original_ended_at ?? r.ended_at })) : lane.runs;
+  t = recordTime(t);
   const sum = { input: 0, cached: 0, cache_write: 0, output: 0 };
   let cost = 0, costKnown = false, costPartial = false, est = false, usage_unattributed = false;
   let gen = 0, first = null, last = null, running = false;
-  for (const r of lane.runs) {
+  for (const r of runs) {
     if (r.started_at > t) continue;
     if (r.usage_unattributed) usage_unattributed = true;
     first = Math.min(first ?? r.started_at, r.started_at);
@@ -237,16 +276,21 @@ function laneStats(lane, t) {
   let liveOut = 0;
   for (const s of segments(lane)) {
     if (s.a >= t) break;
-    const runOpen = lane.runs.some((r) => (B.clock.mode !== 'live' || r.id === SEG_RUN.get(s)) && r.started_at <= s.b && (r.ended_at == null || r.ended_at > t));
+    const runOpen = runs.some((r) => r.id === SEG_RUN.get(s) && r.started_at <= s.b && (r.ended_at == null || r.ended_at > t));
     if (!runOpen) continue;
     liveOut += (s.tokens * (Math.min(s.b, t) - s.a)) / (s.b - s.a);
     if (s.est) est = true;
   }
-  const covered = new Map();
+  const covered = new Map(), ends = new Map();
   for (const s of segments(lane)) {
     if (s.a >= t) break;
     const ms = Math.min(s.b, t) - s.a, run = SEG_RUN.get(s);
-    gen += ms; covered.set(run, (covered.get(run) || 0) + s.tokens * ms / (s.b - s.a));
+    // 回放的字数分段也可能重叠，同一任务的生成时长只取并集。
+    if (replay) {
+      gen += Math.max(0, Math.min(s.b, t) - Math.max(s.a, ends.get(run) ?? -Infinity));
+      ends.set(run, Math.max(ends.get(run) ?? -Infinity, Math.min(s.b, t)));
+    } else gen += ms;
+    covered.set(run, (covered.get(run) || 0) + s.tokens * ms / (s.b - s.a));
     if (s.est) est = true;
   }
   const hostLive = lane.runs.some((r) => r.kind === 'host');
@@ -261,7 +305,7 @@ function laneStats(lane, t) {
   if (liveRate(lane, t) > 0) est = true;
   return {
     ...sum, output: usage_unattributed ? null : out, usage_unattributed, cost: costKnown ? cost : null, costPartial, est, running,
-    rate: rateAt(lane, t), avg: gen > 0 && complete && !usage_unattributed ? out / (gen / 1000) : null,
+    rate: recordRate(lane, t), avg: gen > 0 && complete && !usage_unattributed ? out / (gen / 1000) : null,
     elapsed: first != null ? (last - first) / 1000 : 0,
   };
 }

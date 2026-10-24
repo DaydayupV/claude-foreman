@@ -184,10 +184,19 @@ export function runMessage(run, lane, prices, byId) {
 
 export function replayClock(times, { speed = 1, maxgap = 20 } = {}, now) {
   times = [...new Set(times.filter(Number.isFinite))].sort((a, b) => a - b);
-  const mapped = new Map();
+  const mapped = new Map(), time_map = times.length ? [[times[0], times[0]]] : [];
   let previous = times[0], clock = previous;
-  for (const time of times) { clock += Math.min(time - previous, maxgap * 1000); mapped.set(time, clock); previous = time; }
-  return { map: (time) => mapped.get(time), replay: { start: (mapped.get(times[0]) ?? now) - 2000, end: (clock ?? now) + 2000, speed, maxgap } };
+  for (const time of times) {
+    const gap = Math.min(time - previous, maxgap * 1000);
+    if (gap < time - previous) {
+      if (time_map.at(-1)[0] !== clock) time_map.push([clock, previous]);
+      time_map.push([clock + gap, time]);
+    }
+    clock += gap; mapped.set(time, clock); previous = time;
+  }
+  // 中间帧也要还原记录时间，统计窗口不能随播放空档一起压缩。
+  return { map: (time) => mapped.get(time), replay: { start: (mapped.get(times[0]) ?? now) - 2000, end: (clock ?? now) + 2000, speed, maxgap,
+    time_map } };
 }
 
 export function buildReplay(data, { speed = 1, maxgap = 20, clock } = {}, now) {
@@ -215,7 +224,10 @@ export function buildReplay(data, { speed = 1, maxgap = 20, clock } = {}, now) {
   const scheduled = valid.filter((message) => Number.isFinite(clock.map(message.time)));
   for (const message of scheduled) {
     message.time = clock.map(message.time); message.data = { ...message.data };
-    for (const key of ['ts', 'started_at', 'ended_at']) if (message.data[key] != null) message.data[key] = clock.map(message.data[key]);
+    // maxgap 可以为零，压到同一刻的事件仍须保留各自的原始统计边界。
+    for (const key of ['ts', 'started_at', 'ended_at']) if (message.data[key] != null) {
+      message.data[`original_${key}`] = message.data[key]; message.data[key] = clock.map(message.data[key]);
+    }
   }
   return { hello: { v: 3, mode: 'replay', scope: data.scope, now, replay: clock.replay }, timeline: scheduled };
 }

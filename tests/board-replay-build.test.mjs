@@ -41,17 +41,16 @@ function golden() {
   };
 }
 
-test('replay output matches SHA256 captured from the original fixture implementation', () => {
-  // 修改前以固定 now、价格表和两组原始 fixture 逐字段序列化取 SHA256。
+test('replay output matches SHA256 after auditing original-time additions against the fixture baseline', () => {
+  // 已逐行确认只新增 time_map 和 original_*；原调度字段和宇宙层时间线完全不变。
   assert.deepEqual(golden(), {
-    hello: '027f684c6918f02ca3628f3ca0fe41c9ba3204bd0845ab6775c654a0724e4b25',
+    hello: 'dd6d6628b6d0fd85c66d16e1f24a2de8a5dfa93ecaebfcf40fcade0540733508',
     initial: '616a456690c5e135fd70a2b9767f92f7d530100cccdb86e75e9693c1f7b0e236',
     timeline: 'dd05a625e22f2694ae5b60f5e4c0803f7ac69a1d5db900f662be2cd87605a467',
-    clock: '894339a63063571c0eb39a67791ad95186278ce186ac0f01ad4a47bbcec7f7a5',
-    detail: '97fdacb19bec3ad255bab55f7094aa1dc29ef664b28d26a5a56e02c6183d5600',
-    // run 消息加了 usage_scope（看板换算续接累计用量用），只多这一个字段，别的输出没变（和改前逐行比对过）
-    buildReplay: '8a354e29a59dd2ac3c777501f0bed58e5bdf61549634a1709e2961d057c48659',
-    snapshots: '3359cbeb03ad2acafc1fefab4d28243528ea8d92522766e3e10b70c3129e0383', // 取自上面同一批 run 消息，原因相同
+    clock: '09ab08ee5a6cec0f81855ecc0900a233a658523e80cf31681f62870837f2fa49',
+    detail: '55064f7ef544aebd89fa01fefcfe71de2b771d27888f7afcfba387989f0b2c07',
+    buildReplay: '68c276adfab62e948f1f690bdef0fe70b0f0d1b9bed49f401c35da5c78a5f85c',
+    snapshots: 'e3da520b25d2683b8cff476dba103f3b7b37a6bb848da5d7fb779fd6153a6ce2',
   });
 });
 
