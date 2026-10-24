@@ -103,10 +103,24 @@ test('续接时跳过开工前的会话文件，只读新增请求用量', async
   assert.equal(parent.output_tokens_per_s, parent.duration_s > 0 && parent.usage_scope === 'this_run' ? Math.round(parent.usage.output_tokens / parent.duration_s * 10) / 10 : null);
 });
 
-test('只有 token_count 时保留最新累计用量、最近请求和额度，没有用量记录时为 null', (t) => {
+test('上一轮一次请求都没完成时，续接以 0 为基线，记这一轮的用量', async (t) => {
+  const s = usageSession(t), h = s.h;
+  const initial = h.scenario({ session_id: sessionId, rollout: [{ type: 'session_meta', payload: { id: sessionId } }] });
+  const parent = output(await h.bridge(taskArgs(h, 'run', ['--no-snapshot']), { env: initial.env }));
+  assert.equal(parent.usage, null);
+  const next = tokenUsageRecord();
+  next.payload.response_id = 'resp_first'; next.payload.usage = usage;
+  const scenario = h.scenario({ session_id: sessionId, append_rollout: true, rollout: [next] }, 'resume');
+  const r = output(await h.bridge(['resume', '--run', parent.run_id, '--level', 'complex', '--brief', '-', '--reason', 'recover'], { env: scenario.env }));
+  assert.equal(r.usage_scope, 'this_run');
+  assert.equal(r.usage.input_tokens, usage.input_tokens); assert.equal(r.usage.output_tokens, usage.output_tokens);
+});
+
+test('只有 token_count 时保留最新累计用量、最近请求和额度；整份记录都没有用量时标 no_requests，没有记录文件时为 null', (t) => {
   const s = usageSession(t);
-  s.write([{ type: 'session_meta', payload: { id: sessionId } }]);
   assert.equal(s.stats(), null);
+  s.write([{ type: 'session_meta', payload: { id: sessionId } }]);
+  assert.deepEqual(s.stats(), { total_token_usage: null, last_request: null, rate_limit: null, no_requests: true });
   s.write([tokenCount({ input_tokens: 60, output_tokens: 20 }), tokenCount()]);
   assert.deepEqual(s.stats(), {
     total_token_usage: usage, last_request: { tokens: 60, window: 1000 }, rate_limit: sessionStats.rate_limits.primary,
