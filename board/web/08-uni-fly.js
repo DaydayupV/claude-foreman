@@ -67,8 +67,13 @@ function applyShare(share) {
   const set = (el, a) => { const v = a >= 0.999 ? '' : a.toFixed(3); if (el.style.opacity !== v) el.style.opacity = v; };
   // 弧线区在底下那层画布上，自己按分镜炸开；上面那层画布（光线、刻度带等）和卡片只做淡入淡出
   set(UFX.cv, share.uni); set(FX.cv, share.fx); set(FX.ov.cv, share.rest); set(worldEl, share.rest);
-  // 底部表格在 v = 0.3 时从对话列表换成模型列表：换之前淡出，换之后跟界面一起淡入，不会一下子跳过去
-  set($('usage'), share.v < 0.3 ? 1 - ramp(share.v, 0.12, 0.3) : share.rest);
+  // 底部表格在 v = 0.3 时从对话列表换成模型列表：换之前淡出，换之后跟界面一起淡入，不会一下子跳过去。
+  // 往看板那边换：v 过了 0.3 就清掉对话列表；模型列表要等落地后才搭（09-main.js 的 domStep），从第一次搭起再淡入 0.3 秒，不一下子冒出来。
+  // 往宇宙那边换：v 不到 0.3 时看板停画，对话列表从这时起由 uniFrame 画
+  const usage = $('usage');
+  if (share.v >= 0.3 && usage.dataset.mode === 'uni') { usage.replaceChildren(); delete usage.dataset.mode; UNI_ROWS.clear(); }
+  const built = usage.dataset.mode === 'uni' ? 1 : UI.tableAt == null ? 0 : ramp(performance.now() - UI.tableAt, 0, 300);
+  set(usage, share.v < 0.3 ? 1 - ramp(share.v, 0.12, 0.3) : share.rest * built);
   // 完全看不见的那一层不参与合成
   const vis = (el, on) => { const v = on ? '' : 'hidden'; if (el.style.visibility !== v) el.style.visibility = v; };
   vis(UFX.cv, share.uni > 0); vis(FX.cv, share.fx > 0); vis(FX.ov.cv, share.rest > 0);
@@ -81,11 +86,14 @@ function resetBoardView() {
   worldEl.replaceChildren();
   for (const m of [UI.cards, UI.outs, UI.heads, UI.tableRows]) m.clear();
   UI.open.clear(); UI.collapsed.clear(); UI.hot = null;
-  for (const id of ['usage', 'terms', 'termdone']) { $(id).replaceChildren(); delete $(id).dataset.mode; }
+  // 宇宙的对话列表留着淡出，飞到一半（v = 0.3）再清掉（applyShare）
+  const keepUni = $('usage').dataset.mode === 'uni';
+  for (const id of ['usage', 'terms', 'termdone']) if (!(id === 'usage' && keepUni)) { $(id).replaceChildren(); delete $(id).dataset.mode; }
+  UI.tableAt = null;
   // 用量面板的"展开全部"跟着对话走：换对话时收起
   document.body?.classList.remove('table-all'); $('tall')?.remove();
   PANEL.allDone = false; PANEL.fold.clear(); PANEL.doneLines.clear();
-  PANEL.cols.clear(); UNI_ROWS.clear();
+  PANEL.cols.clear(); if (!keepUni) UNI_ROWS.clear();
   Object.assign(REEL, { s: 0, off: 0, anchor: null }); REEL.born.clear();
   for (const key of [...SMOOTH.vals.keys()]) if (!key.startsWith('u')) SMOOTH.vals.delete(key);
   FX.layout = null;

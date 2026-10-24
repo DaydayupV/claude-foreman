@@ -35,7 +35,8 @@ function reelZone(sx) {
 }
 // hot：鼠标停在用量表哪一行（车道 id），画面上突出这条车道、其余的压暗；只是看得清楚，不触发任何操作
 // ver：界面操作（悬停、点开收起、折叠组）每次加一，主循环看到就马上重画；数据变了看 B.version，最快每 250 毫秒重画一次
-const UI = { open: new Set(), collapsed: new Set(), cards: new Map(), outs: new Map(), heads: new Map(), tableRows: new Map(), hot: null, ver: 0 };
+// tableAt：用量表（模型列表）这次第一次搭起的时刻，面板从这时起淡入（08-uni-fly.js 的 applyShare）
+const UI = { open: new Set(), collapsed: new Set(), cards: new Map(), outs: new Map(), heads: new Map(), tableRows: new Map(), hot: null, ver: 0, tableAt: null };
 
 function laneStatus(lane, t) {
   const r = currentRun(lane, t);

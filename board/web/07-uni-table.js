@@ -107,11 +107,11 @@ function renderUniTop() {
   st.classList.toggle('bad', !!U.error);
 }
 
-// 宇宙层的面板：数据变了或每半秒刷新一次
+// 宇宙层的面板：数据变了或每半秒刷新一次；底部表格还是看板的（刚飞出来）时马上换
 let uniPanelsAt = 0, uniPanelsVersion = -1;
 function renderUniPanels() {
   const ms = performance.now();
-  if (U.version === uniPanelsVersion && ms - uniPanelsAt < 500) return;
+  if (U.version === uniPanelsVersion && ms - uniPanelsAt < 500 && $('usage').dataset.mode === 'uni') return;
   uniPanelsVersion = U.version; uniPanelsAt = ms;
   renderSlots(); renderUniTable();
 }

@@ -26,6 +26,7 @@ function renderTable(t) {
     body.addEventListener('pointerleave', () => hover(null));
     for (const h of TABLE_HEAD) { const c = document.createElement('span'); c.textContent = h; table.firstChild.append(c); }
     costHeadTitle(table.firstChild);
+    UI.tableAt = performance.now(); // 面板从这时起淡入（08-uni-fly.js 的 applyShare）
   }
   const rows = tableRows(t), lanes = rows.filter((x) => x.lane).map((x) => x.lane);
   const body = table.querySelector('.tbody');

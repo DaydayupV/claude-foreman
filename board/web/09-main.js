@@ -90,7 +90,8 @@ let uniStarted = false;
 function uniFrame(alone = true) {
   const t = uNow();
   if (alone) smoothFrame(t);
-  if (FLY.mode === 'universe') { renderUniPanels(); renderUniTop(); }
+  // 飞出时看板在进度 0.3 停画（alone），面板从这时起换成宇宙的，跟着淡入（08-uni-fly.js 的 applyShare）
+  if (FLY.mode === 'universe' || FLY.mode === 'out' && alone) { renderUniPanels(); renderUniTop(); }
   const L = uniLayout();
   if (!uniStarted && L.galaxies.length) {
     uniStarted = true;
