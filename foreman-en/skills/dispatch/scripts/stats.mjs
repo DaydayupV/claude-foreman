@@ -9,7 +9,8 @@ import { costOf, loadPrices, modelIdentity, usd } from './prices.mjs';
 const MODULES = ['discuss', 'review', 'run', 'image'];
 const VERDICTS = ['accept', 'partial', 'reject'];
 const TOKEN_FIELDS = ['input_tokens', 'cached_input_tokens', 'output_tokens'];
-const split = (value) => (value || '').split(',').map((s) => s.trim()).filter(Boolean);
+// 选项可以写几次（cli.mjs 收成数组），每次也可以用逗号分开写几项
+const split = (value) => [value ?? []].flat().flatMap((v) => String(v).split(',')).map((s) => s.trim()).filter(Boolean);
 const print = (value) => process.stdout.write(JSON.stringify(value, null, 2) + '\n');
 function readRecord(dir, file) {
   try { return JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8')); } catch { return null; }

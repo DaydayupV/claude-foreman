@@ -133,6 +133,9 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 .term .node, .term .user, .term .link { color: var(--text); }
 .term .node .mk, .term .user .mk { color: var(--tint); }
 .term .bad { color: var(--bad); }
+/* 结论、错误、越界写入这些行里带色的片段（06-cards.js 的 painted），颜色和终端一致 */
+.term .c-bad { color: var(--tone-bad); } .term .c-ok { color: var(--tone-ok); } .term .c-warn { color: var(--tone-warn); }
+.term .c-run { color: var(--tone-run); } .term .c-dim { color: var(--tone-dim); } .term .c-bold { font-weight: 600; }
 .term .fold { color: var(--dim); }
 .card .think { position: absolute; left: 5px; right: 4px; bottom: 2px; color: var(--dim); font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
@@ -225,13 +228,17 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
    展开的组排成一排，栏的样子和上面运行中的一样（栏头可以点着收起）；折起来的一组一行，列在下面 */
 #termsec:has(#termdone:not([hidden])) { grid-template-rows: auto 1fr auto; }
 #termsec:has(#termdone .row > .tcol) { grid-template-rows: auto 1fr 1fr; }
+/* 上面一排没有正在运行的组时不占高度，结束的组用满整个终端区（不然展开的那组只剩半屏再被下面的列表挤矮） */
+#termsec:has(#terms:empty):has(#termdone:not([hidden])) { grid-template-rows: auto 0 1fr; }
 #termdone { display: flex; flex-direction: column; gap: 4px; min-height: 0; }
 #termdone[hidden] { display: none; }
 #termdone > .sub { flex: none; display: flex; align-items: center; gap: 8px; padding-left: 6px; color: var(--dim); font-size: 10px; }
 #termdone > .sub::after { content: ""; flex: 1; border-top: 1px dashed rgba(200,200,212,.12); }
-#termdone > .row { flex: 1; display: flex; gap: 8px; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
+#termdone > .row { flex: 1 1 0; display: flex; gap: 8px; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
 #termdone > .row:empty, #termdone > .lines:empty { display: none; }
-#termdone > .lines { flex: none; max-height: 30vh; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
+/* 展开的结束组至少留六成高度；折起来的列表在剩下的地方滚动 */
+#termdone > .row:not(:empty) { min-height: 60%; }
+#termdone > .lines { flex: 0 1 auto; min-height: 0; max-height: 30vh; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
 #termdone .dline { cursor: pointer; color: var(--mid); font-size: 10.5px; padding: 2px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #termdone .dline:hover { color: var(--text); background: rgba(255,255,255,.04); }
 .tcol.done-open > header { cursor: pointer; }
@@ -662,9 +669,10 @@ function changedText(c) {
 // 讨论和审查本来只读，只有真的改了文件才显示改动数（那是越界，要提醒）。
 const changedFor = (r, m) => (m?.kind === 'exec' || agentTotal(r?.changes) ? changedText(r?.changes) : null);
 
-function outsideCwdText(r, m) {
+// 写到工作目录外、又不在写入范围里的文件，按显示用的写法（终端、网页的 ⚠ 行和网页卡片的 ⚠N 共用）
+function outsideFiles(r, m) {
   const files = m?.kind === 'exec' ? (r?.changes?.outside_cwd || []).filter((f) => f.in_scope === false) : [];
-  if (!files.length) return null;
+  if (!files.length) return [];
   // 网页也用这段纯显示逻辑，不能依赖 Node 的 path；保留上级目录和原有路径分隔符。
   const cwd = m.cwd ?? r.cwd ?? '', windows = /^[A-Za-z]:|^\\\\/.test(cwd), sep = cwd.includes('\\') ? '\\' : '/';
   const base = cwd ? cwd.replace(/\\/g, '/').replace(/\/$/, '').split('/') : [];
@@ -675,16 +683,23 @@ function outsideCwdText(r, m) {
     const parts = file.replace(/\\/g, '/').split('/');
     let i = 0;
     while (i < base.length && i < parts.length && (windows ? base[i].toLowerCase() === parts[i].toLowerCase() : base[i] === parts[i])) i++;
-    return i ? [...base.slice(i).map(() => '..'), ...parts.slice(i)].join(sep) : file;
+    // 要往上退两级以上的写绝对路径：一长串 ../ 看不出是哪里
+    return i && base.length - i <= 2 ? [...base.slice(i).map(() => '..'), ...parts.slice(i)].join(sep) : file;
   };
-  return D.watchOutsideCwd(D.list(files.slice(0, 3).map((f) => relative(f.path))), Math.max(0, files.length - 3));
+  return files.map((f) => relative(f.path));
+}
+function outsideCwdText(r, m) {
+  const files = outsideFiles(r, m);
+  if (!files.length) return null;
+  return D.watchOutsideCwd(D.list(files.slice(0, 3)), Math.max(0, files.length - 3));
 }
 
 const formatUsd = (n) => (n === 0 ? '0' : n < 0.01 ? n.toPrecision(2) : n < 1 ? n.toFixed(3) : n.toFixed(2));
 function usageLine(result, meta) {
   if (meta?.participant === 'host') return D.watchHostNoUsage;
   const cost = result || {};
-  const parts = [result?.usage ? D.tokenSummary(result.usage, result.last_request ?? result.context, D.tokenCount,
+  // 一次请求都没完成的轮次，有的接入方式记成全 0：和没记一样，写"没有用量"
+  const parts = [result?.usage && Object.values(result.usage).some((v) => Number(v) > 0) ? D.tokenSummary(result.usage, result.last_request ?? result.context, D.tokenCount,
     (result.usage_scope ?? (meta?.mode === 'resume' ? 'session_total' : 'this_run')) === 'session_total') : '',
   // 取消、超时、卡死的轮次只记到最后一次完成的请求，速度偏低，标出来
   result?.output_tokens_per_s != null ? D.outputSpeed(result.output_tokens_per_s, ['cancelled', 'timeout', 'stalled'].includes(result.status)) : '',
@@ -780,7 +795,8 @@ function finalLines(run, r, ok, inner, C = unpainted) {
   if (r?.stale === true) out.push(...marked('⚠', C.yellow, D.watchStale));
   const [mark, color] = r?.status === 'needs_input' ? ['?', C.yellow] : ['✗', C.red];
   const secondary = ['timeout', 'cancelled'].includes(r?.status);
-  realErrors(r, ok).forEach((e, i) => out.push(...(secondary && i > 0 ? marked('·', C.dim, e).map((l) => C.dim(l)) : marked(mark, color, e))));
+  // 次要的报错整行暗色：记号不单独上色，否则记号后的颜色复位会让后面的文字变回正常亮度
+  realErrors(r, ok).forEach((e, i) => out.push(...(secondary && i > 0 ? marked('·', plain, e).map((l) => C.dim(l)) : marked(mark, color, e))));
   const moreErrors = (r?.errors_total ?? 0) - (r?.errors?.length ?? 0);
   if (moreErrors > 0) out.push(...marked(mark, color, D.watchMoreErrors(moreErrors)));
   return out;
@@ -1048,7 +1064,7 @@ function elapsedOf(r, t, points, lastActivity) {
 
 
 
-return { D, seatLine, shortModel, fullModel, modelLabel, agentTypeOf, moduleOf, taskLine, clock, took, shownStatus, outcomeStyle, agentTotal, changedText, changedFor, outsideCwdText,
+return { D, seatLine, shortModel, fullModel, modelLabel, agentTypeOf, moduleOf, taskLine, clock, took, shownStatus, outcomeStyle, agentTotal, changedText, changedFor, outsideCwdText, outsideFiles,
   formatUsd, usageLine, toolLabel, commandAction, errorAction, foldText, thoughtLine, wrapAtDots, realErrors, durationOf, reviewFinding, reviewCounts, reviewConclusion, finalLines, liveLines,
   groupTask, current, planNotes, seatNumbers, roundOf, resultOutcome, liveStatus, seatState, toneOf, COUNT_MARKS, countParts, countsText, seatUsage, queuedLine, queuedStarted, collapseLines, dashFooter,
   displayRun, recordedTime, elapsedOf, textWidth, fitWidth, wrapWidth };
@@ -1090,7 +1106,7 @@ const TEXTS = {
     conversations: (n) => `${n} 个对话`,
     costTitle: '根据模型官方 API 价格计算（插件自带的价格表），和实际扣费不一定相同；+ 表示有的模型不在价格表里，这部分没算进去',
     nowTitle: '近 10 秒的估算，可能借用同一模型之前的样本',
-    recentTitle: '近 2 分钟的速度曲线（估算）：每个点是约 6 秒内的输出 token 除以这段时间；运行中可能借用实时估速',
+    recentTitle: '这条车道全部时长的速度曲线（估算）：从第一轮开始画到最后一轮结束，结束后停住；40 个点，每个点是它之前约两格时长内的输出 token 除以这段时间；运行中可能借用实时估速',
     genAvgTitle: '本席各轮累计输出 ÷ 估算的生成时长；已扣掉能识别的跑命令时段，仍可能含等待和读文件的时间',
     usageUnattributed: '用量无法归属到本轮：缺少可信的续接累计基线',
     emptyList: (h) => `最近 ${h} 小时没有派发过任务的对话。派发之后会出现在这里。`,
@@ -1135,7 +1151,7 @@ const TEXTS = {
     conversations: (n) => `${n} ${n === 1 ? 'conversation' : 'conversations'}`,
     costTitle: "Computed from each model's official API price (the plugin's price table); may differ from what you're actually charged. + means some models aren't in the table and weren't counted",
     nowTitle: 'Estimate over the last 10 seconds; may borrow earlier samples of the same model',
-    recentTitle: 'Speed over the last 2 minutes (estimated): each point is the output tokens in about 6 seconds divided by that time; while running it may use the live estimate',
+    recentTitle: "Speed over this lane's whole time (estimated): drawn from its first round's start to its last round's end, then it stays put; 40 points, each the output tokens in about two points' worth of time before it divided by that time; while running it may use the live estimate",
     genAvgTitle: "This seat's total output ÷ estimated generation time; command time that can be recognised is excluded, waiting and file reads may remain",
     usageUnattributed: 'Usage cannot be attributed to this run: a reliable continuation baseline is missing',
     emptyList: (h) => `No conversation has dispatched work in the last ${h} hours. New ones show up here.`,
@@ -1842,9 +1858,12 @@ function timeline(lane, t, { open = false, limit = 6 } = {}) {
   return open ? lines : lines.slice(-limit);
 }
 
+// 终端区的颜色和终端一致：用和 format.mjs 一样的颜色代码调 display.mjs，fillTerm（06-cards.js）再把颜色代码换成带色的片段
+const TERM_C = Object.fromEntries([['dim', '2'], ['bold', '1'], ['red', '31'], ['green', '32'], ['yellow', '33'], ['cyan', '36']]
+  .map(([key, code]) => [key, (s) => (s === '' ? s : `\x1b[${code}m${s}\x1b[0m`)]));
 function conclusion(r, width = Infinity) {
   const run = Display.displayRun(r), o = Display.resultOutcome(run.result, run.meta);
-  return Display.finalLines(run, run.result, run.meta.participant === 'host' || o.ok || o.partial, width)
+  return Display.finalLines(run, run.result, run.meta.participant === 'host' || o.ok || o.partial, width, TERM_C)
     .map((text) => ({ ts: r.original_ended_at ?? r.ended_at, cls: 'plain', text }));
 }
 
@@ -2063,7 +2082,26 @@ function ccLife(t) {
     const age = secSince(quietAt, t);
     return age < OUT_COLLAPSE ? { phase: 'collapse', from: last.ts, to: t, age, kind: 'quiet' } : { phase: 'none', from: last.ts };
   }
+  // 安静收起以后又有了动静：等空档之后真有了输出（回答、改文件）框才回来，只显示空档之后的；
+  // 后台任务交回、跑命令这些不算输出
+  const gap = ccQuietGap(cc, last.ts, t);
+  if (gap) {
+    const after = firstOut(gap.since, t);
+    if (after === Infinity) return laneActive(cc, t) ? { phase: 'gather', from: gap.since, grow: 1 - Math.exp(-(t - gap.until) / 60000) } : { phase: 'none', from: last.ts };
+    return { phase: 'show', from: gap.since, age: secSince(after, t) };
+  }
   return { phase: 'show', from: last.ts, age: secSince(O, t) };
+}
+// 这一段（from 之后）里最近一次安静满 CC_QUIET、后来又有了动静的空档：since 是空档前最后一次动静，until 是空档后的第一次；没有为 null
+function ccQuietGap(cc, from, t) {
+  let prev = null, gap = null;
+  for (const e of cc.events) {
+    if (e.ts <= from) continue;
+    if (e.ts > t) break;
+    if (prev != null && e.ts - prev >= CC_QUIET) gap = { since: prev, until: e.ts };
+    prev = e.ts;
+  }
+  return gap;
 }
 
 // 框的透明度和缩放：展开时从光团里长出来，收起时缩回一颗光点
@@ -2316,13 +2354,23 @@ function recordRate(lane, t, win = WINDOW) {
   return tokens / (win / 1000) + liveRate(lane, t, win);
 }
 
-// 最近 span 毫秒的速度曲线，n 个点
-function sparkline(lane, t, span = 120000, n = 40) {
-  const out = [];
+// 速度曲线：从这条车道第一轮开始到最后一轮结束（还在跑的画到现在），n 个点。结束以后曲线停住，
+// 画的是它在这个对话里的全部时长；每个点取它之前两格宽的平均速度
+function sparkline(lane, t, n = 40) {
+  const replay = B.clock.mode === 'replay', at = (r, k) => (replay ? r[`original_${k}`] ?? r[k] : r[k]);
   t = recordTime(t);
-  for (let i = n - 1; i >= 0; i--) out.push(recordRate(lane, t - (i * span) / n, span / n * 2));
+  const runs = lane.runs.filter((r) => r.kind !== 'answer' && at(r, 'started_at') <= t);
+  if (!runs.length) return new Array(n).fill(0);
+  const start = Math.min(...runs.map((r) => at(r, 'started_at')));
+  const open = runs.some((r) => at(r, 'ended_at') == null || at(r, 'ended_at') > t);
+  const end = open ? t : Math.max(...runs.map((r) => at(r, 'ended_at'))), step = Math.max(1, end - start) / n, out = [];
+  for (let i = 1; i <= n; i++) out.push(recordRate(lane, start + i * step, Math.max(1000, step * 2)));
   return out;
 }
+
+// 用量明确记成全 0（一次请求都没完成）：没有可算的费用。输入和输出都明确是 0（没报的缓存字段可以是 null）才算；
+// 没报用量的（整个是 null，或者输入、输出是 null）不算在内。要看原始的用量，不能看补过 0 的
+const zeroUsage = (u) => !!u && u.input === 0 && u.output === 0 && Object.values(u).every((v) => v === 0 || v == null);
 
 // 一条车道到时刻 t 的统计：已结束的任务用最终用量，进行中的按分段估到 t
 function laneStats(lane, t) {
@@ -2344,9 +2392,10 @@ function laneStats(lane, t) {
     const u = ended || live ? usageOf(r) || (ended ? usageOf(FINAL.get(r.id)) : null) : null;
     if (u) for (const k in sum) sum[k] += u[k];
     const c = ended ? (r.cost_usd ?? FINAL.get(r.id)?.cost_usd) : live ? r.cost_usd : null;
-    // 算不出来：结束了却没有费用的任务，或者 Claude Code 车道有用量却没有费用（模型不在价格表里；它一直在进行中）。
-    // Claude Code 席自己提交的报告按规则不计费，不算
-    if (c == null && r.kind !== 'answer' && (ended || (live && Object.values(r.usage || {}).some((v) => v)))) costPartial = true;
+    // 费用后面的 +：还有没算进来的费用，和宇宙视图同一条规则。还在跑的任务还没有费用；结束了却算不出价的；
+    // Claude Code 车道有用量却没有费用（模型不在价格表里；它一直在进行中）。结束了、用量明确记成全 0 的（一次请求都没完成）没有可算的，
+    // Claude Code 席自己提交的报告按规则不计费，这两种不算；用量没报（null）的照样算不全
+    if (c == null && r.kind !== 'answer' && (live ? Object.values(r.usage || {}).some((v) => v) : !ended || !zeroUsage(r.usage ?? FINAL.get(r.id)?.usage))) costPartial = true;
     // 费用一律按官方 API 价格（服务端算好），这里只是加起来
     if (c != null) { costKnown = true; cost += c; }
     // Claude Code 车道有的消息算不出价：能算的照加，费用后面带 +
@@ -2709,6 +2758,23 @@ function fillCard(el, lane, t) {
 }
 const VIEW_LOD = () => Number(worldEl.dataset.lod || 0);
 
+// 带颜色代码（03-timeline.js 的 TERM_C）的一行拆成文字和带色的片段：每段以 ESC[<代码>m 开头、ESC[0m 结束
+const PAINT_CLASS = { 1: 'c-bold', 2: 'c-dim', 31: 'c-bad', 32: 'c-ok', 33: 'c-warn', 36: 'c-run' };
+function painted(text) {
+  const s = String(text ?? '');
+  if (!s.includes('\x1b[')) return [s];
+  const out = [], re = /\x1b\[(\d+)m/g;
+  let at = 0, cls = null, m;
+  const push = (part) => {
+    if (!part) return;
+    if (!cls) { out.push(part); return; }
+    const span = document.createElement('span'); span.className = cls; span.textContent = part; out.push(span);
+  };
+  while ((m = re.exec(s))) { push(s.slice(at, m.index)); cls = m[1] === '0' ? null : PAINT_CLASS[m[1]] ?? null; at = re.lastIndex; }
+  push(s.slice(at));
+  return out;
+}
+
 function fillTerm(ol, lines) {
   const sig = lines.map((l) => `${l.ts}${l.text}${l.cls}`).join('\n');
   if (ol.dataset.sig === sig) return;
@@ -2724,7 +2790,7 @@ function fillTerm(ol, lines) {
     if (!act) lastMin = m;
     mk.className = 'mk';
     mk.textContent = l.cls === 'plain' ? '' : act ? '│ ' : l.cls.startsWith('user') ? '▌ ' : '◆ ';
-    li.append(ts, mk, l.text);
+    li.append(ts, mk, ...painted(l.text));
     ol.append(li);
   }
 }
@@ -2954,11 +3020,15 @@ function fateAt(lane, r, t) {
   return r.queued ? 'queued' : 'running';
 }
 
-// 改到写入范围外的文件（相对工作目录的路径；绝对路径的改动不判断）
+// 改到写入范围外的文件：进行中按编辑事件判断（相对工作目录的路径；绝对路径的改动不判断），
+// 结束以后再加上结果里写到工作目录外、又不在范围里的文件（和终端 ⚠ 行同一份清单）
 const scopePath = (p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '').toLowerCase();
 function outOfScope(lane, r, t) {
-  if (!r?.scope?.length) return [];
-  const scope = r.scope.map(scopePath), out = new Set();
+  if (!r) return [];
+  const run = r.ended_at != null && r.ended_at <= t && r.display ? Display.displayRun(r) : null;
+  const out = new Set(run ? Display.outsideFiles(run.result, run.meta) : []);
+  if (!r.scope?.length) return [...out];
+  const scope = r.scope.map(scopePath);
   for (const ev of lane.events) {
     if (ev.run !== r.id || ev.k !== 'edit' || ev.ts > t) continue;
     // 比较时不分大小写，显示时用原样的路径
@@ -3009,7 +3079,7 @@ function scopeLead(lane, t) {
 // 底部用量表和顶栏。用量表每条车道一行，最后一行合计；排法和终端区一样：Claude Code 在最前，然后是正在跑的组和任务，
 // 再是已经结束的（最新结束的在前）。组前面有一行简短的组标题（类型 · 标题，右边是各状态的个数），组里的席位按席位号排。
 
-const TABLE_HEAD = ['', 'model', 'status', 'now ≈tok/s', 'last 2 min', 'gen avg ≈tok/s', 'input · cache', 'output', 'cost', 'time'];
+const TABLE_HEAD = ['', 'model', 'status', 'now ≈tok/s', 'tok/s over time', 'gen avg ≈tok/s', 'input · cache', 'output', 'cost', 'time'];
 // 费用：一律按模型官方 API 价格算（插件自带的价格表），悬停在表头和单元格上有说明；+ 表示有的模型不在价格表里
 // 不到 1 美分的按两位有效数字写（便宜的 API 模型一次常常只有零点零几美分），免得显示成 $0.00
 const fmtUsd = (n) => (n > 0 && n < 0.01 ? n.toPrecision(2) : n.toFixed(2));
@@ -3018,7 +3088,7 @@ const fmtCost = (cost, partial = false) => (cost == null ? '—' : `$${fmtUsd(co
 const markMore = (body) => body.classList.toggle('more', body.scrollHeight - body.scrollTop - body.clientHeight > 2);
 // 速度的估算窗口不同，和费用一样把口径放在表头悬停说明里。
 function costHeadTitle(head) {
-  const titles = { cost: TEXT.costTitle, 'now ≈tok/s': TEXT.nowTitle, 'last 2 min': TEXT.recentTitle, 'gen avg ≈tok/s': TEXT.genAvgTitle };
+  const titles = { cost: TEXT.costTitle, 'now ≈tok/s': TEXT.nowTitle, 'tok/s over time': TEXT.recentTitle, 'gen avg ≈tok/s': TEXT.genAvgTitle };
   for (const c of head.children) if (titles[c.textContent]) c.title = titles[c.textContent];
 }
 function renderTable(t) {
@@ -3251,7 +3321,9 @@ function doneLine(u, t) {
     runs = u.lane.runs.filter((x) => x.started_at <= t);
   }
   const cost = runs.reduce((n, r) => n + (r.cost_usd || 0), 0);
-  const partial = runs.some((r) => r.cost_partial || (r.cost_usd == null && r.kind !== 'answer' && r.ended_at != null && r.ended_at <= t));
+  // 和用量表同一条规则（04-rates.js 的 laneStats）：用量明确记成全 0 的没有可算的费用，不带 +
+  const partial = runs.some((r) => r.cost_partial || (r.cost_usd == null && r.kind !== 'answer' && r.ended_at != null && r.ended_at <= t
+    && !zeroUsage(r.usage || FINAL.get(r.id)?.usage)));
   return `▸ ${[title, counts, when, cost ? fmtCost(cost, partial) : null].filter(Boolean).join(' · ')}`;
 }
 function renderDone(done, t, seen) {
@@ -3437,7 +3509,7 @@ function fillSeat(el, lane, t, no, split = false) {
   setText(el.querySelector('.role'), Display.seatLine(run.meta, { title: split }));
   const ol = el.querySelector('.term'), width = Math.max(20, Math.floor((ol.clientWidth || 560) / 6.6) - 4);
   let lines = open ? timeline(lane, t, { open: true }) : ended ? conclusion(r, width)
-    : Display.liveLines(liveState(lane, r, t), 8, width).map((text) => ({ cls: 'plain', text }));
+    : Display.liveLines(liveState(lane, r, t), 8, width, TERM_C).map((text) => ({ cls: 'plain', text }));
   if (!lines.length && st.running && !liveState(lane, r, t).api.req) lines = [{ cls: 'plain', text: Display.D.watchWorking }];
   el.fullLines = lines;
   fillFlow(ol, lines);
@@ -3466,9 +3538,9 @@ function fillHostSeat(el, h, no = 0) {
 'use strict';
 // 宇宙层右上的名额带（只在宇宙层显示）：每个协作方一行，几个并发名额几格；被哪个对话占着就亮成那个对话的标记色，排队等服务的格子闪烁。
 // 每个对话有一个按 id 定的标记色，名额格、用量表里同一个对话颜色一样；鼠标移上去时星图里那个星系高亮。
-// 对话按 等你确认 › 派发中 › 思考中 › 空闲 排，同一档里最近活动的在前（底部用量表的顺序，07-uni-table.js）。
+// 底部用量表的顺序（07-uni-table.js）：进行中的对话（等你确认、派发中、思考中）在前，固定按最近一轮用户消息的时间排，新的在上，
+// 状态来回切换、有新动静时都不挪位置；空闲的在后，最近活动的在前。
 
-const STATE_ORDER = { waiting: 0, dispatching: 1, thinking: 2, idle: 3 };
 const STATE_WORD = TEXT.states;
 const SIDE = { slots: new Map(), sigSlots: '' };
 // 标记色按对话出现的先后分配：相邻两个隔一个黄金角（约 137.5°），颜色总是拉得开；分到以后这个页面里不再变
@@ -3481,7 +3553,9 @@ function markOf(id, a = 1) {
   }
   return `hsl(${MARKS.get(id)} 72% 66% / ${a})`;
 }
-const byState = (a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || b.last_at - a.last_at;
+const roundAt = (s) => s.prompt_at ?? s.started_at ?? 0; // 旧服务没有 prompt_at 时退回对话开始的时间
+const byState = (a, b) => (a.state === 'idle') - (b.state === 'idle')
+  || (a.state === 'idle' ? b.last_at - a.last_at : roundAt(b) - roundAt(a)) || (a.id < b.id ? -1 : 1);
 // 在跑的席位数用不截断的计数（runs 摘要最多 16 条，会漏）
 const runningOf = (s) => s.counts?.running ?? s.runs.filter((r) => r.status === 'running').length;
 // 协作方代号去掉末尾表示接入方式的几段（-codex-cli、-opencode-cli-ocgo、-pi-cli-api 这类），名额带上更短；

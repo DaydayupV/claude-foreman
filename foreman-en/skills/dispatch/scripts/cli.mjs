@@ -8,7 +8,7 @@ import { HERE, M, die, need, resolveDir, readBrief, isGitRepo, isAscii, agentTyp
 
 // 只输出结果的子命令接到 head 这类提前关掉管道的命令上时，写 stdout 会抛 EPIPE：读的一方已经够了，安静退出，
 // 不打 Node 的堆栈。会派活、会改记录的子命令不这样处理（中途退出会丢掉收尾）
-if (['status', 'stats', 'result', 'config'].includes(process.argv[2])) {
+if (['status', 'stats', 'config'].includes(process.argv[2])) {
   process.on('uncaughtException', (e) => {
     if (e?.code === 'EPIPE') process.exit(0);
     console.error(e);
@@ -61,6 +61,8 @@ const { RUNS_ROOT, CLAUDE_SESSION, findRun, isRunning } = records; // 记录目�
 
 function parseArgs(argv) {
   const [cmd, ...rest] = argv;
+  // judge 的去留和 --same 可以写几次，几次的值合在一起（不然后写的会悄悄盖掉前面的）
+  const JUDGE_LISTS = ['accept', 'partial', 'reject', 'same', 'clear'];
   const opts = { 'add-dir': [], track: [], scope: [], file: [], ...(cmd === 'plan' ? { seat: [] } : {}) };
   // assets 的第一个参数是动作（template、cut 等），不是选项。
   if (cmd === 'assets' && rest[0] && !rest[0].startsWith('--')) opts.action = rest.shift();
@@ -72,6 +74,7 @@ function parseArgs(argv) {
     const val = rest[++i];
     if (val === undefined) die(M.missingValue(a));
     if (key === 'add-dir' || key === 'track' || key === 'scope' || key === 'file' || key === 'seat' && cmd === 'plan') opts[key].push(val);
+    else if (cmd === 'judge' && JUDGE_LISTS.includes(key)) (opts[key] ??= []).push(val); // 没写的选项保持没写
     else opts[key] = val;
   }
   return { cmd, opts };
@@ -165,7 +168,11 @@ async function cmdResume(o) {
   const cfg = load(parent.meta.cwd);
   const brief = readBrief(o);
   // 什么模型都没配置时沿用上一轮记录的模型，同一会话不中途换模型。
-  const profile = resolveProfile(cfg, { module: image ? 'image' : discuss ? 'discuss' : 'run', cell: image ? parent.meta.cell : undefined, plan: parent.meta.plan, seat: parent.meta.seat, role: parent.meta.role, outside_cell: parent.meta.outside_cell }, o, adapters, parent.meta.model, parent.meta.agent || 'codex', parent.meta.cell ?? parent.meta.level);
+  const profile = resolveProfile(cfg, { module: image ? 'image' : discuss ? 'discuss' : 'run', cell: image ? parent.meta.cell : undefined,
+    plan: parent.meta.plan, seat: parent.meta.seat, role: parent.meta.role, outside_cell: parent.meta.outside_cell,
+    // 不在计划里的任务、等级没变时沿用上一轮实际用的推理强度（首轮 --effort high 的，续接不掉回默认）；换了等级按新等级的规则
+    ...(!parent.meta.plan && parent.meta.effort !== undefined && o.level === (parent.meta.cell ?? parent.meta.level) ? { effort: parent.meta.effort } : {}),
+  }, o, adapters, parent.meta.model, parent.meta.agent || 'codex', parent.meta.cell ?? parent.meta.level);
   return adapters[profile.agent.type].execute({ cfg, ...profile, mode: 'resume', kind, cwd: parent.meta.cwd, brief, addDirs,
     ...(image ? { step: parent.meta.step, route: parent.meta.route } : {}),
     title: o.title || parent.meta.title, parent: parent.id, parentDir: parent.dir, sessionId: parent.meta.session_id,
@@ -225,8 +232,8 @@ async function cmdBoard(o) {
   if (o.session !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(o.session)) die(M.badArg(`--session ${o.session}`));
   if (o.stop && o.replay != null) die(M.badArg('--replay'));
   const cfg = load(null);
-  // 关掉的时候不看 dispatch.web：服务可能是开着的时候启动的
-  if (!cfg.dispatch.web && !o.stop) {
+  // 关掉的时候不看 dispatch.watch.web：服务可能是开着的时候启动的
+  if (!cfg.dispatch.watch.web && !o.stop) {
     process.stdout.write(JSON.stringify({ enabled: false, message: M.boardOff }, null, 2) + '\n');
     return;
   }
@@ -392,7 +399,7 @@ async function cmdCheck(o) {
     git: { ok: gitOk, version: gitVersion, fix: gitOk ? null : M.fixGit(gitVersion) },
     // 只影响桌面版终端面板里的实时查看，不计入总体结果
     watch: { ok: isAscii(path.join(RUNS_ROOT, 'watch.mjs')), launcher: path.join(RUNS_ROOT, 'watch.mjs'), fix: isAscii(path.join(RUNS_ROOT, 'watch.mjs')) ? null : M.fixLauncherNotAscii },
-    memory: { total_gb, available_gb, enough: total_gb >= 8 && (process.platform === 'darwin' || available_gb >= 2), web: cfg.dispatch.web },
+    memory: { total_gb, available_gb, enough: total_gb >= 8 && (process.platform === 'darwin' || available_gb >= 2), web: cfg.dispatch.watch.web },
     agents: {},
   };
   const variants = new Map(), usedModes = new Map();

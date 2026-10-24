@@ -243,7 +243,8 @@ export function runMessage(run, lane, prices, byId, { display: includeDisplay = 
     model_name: clip(m.model_name), display_model: clip(m.model || m.model_name || m.model_shown), cell: clip(m.cell), route: m.route ?? null,
     usage, ...(r?.usage_scope != null ? { usage_scope } : {}), ...(usage_unattributed ? { usage_unattributed: true } : {}),
     ...costFields(cost.cost_usd, cost.cost_source), report_head: head ? String(head).slice(0, 160) : null,
-    changed: (r?.changes?.files || []).slice(0, 40).map((f) => Object.fromEntries(['path', 'kind', 'added', 'removed'].filter((k) => k in f).map((k) => [k, f[k]]))),
+    // 同组别的任务改的文件（group_run）不算这一席的，卡片的产出框不列
+    changed: (r?.changes?.files || []).filter((f) => !f.group_run).slice(0, 40).map((f) => Object.fromEntries(['path', 'kind', 'added', 'removed'].filter((k) => k in f).map((k) => [k, f[k]]))),
     review: kind === 'review' && r?.report ? { verdict: clip(r.report.verdict, 120),
       // 审查报告的字段名见 foreman 的 review.schema.json：位置是 location，问题是 issue
       findings: (r.report.findings || []).slice(0, 8).map((f) => { const value = finding(f); return { severity: clip(value.severity, 120), where: clip(value.location, 120), title: clip(value.issue, 120) }; }) } : null,

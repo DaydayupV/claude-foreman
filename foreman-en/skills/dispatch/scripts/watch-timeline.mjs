@@ -367,10 +367,14 @@ function createTimeline(meta, rel, { stream = false, write = (l) => process.stdo
       for (const q of midRun) para(`· ${oneLine(q.question)}`, '  ');
     }
     // 报错：先按纯文字折行，再给行首的记号上色，免得颜色码算进宽度
+    // 超时或取消以后只有第一条错误是原因，后面的用暗色的 · 标（和分组查看、网页一致，见 display.mjs 的 finalLines）
     const [mark, color] = r.status === 'needs_input' ? ['?', C.yellow] : ['✗', C.red];
-    for (const e of realErrors(r, o.ok || o.partial)) {
-      add((W) => wrapWidth(`${mark} ${oneLine(e)}`, Math.max(8, W - 5)).map((l, i) => `  ${i ? `  ${l}` : color(mark) + l.slice(mark.length)}`));
-    }
+    const secondary = ['timeout', 'cancelled'].includes(r.status);
+    realErrors(r, o.ok || o.partial).forEach((e, n) => {
+      const [m, paint] = secondary && n > 0 ? ['·', C.dim] : [mark, color];
+      add((W) => wrapWidth(`${m} ${oneLine(e)}`, Math.max(8, W - 5)).map((l, i) => (secondary && n > 0 ? C.dim(`  ${i ? `  ${l}` : l}`)
+        : `  ${i ? `  ${l}` : paint(m) + l.slice(m.length)}`)));
+    });
     return o;
   };
 

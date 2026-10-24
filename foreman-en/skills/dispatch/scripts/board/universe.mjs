@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promptOf, toolsOf } from './claude-feed.mjs';
+import { queuedRuns } from '../records.mjs';
 import { ms, transient, stat, json, newTail, readLines, append, runMessage, laneOf, settleRun,
   usageTotals, hostCost, costFields, createFeed, buildReplay, replayClock } from './feed.mjs';
 
@@ -133,16 +134,19 @@ function queueOf(raw, state) {
   if (raw.type?.startsWith('api.')) { state.queued = raw.type === 'api.queued'; state.since = state.queued ? ms(raw.ts) : null; }
   else if (raw.type === 'pi.progress' || raw.type?.startsWith('item.')) { state.queued = false; state.since = null; }
 }
-export function stateOf(session, runs, now) {
+export function stateOf(session, runs, now, queued = []) {
   const tools = [...session.tools.values()], waiting = tools.find((t) => ['AskUserQuestion', 'ExitPlanMode'].includes(t.tool)) || null;
   // 等待用户优先于派发；end_turn 只关闭最近消息带来的思考状态。
-  const state = waiting ? 'waiting' : runs.some((r) => r.status === 'running') ? 'dispatching'
+  const state = waiting ? 'waiting' : queued.length || runs.some((r) => r.status === 'running') ? 'dispatching'
     : now - session.last_at < 90000 && !(session.last?.type === 'assistant' && session.last.stop === 'end_turn')
       || tools.some((t) => now - t.since < 600000) ? 'thinking' : 'idle';
   return { state, waiting };
 }
-function summaryOf(session, all, now, hours, prices, meter) {
+// 输入和输出都明确是 0（一次请求都没完成）；没报用量的不算（和 board/web/04-rates.js 同一条规则）
+const zeroUsage = (u) => !!u && u.input === 0 && u.output === 0 && Object.values(u).every((v) => v === 0 || v == null);
+function summaryOf(session, all, now, hours, prices, meter, waiting = []) {
   const cutoff = now - hours * 3600000, own = all.filter((r) => r.session === session.id && !r.host);
+  const queued = waiting.filter((q) => q.claude_session === session.id);
   const counted = own.filter((r) => r.started_at >= cutoff), counts = { running: 0, done: 0, failed: 0 };
   for (const run of counted) counts[run.status === 'running' ? 'running' : run.status === 'done' ? 'done' : 'failed']++;
   const runs = own.filter((r) => r.status === 'running' || r.ended_at >= now - 600000)
@@ -163,15 +167,18 @@ function summaryOf(session, all, now, hours, prices, meter) {
   // 整组都结束以后不再列
   const unitOf = (r) => r.group ?? r.plan ?? r.lane ?? r.id, laneOf = (r) => r.lane ?? r.id;
   const sameSeat = (a, b) => laneOf(a) === laneOf(b) || a.plan != null && a.seat != null && a.plan === b.plan && a.seat === b.seat;
-  const live = new Set(own.filter((r) => r.status === 'running').map(unitOf));
+  const live = new Set(own.filter((r) => r.status === 'running' || queued.some((q) => q.group != null
+    ? q.group === r.group : q.plan != null && q.plan === r.plan)).map(unitOf));
   const issues = own.filter((r) => r.status !== 'running' && r.status !== 'done' && r.ended_at != null && live.has(unitOf(r))
     && !own.some((x) => x !== r && sameSeat(x, r) && x.started_at > r.started_at))
     .sort((a, b) => a.ended_at - b.ended_at).slice(0, 12).map((r) => ({ status: r.status, run: r.id, model: r.model }));
-  const state = stateOf(session, runs, now);
+  const state = stateOf(session, runs, now, queued);
   return { id: session.id, project: keyOf(projectOf(session)), cwd: session.cwd, title: session.title ?? session.firstPrompt, model: session.model,
-    state: state.state, waiting: state.waiting, started_at: session.started_at, last_at: session.last_at, runs, counts,
-    // 还在跑的运行没有费用、有的模型不在价格表里：能算的照样加起来，另外标出不完整，不让整份变成未知
-    usage: meter ? meter.totals : usageTotals(usage), cost_usd: cost, cost_partial: costs.some((c) => c.cost_usd == null), alert, issues };
+    // prompt_at：最近一条用户消息的时间，宇宙列表里进行中的对话按它排（新的在上），不随动静跳来跳去
+    state: state.state, waiting: state.waiting, started_at: session.started_at, last_at: session.last_at, prompt_at: Number.isFinite(session.promptAt) ? session.promptAt : null, runs, counts,
+    // 还在跑的运行没有费用、有的模型不在价格表里：能算的照样加起来，另外标出不完整，不让整份变成未知；
+    // 用量明确记成全 0 的（一次请求都没完成）没有可算的费用，不算不完整（和单对话视图同一条规则）
+    usage: meter ? meter.totals : usageTotals(usage), cost_usd: cost, cost_partial: costs.some((c) => c.cost_usd == null && !zeroUsage(c.usage)), alert, issues };
 }
 
 function equalReplay(a, b) {
@@ -356,8 +363,11 @@ export function createUniverse(options) {
     }
     for (const id of sessions.keys()) if (!found.has(id)) sessions.delete(id);
     const hidden = hiddenNow();
+    // 排队目录一时读不了（别的进程正在建、删票据，或者被占用）：这一拍按没有票据算，不让整份星图读不出来
+    let waiting = [];
+    try { waiting = queuedRuns(null, options.runs); } catch { /* 下一拍再读 */ }
     const all = readRuns(now), selected = [...sessions.values()].filter((s) => s.last_at != null && s.last_at >= cutoff && !hidden.has(s.id)).sort((a, b) => b.last_at - a.last_at || a.id.localeCompare(b.id)).slice(0, 200);
-    const summaries = selected.map((s) => summaryOf(s, all, now, hours, options.prices));
+    const summaries = selected.map((s) => summaryOf(s, all, now, hours, options.prices, undefined, waiting));
     return { v: 3, now, window_h: hours, projects: projectsOf([...selected].sort((a, b) => b.cwdAt - a.cwdAt), older, folders), sessions: summaries,
       // 名额和对话列表同一个口径：桌面版里归档、删掉的对话，它的任务不占"同时运行"的格子（不然点了飞不进去）
       agents: agentSlots(config, hidden.size ? all.filter((r) => !hidden.has(r.session)) : all) };
