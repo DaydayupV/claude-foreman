@@ -18,4 +18,4 @@ If it was opened in the terminal panel, send the user the tab link.
 
 **Web board**: besides the terminal, run `node "${CLAUDE_PLUGIN_ROOT}/skills/dispatch/scripts/cli.mjs" board` and read its JSON.
 - `enabled` is `true`: send the user the `url` as a link, for example `[web board](<url>)`, saying it opens in their default browser, straight into this conversation's board; zooming out shows every conversation on this computer. **Don't open it with any browser tool** (neither the app's browser pane nor Claude in Chrome); the user clicks the link.
-- `enabled` is `false`: say "The web board is off", and that `/foreman-en:setup` or setting `dispatch.web` to `true` in the config turns it on.
+- `enabled` is `false`: say "The web board is off", and that `/foreman-en:setup` or setting `dispatch.watch.web` to `true` in the config turns it on.

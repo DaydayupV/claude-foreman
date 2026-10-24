@@ -18,4 +18,4 @@ disable-model-invocation: true
 
 **网页看板**：终端之外，再运行 `node "${CLAUDE_PLUGIN_ROOT}/skills/dispatch/scripts/cli.mjs" board`，读输出的 JSON。
 - `enabled` 为 `true`：把 `url` 写成链接发给用户，比如 `[网页看板](<url>)`，说明点开会在本机的默认浏览器里打开，直接进入这个对话的看板，再往外缩能看到本机所有对话。**不要用任何浏览器工具替用户打开**（应用里的网页面板、Claude in Chrome 都不用），由用户自己点链接。
-- `enabled` 为 `false`：写一句"网页看板未开启"，并说明可以用 `/foreman:setup` 或在配置里把 `dispatch.web` 设成 `true` 打开。
+- `enabled` 为 `false`：写一句"网页看板未开启"，并说明可以用 `/foreman:setup` 或在配置里把 `dispatch.watch.web` 设成 `true` 打开。

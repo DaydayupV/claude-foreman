@@ -67,7 +67,7 @@ node server.mjs --replay <conversation | run id | group | all> [--speed <N>] [--
 ```
 { "id", "project": <project key>, "cwd", "title", "model",
   "state": "waiting" | "dispatching" | "thinking" | "idle",
-  "started_at", "last_at",
+  "started_at", "last_at", "prompt_at",
   "waiting": { "tool", "since", "header" } | null,
   "runs": [ { "id", "lane", "kind", "agent", "model", "group", "plan", "seat", "role", "title", "status", "started_at", "ended_at", "queued" } ],
   "counts": { "running", "done", "failed" },
@@ -81,6 +81,8 @@ node server.mjs --replay <conversation | run id | group | all> [--speed <N>] [--
 - `title`: the newest `custom-title` entry's title. Otherwise the first `prompt` (v2 rule) cut to 60 characters. Otherwise null.
 - `model`: the newest assistant entry's `message.model`.
 - `started_at` / `last_at`: timestamps of the first and the newest entry used.
+- `prompt_at`: timestamp of the newest user message (the same rule as a v2 `prompt`), or null. The page orders conversations that are not idle by it, newest first, so they keep their place while their state and activity change; idle ones follow, newest `last_at` first.
+- A user message: on entries that carry `origin.kind` or `turnOrigin` (newer Claude Code), only `human` and `peer` (a message from another session) count; on older entries, `isMeta` entries do not count, and `<system-reminder>` blocks are removed before the text is judged.
 
 **`runs`**
 - Covers runs whose `meta.claude_session` is this id. Host answers (`meta.participant === 'host'`) are left out.
@@ -92,7 +94,7 @@ node server.mjs --replay <conversation | run id | group | all> [--speed <N>] [--
 **`usage` and `cost_usd`**
 - `usage` is the transcript usage within the window, summed as in v2 §3.
 - `cost_usd` is that usage priced as in v2, plus the cost of the runs counted in `counts`.
-- Parts without a price (a run still running, a model missing from `prices.json`) count as 0, and `cost_partial` is then true.
+- Parts without a price (a run still running, a model missing from `prices.json`) count as 0, and `cost_partial` is then true. A run that ended with every usage field at 0 (no request ever completed) has nothing to price and does not set it. The single-conversation board marks its totals the same way.
 - `cost_usd` is null only when no part has a price.
 
 **`alert`**
@@ -117,7 +119,7 @@ Rules in priority order; the first that holds wins.
 1. **`waiting`**: an `AskUserQuestion` or `ExitPlanMode` `tool_use` has no `tool_result` yet.
    - `waiting.tool` is the tool name, and `waiting.since` is the `tool_use` entry's timestamp.
    - `waiting.header` is `input.questions[0].header` (at most 24 characters) for AskUserQuestion, otherwise null.
-2. **`dispatching`**: one of `runs` has status `running`.
+2. **`dispatching`**: one of `runs` has status `running`, or the conversation has a dispatch queue ticket waiting for a slot. A group whose only remaining part is a queued ticket still counts as going for `issues`.
 3. **`thinking`**: holds when either of these is true:
    - `now − last_at < 90 s`, unless the newest entry is an assistant entry with `message.stop_reason === "end_turn"`;
    - some other `tool_use` without a `tool_result` started less than 10 minutes ago.

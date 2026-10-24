@@ -240,13 +240,23 @@ function recordRate(lane, t, win = WINDOW) {
   return tokens / (win / 1000) + liveRate(lane, t, win);
 }
 
-// 最近 span 毫秒的速度曲线，n 个点
-function sparkline(lane, t, span = 120000, n = 40) {
-  const out = [];
+// 速度曲线：从这条车道第一轮开始到最后一轮结束（还在跑的画到现在），n 个点。结束以后曲线停住，
+// 画的是它在这个对话里的全部时长；每个点取它之前两格宽的平均速度
+function sparkline(lane, t, n = 40) {
+  const replay = B.clock.mode === 'replay', at = (r, k) => (replay ? r[`original_${k}`] ?? r[k] : r[k]);
   t = recordTime(t);
-  for (let i = n - 1; i >= 0; i--) out.push(recordRate(lane, t - (i * span) / n, span / n * 2));
+  const runs = lane.runs.filter((r) => r.kind !== 'answer' && at(r, 'started_at') <= t);
+  if (!runs.length) return new Array(n).fill(0);
+  const start = Math.min(...runs.map((r) => at(r, 'started_at')));
+  const open = runs.some((r) => at(r, 'ended_at') == null || at(r, 'ended_at') > t);
+  const end = open ? t : Math.max(...runs.map((r) => at(r, 'ended_at'))), step = Math.max(1, end - start) / n, out = [];
+  for (let i = 1; i <= n; i++) out.push(recordRate(lane, start + i * step, Math.max(1000, step * 2)));
   return out;
 }
+
+// 用量明确记成全 0（一次请求都没完成）：没有可算的费用。输入和输出都明确是 0（没报的缓存字段可以是 null）才算；
+// 没报用量的（整个是 null，或者输入、输出是 null）不算在内。要看原始的用量，不能看补过 0 的
+const zeroUsage = (u) => !!u && u.input === 0 && u.output === 0 && Object.values(u).every((v) => v === 0 || v == null);
 
 // 一条车道到时刻 t 的统计：已结束的任务用最终用量，进行中的按分段估到 t
 function laneStats(lane, t) {
@@ -268,9 +278,10 @@ function laneStats(lane, t) {
     const u = ended || live ? usageOf(r) || (ended ? usageOf(FINAL.get(r.id)) : null) : null;
     if (u) for (const k in sum) sum[k] += u[k];
     const c = ended ? (r.cost_usd ?? FINAL.get(r.id)?.cost_usd) : live ? r.cost_usd : null;
-    // 算不出来：结束了却没有费用的任务，或者 Claude Code 车道有用量却没有费用（模型不在价格表里；它一直在进行中）。
-    // Claude Code 席自己提交的报告按规则不计费，不算
-    if (c == null && r.kind !== 'answer' && (ended || (live && Object.values(r.usage || {}).some((v) => v)))) costPartial = true;
+    // 费用后面的 +：还有没算进来的费用，和宇宙视图同一条规则。还在跑的任务还没有费用；结束了却算不出价的；
+    // Claude Code 车道有用量却没有费用（模型不在价格表里；它一直在进行中）。结束了、用量明确记成全 0 的（一次请求都没完成）没有可算的，
+    // Claude Code 席自己提交的报告按规则不计费，这两种不算；用量没报（null）的照样算不全
+    if (c == null && r.kind !== 'answer' && (live ? Object.values(r.usage || {}).some((v) => v) : !ended || !zeroUsage(r.usage ?? FINAL.get(r.id)?.usage))) costPartial = true;
     // 费用一律按官方 API 价格（服务端算好），这里只是加起来
     if (c != null) { costKnown = true; cost += c; }
     // Claude Code 车道有的消息算不出价：能算的照加，费用后面带 +

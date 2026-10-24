@@ -96,7 +96,7 @@ function normalizeModules(cfg) {
   return { ...cfg, modules };
 }
 const DEFAULT_CONFIG = {
-  dispatch: { auto: true, watch: 'auto', web: false, intro: true, discuss_max_rounds: 2, timeout_min: 480, stall_min: 40, busy_ask_min: 2, runs_dir: null },
+  dispatch: { auto: true, watch: { terminal: true, web: false }, intro: true, discuss_max_rounds: 2, timeout_min: 480, stall_min: 40, busy_ask_min: 2, runs_dir: null },
   agents: {},
   modules: { ...Object.fromEntries(MODES.map((mode) => [mode, Object.fromEntries(LEVELS.map((lv) => [lv, CLAUDE_CODE]))])), image: { generate: null, draw: null } },
 };
@@ -203,6 +203,17 @@ function migrateConfig(config, file, base, project) {
   }
   let result = old ? mergeConfig(legacy, current) : current;
   for (const key of oldKeys) delete result[key];
+  // 新对象优先于旧 web；用户配置缺省时补齐两项，项目配置只转换已有的开关。
+  let watch = false;
+  if (isObject(result.dispatch) && (!project || ['watch', 'web'].some((key) => Object.hasOwn(result.dispatch, key)))
+    || !project && result.dispatch === undefined) {
+    const { web, ...dispatch } = result.dispatch || {};
+    if (!Object.hasOwn(dispatch, 'watch') || ['auto', 'off'].includes(dispatch.watch)) {
+      dispatch.watch = { terminal: dispatch.watch !== 'off', web: web === undefined ? false : web };
+    }
+    watch = !isDeepStrictEqual(result.dispatch, dispatch);
+    result = { ...result, dispatch };
+  }
   if (isObject(result.modules)) result.modules = mapCells(result.modules, (value, { module, cell }) => {
     if (value === 'claude') return CLAUDE_CODE;
     if (!isObject(value) && !Array.isArray(value)) return value;
@@ -227,8 +238,6 @@ function migrateConfig(config, file, base, project) {
   });
   if (old && !project) {
     result = mergeConfig(Object.hasOwn(config, 'modules') ? DEFAULT_CONFIG : LEGACY_DEFAULT_CONFIG, result);
-    // 旧版可能不认识 web，迁移只保留用户显式写入的值。
-    if (!Object.hasOwn(config.dispatch || {}, 'web')) delete result.dispatch.web;
   }
   if (old && isObject(result.modules)) result.modules = mapCells(result.modules, (value) => value === 'claude' ? CLAUDE_CODE : isObject(value) ? [value] : value);
   if (project && (old || hasLevels)) notice(M.projectOldFormat(file));
@@ -237,7 +246,7 @@ function migrateConfig(config, file, base, project) {
     return cells === undefined || isObject(cells) && (!Object.hasOwn(cells, 'seats')
       || isObject(cells.seats) && LEVELS.some((cell) => !Object.hasOwn(cells.seats, cell)));
   });
-  return { config: result, old, modules: hasLevels, seats, note };
+  return { config: result, old, modules: hasLevels, seats, note, watch };
 }
 
 function renameAgentsByModel(config, adapters) {
@@ -279,8 +288,8 @@ function migrateStructure(config, file, base, project, adapters) {
   if (!project && migratedConfigs.has(file)) return migratedConfigs.get(file);
   const converted = migrateConfig(config, file, base, project);
   if (project) return converted.config;
-  if (!converted.old && !converted.modules && !converted.seats.length) return config;
-  let result = structuredClone(converted.old || converted.modules ? converted.config : config);
+  if (!converted.old && !converted.modules && !converted.seats.length && !converted.watch) return config;
+  let result = structuredClone(converted.old || converted.modules || converted.watch ? converted.config : config);
   if (converted.old && isObject(config.agents) && !Object.hasOwn(config.agents, 'codex')
     && !eachEntry(result.modules).some(({ item }) => item?.agent === 'codex')) delete result.agents.codex;
   for (const agent of Object.values(result.agents || {})) if (Object.hasOwn(OLD_TYPES, agent?.type)) agent.type = OLD_TYPES[agent.type];
@@ -345,10 +354,12 @@ function migrateStructure(config, file, base, project, adapters) {
     replaceFile(tmp, file);
     if (converted.old) notice(M.configStructureMigrated(file, bak, M.list(Object.entries(renamed.aliases).map(([a, b]) => `${a} → ${b}`))));
     if (converted.modules) notice(M.configModulesMigrated(file, bak));
+    // 两个实时查看开关写全了：说一句，旧版插件读不了这种写法
+    if (converted.watch) notice(M.configWatchWritten(file, bak));
     if (converted.seats.length) notice(M.configSeatsWritten(file, bak, M.list(converted.seats.map((module) =>
       `${M.reportModuleNames[module].toLowerCase()} ${LEVELS.map((cell) => result.modules[module].seats[cell]).join('/')}`))));
   } catch (e) {
-    if (converted.old || converted.modules) notice(M.configMigrateFailed(file, e.message));
+    if (converted.old || converted.modules || converted.watch) notice(M.configMigrateFailed(file, e.message));
     else if (!invalid) notice(M.configSeatsWriteFailed(file, e.message));
   } finally {
     fs.rmSync(tmp, { force: true });
@@ -366,8 +377,8 @@ function validateConfig(cfg, adapters, fail = die) {
   const text = (v) => typeof v === 'string' && !!v.trim();
   for (const key of ['dispatch', 'agents', 'modules']) check(isObject(cfg[key]), key, why.object);
   check(typeof cfg.dispatch.auto === 'boolean', 'dispatch.auto', why.boolean);
-  check(['auto', 'off'].includes(cfg.dispatch.watch), 'dispatch.watch', why.watch);
-  check(typeof cfg.dispatch.web === 'boolean', 'dispatch.web', why.boolean);
+  if (!isObject(cfg.dispatch.watch) || Object.keys(cfg.dispatch.watch).length !== 2
+    || !['terminal', 'web'].every((key) => typeof cfg.dispatch.watch[key] === 'boolean')) fail(M.watchShape);
   check(typeof cfg.dispatch.intro === 'boolean', 'dispatch.intro', why.boolean);
   check(Number.isInteger(cfg.dispatch.discuss_max_rounds) && cfg.dispatch.discuss_max_rounds >= 1, 'dispatch.discuss_max_rounds', why.positiveInt);
   for (const key of ['timeout_min', 'stall_min', 'busy_ask_min']) check(Number.isFinite(cfg.dispatch[key]) && (key === 'timeout_min' ? cfg.dispatch[key] > 0 : cfg.dispatch[key] >= 0), `dispatch.${key}`, why.minutes);
@@ -532,8 +543,6 @@ const API_STARTERS = [
 ];
 function buildStarterConfig(environment) {
   const cfg = structuredClone(DEFAULT_CONFIG);
-  // web 的默认值只在加载时补齐，不自动写进用户配置。
-  delete cfg.dispatch.web;
   if (environment.codex.found && environment.codex.logged_in) {
     for (const model of ['gpt-6.1-sol', 'gpt-6-astra']) cfg.agents[model] = { type: 'codex cli', model };
     cfg.modules.run.complex = [{ agent: 'gpt-6.1-sol', effort: 'max' }];

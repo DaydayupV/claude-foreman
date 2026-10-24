@@ -127,6 +127,9 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 .term .node, .term .user, .term .link { color: var(--text); }
 .term .node .mk, .term .user .mk { color: var(--tint); }
 .term .bad { color: var(--bad); }
+/* 结论、错误、越界写入这些行里带色的片段（06-cards.js 的 painted），颜色和终端一致 */
+.term .c-bad { color: var(--tone-bad); } .term .c-ok { color: var(--tone-ok); } .term .c-warn { color: var(--tone-warn); }
+.term .c-run { color: var(--tone-run); } .term .c-dim { color: var(--tone-dim); } .term .c-bold { font-weight: 600; }
 .term .fold { color: var(--dim); }
 .card .think { position: absolute; left: 5px; right: 4px; bottom: 2px; color: var(--dim); font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
@@ -219,13 +222,17 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
    展开的组排成一排，栏的样子和上面运行中的一样（栏头可以点着收起）；折起来的一组一行，列在下面 */
 #termsec:has(#termdone:not([hidden])) { grid-template-rows: auto 1fr auto; }
 #termsec:has(#termdone .row > .tcol) { grid-template-rows: auto 1fr 1fr; }
+/* 上面一排没有正在运行的组时不占高度，结束的组用满整个终端区（不然展开的那组只剩半屏再被下面的列表挤矮） */
+#termsec:has(#terms:empty):has(#termdone:not([hidden])) { grid-template-rows: auto 0 1fr; }
 #termdone { display: flex; flex-direction: column; gap: 4px; min-height: 0; }
 #termdone[hidden] { display: none; }
 #termdone > .sub { flex: none; display: flex; align-items: center; gap: 8px; padding-left: 6px; color: var(--dim); font-size: 10px; }
 #termdone > .sub::after { content: ""; flex: 1; border-top: 1px dashed rgba(200,200,212,.12); }
-#termdone > .row { flex: 1; display: flex; gap: 8px; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
+#termdone > .row { flex: 1 1 0; display: flex; gap: 8px; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
 #termdone > .row:empty, #termdone > .lines:empty { display: none; }
-#termdone > .lines { flex: none; max-height: 30vh; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
+/* 展开的结束组至少留六成高度；折起来的列表在剩下的地方滚动 */
+#termdone > .row:not(:empty) { min-height: 60%; }
+#termdone > .lines { flex: 0 1 auto; min-height: 0; max-height: 30vh; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
 #termdone .dline { cursor: pointer; color: var(--mid); font-size: 10.5px; padding: 2px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #termdone .dline:hover { color: var(--text); background: rgba(255,255,255,.04); }
 .tcol.done-open > header { cursor: pointer; }

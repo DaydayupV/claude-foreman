@@ -8,8 +8,15 @@ const slash = (v) => String(v).replace(/\\/g, '/');
 
 export function promptOf(row) {
   if (row.isSidechain || row.type !== 'user') return null;
-  const value = text(row.message?.content).trim();
-  return value && !/^<(?:system-reminder>|command-|local-command|task-notification>)/.test(value) ? first(value) : null;
+  let value = text(row.message?.content).replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
+  const origin = row.origin?.kind ?? row.turnOrigin;
+  // 新记录按来源认用户和会话消息；旧记录排除元数据，再按去掉提醒块的正文判断。
+  if (origin != null ? !['human', 'peer'].includes(origin)
+    : row.isMeta || /^<(?:system-reminder>|command-|local-command|task-notification>)/.test(value)) return null;
+  if (origin === 'peer') value = /<cross-session-message\b[^>]*>([\s\S]*?)<\/cross-session-message>/.exec(value)?.[1] ?? value;
+  const command = /<command-name>([\s\S]*?)<\/command-name>/.exec(value)?.[1];
+  if (command) value = [command.trim(), /<command-args>([\s\S]*?)<\/command-args>/.exec(value)?.[1]?.trim()].filter(Boolean).join(' ');
+  return first(value) || null;
 }
 
 export function toolsOf(row) {
@@ -88,7 +95,7 @@ export function createTranscriptParser(ctx) {
     if (row.type === 'user') {
       const value = text(content).trim(), task = /<task-notification>[\s\S]*?<task-id>([^<]+)<\/task-id>/.exec(value)?.[1];
       if (task && Object.hasOwn(tasks, task)) emit('returned', { t: /<status>([^<]*)<\/status>/.exec(value)?.[1] || '', target: tasks[task] });
-      else if (value && !/^<(?:system-reminder>|command-|local-command|task-notification>)/.test(value)) emit('prompt', { t: first(value) });
+      else { const prompt = promptOf(row); if (prompt) emit('prompt', { t: prompt }); }
       for (const block of blocks.filter((b) => b.type === 'tool_result')) {
         const tool = tools.get(block.tool_use_id), taskId = /running in background with ID: (\w+)/.exec(text(block.content))?.[1];
         if (tool?.k === 'dispatch' && taskId) tasks[taskId] = tool.target || [];

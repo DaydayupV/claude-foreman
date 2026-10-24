@@ -184,7 +184,26 @@ function ccLife(t) {
     const age = secSince(quietAt, t);
     return age < OUT_COLLAPSE ? { phase: 'collapse', from: last.ts, to: t, age, kind: 'quiet' } : { phase: 'none', from: last.ts };
   }
+  // 安静收起以后又有了动静：等空档之后真有了输出（回答、改文件）框才回来，只显示空档之后的；
+  // 后台任务交回、跑命令这些不算输出
+  const gap = ccQuietGap(cc, last.ts, t);
+  if (gap) {
+    const after = firstOut(gap.since, t);
+    if (after === Infinity) return laneActive(cc, t) ? { phase: 'gather', from: gap.since, grow: 1 - Math.exp(-(t - gap.until) / 60000) } : { phase: 'none', from: last.ts };
+    return { phase: 'show', from: gap.since, age: secSince(after, t) };
+  }
   return { phase: 'show', from: last.ts, age: secSince(O, t) };
+}
+// 这一段（from 之后）里最近一次安静满 CC_QUIET、后来又有了动静的空档：since 是空档前最后一次动静，until 是空档后的第一次；没有为 null
+function ccQuietGap(cc, from, t) {
+  let prev = null, gap = null;
+  for (const e of cc.events) {
+    if (e.ts <= from) continue;
+    if (e.ts > t) break;
+    if (prev != null && e.ts - prev >= CC_QUIET) gap = { since: prev, until: e.ts };
+    prev = e.ts;
+  }
+  return gap;
 }
 
 // 框的透明度和缩放：展开时从光团里长出来，收起时缩回一颗光点

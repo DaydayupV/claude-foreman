@@ -148,9 +148,12 @@ function timeline(lane, t, { open = false, limit = 6 } = {}) {
   return open ? lines : lines.slice(-limit);
 }
 
+// 终端区的颜色和终端一致：用和 format.mjs 一样的颜色代码调 display.mjs，fillTerm（06-cards.js）再把颜色代码换成带色的片段
+const TERM_C = Object.fromEntries([['dim', '2'], ['bold', '1'], ['red', '31'], ['green', '32'], ['yellow', '33'], ['cyan', '36']]
+  .map(([key, code]) => [key, (s) => (s === '' ? s : `\x1b[${code}m${s}\x1b[0m`)]));
 function conclusion(r, width = Infinity) {
   const run = Display.displayRun(r), o = Display.resultOutcome(run.result, run.meta);
-  return Display.finalLines(run, run.result, run.meta.participant === 'host' || o.ok || o.partial, width)
+  return Display.finalLines(run, run.result, run.meta.participant === 'host' || o.ok || o.partial, width, TERM_C)
     .map((text) => ({ ts: r.original_ended_at ?? r.ended_at, cls: 'plain', text }));
 }
 

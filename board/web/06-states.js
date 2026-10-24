@@ -33,11 +33,15 @@ function fateAt(lane, r, t) {
   return r.queued ? 'queued' : 'running';
 }
 
-// 改到写入范围外的文件（相对工作目录的路径；绝对路径的改动不判断）
+// 改到写入范围外的文件：进行中按编辑事件判断（相对工作目录的路径；绝对路径的改动不判断），
+// 结束以后再加上结果里写到工作目录外、又不在范围里的文件（和终端 ⚠ 行同一份清单）
 const scopePath = (p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '').toLowerCase();
 function outOfScope(lane, r, t) {
-  if (!r?.scope?.length) return [];
-  const scope = r.scope.map(scopePath), out = new Set();
+  if (!r) return [];
+  const run = r.ended_at != null && r.ended_at <= t && r.display ? Display.displayRun(r) : null;
+  const out = new Set(run ? Display.outsideFiles(run.result, run.meta) : []);
+  if (!r.scope?.length) return [...out];
+  const scope = r.scope.map(scopePath);
   for (const ev of lane.events) {
     if (ev.run !== r.id || ev.k !== 'edit' || ev.ts > t) continue;
     // 比较时不分大小写，显示时用原样的路径

@@ -276,9 +276,10 @@ function changedText(c) {
 // 讨论和审查本来只读，只有真的改了文件才显示改动数（那是越界，要提醒）。
 const changedFor = (r, m) => (m?.kind === 'exec' || agentTotal(r?.changes) ? changedText(r?.changes) : null);
 
-function outsideCwdText(r, m) {
+// 写到工作目录外、又不在写入范围里的文件，按显示用的写法（终端、网页的 ⚠ 行和网页卡片的 ⚠N 共用）
+function outsideFiles(r, m) {
   const files = m?.kind === 'exec' ? (r?.changes?.outside_cwd || []).filter((f) => f.in_scope === false) : [];
-  if (!files.length) return null;
+  if (!files.length) return [];
   // 网页也用这段纯显示逻辑，不能依赖 Node 的 path；保留上级目录和原有路径分隔符。
   const cwd = m.cwd ?? r.cwd ?? '', windows = /^[A-Za-z]:|^\\\\/.test(cwd), sep = cwd.includes('\\') ? '\\' : '/';
   const base = cwd ? cwd.replace(/\\/g, '/').replace(/\/$/, '').split('/') : [];
@@ -289,16 +290,23 @@ function outsideCwdText(r, m) {
     const parts = file.replace(/\\/g, '/').split('/');
     let i = 0;
     while (i < base.length && i < parts.length && (windows ? base[i].toLowerCase() === parts[i].toLowerCase() : base[i] === parts[i])) i++;
-    return i ? [...base.slice(i).map(() => '..'), ...parts.slice(i)].join(sep) : file;
+    // 要往上退两级以上的写绝对路径：一长串 ../ 看不出是哪里
+    return i && base.length - i <= 2 ? [...base.slice(i).map(() => '..'), ...parts.slice(i)].join(sep) : file;
   };
-  return D.watchOutsideCwd(D.list(files.slice(0, 3).map((f) => relative(f.path))), Math.max(0, files.length - 3));
+  return files.map((f) => relative(f.path));
+}
+function outsideCwdText(r, m) {
+  const files = outsideFiles(r, m);
+  if (!files.length) return null;
+  return D.watchOutsideCwd(D.list(files.slice(0, 3)), Math.max(0, files.length - 3));
 }
 
 const formatUsd = (n) => (n === 0 ? '0' : n < 0.01 ? n.toPrecision(2) : n < 1 ? n.toFixed(3) : n.toFixed(2));
 function usageLine(result, meta) {
   if (meta?.participant === 'host') return D.watchHostNoUsage;
   const cost = result || {};
-  const parts = [result?.usage ? D.tokenSummary(result.usage, result.last_request ?? result.context, D.tokenCount,
+  // 一次请求都没完成的轮次，有的接入方式记成全 0：和没记一样，写"没有用量"
+  const parts = [result?.usage && Object.values(result.usage).some((v) => Number(v) > 0) ? D.tokenSummary(result.usage, result.last_request ?? result.context, D.tokenCount,
     (result.usage_scope ?? (meta?.mode === 'resume' ? 'session_total' : 'this_run')) === 'session_total') : '',
   // 取消、超时、卡死的轮次只记到最后一次完成的请求，速度偏低，标出来
   result?.output_tokens_per_s != null ? D.outputSpeed(result.output_tokens_per_s, ['cancelled', 'timeout', 'stalled'].includes(result.status)) : '',
@@ -394,7 +402,8 @@ function finalLines(run, r, ok, inner, C = unpainted) {
   if (r?.stale === true) out.push(...marked('⚠', C.yellow, D.watchStale));
   const [mark, color] = r?.status === 'needs_input' ? ['?', C.yellow] : ['✗', C.red];
   const secondary = ['timeout', 'cancelled'].includes(r?.status);
-  realErrors(r, ok).forEach((e, i) => out.push(...(secondary && i > 0 ? marked('·', C.dim, e).map((l) => C.dim(l)) : marked(mark, color, e))));
+  // 次要的报错整行暗色：记号不单独上色，否则记号后的颜色复位会让后面的文字变回正常亮度
+  realErrors(r, ok).forEach((e, i) => out.push(...(secondary && i > 0 ? marked('·', plain, e).map((l) => C.dim(l)) : marked(mark, color, e))));
   const moreErrors = (r?.errors_total ?? 0) - (r?.errors?.length ?? 0);
   if (moreErrors > 0) out.push(...marked(mark, color, D.watchMoreErrors(moreErrors)));
   return out;
@@ -659,7 +668,7 @@ function elapsedOf(r, t, points, lastActivity) {
   return Math.max(0, ended && r.duration_s != null ? r.duration_s : (end - start) / 1000);
 }
 
-export { D, seatLine, shortModel, fullModel, modelLabel, agentTypeOf, moduleOf, taskLine, clock, took, shownStatus, outcomeStyle, agentTotal, changedText, changedFor, outsideCwdText,
+export { D, seatLine, shortModel, fullModel, modelLabel, agentTypeOf, moduleOf, taskLine, clock, took, shownStatus, outcomeStyle, agentTotal, changedText, changedFor, outsideCwdText, outsideFiles,
   formatUsd, usageLine, toolLabel, commandAction, errorAction, foldText, thoughtLine, wrapAtDots, realErrors, durationOf, reviewFinding, reviewCounts, reviewConclusion, finalLines, liveLines,
   groupTask, current, planNotes, seatNumbers, roundOf, resultOutcome, liveStatus, seatState, toneOf, COUNT_MARKS, countParts, countsText, seatUsage, queuedLine, queuedStarted, collapseLines, dashFooter,
   displayRun, recordedTime, elapsedOf, textWidth, fitWidth, wrapWidth };

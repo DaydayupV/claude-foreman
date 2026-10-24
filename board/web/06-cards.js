@@ -49,6 +49,23 @@ function fillCard(el, lane, t) {
 }
 const VIEW_LOD = () => Number(worldEl.dataset.lod || 0);
 
+// 带颜色代码（03-timeline.js 的 TERM_C）的一行拆成文字和带色的片段：每段以 ESC[<代码>m 开头、ESC[0m 结束
+const PAINT_CLASS = { 1: 'c-bold', 2: 'c-dim', 31: 'c-bad', 32: 'c-ok', 33: 'c-warn', 36: 'c-run' };
+function painted(text) {
+  const s = String(text ?? '');
+  if (!s.includes('\x1b[')) return [s];
+  const out = [], re = /\x1b\[(\d+)m/g;
+  let at = 0, cls = null, m;
+  const push = (part) => {
+    if (!part) return;
+    if (!cls) { out.push(part); return; }
+    const span = document.createElement('span'); span.className = cls; span.textContent = part; out.push(span);
+  };
+  while ((m = re.exec(s))) { push(s.slice(at, m.index)); cls = m[1] === '0' ? null : PAINT_CLASS[m[1]] ?? null; at = re.lastIndex; }
+  push(s.slice(at));
+  return out;
+}
+
 function fillTerm(ol, lines) {
   const sig = lines.map((l) => `${l.ts}${l.text}${l.cls}`).join('\n');
   if (ol.dataset.sig === sig) return;
@@ -64,7 +81,7 @@ function fillTerm(ol, lines) {
     if (!act) lastMin = m;
     mk.className = 'mk';
     mk.textContent = l.cls === 'plain' ? '' : act ? '│ ' : l.cls.startsWith('user') ? '▌ ' : '◆ ';
-    li.append(ts, mk, l.text);
+    li.append(ts, mk, ...painted(l.text));
     ol.append(li);
   }
 }

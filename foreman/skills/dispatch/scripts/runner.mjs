@@ -402,7 +402,11 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
     // 存储和比较都用原始路径解析出的绝对路径：先算相对路径再拼回去，跨网络共享（\\server\a → \\server\b）时会拼错
     const outsideCwd = new Map();
     const rootOf = (p) => pathKey(path.parse(p).root.replace(/\\/g, '/'));
-    const shownPath = (p) => (rootOf(p) === rootOf(path.resolve(cwd)) ? relativePath(cwd, p) : p.replace(/\\/g, '/'));
+    // 同一个盘或网络共享上、往上不超过两级的写相对路径；再远就写完整路径，一长串 ../ 看不出是哪里（和 display.mjs 的 outsideFiles 一致）
+    const shownPath = (p) => {
+      const rel = rootOf(p) === rootOf(path.resolve(cwd)) ? relativePath(cwd, p) : null;
+      return rel != null && (rel.match(/^(\.\.\/)*/)[0].length / 3) <= 2 ? rel : p.replace(/\\/g, '/');
+    };
     if (kind === 'exec') {
       const reportedRaw = (Array.isArray(claimed) ? claimed : []).filter((c) => typeof c?.path === 'string').map((c) => c.path);
       for (const [by, files] of [['agent', r.fileChanges], ['reported', reportedRaw]]) for (const file of files) {

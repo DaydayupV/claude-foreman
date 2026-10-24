@@ -104,7 +104,9 @@ function doneLine(u, t) {
     runs = u.lane.runs.filter((x) => x.started_at <= t);
   }
   const cost = runs.reduce((n, r) => n + (r.cost_usd || 0), 0);
-  const partial = runs.some((r) => r.cost_partial || (r.cost_usd == null && r.kind !== 'answer' && r.ended_at != null && r.ended_at <= t));
+  // 和用量表同一条规则（04-rates.js 的 laneStats）：用量明确记成全 0 的没有可算的费用，不带 +
+  const partial = runs.some((r) => r.cost_partial || (r.cost_usd == null && r.kind !== 'answer' && r.ended_at != null && r.ended_at <= t
+    && !zeroUsage(r.usage || FINAL.get(r.id)?.usage)));
   return `▸ ${[title, counts, when, cost ? fmtCost(cost, partial) : null].filter(Boolean).join(' · ')}`;
 }
 function renderDone(done, t, seen) {
@@ -290,7 +292,7 @@ function fillSeat(el, lane, t, no, split = false) {
   setText(el.querySelector('.role'), Display.seatLine(run.meta, { title: split }));
   const ol = el.querySelector('.term'), width = Math.max(20, Math.floor((ol.clientWidth || 560) / 6.6) - 4);
   let lines = open ? timeline(lane, t, { open: true }) : ended ? conclusion(r, width)
-    : Display.liveLines(liveState(lane, r, t), 8, width).map((text) => ({ cls: 'plain', text }));
+    : Display.liveLines(liveState(lane, r, t), 8, width, TERM_C).map((text) => ({ cls: 'plain', text }));
   if (!lines.length && st.running && !liveState(lane, r, t).api.req) lines = [{ cls: 'plain', text: Display.D.watchWorking }];
   el.fullLines = lines;
   fillFlow(ol, lines);

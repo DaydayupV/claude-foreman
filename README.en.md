@@ -168,9 +168,9 @@ Prompt templates, command options and the checks are in [references/image-assets
 
 ### The web board
 
-A second way to watch, alongside the terminal live view, off by default: set `dispatch.web` to `true` in the config, or turn it on with `/foreman-en:setup`.
+A second way to watch, alongside the terminal live view, off by default: set `dispatch.watch.web` to `true` in the config, or run `/foreman-en:setup` (it decides from this computer's memory).
 
-- **Opening it**: when it's on, every handoff and every `/foreman-en:watch` gives a link besides the terminal tab. It opens in your default browser: you see the star map first, then fly into that conversation's board on your own (a reload goes straight back to the board); it never opens inside the Claude app.
+- **Opening it**: when it's on, every handoff first gives a link in the conversation, then starts the work; `/foreman-en:watch` gives one too. It opens in your default browser: you see the star map first, then fly into that conversation's board on your own (a reload goes straight back to the board); it never opens inside the Claude app.
 - **The star map**:
   - Every Claude Code conversation on this computer from the last 24 hours is a galaxy, and conversations of the same project gather into a nebula. Conversations archived or deleted in the Claude desktop app are left out, matching the app's conversation list.
   - Agents at work are stars circling their galaxy; a conversation waiting for you has an amber ring; one with a failure keeps a red dot.
@@ -350,7 +350,7 @@ Both take a change snapshot first, and Claude Code reviews the diff file by file
 {
   "dispatch": {
     "auto": true,
-    "watch": "auto",
+    "watch": { "terminal": true, "web": false },
     "intro": true,
     "discuss_max_rounds": 2,
     "timeout_min": 240,

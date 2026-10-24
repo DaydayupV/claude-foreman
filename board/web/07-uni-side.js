@@ -1,9 +1,9 @@
 'use strict';
 // 宇宙层右上的名额带（只在宇宙层显示）：每个协作方一行，几个并发名额几格；被哪个对话占着就亮成那个对话的标记色，排队等服务的格子闪烁。
 // 每个对话有一个按 id 定的标记色，名额格、用量表里同一个对话颜色一样；鼠标移上去时星图里那个星系高亮。
-// 对话按 等你确认 › 派发中 › 思考中 › 空闲 排，同一档里最近活动的在前（底部用量表的顺序，07-uni-table.js）。
+// 底部用量表的顺序（07-uni-table.js）：进行中的对话（等你确认、派发中、思考中）在前，固定按最近一轮用户消息的时间排，新的在上，
+// 状态来回切换、有新动静时都不挪位置；空闲的在后，最近活动的在前。
 
-const STATE_ORDER = { waiting: 0, dispatching: 1, thinking: 2, idle: 3 };
 const STATE_WORD = TEXT.states;
 const SIDE = { slots: new Map(), sigSlots: '' };
 // 标记色按对话出现的先后分配：相邻两个隔一个黄金角（约 137.5°），颜色总是拉得开；分到以后这个页面里不再变
@@ -16,7 +16,9 @@ function markOf(id, a = 1) {
   }
   return `hsl(${MARKS.get(id)} 72% 66% / ${a})`;
 }
-const byState = (a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || b.last_at - a.last_at;
+const roundAt = (s) => s.prompt_at ?? s.started_at ?? 0; // 旧服务没有 prompt_at 时退回对话开始的时间
+const byState = (a, b) => (a.state === 'idle') - (b.state === 'idle')
+  || (a.state === 'idle' ? b.last_at - a.last_at : roundAt(b) - roundAt(a)) || (a.id < b.id ? -1 : 1);
 // 在跑的席位数用不截断的计数（runs 摘要最多 16 条，会漏）
 const runningOf = (s) => s.counts?.running ?? s.runs.filter((r) => r.status === 'running').length;
 // 协作方代号去掉末尾表示接入方式的几段（-codex-cli、-opencode-cli-ocgo、-pi-cli-api 这类），名额带上更短；

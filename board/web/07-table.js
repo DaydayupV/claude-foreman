@@ -2,7 +2,7 @@
 // 底部用量表和顶栏。用量表每条车道一行，最后一行合计；排法和终端区一样：Claude Code 在最前，然后是正在跑的组和任务，
 // 再是已经结束的（最新结束的在前）。组前面有一行简短的组标题（类型 · 标题，右边是各状态的个数），组里的席位按席位号排。
 
-const TABLE_HEAD = ['', 'model', 'status', 'now ≈tok/s', 'last 2 min', 'gen avg ≈tok/s', 'input · cache', 'output', 'cost', 'time'];
+const TABLE_HEAD = ['', 'model', 'status', 'now ≈tok/s', 'tok/s over time', 'gen avg ≈tok/s', 'input · cache', 'output', 'cost', 'time'];
 // 费用：一律按模型官方 API 价格算（插件自带的价格表），悬停在表头和单元格上有说明；+ 表示有的模型不在价格表里
 // 不到 1 美分的按两位有效数字写（便宜的 API 模型一次常常只有零点零几美分），免得显示成 $0.00
 const fmtUsd = (n) => (n > 0 && n < 0.01 ? n.toPrecision(2) : n.toFixed(2));
@@ -11,7 +11,7 @@ const fmtCost = (cost, partial = false) => (cost == null ? '—' : `$${fmtUsd(co
 const markMore = (body) => body.classList.toggle('more', body.scrollHeight - body.scrollTop - body.clientHeight > 2);
 // 速度的估算窗口不同，和费用一样把口径放在表头悬停说明里。
 function costHeadTitle(head) {
-  const titles = { cost: TEXT.costTitle, 'now ≈tok/s': TEXT.nowTitle, 'last 2 min': TEXT.recentTitle, 'gen avg ≈tok/s': TEXT.genAvgTitle };
+  const titles = { cost: TEXT.costTitle, 'now ≈tok/s': TEXT.nowTitle, 'tok/s over time': TEXT.recentTitle, 'gen avg ≈tok/s': TEXT.genAvgTitle };
   for (const c of head.children) if (titles[c.textContent]) c.title = titles[c.textContent];
 }
 function renderTable(t) {

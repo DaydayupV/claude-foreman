@@ -7,8 +7,8 @@ description: 按配置把执行类编码工作派给 Codex、opencode、pi 等�
 
 ## 开始前：读配置和偏好
 本会话第一次用到本 skill 时，先运行 `config --cwd "<项目目录>"`（见文末"调用方式"），从输出里读：
-- `effective.dispatch.auto` 和 `effective.dispatch.watch`：决定主动发起前要不要先问用户、是否打开实时查看。
-- `effective.dispatch.web`：网页看板开没开（见"实时查看"里的"网页看板"）。
+- `effective.dispatch.auto`：决定主动发起前要不要先问用户。
+- `effective.dispatch.watch`：实时查看的两个开关，`terminal` 是终端里的实时查看，`web` 是网页看板（见"实时查看"）。
 - `resolved_modules`：讨论、执行、审查三类任务的 1–3 级，以及图像的出图（generate）、手画（draw）两格，各有哪些候选（协作方、模型、推理强度）、谁是必选（`required`）。`"claude code"` 表示这一格不找外部模型，`null` 表示图像格子关着。`image_configured` 为 `false` 表示用户配置里还没有图像块（这时图像两格显示的 `null` 是默认值，不是用户关掉的）。`closed_by_project` 列出被项目配置关掉的格子。
 - `agents_status`：每个协作方的类型和 `capabilities`（能做哪些任务 `modes`、能不能出图 `images`、能不能看图 `reads_images` 等），以及 API 协作方的 key 是否已设置（`key_set`）。为 `false` 的参与方会直接失败。讨论或审查前提醒用户：在 `~/.claude/foreman/config.json` 的这个协作方里填 `api_key`（立即生效），或者设置 `api_key_env` 指向的环境变量并重启 Claude Code。
 - `preferences`：用户级和项目级偏好文件。存在的就读一遍。偏好文件是用户用文字写的习惯和规则，比如分工、领域里哪些代码算高风险、各种门槛。
@@ -295,7 +295,9 @@ API 协作方的服务繁忙时，请求会在服务端排队，迟迟不开始�
 - Codex 的沙箱不是 `read-only` / `workspace-write` 时（比如 `danger-full-access`），`--cwd` **不限制写入范围**，范围只能靠任务说明约束，再靠事后审查 diff 把关。
 
 ### 实时查看（每次派出都做）
-只要派给了其他模型，也就是用后台方式启动 `run`、`image`、`resume`、`discuss` 或 `review` 之后，立即让用户能看到实时进度。实时进度有两个入口，各自有开关：终端里的实时查看（`dispatch.watch`，默认开）和网页看板（`dispatch.web`，默认关）。`dispatch.watch` 为 `off` 时不开终端标签页，只告诉用户可以用 `/foreman:watch` 查看；网页看板照最后的"网页看板"一条处理。
+只要派给其他模型（`run`、`image`、`resume`、`discuss`、`review`），就让用户能看到实时进度。实时进度有两个入口，开关都在 `dispatch.watch` 里：`terminal` 是终端里的实时查看（默认开），`web` 是网页看板（默认关，`/foreman:setup` 按内存情况决定开不开）。两个入口给的时机不一样：
+- 网页看板（`web` 为 `true`）：一决定派出，就先给链接，再启动任务，见最后的"网页看板"一条。
+- 终端实时查看（`terminal` 为 `true`）：任务在后台启动以后再开标签页，见下面几条。`terminal` 为 `false` 时不开终端标签页，只告诉用户可以用 `/foreman:watch` 查看。
 - **先打开终端面板，再开标签页**（Claude 桌面版）：先调用显示面板的工具（名字带 `show_pane`，和 `run_in_terminal` 一起用一次 ToolSearch 加载），`pane` 填 `terminal`，不填 `tab_id`；等它返回后再用 `run_in_terminal` 开标签页。面板开着时，新开的标签页会自动切到前台，watch 开头几秒的启动动画用户能从头看到；反过来先开标签页再显示面板，两次调用之间常常隔十几秒，面板出来时动画已经放完了。没有显示面板的工具就直接开标签页。
 - **用 `run_in_terminal` 打开**：运行 `node <记录目录>/watch.mjs --run <run_id>`，标题写"<模型>：<短标题>"。讨论和审查都在计划的组里，只开一个标签页：`node <记录目录>/watch.mjs --group <组名>`，标题写"讨论：<短标题>"或"审查：<短标题>"；组视图里 Claude Code 席排在最前（席位号 0），和外部席一样显示报告的结论。记录目录默认是 `~/.claude/foreman/runs`，在 Windows 上写成 `C:\Users\<用户名>\.claude\foreman\runs`，以 `config` 的输出为准。这个启动器由脚本自动生成，插件路径含非 ASCII 字符时也能满足 `run_in_terminal` 只接受 ASCII 的要求。`config` 输出里 `watch_launcher_ascii` 为 `false` 时（记录目录路径含中文等非 ASCII 字符），`run_in_terminal` 会拒绝这条命令：改为把命令放在代码块里发给用户，请用户在自己的终端里运行，并转告 `check` 输出里 `watch.fix` 的处理办法。
 - run_id 在启动后后台输出的第一行（"run dir …/<run_id>"）里。不加 `--run` 时它会跟踪正在运行的任务，但其他会话可能也在跑任务，所以尽量指定。
@@ -304,9 +306,9 @@ API 协作方的服务繁忙时，请求会在服务端排队，迟迟不开始�
 - 讨论里有 API 参与方时，同时在后台启动排队检查 `await-busy`（见"API 参与方繁忙时"）。
 - 任务结束后实时查看停在画面里：用户可以翻看完整记录，组视图里按席位号打开某一席；按 q 离开后记录留在标签页里供回看。不要关闭标签页。实时查看不会自己换到新任务，所以每次续接（讨论的下一轮、返工）都要按上面的做法新开一个标签页：`resume` 输出的是新的 run_id，新标签页用这个新的，原来的单任务标签页底部会提示已续接，按 n 也能跟过去；讨论的下一轮照样用 `--group <组名>`，标题写"讨论：<短标题>（第 N 轮）"。
 - 默认是简洁显示。用户要看完整细节时，加 `--verbose`。
-- **网页看板**（和终端实时查看并列，每次派出都做）：终端标签页处理完后，运行 `node "<脚本路径>" board`，读输出的 JSON。
+- **网页看板**（`dispatch.watch.web` 为 `true` 时，每次派出都做）：在启动任务之前运行 `node "<脚本路径>" board`，读输出的 JSON，先把链接发给用户，再启动任务。讨论和审查在建好计划、提交 Claude Code 席的报告以后、启动外部席之前给；执行在启动 `run` 之前给；续接在启动 `resume` 之前给。这样用户点开时能从头看到派出的过程。
   - `enabled` 为 `true`：把 `url` 写成链接发给用户，比如 `[网页看板](<url>)`，说明点开会在本机的默认浏览器里打开，直接进入这个对话的看板，再往外缩能看到本机所有对话。**不要用任何浏览器工具替用户打开**（应用里的网页面板、Claude in Chrome 都不用），由用户自己点链接。
-  - `enabled` 为 `false`：只写一句"网页看板未开启"，可以顺带说明用 `/foreman:setup` 或在配置里把 `dispatch.web` 设成 `true` 打开。
+  - `enabled` 为 `false`：只写一句"网页看板未开启"，可以顺带说明用 `/foreman:setup` 或在配置里把 `dispatch.watch.web` 设成 `true` 打开。
   - 看板服务是这台电脑上所有对话共用的：`board` 发现服务已经在运行就直接复用（`started` 为 `false`），没在运行才在后台启动一个。命令报错时转告错误，不影响派出的任务。服务 30 分钟没人看、也没有任务在跑会自己退出，插件被卸载或更新后也会退出；用户要马上关掉时运行 `board --stop`。
   - 看板只做直播。用户要把已经结束的对话按时间重新播一遍查问题时，用 `board --replay <对话 id、run_id、组名或 all> [--speed <倍数>] [--maxgap <秒>]`：它另起一个临时回放服务，输出的 `url` 同样写成链接发给用户。记录太大（超过 256 MB）或找不到目标时，把报错原文转告用户。派活时不用它。
 
