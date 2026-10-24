@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 
-const FILES = ['index.html', 'server.mjs', 'feed.mjs', 'claude-feed.mjs', 'universe.mjs', '../prices.mjs', '../prices.json', 'lock.mjs'];
+const FILES = ['index.html', 'server.mjs', 'stream-worker.js', 'feed.mjs', 'claude-feed.mjs', 'universe.mjs', '../prices.mjs', '../prices.json', 'lock.mjs'];
 
 export function buildId(dir) {
   const hash = createHash('sha256');

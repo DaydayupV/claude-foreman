@@ -107,9 +107,9 @@ function showNotice(text, keep = false) {
   showNotice.kept = keep;
 }
 
-// 后台标签页让出数据流：浏览器对同一主机只开 6 条连接，看板标签页多了，前台的页面会连不上。
-// 平时在后台 10 分钟才让（让出以后再回来，较早的记录只剩最近 200 条，不能切一下窗口就让）；
-// 前台的页面连不上超过 2 秒时，通过同源广播请后台的看板标签页马上让出来。
+// 后台满 10 分钟取消订阅，省下服务和浏览器的计算；直连流也会腾出同主机最多 6 条的连接。
+// 让出以后再回来，较早的记录只剩最近 200 条，不能切一下窗口就让；
+// 前台的页面连不上超过 2 秒时，通过同源广播请后台用直连流的看板标签页马上让出来。
 // 让出以后每分钟向服务报一次在，服务不会因为没有连接就当成没人看而退出；
 // 在后台放了 30 分钟以上就不再报，忘在后台的标签页不能让服务一直不退出
 const HIDDEN_RELEASE_MS = 600000, WATCHING_PING_MS = 60000, WATCHING_MAX_MS = 1800000;
@@ -128,7 +128,10 @@ function releaseStreams() {
 }
 // 前台页面的流迟迟连不上（01-state.js 的 watchStream 调用）：请其他看板标签页让出连接
 function askForStream() { if (STREAM_CHANNEL && document.visibilityState !== 'hidden') STREAM_CHANNEL.postMessage('release'); }
-if (STREAM_CHANNEL) STREAM_CHANNEL.onmessage = (e) => { if (e.data === 'release' && document.visibilityState === 'hidden') releaseStreams(); };
+if (STREAM_CHANNEL) STREAM_CHANNEL.onmessage = (e) => {
+  if (e.data === 'release' && document.visibilityState === 'hidden'
+    && [B.es, U.es].some((es) => es && (!(es instanceof SharedStream) || es.direct))) releaseStreams();
+};
 function onVisibilityChange() {
   clearTimeout(hiddenReleaseTimer); hiddenReleaseTimer = null;
   // 回放重连会从头播放，不能暂停共用时钟；定格和演示沿用原来的取数方式。

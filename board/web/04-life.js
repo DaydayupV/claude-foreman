@@ -134,6 +134,19 @@ function groupLeave(lanes, t) {
   return when <= t ? secSince(when, t) / LEAVE_ANIM : 0;
 }
 
+// 一组此刻在刻度带上显示哪些席位：这一批里启动过的，加上结果还没被读走的；计划里还没启动的虚影席照常显示。
+// 一批 = 组里的任务一个接一个、中间没有一刻全部停下的一段。全部停下以后再续接就是新的一批，
+// 只有新一批里启动的席位回来（比如返工只续接了两席，早就结束的第三席不跟着回来；讨论第 2 轮不续接的广度席也一样）
+function bandLanes(lanes, t) {
+  const runs = lanes.flatMap((l) => (l.ghost ? [] : l.runs.filter((r) => r.started_at <= t && r.kind !== 'answer'))).sort(byStart);
+  let busy = -Infinity, from = -Infinity;
+  for (const r of runs) {
+    if (r.started_at > busy) from = busy;
+    busy = Math.max(busy, r.ended_at != null && r.ended_at <= t ? r.ended_at : Infinity);
+  }
+  return lanes.filter((l) => l.ghost || runAt(l, t).started_at > from || leaveAt(l, runAt(l, t), t) > t);
+}
+
 // 一席这一次是什么时候"进来"的：第一次任务启动，或者离开之后下一轮任务启动；一直在的返回 null（不播进场）
 function enteredAt(lane, t) {
   const runs = lane.runs.filter((r) => r.started_at <= t), r = runs[runs.length - 1];

@@ -80,7 +80,7 @@ function connectUniverse() {
     return;
   }
   if (U.es || streamsReleased) return;
-  const es = new EventSource(`stream?${q}`);
+  const es = openStream(q);
   U.es = es;
   watchStream(U, es);
   const on = (name, fn) => es.addEventListener(name, (e) => fn(JSON.parse(e.data)));

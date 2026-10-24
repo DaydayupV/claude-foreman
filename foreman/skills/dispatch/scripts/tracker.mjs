@@ -55,6 +55,9 @@ function makeTracker(runDir, cwd, track, { ignored: listIgnored = false } = {}) 
     // 记录目录可能就在项目里，排除整棵目录，免得其他任务的记录也进项目补丁。
     const excludes = [...SNAPSHOT_EXCLUDES, ...(recordsInside ? [`/${records.replace(/[\\*?[\]]/g, '\\$&')}/`] : [])];
     fs.writeFileSync(path.join(gitDir, 'info', 'exclude'), excludes.join('\n') + '\n');
+    // 快照存文件的原始字节：不按项目的 .gitattributes 转换换行、不跑 clean 过滤和 ident 等，
+    // 免得项目改了这些设置以后，没改过的文件也被报成改动（info/attributes 优先于项目里的 .gitattributes）。
+    fs.writeFileSync(path.join(gitDir, 'info', 'attributes'), '* -text -eol -filter -ident -working-tree-encoding\n');
   } catch (e) { cleanup(); throw e; }
 
   function snap(label) {

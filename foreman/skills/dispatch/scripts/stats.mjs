@@ -1,7 +1,7 @@
 // 核实意见的去留，以及按基础模型和模块汇总本地实测记录。
 import fs from 'node:fs';
 import path from 'node:path';
-import { RUNS_ROOT, listRuns, findRun, readMeta, checkRunners, isRunning, runOutcome, resultValid } from './records.mjs';
+import { RUNS_ROOT, listRuns, findRun, readMeta, checkRunners, isRunning, runOutcome, resumeVerdict } from './records.mjs';
 import { M, die, need, isObject, modelOf, agentTypeOf, replaceFile } from './util.mjs';
 import { acquireLock } from './locks.mjs';
 import { costOf, loadPrices, modelIdentity, usd } from './prices.mjs';
@@ -212,6 +212,7 @@ function cmdStats(o, statsOf) {
       const row = { model, module, ...(host ? { participant: 'host', self_judged: true } : {}), seats: 0, runs: 0, findings_reported: module === 'review' ? 0 : null,
         judged_runs: 0, judged: 0, accepted: 0, partial: 0, rejected: 0, unique: null, unique_basis_runs: 0,
         rework: ['run', 'image'].includes(module) ? { seats: 0, reworked: 0, rate: null } : null,
+        ...(['run', 'image'].includes(module) ? { rework_basis: { inferred_seats: 0, inferred_reworked: 0 } } : {}),
         duration_s: { total: 0, median_per_seat: null, missing_runs: 0 },
         tokens: { input: null, cached_input: null, output: null, runs: 0, missing_runs: 0 },
         output_tokens_per_s: null,
@@ -236,13 +237,16 @@ function cmdStats(o, statsOf) {
     rootRow.seats++;
     if (rootRow.rework) {
       rootRow.rework.seats++;
-      if (rounds.some((run) => {
-        if (run.running) return false;
+      const verdicts = rounds.flatMap((run) => {
+        if (run.running) return [];
         const parent = rounds.find((p) => p.id === run.meta.parent);
-        if (!parent) return false;
-        const outcome = runOutcome(parent);
-        return outcome.status === 'done' && resultValid(parent.meta, outcome.result) && !outcome.blocked;
-      })) rootRow.rework.reworked++;
+        return parent ? [resumeVerdict(run.meta, runOutcome(parent))] : [];
+      });
+      // 每席只记一次返工；有显式返工时，不归为只靠旧规则推断。
+      const reworked = verdicts.some((v) => v.rework);
+      if (reworked) rootRow.rework.reworked++;
+      if (verdicts.some((v) => v.inferred)) rootRow.rework_basis.inferred_seats++;
+      if (reworked && !verdicts.some((v) => !v.inferred && v.rework)) rootRow.rework_basis.inferred_reworked++;
     }
     const host = root.meta.participant === 'host', durations = host ? [] : rounds.map(durationOf);
     if (!host && !rounds.some((run) => run.running) && durations.every((n) => n != null)) seatTimes.get(rootRow).push(durations.reduce((sum, n) => sum + n, 0));

@@ -66,9 +66,8 @@ function computeLayout(t) {
   const L = { groups: [], rows: new Map() };
   const plan = [];
   for (const [key, all] of order) {
-    // 上一轮之后没再续接、已经离开的席位不再显示（比如讨论第 2 轮只续接了一部分）
-    const top = Math.max(1, ...all.filter((l) => !l.ghost).map((l) => runAt(l, t).round || 1));
-    const lanes = all.filter((l) => l.ghost || (runAt(l, t).round || 1) === top || leaveAt(l, runAt(l, t), t) > t);
+    // 上一批之后没再续接、已经离开的席位不再显示（见 04-life.js 的 bandLanes）
+    const lanes = bandLanes(all, t);
     const leave = groupLeave(lanes, t);
     if (leave >= 1) continue;
     lanes.sort((a, b) => seatOrder(a) - seatOrder(b) || laneT0(a) - laneT0(b));

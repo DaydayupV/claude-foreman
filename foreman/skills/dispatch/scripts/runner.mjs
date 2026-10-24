@@ -91,6 +91,7 @@ function startRun(ctx, { started = Date.now(), track = [], modelShown = ctx.mode
     ...(kind === 'review' ? { review_target: ctx.reviewTarget } : {}),
     ...(kind === 'exec' && ctx.isolation === 'tools' ? { isolation: ctx.isolation, run_access: agent.run_access } : {}),
     track, add_dir: ctx.addDirs ?? [], group: opts.group ?? null, scope: opts.scope, round: ctx.round ?? null,
+    ...(mode === 'resume' && kind === 'exec' ? { resume_reason: ctx.resumeReason } : {}),
     started_at: new Date(started).toISOString(), status: 'running', pid: process.pid, session_id: ctx.sessionId || null,
     claude_session: CLAUDE_SESSION,
   };
@@ -286,6 +287,7 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
 
   const warnings = [];
   const notes = [];
+  if (ctx.resumeNote) notes.push(ctx.resumeNote);
   if (snapshotRequired && ctx.parent && ctx.previousRunAccess !== agent.run_access) notes.push(M.runAccessChanged(ctx.previousRunAccess, agent.run_access));
   let tracker = null;
   const cleanup = () => tracker?.cleanup();

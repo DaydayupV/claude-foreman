@@ -28,6 +28,98 @@ const B = {
   version: 0,             // 数据每变一次加一，面板据此决定要不要重画
   clock: { mode: 'live', start: 0, end: 0, speed: 1, perf0: 0, frozenAt: null },
 };
+
+let streamWorker = null, streamWorkerFailed = false, streamTab = null, streamSeq = 0, streamTabReady = Promise.resolve();
+const sharedStreams = new Map();
+class SharedStream {
+  constructor(query) {
+    this.query = query; this.id = streamTab + '_' + ++streamSeq;
+    this.state = 0; this.closed = false; this.direct = null; this.listeners = new Map();
+    this.onopen = this.onerror = null;
+    sharedStreams.set(this.id, this); this.subscribe();
+  }
+  get readyState() { return this.direct ? this.direct.readyState : this.state; }
+  addEventListener(name, fn) {
+    if (!this.listeners.has(name)) {
+      this.listeners.set(name, []);
+      if (this.direct && name !== 'open' && name !== 'error') this.forward(name);
+    }
+    this.listeners.get(name).push(fn);
+  }
+  dispatch(name, event) {
+    if (this.closed) return;
+    for (const fn of this.listeners.get(name) || []) fn.call(this, event);
+    this['on' + name]?.(event);
+  }
+  receive(message) {
+    if (this.closed || this.direct) return;
+    if (message.state) {
+      this.state = message.state === 'open' ? 1 : message.state === 'closed' ? 2 : 0;
+      if (message.state === 'open') streamWorkerOpened = true;
+      const type = message.state === 'open' ? 'open' : 'error'; this.dispatch(type, { type });
+      if (type === 'error' && message.opened === false) checkStreamWorker();
+    } else this.dispatch(message.event, { data: message.data });
+  }
+  subscribe() {
+    // 页面先拿住锁，worker 随后排队；页面消失时 worker 才能拿到它。
+    streamTabReady.then(() => {
+      if (!this.closed && !this.direct && this.state !== 2 && !streamWorkerFailed)
+        streamWorker.port.postMessage({ op: 'sub', id: this.id, q: this.query, tab: streamTab });
+    });
+  }
+  forward(name) { this.direct.addEventListener(name, (event) => this.dispatch(name, event)); }
+  fallback() {
+    if (this.closed || this.state === 2 || this.direct) return;
+    this.direct = new EventSource(`stream?${this.query}`);
+    for (const name of new Set(['open', 'error', ...this.listeners.keys()])) this.forward(name);
+  }
+  close() {
+    if (this.closed) return;
+    this.closed = true; this.state = 2; sharedStreams.delete(this.id);
+    if (this.direct) this.direct.close();
+    else if (!streamWorkerFailed) streamWorker.port.postMessage({ op: 'unsub', id: this.id });
+  }
+}
+function failStreamWorker() {
+  if (streamWorkerFailed) return;
+  streamWorkerFailed = true;
+  for (const stream of sharedStreams.values()) stream.fallback();
+  if (streamWorker && streamTab) streamWorker.port.postMessage({ op: 'bye', tab: streamTab });
+  streamWorker?.port.close();
+}
+// worker 的长连接一次都没连上过：页面自己问一下服务。服务通着，说明是 worker 发不出请求
+// （Claude 桌面版的内置浏览器里 worker 能加载，但它发的请求一律失败），改走直连；服务不通就照常等它回来
+// 查的这一会儿 worker 可能已经连上了：回来时这一页收到过 open 就不切
+let streamWorkerCheck = null, streamWorkerOpened = false;
+function checkStreamWorker() {
+  if (streamWorkerCheck || streamWorkerFailed || streamWorkerOpened) return;
+  const options = typeof AbortSignal === 'function' && typeof AbortSignal.timeout === 'function' ? { signal: AbortSignal.timeout(5000) } : undefined;
+  streamWorkerCheck = fetch('health', options).then((r) => { if (r.ok && !streamWorkerOpened) failStreamWorker(); }, () => {}).finally(() => { streamWorkerCheck = null; });
+}
+function openStream(query) {
+  query = String(query);
+  if (window.__BOARD_MODE__ === 'live' && B.params.replay == null && B.params.t == null && !window.__BOARD_FIXTURE__
+    && typeof SharedWorker === 'function' && !streamWorkerFailed) {
+    if (!streamWorker) {
+      try { streamWorker = new SharedWorker('stream-worker.js', { name: 'foreman-board-streams' }); }
+      catch { failStreamWorker(); }
+      if (streamWorker) {
+        streamTab = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+        if (navigator.locks) streamTabReady = new Promise((resolve) => {
+          navigator.locks.request('foreman-board-tab-' + streamTab, () => { resolve(); return new Promise(() => {}); });
+        });
+        streamWorker.onerror = failStreamWorker;
+        streamWorker.port.onmessage = ({ data }) => sharedStreams.get(data.id)?.receive(data);
+        streamWorker.port.start();
+        addEventListener('pagehide', () => { if (!streamWorkerFailed) streamWorker.port.postMessage({ op: 'bye', tab: streamTab }); });
+        addEventListener('pageshow', (e) => { if (e.persisted) for (const stream of sharedStreams.values()) stream.subscribe(); });
+      }
+    }
+    if (!streamWorkerFailed) return new SharedStream(query);
+  }
+  return new EventSource(`stream?${query}`);
+}
+
 // 统计用的事件不带正文，留得多一些；超出时这条车道的平均速度显示 —（分子分母不再覆盖同一段）
 const FEED_MAX = 3000, LANE_EVENTS_MAX = 600, RATE_EVENTS_MAX = 20000;
 
@@ -189,7 +281,7 @@ function connect() {
     return;
   }
   if (B.es || streamsReleased) return;
-  const es = new EventSource(`stream?${q}`);
+  const es = openStream(q);
   B.es = es;
   watchStream(B, es);
   const on = (name, fn) => es.addEventListener(name, (e) => fn(JSON.parse(e.data)));
