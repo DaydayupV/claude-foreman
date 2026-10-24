@@ -3,8 +3,9 @@
 
 // 互联网光线：起点在核心网中心周围一圈（0.15R–0.45R）里随机，先朝外弯出去，再拐向卡片的 token 接口
 // （Claude Code 从右边进、席位从左边进）。起点一端透明、渐渐融进白色弧线，越靠近卡片越显出卡片的颜色。
-// 只有对话正在活跃进行时才流动，token/s 越快越亮、流得越快；不活跃时是一道静止的暗线
-function drawBundle(c, lane, p, I, live) {
+// 只有对话正在活跃进行时才流动，token/s 越快越亮、流得越快；不活跃时是一道静止的暗线。
+// surge：这条车道输出突然加快后的屏幕秒数（08-surge.js），有的话一道亮光沿每条线从弧线区走到卡片
+function drawBundle(c, lane, p, I, live, surge = null) {
   const rand = rng(hash(`bundle|${lane.id}`)), k = (p.visible === false ? 0.45 : 1) * (0.45 + 0.55 * live);
   const side = p.tok[0] < c.cx ? 1 : -1; // 卡片在左边时，线从卡片右侧进来
   const color = tintOf(lane.id), flow = flowPhase(`bundle|${lane.id}`, 10 + 70 * I);
@@ -19,6 +20,7 @@ function drawBundle(c, lane, p, I, live) {
     g.addColorStop(0, HI(0)); g.addColorStop(0.3, HI(0.12 * k)); g.addColorStop(0.7, color((0.22 + 0.35 * I) * k)); g.addColorStop(1, color((0.4 + 0.45 * I) * k));
     strokeCubic(q);
     ctx.strokeStyle = g; ctx.lineWidth = 0.9 * FX.lw; ctx.stroke();
+    if (surge != null) { drawSurgeAlong(q, surge, color, surgeK(lane.id) * k); strokeCubic(q); }
     if (live > 0.01) {
       // 流动的光点随活跃程度淡入淡出
       const d = ctx.createLinearGradient(sx, sy, ex, ey);

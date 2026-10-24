@@ -82,13 +82,15 @@ function resetBoardView() {
   for (const m of [UI.cards, UI.outs, UI.heads, UI.tableRows]) m.clear();
   UI.open.clear(); UI.collapsed.clear(); UI.hot = null;
   for (const id of ['usage', 'terms', 'termdone']) { $(id).replaceChildren(); delete $(id).dataset.mode; }
-  PANEL.doneRows.clear(); PANEL.openDone.clear(); PANEL.allDone = false;
+  PANEL.allDone = false;
   PANEL.cols.clear(); UNI_ROWS.clear();
   Object.assign(REEL, { s: 0, off: 0, anchor: null }); REEL.born.clear();
   for (const key of [...SMOOTH.vals.keys()]) if (!key.startsWith('u')) SMOOTH.vals.delete(key);
   FX.layout = null;
   // 回放估算的总量缓存按对话分：每个对话的 Claude Code 车道 id 都是 cc，不清掉就会拿上一个对话的数
   FINAL.clear(); FINAL_EV.clear(); loadFinals.started = false; loadFinals.gen = (loadFinals.gen || 0) + 1;
+  // 加速脉冲的基线也按对话分（Claude Code 车道 id 都是 cc），换对话从新的速度重新算
+  SURGE.clear();
 }
 function openBoardFor(s) {
   disconnect(); reset(); resetBoardView();

@@ -1,6 +1,8 @@
 :root {
   --bg: #050506; --panel: #0b0b0e; --edge: #26262b; --edge2: #3a3a42;
   --dim: #5c5c66; --mid: #8f8f9c; --text: #d2d2d9; --hi: #f5f5f8; --bad: #e88a9f;
+  /* 状态色调（scripts/display.mjs 的 toneOf，和终端的上色一一对应）：运行中、完成、部分完成/交回问题/排队、失败、已续接和没开始 */
+  --tone-run: #b9a3ff; --tone-ok: #82d99c; --tone-warn: rgb(232,194,122); --tone-bad: var(--bad); --tone-dim: var(--dim);
   --mono: ui-monospace, "Cascadia Mono", "Sarasa Mono SC", Consolas, Menlo, monospace;
   --top-h: 36px; --table-h: min(195px, 32vh); /* 底部面板固定高度：表头、正好 7 行（每行 19px）、合计；行多了在面板里滚动 */
 }
@@ -40,7 +42,8 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 /* 宇宙层右上的名额带 */
 #uslots { position: absolute; z-index: 3; top: 10px; display: flex; flex-direction: column; cursor: default; user-select: none;
   background: linear-gradient(180deg, rgba(22,22,27,.62), rgba(7,7,9,.86)); border: 1px solid rgba(170,170,182,.14); }
-#uslots { right: 10px; width: 236px; max-height: calc(100% - 60px); }
+/* 名额面板在左上（右边留给星系和标签） */
+#uslots { left: 10px; width: 236px; max-height: calc(100% - 60px); }
 #uslots > header { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; border-bottom: 1px solid rgba(200,200,212,.12); flex: none; }
 #uslots > header b { color: var(--hi); font-size: 10px; letter-spacing: .16em; }
 #uslots > header .n { color: var(--dim); font-size: 10px; flex: 1; }
@@ -112,8 +115,8 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 .card .hd > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card .model { color: var(--hi); font-weight: 700; }
 .card .st { color: var(--mid); }
-.card.running .st { color: var(--tint); }
-.card .st.bad { color: var(--bad); }
+/* 改到范围外的文件：状态行最前面一个琥珀色的 ⚠N */
+.card .st[data-over]::before { content: "⚠" attr(data-over) " "; color: var(--tone-warn); }
 .card .tl { color: var(--text); font-weight: 600; }
 .card .rate { color: var(--dim); }
 .card .rate .now { color: var(--tint); }
@@ -183,8 +186,15 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 #table .tbody.more { mask-image: linear-gradient(180deg, #000 calc(100% - 14px), transparent); }
 #table .tr .av img { width: 18px; height: 18px; object-fit: cover; object-position: 50% 12%; image-rendering: pixelated; display: block; border: 1px solid var(--edge); }
 #table .tbody .tr span:nth-child(2) { color: var(--text); }
+/* 组标题行：比车道行矮、字暗一些，左边是类型 · 标题，右边是各状态的个数（颜色和终端一致） */
+#table .tbody .tr.gh { display: flex; justify-content: space-between; gap: 10px; height: 16px; margin-top: 3px; padding: 0 2px; font-size: 10px; color: var(--mid); border-top: 1px dashed rgba(200,200,212,.1); }
+#table .tbody .tr.gh span:first-child { color: var(--mid); }
+#table .tbody .tr.gh .cnt { flex: none; }
+#table .tbody .tr.gh .cnt i { font-style: normal; margin-left: 7px; }
+#table .tbody .tr.gh .cnt i[data-tone="run"] { color: var(--tone-run); } #table .tbody .tr.gh .cnt i[data-tone="ok"] { color: var(--tone-ok); }
+#table .tbody .tr.gh .cnt i[data-tone="warn"] { color: var(--tone-warn); } #table .tbody .tr.gh .cnt i[data-tone="bad"] { color: var(--tone-bad); }
+#table .tbody .tr.gh .cnt i[data-tone="dim"] { color: var(--tone-dim); }
 #table .tbody .tr span:nth-child(4) { color: var(--tint); }
-#table .tbody .tr.running span:nth-child(3) { color: var(--tint); }
 #table svg { width: 100%; height: 16px; display: block; }
 #table svg polyline { fill: none; stroke: var(--tint); stroke-width: 1.2; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 2px var(--tint)); }
 #table .total { border-top: 1px solid rgba(200,200,212,.14); color: var(--hi); }
@@ -203,17 +213,14 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 #usage { display: grid; grid-template-rows: auto 1fr auto; height: 100%; min-height: 0; }
 #hud #more { width: auto; padding: 0 8px; letter-spacing: .08em; }
 #termsec { height: calc(100vh - var(--top-h) - 14px); margin-bottom: 8px; display: grid; grid-template-rows: auto 1fr auto; gap: 6px; }
-/* 已完成列表：终端区底部，一行一组，最多占三成高度，点开的组在行下面展开成和上面一样的栏 */
-#termdone { max-height: 34vh; overflow-y: auto; border-top: 1px solid rgba(200,200,212,.14); scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
+/* 已结束的组：终端区下面一排，栏的样子和上面运行中的一样；小标题缩进、不加粗，看得出是终端区里的一段，不和 TERMINAL 同级 */
+#termsec:has(#termdone:not([hidden])) { grid-template-rows: auto 1fr 1fr; }
+#termdone { display: grid; grid-template-rows: auto 1fr; gap: 4px; min-height: 0; }
 #termdone[hidden] { display: none; }
-#termdone > header { display: flex; align-items: baseline; gap: 8px; height: 18px; }
-#termdone > header b { color: var(--hi); font-size: 10px; letter-spacing: .16em; }
-#termdone > header .n { color: var(--dim); font-size: 10px; }
-#termdone .dline { cursor: pointer; color: var(--mid); font-size: 10.5px; padding: 2px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#termdone .dline:hover, #termdone .drow.open > .dline { color: var(--text); background: rgba(255,255,255,.04); }
-#termdone .dbody > .tcol { height: auto; max-height: 30vh; margin: 2px 0 6px 14px; }
-#termdone .more { margin: 4px 4px 2px; padding: 1px 8px; font-size: 10px; }
-#termdone .more[hidden] { display: none; }
+#termdone > .sub { display: flex; align-items: center; gap: 8px; padding-left: 6px; color: var(--dim); font-size: 10px; }
+#termdone > .sub::after { content: ""; flex: 1; border-top: 1px dashed rgba(200,200,212,.12); }
+#termdone > .row { display: flex; gap: 8px; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
+#termdone .more { flex: none; align-self: center; padding: 2px 10px; font-size: 10px; }
 #termsec > header { display: flex; align-items: baseline; gap: 12px; height: 18px; border-bottom: 1px solid rgba(200,200,212,.14); }
 #termsec > header b { color: var(--hi); font-size: 10px; letter-spacing: .16em; }
 #termsec > header span { color: var(--dim); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -227,7 +234,6 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 .tcol header img { width: 16px; height: 16px; object-fit: cover; object-position: 50% 12%; image-rendering: pixelated; flex: none; }
 .tcol header b { color: var(--hi); overflow: hidden; text-overflow: ellipsis; }
 .tcol header .st { color: var(--mid); overflow: hidden; text-overflow: ellipsis; }
-.tcol.running header .st, .tcol.cc header .st { color: var(--tint); }
 .tcol .term { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 3px 6px 4px; list-style: none; font-size: 10.5px; line-height: 1.5; color: var(--mid); scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
 .tcol .term li { padding-left: 8ch; text-indent: -8ch; white-space: pre-wrap; overflow-wrap: anywhere; }
 
@@ -238,9 +244,6 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 .tgroup > header { justify-content: space-between; }
 .tgroup > header b { color: var(--text); font-weight: 600; }
 .tgroup .cnt i { font-style: normal; margin-left: 7px; }
-.tgroup .cnt .running { color: #74d4e8; } .tgroup .cnt .ok { color: #82d99c; } .tgroup .cnt .failed { color: var(--bad); }
-/* 和终端组标题的计数同色：部分完成、交回问题、排队琥珀色，已续接暗下去 */
-.tgroup .cnt :is(.partial, .blocked, .queued) { color: rgb(232,194,122); } .tgroup .cnt .resumed { color: var(--dim); }
 .tgroup .seats { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
 .seat { padding: 3px 6px 4px; border-bottom: 1px dashed rgba(170,170,182,.13); cursor: pointer; --pad: calc(2ch + 26px); }
 .seat:hover { background: rgba(255,255,255,.03); }
@@ -248,14 +251,10 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 .seat .id .no { color: var(--dim); width: 2ch; text-align: right; flex: none; }
 .seat .id img { width: 14px; height: 14px; object-fit: cover; object-position: 50% 12%; image-rendering: pixelated; flex: none; }
 .seat .id b { color: var(--hi); overflow: hidden; text-overflow: ellipsis; }
-.seat .id .st { margin-left: auto; color: #82d99c; flex: none; }
-.seat.running .id .st { color: var(--tint); }
-.seat.bad .id .st { color: var(--bad); }
-/* 部分完成、交回问题、排队用琥珀色，已续接的暗下去（结果看续接的那一轮）；和终端的颜色一致 */
-.seat:is([data-kind="partial"], [data-kind="blocked"], [data-kind="queued"]) .id .st { color: rgb(232,194,122); }
-.seat[data-kind="resumed"] .id .st, .seat[data-kind="resumed"] .id b { color: var(--dim); }
+.seat .id .st { margin-left: auto; flex: none; }
+.seat .id .mk { font-style: normal; flex: none; }
+.seat[data-kind="resumed"] .id b { color: var(--dim); }
 .card:is(.partial, .blocked) { --cc: rgb(232,194,122); border-color: rgba(232,194,122,.5); }
-.card:is(.partial, .blocked) .st { color: rgb(232,194,122); }
 .card.resumed { filter: brightness(.72); }
 .seat .role { color: var(--dim); font-size: 10px; padding-left: var(--pad); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tcol .seat .term { flex: none; padding: 0 0 0 var(--pad); overflow: visible; }
@@ -308,9 +307,22 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
   #usage[data-mode="uni"] .tr { grid-template-columns: 18px 1.8fr .9fr .75fr 1fr; }
   #usage[data-mode="uni"] .tr > span:is(:nth-child(6), :nth-child(7), :nth-child(10)) { display: none; }
   #termsec { height: auto; min-height: calc(100vh - var(--top-h) - 14px); }
-  #terms { flex-direction: column; overflow: visible; }
+  #terms, #termdone > .row { flex-direction: column; overflow: visible; }
+  #termsec:has(#termdone:not([hidden])) { grid-template-rows: auto auto auto; }
   .tcol, .tcol.cc, .tgroup { flex: none; min-width: 0; height: 70vh; }
 }
 
 /* 头像（卡片、用量表、终端栏里的）不能选中、不能拖出来 */
 img { -webkit-user-drag: none; user-select: none; -webkit-user-select: none; }
+
+/* 状态文字统一按色调上色（用量表的状态列、卡片状态行、终端栏头、席位记号和状态、组计数），颜色和终端一致 */
+:is(#table .tbody .tr span, .card .st, .tcol header .st, .tgroup .cnt i)[data-tone="run"], .seat[data-tone="run"] .id :is(.mk, .st) { color: var(--tone-run); }
+:is(#table .tbody .tr span, .card .st, .tcol header .st, .tgroup .cnt i)[data-tone="ok"], .seat[data-tone="ok"] .id :is(.mk, .st) { color: var(--tone-ok); }
+:is(#table .tbody .tr span, .card .st, .tcol header .st, .tgroup .cnt i)[data-tone="warn"], .seat[data-tone="warn"] .id :is(.mk, .st) { color: var(--tone-warn); }
+:is(#table .tbody .tr span, .card .st, .tcol header .st, .tgroup .cnt i)[data-tone="bad"], .seat[data-tone="bad"] .id :is(.mk, .st) { color: var(--tone-bad); }
+:is(#table .tbody .tr span, .card .st, .tcol header .st, .tgroup .cnt i)[data-tone="dim"], .seat[data-tone="dim"] .id :is(.mk, .st) { color: var(--tone-dim); }
+
+/* 宇宙表的状态列：出了问题的席位每个一个点，颜色按状态色调 */
+#usage[data-mode="uni"] .tr span i.issue { display: inline-block; width: 6px; height: 6px; margin-left: 4px; border-radius: 50%; vertical-align: 1px; }
+#usage[data-mode="uni"] .tr span i.issue[data-tone="bad"] { background: var(--tone-bad); box-shadow: 0 0 5px var(--tone-bad); }
+#usage[data-mode="uni"] .tr span i.issue[data-tone="warn"] { background: var(--tone-warn); box-shadow: 0 0 5px var(--tone-warn); }

@@ -7,6 +7,8 @@
 <style>:root {
   --bg: #050506; --panel: #0b0b0e; --edge: #26262b; --edge2: #3a3a42;
   --dim: #5c5c66; --mid: #8f8f9c; --text: #d2d2d9; --hi: #f5f5f8; --bad: #e88a9f;
+  /* 状态色调（scripts/display.mjs 的 toneOf，和终端的上色一一对应）：运行中、完成、部分完成/交回问题/排队、失败、已续接和没开始 */
+  --tone-run: #b9a3ff; --tone-ok: #82d99c; --tone-warn: rgb(232,194,122); --tone-bad: var(--bad); --tone-dim: var(--dim);
   --mono: ui-monospace, "Cascadia Mono", "Sarasa Mono SC", Consolas, Menlo, monospace;
   --top-h: 36px; --table-h: min(195px, 32vh); /* 底部面板固定高度：表头、正好 7 行（每行 19px）、合计；行多了在面板里滚动 */
 }
@@ -46,7 +48,8 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 /* 宇宙层右上的名额带 */
 #uslots { position: absolute; z-index: 3; top: 10px; display: flex; flex-direction: column; cursor: default; user-select: none;
   background: linear-gradient(180deg, rgba(22,22,27,.62), rgba(7,7,9,.86)); border: 1px solid rgba(170,170,182,.14); }
-#uslots { right: 10px; width: 236px; max-height: calc(100% - 60px); }
+/* 名额面板在左上（右边留给星系和标签） */
+#uslots { left: 10px; width: 236px; max-height: calc(100% - 60px); }
 #uslots > header { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; border-bottom: 1px solid rgba(200,200,212,.12); flex: none; }
 #uslots > header b { color: var(--hi); font-size: 10px; letter-spacing: .16em; }
 #uslots > header .n { color: var(--dim); font-size: 10px; flex: 1; }
@@ -118,8 +121,8 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 .card .hd > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card .model { color: var(--hi); font-weight: 700; }
 .card .st { color: var(--mid); }
-.card.running .st { color: var(--tint); }
-.card .st.bad { color: var(--bad); }
+/* 改到范围外的文件：状态行最前面一个琥珀色的 ⚠N */
+.card .st[data-over]::before { content: "⚠" attr(data-over) " "; color: var(--tone-warn); }
 .card .tl { color: var(--text); font-weight: 600; }
 .card .rate { color: var(--dim); }
 .card .rate .now { color: var(--tint); }
@@ -189,8 +192,15 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 #table .tbody.more { mask-image: linear-gradient(180deg, #000 calc(100% - 14px), transparent); }
 #table .tr .av img { width: 18px; height: 18px; object-fit: cover; object-position: 50% 12%; image-rendering: pixelated; display: block; border: 1px solid var(--edge); }
 #table .tbody .tr span:nth-child(2) { color: var(--text); }
+/* 组标题行：比车道行矮、字暗一些，左边是类型 · 标题，右边是各状态的个数（颜色和终端一致） */
+#table .tbody .tr.gh { display: flex; justify-content: space-between; gap: 10px; height: 16px; margin-top: 3px; padding: 0 2px; font-size: 10px; color: var(--mid); border-top: 1px dashed rgba(200,200,212,.1); }
+#table .tbody .tr.gh span:first-child { color: var(--mid); }
+#table .tbody .tr.gh .cnt { flex: none; }
+#table .tbody .tr.gh .cnt i { font-style: normal; margin-left: 7px; }
+#table .tbody .tr.gh .cnt i[data-tone="run"] { color: var(--tone-run); } #table .tbody .tr.gh .cnt i[data-tone="ok"] { color: var(--tone-ok); }
+#table .tbody .tr.gh .cnt i[data-tone="warn"] { color: var(--tone-warn); } #table .tbody .tr.gh .cnt i[data-tone="bad"] { color: var(--tone-bad); }
+#table .tbody .tr.gh .cnt i[data-tone="dim"] { color: var(--tone-dim); }
 #table .tbody .tr span:nth-child(4) { color: var(--tint); }
-#table .tbody .tr.running span:nth-child(3) { color: var(--tint); }
 #table svg { width: 100%; height: 16px; display: block; }
 #table svg polyline { fill: none; stroke: var(--tint); stroke-width: 1.2; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 2px var(--tint)); }
 #table .total { border-top: 1px solid rgba(200,200,212,.14); color: var(--hi); }
@@ -209,17 +219,14 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 #usage { display: grid; grid-template-rows: auto 1fr auto; height: 100%; min-height: 0; }
 #hud #more { width: auto; padding: 0 8px; letter-spacing: .08em; }
 #termsec { height: calc(100vh - var(--top-h) - 14px); margin-bottom: 8px; display: grid; grid-template-rows: auto 1fr auto; gap: 6px; }
-/* 已完成列表：终端区底部，一行一组，最多占三成高度，点开的组在行下面展开成和上面一样的栏 */
-#termdone { max-height: 34vh; overflow-y: auto; border-top: 1px solid rgba(200,200,212,.14); scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
+/* 已结束的组：终端区下面一排，栏的样子和上面运行中的一样；小标题缩进、不加粗，看得出是终端区里的一段，不和 TERMINAL 同级 */
+#termsec:has(#termdone:not([hidden])) { grid-template-rows: auto 1fr 1fr; }
+#termdone { display: grid; grid-template-rows: auto 1fr; gap: 4px; min-height: 0; }
 #termdone[hidden] { display: none; }
-#termdone > header { display: flex; align-items: baseline; gap: 8px; height: 18px; }
-#termdone > header b { color: var(--hi); font-size: 10px; letter-spacing: .16em; }
-#termdone > header .n { color: var(--dim); font-size: 10px; }
-#termdone .dline { cursor: pointer; color: var(--mid); font-size: 10.5px; padding: 2px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#termdone .dline:hover, #termdone .drow.open > .dline { color: var(--text); background: rgba(255,255,255,.04); }
-#termdone .dbody > .tcol { height: auto; max-height: 30vh; margin: 2px 0 6px 14px; }
-#termdone .more { margin: 4px 4px 2px; padding: 1px 8px; font-size: 10px; }
-#termdone .more[hidden] { display: none; }
+#termdone > .sub { display: flex; align-items: center; gap: 8px; padding-left: 6px; color: var(--dim); font-size: 10px; }
+#termdone > .sub::after { content: ""; flex: 1; border-top: 1px dashed rgba(200,200,212,.12); }
+#termdone > .row { display: flex; gap: 8px; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
+#termdone .more { flex: none; align-self: center; padding: 2px 10px; font-size: 10px; }
 #termsec > header { display: flex; align-items: baseline; gap: 12px; height: 18px; border-bottom: 1px solid rgba(200,200,212,.14); }
 #termsec > header b { color: var(--hi); font-size: 10px; letter-spacing: .16em; }
 #termsec > header span { color: var(--dim); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -233,7 +240,6 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 .tcol header img { width: 16px; height: 16px; object-fit: cover; object-position: 50% 12%; image-rendering: pixelated; flex: none; }
 .tcol header b { color: var(--hi); overflow: hidden; text-overflow: ellipsis; }
 .tcol header .st { color: var(--mid); overflow: hidden; text-overflow: ellipsis; }
-.tcol.running header .st, .tcol.cc header .st { color: var(--tint); }
 .tcol .term { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 3px 6px 4px; list-style: none; font-size: 10.5px; line-height: 1.5; color: var(--mid); scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
 .tcol .term li { padding-left: 8ch; text-indent: -8ch; white-space: pre-wrap; overflow-wrap: anywhere; }
 
@@ -244,9 +250,6 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 .tgroup > header { justify-content: space-between; }
 .tgroup > header b { color: var(--text); font-weight: 600; }
 .tgroup .cnt i { font-style: normal; margin-left: 7px; }
-.tgroup .cnt .running { color: #74d4e8; } .tgroup .cnt .ok { color: #82d99c; } .tgroup .cnt .failed { color: var(--bad); }
-/* 和终端组标题的计数同色：部分完成、交回问题、排队琥珀色，已续接暗下去 */
-.tgroup .cnt :is(.partial, .blocked, .queued) { color: rgb(232,194,122); } .tgroup .cnt .resumed { color: var(--dim); }
 .tgroup .seats { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
 .seat { padding: 3px 6px 4px; border-bottom: 1px dashed rgba(170,170,182,.13); cursor: pointer; --pad: calc(2ch + 26px); }
 .seat:hover { background: rgba(255,255,255,.03); }
@@ -254,14 +257,10 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 .seat .id .no { color: var(--dim); width: 2ch; text-align: right; flex: none; }
 .seat .id img { width: 14px; height: 14px; object-fit: cover; object-position: 50% 12%; image-rendering: pixelated; flex: none; }
 .seat .id b { color: var(--hi); overflow: hidden; text-overflow: ellipsis; }
-.seat .id .st { margin-left: auto; color: #82d99c; flex: none; }
-.seat.running .id .st { color: var(--tint); }
-.seat.bad .id .st { color: var(--bad); }
-/* 部分完成、交回问题、排队用琥珀色，已续接的暗下去（结果看续接的那一轮）；和终端的颜色一致 */
-.seat:is([data-kind="partial"], [data-kind="blocked"], [data-kind="queued"]) .id .st { color: rgb(232,194,122); }
-.seat[data-kind="resumed"] .id .st, .seat[data-kind="resumed"] .id b { color: var(--dim); }
+.seat .id .st { margin-left: auto; flex: none; }
+.seat .id .mk { font-style: normal; flex: none; }
+.seat[data-kind="resumed"] .id b { color: var(--dim); }
 .card:is(.partial, .blocked) { --cc: rgb(232,194,122); border-color: rgba(232,194,122,.5); }
-.card:is(.partial, .blocked) .st { color: rgb(232,194,122); }
 .card.resumed { filter: brightness(.72); }
 .seat .role { color: var(--dim); font-size: 10px; padding-left: var(--pad); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tcol .seat .term { flex: none; padding: 0 0 0 var(--pad); overflow: visible; }
@@ -314,12 +313,25 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
   #usage[data-mode="uni"] .tr { grid-template-columns: 18px 1.8fr .9fr .75fr 1fr; }
   #usage[data-mode="uni"] .tr > span:is(:nth-child(6), :nth-child(7), :nth-child(10)) { display: none; }
   #termsec { height: auto; min-height: calc(100vh - var(--top-h) - 14px); }
-  #terms { flex-direction: column; overflow: visible; }
+  #terms, #termdone > .row { flex-direction: column; overflow: visible; }
+  #termsec:has(#termdone:not([hidden])) { grid-template-rows: auto auto auto; }
   .tcol, .tcol.cc, .tgroup { flex: none; min-width: 0; height: 70vh; }
 }
 
 /* 头像（卡片、用量表、终端栏里的）不能选中、不能拖出来 */
 img { -webkit-user-drag: none; user-select: none; -webkit-user-select: none; }
+
+/* 状态文字统一按色调上色（用量表的状态列、卡片状态行、终端栏头、席位记号和状态、组计数），颜色和终端一致 */
+:is(#table .tbody .tr span, .card .st, .tcol header .st, .tgroup .cnt i)[data-tone="run"], .seat[data-tone="run"] .id :is(.mk, .st) { color: var(--tone-run); }
+:is(#table .tbody .tr span, .card .st, .tcol header .st, .tgroup .cnt i)[data-tone="ok"], .seat[data-tone="ok"] .id :is(.mk, .st) { color: var(--tone-ok); }
+:is(#table .tbody .tr span, .card .st, .tcol header .st, .tgroup .cnt i)[data-tone="warn"], .seat[data-tone="warn"] .id :is(.mk, .st) { color: var(--tone-warn); }
+:is(#table .tbody .tr span, .card .st, .tcol header .st, .tgroup .cnt i)[data-tone="bad"], .seat[data-tone="bad"] .id :is(.mk, .st) { color: var(--tone-bad); }
+:is(#table .tbody .tr span, .card .st, .tcol header .st, .tgroup .cnt i)[data-tone="dim"], .seat[data-tone="dim"] .id :is(.mk, .st) { color: var(--tone-dim); }
+
+/* 宇宙表的状态列：出了问题的席位每个一个点，颜色按状态色调 */
+#usage[data-mode="uni"] .tr span i.issue { display: inline-block; width: 6px; height: 6px; margin-left: 4px; border-radius: 50%; vertical-align: 1px; }
+#usage[data-mode="uni"] .tr span i.issue[data-tone="bad"] { background: var(--tone-bad); box-shadow: 0 0 5px var(--tone-bad); }
+#usage[data-mode="uni"] .tr span i.issue[data-tone="warn"] { background: var(--tone-warn); box-shadow: 0 0 5px var(--tone-warn); }
 </style>
 </head>
 <body>
@@ -797,7 +809,9 @@ function groupTask(all, plans = [], queue = []) {
   const same = (key) => (new Set(metas.map((m) => m[key] ?? null)).size === 1 ? metas[0]?.[key] : null);
   const titles = [...new Set(metas.map((m) => withoutRole(oneLine(m.title || ''), m.role)).filter(Boolean))];
   const round = same('round');
-  return { split: module === 'run' && titles.length > 1, text: taskLine({ ...metas[0], level: same('level'), cell: same('cell') }, { mode, title: titles.join(' / '), round }) };
+  return { split: module === 'run' && titles.length > 1, text: taskLine({ ...metas[0], level: same('level'), cell: same('cell') }, { mode, title: titles.join(' / '), round }),
+    // 简短的组标题（网页用量表的组行）：只写类型和标题
+    short: D.dots([moduleOf(metas[0]), titles.length && oneLine(titles.join(' / '))]) };
 }
 
 // 只算查看画面的计划提示；准入和登记仍由 plan.mjs/records.mjs 负责。
@@ -927,6 +941,9 @@ function seatState(meta, result, api, now, C = unpainted, outcome = resultOutcom
   return { style, right: [style.word, Number.isFinite(sec) ? clock(sec * 1000) : null],
     kind: outcome.resumed ? 'resumed' : outcome.ok ? 'ok' : outcome.blocked ? 'blocked' : outcome.partial ? 'partial' : 'failed' };
 }
+// 各状态的色调，和终端的上色一致（运行中、完成、部分完成/交回问题/排队、失败、已续接和没开始）；网页按色调取同一组颜色
+const TONES = { running: 'run', queued: 'warn', ok: 'ok', partial: 'warn', blocked: 'warn', resumed: 'dim', not_started: 'dim', failed: 'bad' };
+const toneOf = (kind) => TONES[kind] || 'dim';
 const COUNT_MARKS = { running: '●', queued: '⋯', ok: '✔', partial: '◐', blocked: '?', resumed: '↪', failed: '✗' };
 const countParts = (states) => Object.entries(COUNT_MARKS).flatMap(([kind, mark]) => {
   const n = states.filter((s) => s.kind === kind).length;
@@ -988,7 +1005,7 @@ function elapsedOf(r, t, points, lastActivity) {
 
 return { D, seatLine, shortModel, fullModel, modelLabel, agentTypeOf, moduleOf, taskLine, clock, took, shownStatus, outcomeStyle, agentTotal, changedText, changedFor,
   formatUsd, usageLine, toolLabel, commandAction, errorAction, foldText, thoughtLine, wrapAtDots, realErrors, durationOf, reviewFinding, reviewCounts, reviewConclusion, finalLines, liveLines,
-  groupTask, current, planNotes, seatNumbers, roundOf, resultOutcome, liveStatus, seatState, COUNT_MARKS, countParts, countsText, seatUsage, queuedLine, queuedStarted, collapseLines, dashFooter,
+  groupTask, current, planNotes, seatNumbers, roundOf, resultOutcome, liveStatus, seatState, toneOf, COUNT_MARKS, countParts, countsText, seatUsage, queuedLine, queuedStarted, collapseLines, dashFooter,
   displayRun, recordedTime, elapsedOf, textWidth, fitWidth, wrapWidth };
 })();
 // ---- 00-text.js
@@ -1868,9 +1885,9 @@ function outLife(lane, t) {
 // ---- 席位进出刻度带 ----
 // 刻度带里只放正在干活、或者结果还没被读走的席位：一次任务的结果被 Claude Code 读走、产出框收起之后这一席就离开；
 // 一直没被读的（比如没有 Claude Code 记录），结束 LEAVE_GRACE 之后也离开。下一轮任务启动时再回来。
-// 一个组里所有席位都要离开时整组才离开，离开时整组溶解成光点（LEAVE_ANIM 屏幕秒），下面的组滑上来补位。
+// 一个组里所有席位都要离开时整组才离开，离开时整组溶解成光点飞进 Claude Code（LEAVE_ANIM 屏幕秒），下面的组滑上来补位。
 const LEAVE_GRACE = 10 * 60000; // 记录时间
-const LEAVE_ANIM = 0.9;
+const LEAVE_ANIM = 1.4; // 光点要飞到 Claude Code 卡片，比原地飘散长一些
 const recMs = (sec) => sec * 1000 * (B.clock.mode === 'replay' ? B.clock.speed : 1); // 屏幕秒 → 记录毫秒
 
 // 这次任务的这一席什么时候离开（记录时间，还定不下来就是 Infinity）
@@ -1972,6 +1989,8 @@ function loadFinals() {
     for (const ev of s.events) { const id = ev.lane || ev.run; if (!FINAL_EV.has(id)) FINAL_EV.set(id, []); FINAL_EV.get(id).push(ev); }
     for (const list of FINAL_EV.values()) list.sort((a, b) => a.ts - b.ts);
     for (const lane of B.lanes) lane.segs = null;
+    // 补齐的是历史用量，不是输出加快：加速脉冲的基线从补齐后的速度重新算（08-surge.js）
+    if (typeof SURGE !== 'undefined') SURGE.clear();
     B.version++;
   }).catch(() => {});
 }
@@ -2293,9 +2312,9 @@ const UI = { open: new Set(), collapsed: new Set(), cards: new Map(), outs: new 
 
 function laneStatus(lane, t) {
   const r = currentRun(lane, t);
-  if (lane.id === 'cc' && r) return { mark: r.status === 'idle' ? '○' : '●', word: r.status === 'idle' ? 'idle' : 'active', running: r.status !== 'idle' };
+  if (lane.id === 'cc' && r) return { mark: r.status === 'idle' ? '○' : '●', word: r.status === 'idle' ? 'idle' : 'active', running: r.status !== 'idle', tone: r.status === 'idle' ? 'dim' : 'run' };
   const st = seatStatus(lane, r, t);
-  return { ...st, mark: st.style.mark, word: st.style.word, running: !!st.running };
+  return { ...st, mark: st.style.mark, word: st.style.word, running: !!st.running, tone: Display.toneOf(st.kind) };
 }
 
 // 对话是否正在活跃进行（光束只在这时有基础流动）：席位看任务是否在运行；Claude Code 看最近 60 秒（记录时间）里有没有新动作
@@ -2544,7 +2563,7 @@ function fillCard(el, lane, t) {
   el.querySelector('.model').title = Display.modelLabel(Display.displayRun(r).meta);
   const stEl = el.querySelector('.st');
   setText(stEl, `${st.mark} ${st.word} ${Display.clock(laneElapsed(lane, t) * 1000)}`);
-  stEl.classList.toggle('bad', st.kind === 'failed');
+  if (stEl.dataset.tone !== st.tone) stEl.dataset.tone = st.tone;
   const round = roundOf(lane, t);
   setText(el.querySelector('.tl'), isCC ? [shortModel(r.model), r.title].filter(Boolean).join(' · ')
     : [r.kind, r.role ? `[${r.role}]` : null, r.title, r.level, round > 1 ? `round ${round}` : null].filter(Boolean).join(' · '));
@@ -2722,6 +2741,7 @@ function fillGhost(el, lane, t) {
   el.classList.toggle('gap-ready', gap === 'ready');
   const state = Display.outcomeStyle({ status: 'not_started' });
   setText(el.querySelector('.st'), `${state.mark} ${state.word} · seat ${s.seat}${s.required ? ' · required' : ''}`);
+  el.querySelector('.st').dataset.tone = 'dim';
   setText(el.querySelector('.tl'), gap === 'ready' ? TEXT.gapReady : gap ? TEXT.gapWaiting : [s.role ? `[${s.role}]` : null, 'waiting to launch'].filter(Boolean).join(' · '));
   const rate = el.querySelector('.rate');
   if (rate.dataset.sig !== '') { rate.dataset.sig = ''; rate.innerHTML = ''; }
@@ -2836,9 +2856,11 @@ function decorateCard(el, lane, t) {
   const live = lane.runs.filter((x) => x.started_at <= t && x.kind !== 'answer'), r = live[live.length - 1];
   const fate = fateAt(lane, r, t);
   for (const c of ['queued', 'cancelled', 'failed', 'partial', 'blocked', 'resumed']) el.classList.toggle(c, fate === c);
-  const over = outOfScope(lane, r, t).length, st = el.querySelector('.st');
-  if (over) st.title = TEXT.outOfScope(over); else st.title = '';
-  st.classList.toggle('bad', st.classList.contains('bad') || over > 0);
+  // 改到范围外的文件：状态行最前面一个琥珀色的 ⚠N（和终端的 ⚠ 同色；放在前面，卡片窄时不会被行尾的省略号吃掉），
+  // 状态本身的颜色不变；悬停写明越界几个、是哪些文件
+  const files = outOfScope(lane, r, t), st = el.querySelector('.st'), over = files.length ? String(files.length) : '';
+  if ((st.dataset.over || '') !== over) { if (over) st.dataset.over = over; else delete st.dataset.over; }
+  st.title = files.length ? TEXT.outOfScopeList(files.slice(0, 5), files.length) : '';
 }
 
 // 补漏席（计划里角色写"补漏"的席位）还没启动时在等什么：其他席还在跑 waiting；都结束了 ready；不是补漏席 null
@@ -2859,7 +2881,8 @@ function scopeLead(lane, t) {
 
 // ---- 07-table.js
 'use strict';
-// 底部用量表（每个模型一行，Claude Code 在最前，最后一行合计）和顶栏。
+// 底部用量表和顶栏。用量表每条车道一行，最后一行合计；排法和终端区一样：Claude Code 在最前，然后是正在跑的组和任务，
+// 再是已经结束的（最新结束的在前）。组前面有一行简短的组标题（类型 · 标题，右边是各状态的个数），组里的席位按席位号排。
 
 const TABLE_HEAD = ['', 'model', 'status', 'now ≈tok/s', 'last 2 min', 'gen avg ≈tok/s', 'input · cache', 'output', 'cost', 'time'];
 // 费用：一律按模型官方 API 价格算（插件自带的价格表），悬停在表头和单元格上有说明；+ 表示有的模型不在价格表里
@@ -2886,10 +2909,12 @@ function renderTable(t) {
     for (const h of TABLE_HEAD) { const c = document.createElement('span'); c.textContent = h; table.firstChild.append(c); }
     costHeadTitle(table.firstChild);
   }
-  const lanes = [B.laneById.get('cc'), ...seatLanes(t)].filter((l) => l && latest(l) && latest(l).started_at <= t);
+  const rows = tableRows(t), lanes = rows.filter((x) => x.lane).map((x) => x.lane);
   const body = table.querySelector('.tbody');
   const tot = { input: 0, cached: 0, output: 0, usage_unattributed: false, cost: null, partial: false, rate: 0 };
-  lanes.forEach((lane, i) => {
+  rows.forEach((row, i) => {
+    if (row.head) { const tr = headRow(row); if (body.children[i] !== tr) body.insertBefore(tr, body.children[i] || null); return; }
+    const lane = row.lane;
     let tr = UI.tableRows.get(lane.id);
     if (!tr) {
       tr = document.createElement('div');
@@ -2909,6 +2934,7 @@ function renderTable(t) {
     setText(c[1], Display.modelLabel({ ...Display.displayRun(r).meta, ...(lane.id === 'cc' ? { agent_type: 'host' } : {}) }));
     c[1].title = lane.id === 'cc' ? '' : [r.title, r.group, r.id].filter(Boolean).join(' · ');
     setText(c[2], st.word);
+    if (c[2].dataset.tone !== st.tone) c[2].dataset.tone = st.tone;
     setText(c[3], s.rate >= 0.5 ? `≈ ${Math.round(s.rate)}` : '—');
     sparkSvg(c[4], sparkline(lane, t));
     setText(c[5], s.avg != null ? `≈ ${Math.round(s.avg)}` : '—');
@@ -2924,7 +2950,7 @@ function renderTable(t) {
     if (s.cost != null) tot.cost = (tot.cost ?? 0) + s.cost;
     if (s.costPartial) tot.partial = true;
   });
-  while (body.children.length > lanes.length) body.lastChild.remove();
+  while (body.children.length > rows.length) body.lastChild.remove();
   markMore(body);
   const total = table.querySelector('.total');
   const sig = `${lanes.length}|${Math.round(tot.rate)}|${tot.input}|${tot.output}|${tot.usage_unattributed}|${fmtCost(tot.cost, tot.partial)}`;
@@ -2937,6 +2963,41 @@ function renderTable(t) {
     total.children[7].title = tot.usage_unattributed ? TEXT.usageUnattributed : '';
     total.children[6].title = tot.usage_unattributed ? TEXT.usageUnattributed : '';
   }
+}
+
+// 用量表的行：车道行 { lane }，组标题行 { head, id, text, counts }
+function tableRows(t) {
+  const started = (l) => latest(l) && latest(l).started_at <= t, out = [], cc = B.laneById.get('cc');
+  if (cc && started(cc)) out.push({ lane: cc });
+  const units = termUnits(t).filter((u) => u.id !== 'cc' && unitLanes(u).some(started));
+  const live = (u) => unitLanes(u).some((l) => laneStatus(l, t).running) || !!u.group && dispatchQueue(t).some((q) => q.group === u.group);
+  const done = units.filter((u) => !live(u)).sort((a, b) => unitEnd(b, t) - unitEnd(a, t));
+  for (const u of [...units.filter(live), ...done]) {
+    if (!u.group) { out.push({ lane: u.lane }); continue; }
+    const { blocks, all, plans, queue, states } = groupSeats(u, t), order = blocks.filter((b) => b.lane).map((b) => b.lane);
+    const lanes = [...order, ...u.lanes.filter((l) => !order.includes(l))].filter(started);
+    if (!lanes.length) continue;
+    // 计数和终端组头一样：当前各席（含 Claude Code 席）加排队；被同一席新一轮替代的旧车道照样列出用量，但不算进计数
+    const counts = Display.countParts([...states, ...queue.map(() => ({ kind: 'queued' }))]);
+    out.push({ head: true, id: `head:${u.id}`, text: Display.groupTask(all, plans, queue).short, counts });
+    for (const lane of lanes) out.push({ lane });
+  }
+  return out;
+}
+function headRow(row) {
+  let tr = UI.tableRows.get(row.id);
+  if (!tr) {
+    tr = document.createElement('div'); tr.className = 'tr gh';
+    const title = document.createElement('span'), cnt = document.createElement('span'); cnt.className = 'cnt';
+    tr.append(title, cnt); UI.tableRows.set(row.id, tr);
+  }
+  setText(tr.firstChild, row.text); tr.firstChild.title = row.text;
+  const sig = row.counts.map((p) => p.text).join(' '), cnt = tr.lastChild;
+  if (cnt.dataset.sig !== sig) {
+    cnt.dataset.sig = sig; cnt.replaceChildren();
+    for (const p of row.counts) { const i = document.createElement('i'); i.dataset.tone = Display.toneOf(p.kind); i.textContent = p.text; cnt.append(i); }
+  }
+  return tr;
 }
 
 function sparkSvg(cell, pts) {
@@ -2968,7 +3029,7 @@ function renderTop(t) {
 //  - Claude Code 自己的对话流单独一栏，放在最前
 // 有新内容时自动滚到底，往上翻看时不打扰。以后做多对话，切换对话就是换一组车道（termUnits）重画，标题跟着换。
 
-const PANEL = { cols: new Map(), open: new Set(), seen: false, numbers: new Map(), doneRows: new Map(), openDone: new Set(), allDone: false };
+const PANEL = { cols: new Map(), open: new Set(), seen: false, numbers: new Map(), allDone: false };
 const groupPlans = (group, t) => [...new Map(B.life.filter((p) => p.k === 'fplan' && p.group === group && p.ts <= t).map((p) => [p.plan, p])).values()];
 function dispatchQueue(t) {
   const snapshot = B.laneById.get('dispatch_queue')?.events.filter((e) => e.ts <= t).at(-1);
@@ -2985,9 +3046,7 @@ addEventListener('scroll', () => {
 }, { passive: true });
 $('more').addEventListener('click', () => $('termsec').scrollIntoView({ behavior: 'smooth' }));
 $('termsec').addEventListener('click', (e) => {
-  // 已完成列表：点一行展开或收起这一组的完整摘要；"更多"列出全部
-  const line = e.target.closest('#termdone .dline');
-  if (line) { const id = line.parentNode.dataset.unit; if (!PANEL.openDone.delete(id)) PANEL.openDone.add(id); B.version++; wake(); return; }
+  // 已结束的组多于 DONE_SHOWN 时，最后的按钮列出全部
   if (e.target.closest('#termdone .more')) { PANEL.allDone = true; B.version++; wake(); return; }
   const seat = e.target.closest('.seat');
   if (!seat) return;
@@ -3017,8 +3076,8 @@ function termUnits(t, L) {
   return units;
 }
 
-// 正在跑的组和刚出结果的组展开在上面；全部结束一分钟以后折进下面的"已完成"列表（一行一组，点开是完整摘要），
-// 和刻度带脱钩：结果被 Claude Code 读走、席位离开刻度带以后照样留着
+// 正在跑的组和刚出结果的组在上面一排；全部结束一分钟以后挪到下面一排（"finished"），样子和上面完全一样、照样展开，
+// 和刻度带脱钩：结果被 Claude Code 读走、席位离开刻度带以后照样留着。最新结束的在最前，先列 DONE_SHOWN 组
 const DONE_AFTER = 60000, DONE_SHOWN = 20;
 const unitLanes = (u) => (u.group ? u.lanes : [u.lane]);
 const unitEnd = (u, t) => Math.max(0, ...unitLanes(u).map((l) => currentRun(l, t)?.ended_at ?? 0));
@@ -3029,42 +3088,32 @@ function unitFinished(u, t) {
   const end = unitEnd(u, t);
   return end > 0 && t - end > DONE_AFTER;
 }
-function doneLine(u, t) {
-  const lanes = unitLanes(u), runs = lanes.map((l) => currentRun(l, t)), shown = runs.map(Display.displayRun);
-  const title = u.group ? Display.groupTask(shown).text : Display.taskLine(shown[0].meta);
-  const counts = Display.countsText(lanes.map((l, i) => seatStatus(l, runs[i], t)));
-  const cost = runs.reduce((n, r) => n + (r.cost_usd || 0), 0);
-  return [title, counts, `ended ${hhmm(Display.recordedTime(unitEnd(u, t), displayPoints()))}`, cost ? `$${fmtUsd(cost)}` : null].filter(Boolean).join(' · ');
+// 一排终端栏：按 units 的顺序放进 row（已有的栏复用），填好内容
+function fillRow(row, units, t, seen) {
+  units.forEach((u, i) => {
+    let col = PANEL.cols.get(u.id);
+    if (!col) { col = u.group ? groupColumn(u.id) : termColumn(u.id); PANEL.cols.set(u.id, col); }
+    seen.add(u.id);
+    // 先放进页面再填内容，滚到底才量得到高度
+    if (row.children[i] !== col) row.insertBefore(col, row.children[i] || null);
+    if (u.group) fillGroup(col, u, t); else fillColumn(col, u.lane, t);
+  });
 }
 function renderDone(done, t, seen) {
   const box = $('termdone');
   box.hidden = !done.length;
   if (!done.length) return;
-  if (!box.firstChild) box.innerHTML = '<header><b>FINISHED</b><span class="n"></span></header><div class="rows"></div><button type="button" class="more"></button>';
-  setText(box.querySelector('.n'), String(done.length));
-  const list = box.querySelector('.rows'), shown = PANEL.allDone ? done : done.slice(0, DONE_SHOWN), ids = new Set();
-  shown.forEach((u, i) => {
-    let row = PANEL.doneRows.get(u.id);
-    if (!row) {
-      row = document.createElement('section'); row.className = 'drow'; row.dataset.unit = u.id;
-      row.innerHTML = '<div class="dline"></div><div class="dbody"></div>'; PANEL.doneRows.set(u.id, row);
-    }
-    ids.add(u.id);
-    if (list.children[i] !== row) list.insertBefore(row, list.children[i] || null);
-    const open = PANEL.openDone.has(u.id), body = row.querySelector('.dbody');
-    row.classList.toggle('open', open);
-    setText(row.querySelector('.dline'), `${open ? '▾' : '▸'} ${doneLine(u, t)}`);
-    if (!open) { if (body.firstChild) body.replaceChildren(); return; }
-    let col = PANEL.cols.get(u.id);
-    if (!col) { col = u.group ? groupColumn(u.id) : termColumn(u.id); PANEL.cols.set(u.id, col); }
-    seen.add(u.id);
-    if (col.parentNode !== body) body.replaceChildren(col);
-    if (u.group) fillGroup(col, u, t); else fillColumn(col, u.lane, t);
-  });
-  for (const [id, row] of PANEL.doneRows) if (!ids.has(id)) { row.remove(); PANEL.doneRows.delete(id); }
-  const more = box.querySelector('.more'), rest = done.length - shown.length;
-  more.hidden = rest <= 0;
-  setText(more, `show ${rest} more`);
+  if (!box.firstChild) box.innerHTML = '<div class="sub"></div><div class="row"></div>';
+  setText(box.firstChild, `finished · ${done.length}`);
+  const row = box.lastChild, shown = PANEL.allDone ? done : done.slice(0, DONE_SHOWN);
+  fillRow(row, shown, t, seen);
+  let more = row.querySelector(':scope > .more');
+  const rest = done.length - shown.length;
+  if (rest > 0) {
+    if (!more) { more = document.createElement('button'); more.type = 'button'; more.className = 'more'; }
+    setText(more, `show ${rest} more`);
+    if (row.lastChild !== more) row.append(more);
+  } else more?.remove();
 }
 
 function renderTerms(t, L) {
@@ -3073,14 +3122,7 @@ function renderTerms(t, L) {
   if (!termsNear()) return;
   const box = $('terms'), seen = new Set(), units = termUnits(t, L);
   const done = units.filter((u) => unitFinished(u, t)).sort((a, b) => unitEnd(b, t) - unitEnd(a, t));
-  units.filter((u) => !done.includes(u)).forEach((u, i) => {
-    let col = PANEL.cols.get(u.id);
-    if (!col) { col = u.group ? groupColumn(u.id) : termColumn(u.id); PANEL.cols.set(u.id, col); }
-    seen.add(u.id);
-    // 先放进页面再填内容，滚到底才量得到高度
-    if (box.children[i] !== col) box.insertBefore(col, box.children[i] || null);
-    if (u.group) fillGroup(col, u, t); else fillColumn(col, u.lane, t);
-  });
+  fillRow(box, units.filter((u) => !done.includes(u)), t, seen);
   renderDone(done, t, seen);
   for (const [id, col] of PANEL.cols) if (!seen.has(id)) { col.remove(); PANEL.cols.delete(id); }
 }
@@ -3122,6 +3164,7 @@ function fillColumn(col, lane, t) {
   setAvatar(col.querySelector('img'), key);
   setText(col.querySelector('b'), isCC ? 'Claude Code' : Display.modelLabel(Display.displayRun(r).meta));
   setText(col.querySelector('.st'), `${st.mark} ${st.word} ${Display.clock(laneElapsed(lane, t) * 1000)}`);
+  col.querySelector('.st').dataset.tone = st.tone;
   setText(col.querySelector('.task'), isCC ? [shortModel(r.model), r.title].filter(Boolean).join(' · ')
     : Display.taskLine(Display.displayRun(r).meta, { round }));
   fillFlow(col.querySelector('.term'), timeline(lane, t, { open: true }).slice(-400));
@@ -3137,7 +3180,8 @@ function groupColumn(id) {
   return col;
 }
 
-function fillGroup(col, u, t) {
+// 一组的席位块（Claude Code 席在前）和席位号，按号排好；终端栏和用量表的组共用，号码和顺序两边一样
+function groupSeats(u, t) {
   const history = [...B.runs.values()].filter((r) => r.group === u.group && r.started_at <= t).map(Display.displayRun);
   const chosen = new Set(Display.current(history).map((r) => r.id));
   const hosts = history.filter((r) => r.meta.participant === 'host' && chosen.has(r.id));
@@ -3150,10 +3194,17 @@ function fillGroup(col, u, t) {
   PANEL.numbers.set(numberKey, numbers);
   blocks.sort((a, b) => numbers.runs.get((a.host || currentRun(a.lane, t)).id) - numbers.runs.get((b.host || currentRun(b.lane, t)).id));
   all.sort((a, b) => numbers.runs.get(a.id) - numbers.runs.get(b.id));
-  for (const run of all) { const b = blocks.find((b) => (b.host || currentRun(b.lane, t)).id === run.id); if (b.lane) run.meta.round = roundOf(b.lane, t); }
   const queue = dispatchQueue(t).filter((q) => q.group === u.group || q.group == null && all.some((r) => r.meta.plan === q.plan))
     .filter((q) => !Display.queuedStarted(q, history));
-  const head = Display.groupTask(all, plans, queue), states = blocks.map((b) => b.host ? { kind: 'ok' } : seatStatus(b.lane, currentRun(b.lane, t), t));
+  // 各席此刻的状态（Claude Code 席算交过了）：组头计数和用量表组行的计数共用
+  const states = blocks.map((b) => b.host ? { kind: 'ok' } : seatStatus(b.lane, currentRun(b.lane, t), t));
+  return { history, blocks, all, plans, numbers, queue, states };
+}
+
+function fillGroup(col, u, t) {
+  const { history, blocks, all, plans, numbers, queue, states } = groupSeats(u, t);
+  for (const run of all) { const b = blocks.find((b) => (b.host || currentRun(b.lane, t)).id === run.id); if (b.lane) run.meta.round = roundOf(b.lane, t); }
+  const head = Display.groupTask(all, plans, queue);
   setText(col.querySelector('header b'), head.text);
   const notes = Display.planNotes(plans, history.map((r) => ({ ...r,
     outcome: Display.resultOutcome(r.meta.ended_at != null && r.meta.ended_at <= t || r.meta.participant === 'host' ? r.result : { status: 'running' }, r.meta) })));
@@ -3164,7 +3215,7 @@ function fillGroup(col, u, t) {
   const count = col.querySelector('.cnt'); count.replaceChildren();
   for (const p of Display.countParts([...states, ...queue.map(() => ({ kind: 'queued' }))])) {
     if (count.children.length) count.append(' ');
-    const part = document.createElement('i'); part.className = p.kind; part.textContent = p.text; count.append(part);
+    const part = document.createElement('i'); part.className = p.kind; part.dataset.tone = Display.toneOf(p.kind); part.textContent = p.text; count.append(part);
   }
   col.classList.toggle('running', states.some((s) => s.running) || queue.length > 0);
   const box = col.querySelector('.seats'), seen = new Set();
@@ -3195,7 +3246,7 @@ function seatShell(id) {
   const el = document.createElement('section');
   el.className = 'seat';
   el.dataset.lane = id;
-  el.innerHTML = '<div class="id"><span class="no"></span><img alt=""><b></b><span class="st"></span></div><div class="role"></div><ol class="term"></ol><div class="use"><span></span><span class="rid"></span></div>';
+  el.innerHTML = '<div class="id"><span class="no"></span><img alt=""><i class="mk"></i><b></b><span class="st"></span></div><div class="role"></div><ol class="term"></ol><div class="use"><span></span><span class="rid"></span></div>';
   return el;
 }
 
@@ -3206,10 +3257,12 @@ function fillSeat(el, lane, t, no, split = false) {
   el.style.setProperty('--tint', rgba(key));
   el.classList.toggle('running', !!st.running); el.classList.toggle('open', open);
   el.classList.toggle('bad', st.kind === 'failed');
-  el.dataset.kind = st.kind || ''; // 样式按状态上色：部分完成、交回问题、已续接、排队
+  el.dataset.kind = st.kind || '';
+  el.dataset.tone = Display.toneOf(st.kind); // 状态记号和状态词按色调上色，和终端一致
   setAvatar(el.querySelector('img'), key);
   setText(el.querySelector('.no'), String(no));
-  setText(el.querySelector('b'), `${st.style.mark} ${Display.modelLabel(run.meta)}`);
+  setText(el.querySelector('.mk'), st.style.mark);
+  setText(el.querySelector('b'), Display.modelLabel(run.meta));
   setText(el.querySelector('.st'), st.right.filter(Boolean).join(' '));
   setText(el.querySelector('.role'), Display.seatLine(run.meta, { title: split }));
   const ol = el.querySelector('.term'), width = Math.max(20, Math.floor((ol.clientWidth || 560) / 6.6) - 4);
@@ -3226,9 +3279,11 @@ function fillHostSeat(el, h, no = 0) {
   const run = Display.displayRun(h), open = PANEL.open.has(el.dataset.lane);
   const st = Display.seatState(run.meta, run.result, {}, 0);
   el.style.setProperty('--tint', rgba('claude')); el.classList.add('host'); el.classList.toggle('open', open);
+  el.dataset.tone = Display.toneOf(st.kind);
   setAvatar(el.querySelector('img'), 'claude');
   setText(el.querySelector('.no'), String(no));
-  setText(el.querySelector('b'), `${st.style.mark} ${Display.modelLabel(run.meta)}`);
+  setText(el.querySelector('.mk'), st.style.mark);
+  setText(el.querySelector('b'), Display.modelLabel(run.meta));
   setText(el.querySelector('.st'), st.right.filter(Boolean).join(' '));
   setText(el.querySelector('.role'), Display.seatLine(run.meta));
   const ol = el.querySelector('.term'), width = Math.max(20, Math.floor((ol.clientWidth || 560) / 6.6) - 4);
@@ -3352,7 +3407,7 @@ function renderUniTable() {
     if (tr.className !== cls) tr.className = cls;
     setText(c[1], s.title || s.id.slice(0, 8));
     setText(c[2], U.projects.get(s.project)?.name || s.project);
-    setText(c[3], s.state === 'waiting' && s.waiting?.header ? TEXT.asking(s.waiting.header) : s.alert ? `${STATE_WORD[s.state]} · ${s.alert.kind}` : STATE_WORD[s.state]);
+    fillUniState(c[3], s);
     setText(c[4], n ? `● ${n}` : '—');
     setText(c[5], `${s.counts.done} · ${s.counts.failed}`);
     setText(c[6], inAll ? `${fmtTok(inAll)} · ${Math.round((100 * (u.cached || 0)) / inAll)}%` : '—');
@@ -3390,6 +3445,18 @@ function renderUniTable() {
   }
 }
 
+// 状态列：对话此刻在做什么，后面每个出了问题的席位一个点（颜色和终端的状态色一致：超时、失败、被停止都是红的），
+// 只列还在进行的组里的（服务端算好的 issues）；整组结束以后点就没了。悬停看是哪几席
+function fillUniState(cell, s) {
+  const word = s.state === 'waiting' && s.waiting?.header ? TEXT.asking(s.waiting.header) : STATE_WORD[s.state], issues = s.issues || [];
+  // 签名带上每席的 run 和模型：同样个数、同样状态但换了席位时，悬停说明也要跟着换
+  const sig = `${word}|${issues.map((x) => `${x.run}:${x.status}:${x.model}`).join(',')}`;
+  if (cell.dataset.sig === sig) return;
+  cell.dataset.sig = sig; cell.replaceChildren(word);
+  for (const x of issues) { const dot = document.createElement('i'); dot.className = 'issue'; dot.dataset.tone = 'bad'; cell.append(dot); }
+  cell.title = issues.map((x) => `${Display.D.statusName(x.status)} · ${shortModel(x.model) || '?'}`).join('\n');
+}
+
 // 宇宙层的顶栏：范围、宇宙层自己的时钟和回放进度、连接状态（看板的 renderTop 在宇宙层不跑，不清掉会留着上一个对话的）
 function renderUniTop() {
   const c = U.clock, t = uNow(), replay = c.mode === 'replay';
@@ -3418,8 +3485,9 @@ function renderUniPanels() {
 
 // 互联网光线：起点在核心网中心周围一圈（0.15R–0.45R）里随机，先朝外弯出去，再拐向卡片的 token 接口
 // （Claude Code 从右边进、席位从左边进）。起点一端透明、渐渐融进白色弧线，越靠近卡片越显出卡片的颜色。
-// 只有对话正在活跃进行时才流动，token/s 越快越亮、流得越快；不活跃时是一道静止的暗线
-function drawBundle(c, lane, p, I, live) {
+// 只有对话正在活跃进行时才流动，token/s 越快越亮、流得越快；不活跃时是一道静止的暗线。
+// surge：这条车道输出突然加快后的屏幕秒数（08-surge.js），有的话一道亮光沿每条线从弧线区走到卡片
+function drawBundle(c, lane, p, I, live, surge = null) {
   const rand = rng(hash(`bundle|${lane.id}`)), k = (p.visible === false ? 0.45 : 1) * (0.45 + 0.55 * live);
   const side = p.tok[0] < c.cx ? 1 : -1; // 卡片在左边时，线从卡片右侧进来
   const color = tintOf(lane.id), flow = flowPhase(`bundle|${lane.id}`, 10 + 70 * I);
@@ -3434,6 +3502,7 @@ function drawBundle(c, lane, p, I, live) {
     g.addColorStop(0, HI(0)); g.addColorStop(0.3, HI(0.12 * k)); g.addColorStop(0.7, color((0.22 + 0.35 * I) * k)); g.addColorStop(1, color((0.4 + 0.45 * I) * k));
     strokeCubic(q);
     ctx.strokeStyle = g; ctx.lineWidth = 0.9 * FX.lw; ctx.stroke();
+    if (surge != null) { drawSurgeAlong(q, surge, color, surgeK(lane.id) * k); strokeCubic(q); }
     if (live > 0.01) {
       // 流动的光点随活跃程度淡入淡出
       const d = ctx.createLinearGradient(sx, sy, ex, ey);
@@ -3896,30 +3965,36 @@ function drawFx(t, L) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     ctx.setTransform(dpr * VIEW.k, 0, 0, dpr * VIEW.k, dpr * VIEW.tx, dpr * VIEW.ty);
-    drawOverlay(t, L, P, lanes, rates, live, bandA);
+    drawOverlay(t, L, P, lanes, rates, live, bandA, burst);
   } finally { ctx = base; }
 }
 
-// 上面那层：核心网到卡片的汇流线、刻度带、席位到产出框的光带、产出框、状态、标签、交互光线
-function drawOverlay(t, L, P, lanes, rates, live, bandA) {
-  const pulses = recentPulses(t);
+// 上面那层：核心网到卡片的汇流线、刻度带、席位到产出框的光带、产出框、状态、标签、交互光线。
+// 切换中（burst）弧线区在亮核此刻的位置、按炸开的进度缩放：连到弧线区的光线（汇流线、交互光线）和核心附近的标签
+// 都以这个位置和大小为准，跟着弧线区移动、被拉长，和滚动刻度带时一样一直粘在弧线区上
+function drawOverlay(t, L, P, lanes, rates, live, bandA, burst = null) {
+  const core = burst ? { ...L.core, cx: burst.wx, cy: burst.wy, R: L.core.R * Math.max(0.05, burst.s) } : L.core;
+  // 输出突然加快的脉冲（08-surge.js）：切换中、定格（?t=）时不放
+  trackSurges(rates, !!burst || B.params.t != null);
+  const pulses = [...recentPulses(t), ...surgePulses(lanes)];
   // 滚到刻度带两头的席位跟着渐隐，它的光线也一起淡掉
   // 还没被光点拉到的卡片、正在离开的组，光线也跟着淡入淡出
   L.arrive = arrivals(t);
   const fadeOf = (id) => (P.get(id).vis ?? 1) * (L.arrive.get(id)?.card ?? 1) * (1 - (L.rows.get(id)?.leave || 0)) * dimOf(id);
   const each = (fn) => { for (const lane of lanes) { const v = fadeOf(lane.id); if (v < 0.02) continue; ctx.globalAlpha = v; fn(lane); } ctx.globalAlpha = 1; };
-  each((lane) => drawBundle(L.core, lane, P.get(lane.id), smooth(`bI|${lane.id}`, glow(rates.get(lane.id) || 0)), live.get(lane.id)));
+  each((lane) => drawBundle(core, lane, P.get(lane.id), smooth(`bI|${lane.id}`, glow(rates.get(lane.id) || 0)), live.get(lane.id), surgeAge(lane.id)));
+  each((lane) => { const age = surgeAge(lane.id); if (age != null && age < SURGE_CORE) drawSurgeCore(core, lane.id, age); });
   drawBand(L.band, t, bandA);
   each((lane) => { if (lane.id !== 'cc' && P.get(lane.id).visible) drawRibbon(lane, P.get(lane.id), t, rates.get(lane.id) || 0, pulses, live.get(lane.id)); });
   drawCCOut(P.get('cc'), L.ccOut, pulses, rates.get('cc') || 0, live.get('cc') || 0, t);
   drawOutLife(L, P, t);
   drawStates(L, t);
   drawTags(L, t, rates);
-  each((lane) => { if (lane.id !== 'cc') drawLink(L.core, lane, P.get('cc'), P.get(lane.id), t, pulses); });
+  each((lane) => { if (lane.id !== 'cc') drawLink(core, lane, P.get('cc'), P.get(lane.id), t, pulses); });
   drawLife(L, t);
   const others = [];
-  for (const lab of recentLabels(t).reverse()) drawLabel(lab, L.core, P, others);
-  drawNotes(L.core, t);
+  for (const lab of recentLabels(t).reverse()) drawLabel(lab, core, P, others);
+  drawNotes(core, t);
 }
 
 // ---- 08-labels.js
@@ -4141,24 +4216,36 @@ function drawDispatchBirth(L, t) {
   }
 }
 
-// 离开的组：卡片溶解成一团模型颜色的光点，往右上方飘散
+// 离开的组（结果都被 Claude Code 读走了）：卡片溶解成一团模型颜色的光点，先散开一点，再沿弧线飞进 Claude Code 卡片，
+// 到的时候 Claude Code 卡片的入口亮一下
 function drawLeave(L) {
+  const cc = L.cc, port = [cc.x + cc.w, cc.y + cc.h * 0.5];
+  let arrive = 0;
   for (const g of L.groups) {
     if (!g.leave || g.collapsed) continue;
-    const e = ease(clamp01(g.leave)), fadeOut = 1 - clamp01(g.leave);
+    const k = clamp01(g.leave);
     for (const lane of g.lanes) {
       const row = L.rows.get(lane.id);
       if (!row || lane.ghost) continue;
       const c = row.card, color = tintOf(lane.id), rand = rng(hash(`leave|${lane.id}`));
-      if (g.leave < 0.25) { ctx.strokeStyle = color(0.8 * (1 - g.leave / 0.25)); ctx.lineWidth = 1.5 * FX.lw; ctx.strokeRect(c.x, c.y, c.w, c.h); }
+      if (k < 0.25) { ctx.strokeStyle = color(0.8 * (1 - k / 0.25)); ctx.lineWidth = 1.5 * FX.lw; ctx.strokeRect(c.x, c.y, c.w, c.h); }
       for (let i = 0; i < 34; i++) {
-        const x0 = c.x + rand() * c.w, y0 = c.y + rand() * c.h, vx = (rand() - 0.25) * 110, vy = (rand() - 0.7) * 80, s = 1.1 + rand() * 1.8;
-        const a = fadeOut * (0.5 + 0.5 * rand()) * row.vis, x = x0 + vx * e, y = y0 + vy * e;
-        if (i % 5 === 0) glowDot(x, y, s, color, a);
-        else { ctx.fillStyle = i % 4 ? color(a) : HI(a); ctx.beginPath(); ctx.arc(x, y, s * FX.lw, 0, 6.283); ctx.fill(); }
+        const x0 = c.x + rand() * c.w, y0 = c.y + rand() * c.h, delay = rand() * 0.3, s = 1.1 + rand() * 1.8, lift = 30 + rand() * 70;
+        const sx = x0 + (rand() - 0.5) * 40, sy = y0 + (rand() - 0.5) * 30, flash = rand();
+        const u = clamp01((k - delay) / (1 - delay)), e = ease(u);
+        // 前 20% 原地散开，之后沿二次曲线飞向 Claude Code 卡片的入口（控制点在两头中间偏上，划出一道弧）
+        const spread = clamp01(u / 0.2), fly = ease(clamp01((u - 0.2) / 0.8));
+        const ax = x0 + (sx - x0) * spread, ay = y0 + (sy - y0) * spread, mx = (ax + port[0]) / 2, my = Math.min(ay, port[1]) - lift;
+        const x = (1 - fly) ** 2 * ax + 2 * (1 - fly) * fly * mx + fly ** 2 * port[0], y = (1 - fly) ** 2 * ay + 2 * (1 - fly) * fly * my + fly ** 2 * port[1];
+        const a = (0.5 + 0.5 * flash) * row.vis * (u < 1 ? 1 - 0.6 * e ** 4 : 0);
+        if (a <= 0) continue;
+        if (i % 5 === 0) glowDot(x, y, s * (1 - 0.4 * fly), color, a);
+        else { ctx.fillStyle = i % 4 ? color(a) : HI(a); ctx.beginPath(); ctx.arc(x, y, s * (1 - 0.4 * fly) * FX.lw, 0, 6.283); ctx.fill(); }
       }
     }
+    arrive = Math.max(arrive, k);
   }
+  if (arrive > 0.6) ring(port[0], port[1], (arrive - 0.6) / 0.4, tintOf('cc'), 6, 40);
 }
 
 // ① 建计划
@@ -4668,6 +4755,67 @@ function drawStates(L, t) {
   ctx.globalAlpha = 1;
 }
 
+// ---- 08-surge.js
+'use strict';
+// 输出突然加快时的脉冲：弧线区中心先闪一圈，一道亮光沿这条车道的汇流线从弧线区传到卡片，再沿光带从卡片传到产出框。
+// 判断加快：每条车道的速度和它最近几秒的平均（指数平滑，约 4 秒）比，一下子高出一截（高出 60% 以上、至少多 15 tok/s）
+// 就算一次加速；同一条车道 6 秒内只放一次。速度从 0 起步也算（开始出字时亮一下）。切换动画中、要求减少动效时不放。
+const SURGE = new Map(); // 车道 id → { base: 平滑后的速度, at: 上次更新（屏幕秒）, t0: 这次脉冲开始（屏幕秒）, k: 强度 0.4–1 }
+const SURGE_CORE = 0.45, SURGE_BUNDLE = 1.05, SURGE_RIBBON = 1.3;
+const SURGE_TOTAL = SURGE_BUNDLE + SURGE_RIBBON;
+
+function trackSurges(rates, quiet) {
+  const now = performance.now() / 1000;
+  for (const [id, rate] of rates) {
+    let s = SURGE.get(id);
+    if (!s) { SURGE.set(id, { base: rate, at: now, t0: -Infinity, k: 0 }); continue; }
+    const dt = Math.min(1, Math.max(0, now - s.at));
+    s.at = now;
+    if (!quiet && !reduceMotion.matches && rate > s.base * 1.6 && rate - s.base >= 15 && now - s.t0 > 6) {
+      s.t0 = now; s.k = 0.4 + 0.6 * clamp01((rate - s.base) / 80);
+    }
+    s.base += (rate - s.base) * (1 - Math.exp(-dt / 4));
+  }
+  for (const id of [...SURGE.keys()]) if (!rates.has(id)) SURGE.delete(id);
+}
+// 这条车道的脉冲走了多少屏幕秒；没有正在走的返回 null
+function surgeAge(id) {
+  const s = SURGE.get(id);
+  if (!s) return null;
+  const age = performance.now() / 1000 - s.t0;
+  return age >= 0 && age < SURGE_TOTAL ? age : null;
+}
+const surgeK = (id) => SURGE.get(id)?.k ?? 0;
+
+// ① 弧线区中心闪一下：一团车道颜色的光，外面一圈往外扩
+function drawSurgeCore(c, id, age) {
+  const u = age / SURGE_CORE, k = surgeK(id), color = tintOf(id);
+  if (u >= 1) return;
+  const r = c.R * (0.12 + 0.3 * ease(u)), g = ctx.createRadialGradient(c.cx, c.cy, 0, c.cx, c.cy, r);
+  g.addColorStop(0, HI(0.55 * k * (1 - u))); g.addColorStop(0.35, color(0.35 * k * (1 - u))); g.addColorStop(1, color(0));
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(c.cx, c.cy, r, 0, 6.283); ctx.fill();
+  ring(c.cx, c.cy, u, color, c.R * 0.08, c.R * 0.55);
+}
+// ② 汇流线上的亮光：沿一条曲线从弧线区（u = 0）走到卡片（u = 1），拖一小段尾巴
+function drawSurgeAlong(q, age, color, k) {
+  const u = ease(clamp01((age - SURGE_CORE * 0.4) / (SURGE_BUNDLE - SURGE_CORE * 0.4)));
+  if (u <= 0 || u >= 1) return;
+  ctx.beginPath();
+  for (let j = 0; j <= 6; j++) { const [x, y] = cubicAt(q, Math.max(0, u - 0.08 + j * 0.08 / 6)); j ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+  ctx.strokeStyle = HI(0.85 * k * (1 - 0.3 * u)); ctx.lineWidth = 1.7 * FX.lw; ctx.stroke();
+  const [hx, hy] = cubicAt(q, u);
+  glowDot(hx, hy, 2.2, color, k);
+}
+// ③ 卡片到产出框：交给光带自己的脉冲（drawCone 的 pulseAges），这里换算成光带上的时刻
+function surgePulses(lanes) {
+  const out = [];
+  for (const lane of lanes) {
+    const age = surgeAge(lane.id);
+    if (age != null && age > SURGE_BUNDLE) out.push({ lane: lane.id, out: true, age: age - SURGE_BUNDLE });
+  }
+  return out;
+}
+
 // ---- 08-tags.js
 'use strict';
 // 光束区里的状态标签：每个席位的粒子流中间一个小 HUD 标签，写着它此刻在做什么和速度。
@@ -4954,13 +5102,15 @@ function resetBoardView() {
   for (const m of [UI.cards, UI.outs, UI.heads, UI.tableRows]) m.clear();
   UI.open.clear(); UI.collapsed.clear(); UI.hot = null;
   for (const id of ['usage', 'terms', 'termdone']) { $(id).replaceChildren(); delete $(id).dataset.mode; }
-  PANEL.doneRows.clear(); PANEL.openDone.clear(); PANEL.allDone = false;
+  PANEL.allDone = false;
   PANEL.cols.clear(); UNI_ROWS.clear();
   Object.assign(REEL, { s: 0, off: 0, anchor: null }); REEL.born.clear();
   for (const key of [...SMOOTH.vals.keys()]) if (!key.startsWith('u')) SMOOTH.vals.delete(key);
   FX.layout = null;
   // 回放估算的总量缓存按对话分：每个对话的 Claude Code 车道 id 都是 cc，不清掉就会拿上一个对话的数
   FINAL.clear(); FINAL_EV.clear(); loadFinals.started = false; loadFinals.gen = (loadFinals.gen || 0) + 1;
+  // 加速脉冲的基线也按对话分（Claude Code 车道 id 都是 cc），换对话从新的速度重新算
+  SURGE.clear();
 }
 function openBoardFor(s) {
   disconnect(); reset(); resetBoardView();
@@ -5333,9 +5483,9 @@ function uniFitGoal() {
   const r = viewEl.getBoundingClientRect(), b = UV.bounds;
   // 视图还没有大小时不适配（和看板的 fitGoal 一样），留着原来的镜头
   if (!(r.width > 0 && r.height > 0)) return { k: UV.k > 0 ? UV.k : 1, tx: UV.tx, ty: UV.ty, bounds: b };
-  // 让开左边的对话列表和右上的名额带（收起或没显示时不让）
+  // 让开左上的名额面板（收起或没显示时不让）
   const side = (id, edge) => { const e = $(id).getBoundingClientRect(); return e.width ? (edge === 'l' ? e.right - r.left : r.right - e.left) + 8 : 0; };
-  const left = 0, right = FLY.mode === 'universe' ? side('uslots', 'r') : 0;
+  const left = FLY.mode === 'universe' ? side('uslots', 'l') : 0, right = 0;
   const w = Math.max(200, r.width - left - right), k = Math.min(w / b.w, r.height / b.h) * 0.86;
   return (UV.fitCache = { k, tx: left + w / 2 - (b.x + b.w / 2) * k, ty: r.height / 2 - (b.y + b.h / 2) * k, bounds: b });
 }

@@ -113,9 +113,9 @@ function outLife(lane, t) {
 // ---- 席位进出刻度带 ----
 // 刻度带里只放正在干活、或者结果还没被读走的席位：一次任务的结果被 Claude Code 读走、产出框收起之后这一席就离开；
 // 一直没被读的（比如没有 Claude Code 记录），结束 LEAVE_GRACE 之后也离开。下一轮任务启动时再回来。
-// 一个组里所有席位都要离开时整组才离开，离开时整组溶解成光点（LEAVE_ANIM 屏幕秒），下面的组滑上来补位。
+// 一个组里所有席位都要离开时整组才离开，离开时整组溶解成光点飞进 Claude Code（LEAVE_ANIM 屏幕秒），下面的组滑上来补位。
 const LEAVE_GRACE = 10 * 60000; // 记录时间
-const LEAVE_ANIM = 0.9;
+const LEAVE_ANIM = 1.4; // 光点要飞到 Claude Code 卡片，比原地飘散长一些
 const recMs = (sec) => sec * 1000 * (B.clock.mode === 'replay' ? B.clock.speed : 1); // 屏幕秒 → 记录毫秒
 
 // 这次任务的这一席什么时候离开（记录时间，还定不下来就是 Infinity）

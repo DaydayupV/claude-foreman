@@ -1,5 +1,6 @@
 'use strict';
-// 底部用量表（每个模型一行，Claude Code 在最前，最后一行合计）和顶栏。
+// 底部用量表和顶栏。用量表每条车道一行，最后一行合计；排法和终端区一样：Claude Code 在最前，然后是正在跑的组和任务，
+// 再是已经结束的（最新结束的在前）。组前面有一行简短的组标题（类型 · 标题，右边是各状态的个数），组里的席位按席位号排。
 
 const TABLE_HEAD = ['', 'model', 'status', 'now ≈tok/s', 'last 2 min', 'gen avg ≈tok/s', 'input · cache', 'output', 'cost', 'time'];
 // 费用：一律按模型官方 API 价格算（插件自带的价格表），悬停在表头和单元格上有说明；+ 表示有的模型不在价格表里
@@ -26,10 +27,12 @@ function renderTable(t) {
     for (const h of TABLE_HEAD) { const c = document.createElement('span'); c.textContent = h; table.firstChild.append(c); }
     costHeadTitle(table.firstChild);
   }
-  const lanes = [B.laneById.get('cc'), ...seatLanes(t)].filter((l) => l && latest(l) && latest(l).started_at <= t);
+  const rows = tableRows(t), lanes = rows.filter((x) => x.lane).map((x) => x.lane);
   const body = table.querySelector('.tbody');
   const tot = { input: 0, cached: 0, output: 0, usage_unattributed: false, cost: null, partial: false, rate: 0 };
-  lanes.forEach((lane, i) => {
+  rows.forEach((row, i) => {
+    if (row.head) { const tr = headRow(row); if (body.children[i] !== tr) body.insertBefore(tr, body.children[i] || null); return; }
+    const lane = row.lane;
     let tr = UI.tableRows.get(lane.id);
     if (!tr) {
       tr = document.createElement('div');
@@ -49,6 +52,7 @@ function renderTable(t) {
     setText(c[1], Display.modelLabel({ ...Display.displayRun(r).meta, ...(lane.id === 'cc' ? { agent_type: 'host' } : {}) }));
     c[1].title = lane.id === 'cc' ? '' : [r.title, r.group, r.id].filter(Boolean).join(' · ');
     setText(c[2], st.word);
+    if (c[2].dataset.tone !== st.tone) c[2].dataset.tone = st.tone;
     setText(c[3], s.rate >= 0.5 ? `≈ ${Math.round(s.rate)}` : '—');
     sparkSvg(c[4], sparkline(lane, t));
     setText(c[5], s.avg != null ? `≈ ${Math.round(s.avg)}` : '—');
@@ -64,7 +68,7 @@ function renderTable(t) {
     if (s.cost != null) tot.cost = (tot.cost ?? 0) + s.cost;
     if (s.costPartial) tot.partial = true;
   });
-  while (body.children.length > lanes.length) body.lastChild.remove();
+  while (body.children.length > rows.length) body.lastChild.remove();
   markMore(body);
   const total = table.querySelector('.total');
   const sig = `${lanes.length}|${Math.round(tot.rate)}|${tot.input}|${tot.output}|${tot.usage_unattributed}|${fmtCost(tot.cost, tot.partial)}`;
@@ -77,6 +81,41 @@ function renderTable(t) {
     total.children[7].title = tot.usage_unattributed ? TEXT.usageUnattributed : '';
     total.children[6].title = tot.usage_unattributed ? TEXT.usageUnattributed : '';
   }
+}
+
+// 用量表的行：车道行 { lane }，组标题行 { head, id, text, counts }
+function tableRows(t) {
+  const started = (l) => latest(l) && latest(l).started_at <= t, out = [], cc = B.laneById.get('cc');
+  if (cc && started(cc)) out.push({ lane: cc });
+  const units = termUnits(t).filter((u) => u.id !== 'cc' && unitLanes(u).some(started));
+  const live = (u) => unitLanes(u).some((l) => laneStatus(l, t).running) || !!u.group && dispatchQueue(t).some((q) => q.group === u.group);
+  const done = units.filter((u) => !live(u)).sort((a, b) => unitEnd(b, t) - unitEnd(a, t));
+  for (const u of [...units.filter(live), ...done]) {
+    if (!u.group) { out.push({ lane: u.lane }); continue; }
+    const { blocks, all, plans, queue, states } = groupSeats(u, t), order = blocks.filter((b) => b.lane).map((b) => b.lane);
+    const lanes = [...order, ...u.lanes.filter((l) => !order.includes(l))].filter(started);
+    if (!lanes.length) continue;
+    // 计数和终端组头一样：当前各席（含 Claude Code 席）加排队；被同一席新一轮替代的旧车道照样列出用量，但不算进计数
+    const counts = Display.countParts([...states, ...queue.map(() => ({ kind: 'queued' }))]);
+    out.push({ head: true, id: `head:${u.id}`, text: Display.groupTask(all, plans, queue).short, counts });
+    for (const lane of lanes) out.push({ lane });
+  }
+  return out;
+}
+function headRow(row) {
+  let tr = UI.tableRows.get(row.id);
+  if (!tr) {
+    tr = document.createElement('div'); tr.className = 'tr gh';
+    const title = document.createElement('span'), cnt = document.createElement('span'); cnt.className = 'cnt';
+    tr.append(title, cnt); UI.tableRows.set(row.id, tr);
+  }
+  setText(tr.firstChild, row.text); tr.firstChild.title = row.text;
+  const sig = row.counts.map((p) => p.text).join(' '), cnt = tr.lastChild;
+  if (cnt.dataset.sig !== sig) {
+    cnt.dataset.sig = sig; cnt.replaceChildren();
+    for (const p of row.counts) { const i = document.createElement('i'); i.dataset.tone = Display.toneOf(p.kind); i.textContent = p.text; cnt.append(i); }
+  }
+  return tr;
 }
 
 function sparkSvg(cell, pts) {

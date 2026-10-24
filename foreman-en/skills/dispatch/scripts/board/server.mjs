@@ -7,7 +7,7 @@ import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { createFeed, buildReplay, snapshotAt, imagesOf } from './feed.mjs';
 import { loadPrices } from '../prices.mjs';
-import { createUniverse, universeChanges, universeAt } from './universe.mjs';
+import { createUniverse, universeChanges, universeAt, desktopRoots } from './universe.mjs';
 import { buildId } from './build-id.mjs';
 import { retryFile, removeLock } from './lock.mjs';
 
@@ -169,7 +169,9 @@ async function main() {
     lead: Number(values.lead ?? 10), tail: Number(values.tail ?? 5), prices: loadPrices(values.prices || path.join(here, '../prices.json')) };
   // 与轮询间隔变量一样只供测试缩小上限，不作为用户配置。
   const replayLimitBytes = process.env.FOREMAN_TEST_REPLAY_LIMIT_BYTES == null ? undefined : Number(process.env.FOREMAN_TEST_REPLAY_LIMIT_BYTES);
-  const feed = replayMode ? null : createFeed(root, options), universe = createUniverse({ ...options, runs: root, config: configFile, windowH, replayLimitBytes }), clients = new Set();
+  const feed = replayMode ? null : createFeed(root, options), universe = createUniverse({ ...options, runs: root, config: configFile, windowH, replayLimitBytes,
+    // 直播时宇宙只列桌面版对话列表里还在的对话（归档、删掉的不列）；回放照原样
+    desktopRoots: replayMode ? [] : desktopRoots() }), clients = new Set();
   const sessions = replayMode ? replaySessions(values.replay, root, options.claudeDir) : undefined;
   const sharedReplay = replayMode ? universe.replay({ speed: timing.speed, maxgap: timing.maxgap, sessions }, Date.now()) : null, details = new Map();
   // 单个组或任务的回放：第一次请求时构建（现在只要几十毫秒），之后复用；范围里没有任务的记成 null（404）

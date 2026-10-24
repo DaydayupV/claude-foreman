@@ -202,28 +202,34 @@ function drawFx(t, L) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     ctx.setTransform(dpr * VIEW.k, 0, 0, dpr * VIEW.k, dpr * VIEW.tx, dpr * VIEW.ty);
-    drawOverlay(t, L, P, lanes, rates, live, bandA);
+    drawOverlay(t, L, P, lanes, rates, live, bandA, burst);
   } finally { ctx = base; }
 }
 
-// 上面那层：核心网到卡片的汇流线、刻度带、席位到产出框的光带、产出框、状态、标签、交互光线
-function drawOverlay(t, L, P, lanes, rates, live, bandA) {
-  const pulses = recentPulses(t);
+// 上面那层：核心网到卡片的汇流线、刻度带、席位到产出框的光带、产出框、状态、标签、交互光线。
+// 切换中（burst）弧线区在亮核此刻的位置、按炸开的进度缩放：连到弧线区的光线（汇流线、交互光线）和核心附近的标签
+// 都以这个位置和大小为准，跟着弧线区移动、被拉长，和滚动刻度带时一样一直粘在弧线区上
+function drawOverlay(t, L, P, lanes, rates, live, bandA, burst = null) {
+  const core = burst ? { ...L.core, cx: burst.wx, cy: burst.wy, R: L.core.R * Math.max(0.05, burst.s) } : L.core;
+  // 输出突然加快的脉冲（08-surge.js）：切换中、定格（?t=）时不放
+  trackSurges(rates, !!burst || B.params.t != null);
+  const pulses = [...recentPulses(t), ...surgePulses(lanes)];
   // 滚到刻度带两头的席位跟着渐隐，它的光线也一起淡掉
   // 还没被光点拉到的卡片、正在离开的组，光线也跟着淡入淡出
   L.arrive = arrivals(t);
   const fadeOf = (id) => (P.get(id).vis ?? 1) * (L.arrive.get(id)?.card ?? 1) * (1 - (L.rows.get(id)?.leave || 0)) * dimOf(id);
   const each = (fn) => { for (const lane of lanes) { const v = fadeOf(lane.id); if (v < 0.02) continue; ctx.globalAlpha = v; fn(lane); } ctx.globalAlpha = 1; };
-  each((lane) => drawBundle(L.core, lane, P.get(lane.id), smooth(`bI|${lane.id}`, glow(rates.get(lane.id) || 0)), live.get(lane.id)));
+  each((lane) => drawBundle(core, lane, P.get(lane.id), smooth(`bI|${lane.id}`, glow(rates.get(lane.id) || 0)), live.get(lane.id), surgeAge(lane.id)));
+  each((lane) => { const age = surgeAge(lane.id); if (age != null && age < SURGE_CORE) drawSurgeCore(core, lane.id, age); });
   drawBand(L.band, t, bandA);
   each((lane) => { if (lane.id !== 'cc' && P.get(lane.id).visible) drawRibbon(lane, P.get(lane.id), t, rates.get(lane.id) || 0, pulses, live.get(lane.id)); });
   drawCCOut(P.get('cc'), L.ccOut, pulses, rates.get('cc') || 0, live.get('cc') || 0, t);
   drawOutLife(L, P, t);
   drawStates(L, t);
   drawTags(L, t, rates);
-  each((lane) => { if (lane.id !== 'cc') drawLink(L.core, lane, P.get('cc'), P.get(lane.id), t, pulses); });
+  each((lane) => { if (lane.id !== 'cc') drawLink(core, lane, P.get('cc'), P.get(lane.id), t, pulses); });
   drawLife(L, t);
   const others = [];
-  for (const lab of recentLabels(t).reverse()) drawLabel(lab, L.core, P, others);
-  drawNotes(L.core, t);
+  for (const lab of recentLabels(t).reverse()) drawLabel(lab, core, P, others);
+  drawNotes(core, t);
 }

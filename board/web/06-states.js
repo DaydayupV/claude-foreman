@@ -60,9 +60,11 @@ function decorateCard(el, lane, t) {
   const live = lane.runs.filter((x) => x.started_at <= t && x.kind !== 'answer'), r = live[live.length - 1];
   const fate = fateAt(lane, r, t);
   for (const c of ['queued', 'cancelled', 'failed', 'partial', 'blocked', 'resumed']) el.classList.toggle(c, fate === c);
-  const over = outOfScope(lane, r, t).length, st = el.querySelector('.st');
-  if (over) st.title = TEXT.outOfScope(over); else st.title = '';
-  st.classList.toggle('bad', st.classList.contains('bad') || over > 0);
+  // 改到范围外的文件：状态行最前面一个琥珀色的 ⚠N（和终端的 ⚠ 同色；放在前面，卡片窄时不会被行尾的省略号吃掉），
+  // 状态本身的颜色不变；悬停写明越界几个、是哪些文件
+  const files = outOfScope(lane, r, t), st = el.querySelector('.st'), over = files.length ? String(files.length) : '';
+  if ((st.dataset.over || '') !== over) { if (over) st.dataset.over = over; else delete st.dataset.over; }
+  st.title = files.length ? TEXT.outOfScopeList(files.slice(0, 5), files.length) : '';
 }
 
 // 补漏席（计划里角色写"补漏"的席位）还没启动时在等什么：其他席还在跑 waiting；都结束了 ready；不是补漏席 null

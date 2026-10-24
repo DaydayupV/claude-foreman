@@ -42,17 +42,18 @@ function golden() {
 }
 
 // display 里加了问题、报错的原条数（questions_total、errors_total、decision_requests_total）以后，buildReplay、detail、snapshots 三个哈希更新；
-// 去掉这三个字段算出的哈希和之前完全一样
+// 去掉这三个字段算出的哈希和之前完全一样。
+// 宇宙对话摘要加了 issues（还在进行的组里出了问题的席位）以后，timeline、snapshots 两个哈希更新；去掉 issues 算出的七个哈希和之前完全一样
 test('replay output matches SHA256 after auditing original-time additions against the fixture baseline', () => {
   // 已与返工前消息逐字段核对：仅显示字段和历史队列载荷变化；开始消息不提前携带结论，时钟及调度不变。
   assert.deepEqual(golden(), {
     hello: 'dd6d6628b6d0fd85c66d16e1f24a2de8a5dfa93ecaebfcf40fcade0540733508',
     initial: '616a456690c5e135fd70a2b9767f92f7d530100cccdb86e75e9693c1f7b0e236',
-    timeline: 'dd05a625e22f2694ae5b60f5e4c0803f7ac69a1d5db900f662be2cd87605a467',
+    timeline: '42d2977375016be5425671652b990731fa1e40897bb513c3f7db8493dd1665f4',
     clock: '09ab08ee5a6cec0f81855ecc0900a233a658523e80cf31681f62870837f2fa49',
     detail: '1e46d84ee512c83aa321213c48b392ac3663bd6e33cd0a599e4d176388faece4',
     buildReplay: '25fab4bc455fbaa159c4ec0e9da97ed382ba45d72818d9a315b4d0801c3f6e7a',
-    snapshots: 'c41a626322543a92c04a628d017fe4ca6e5ae9ba598f9c2902992ee7f37a67a1',
+    snapshots: 'ea5fbe5bcebda6f14600bdc5495612c320986cd164e408b59b82c5422b6f5a09',
   });
 });
 

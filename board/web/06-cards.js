@@ -26,7 +26,7 @@ function fillCard(el, lane, t) {
   el.querySelector('.model').title = Display.modelLabel(Display.displayRun(r).meta);
   const stEl = el.querySelector('.st');
   setText(stEl, `${st.mark} ${st.word} ${Display.clock(laneElapsed(lane, t) * 1000)}`);
-  stEl.classList.toggle('bad', st.kind === 'failed');
+  if (stEl.dataset.tone !== st.tone) stEl.dataset.tone = st.tone;
   const round = roundOf(lane, t);
   setText(el.querySelector('.tl'), isCC ? [shortModel(r.model), r.title].filter(Boolean).join(' · ')
     : [r.kind, r.role ? `[${r.role}]` : null, r.title, r.level, round > 1 ? `round ${round}` : null].filter(Boolean).join(' · '));
@@ -204,6 +204,7 @@ function fillGhost(el, lane, t) {
   el.classList.toggle('gap-ready', gap === 'ready');
   const state = Display.outcomeStyle({ status: 'not_started' });
   setText(el.querySelector('.st'), `${state.mark} ${state.word} · seat ${s.seat}${s.required ? ' · required' : ''}`);
+  el.querySelector('.st').dataset.tone = 'dim';
   setText(el.querySelector('.tl'), gap === 'ready' ? TEXT.gapReady : gap ? TEXT.gapWaiting : [s.role ? `[${s.role}]` : null, 'waiting to launch'].filter(Boolean).join(' · '));
   const rate = el.querySelector('.rate');
   if (rate.dataset.sig !== '') { rate.dataset.sig = ''; rate.innerHTML = ''; }

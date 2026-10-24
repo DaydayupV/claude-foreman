@@ -1,5 +1,7 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promptOf, toolsOf } from './claude-feed.mjs';
 import { ms, transient, stat, json, newTail, readLines, append, runMessage, laneOf, settleRun,
   usageTotals, hostCost, costFields, createFeed, buildReplay, replayClock } from './feed.mjs';
@@ -27,6 +29,62 @@ export function projectRoot(cwd) {
 // 对话的项目看它启动时的目录：之后 cd 到子目录或别的地方，记录里的 cwd 会跟着变，但对话还是那个项目的
 const projectOf = (session) => projectRoot(session.root ?? session.cwd);
 const list = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { if (!transient(e)) throw e; return []; } };
+
+// Claude 桌面版的对话列表：桌面版给每个对话存一份元数据（<数据目录>/claude-code-sessions/<组织>/<账号>/local_*.json，
+// 里面有 cliSessionId 和 isArchived；删掉的对话留一个 deleted_<id> 文件）。在桌面版里归档或删掉的对话，宇宙里也不列，
+// 和桌面版的对话列表一致。只读这两个字段；找不到这些文件（只用命令行、格式变了）就全部照列。
+// 数据目录：插件装在桌面版里时就在插件路径的上面几层（…/Claude-Data/claude_xxx/rpm/…），
+// 另外看各系统的默认位置（Windows 的 %APPDATA%\Claude 和商店版的 %LOCALAPPDATA%\Claude-Data\*，macOS、Linux 的 Claude 目录）
+export function desktopRoots() {
+  const out = [], add = (dir) => { const p = path.join(dir, 'claude-code-sessions'); if (!out.includes(p) && stat(p)?.isDirectory()) out.push(p); };
+  for (let dir = path.dirname(fileURLToPath(import.meta.url)), i = 0; i < 12; i++) { add(dir); const up = path.dirname(dir); if (up === dir) break; dir = up; }
+  const home = os.homedir(), local = process.env.LOCALAPPDATA;
+  if (process.env.APPDATA) add(path.join(process.env.APPDATA, 'Claude'));
+  if (local) for (const d of list(path.join(local, 'Claude-Data')).filter((d) => d.isDirectory())) add(path.join(local, 'Claude-Data', d.name));
+  add(path.join(home, 'Library', 'Application Support', 'Claude'));
+  add(path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'Claude'));
+  return out;
+}
+// 桌面版里归档或删掉的对话（Claude Code 会话 id 的集合）。每 5 秒（真实时钟）重列一次目录，元数据文件没变就不重读
+export function desktopHidden(roots, clock = Date.now) {
+  // cache：元数据文件 → 上次读到的结果；byDir：目录 → 上次从它得出的隐藏 id。
+  // 一时读不了（被占用、没权限）的目录和文件沿用上次的结果，不让已归档的对话闪回来
+  const cache = new Map(), byDir = new Map();
+  const listed = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { if (!transient(e)) throw e; return null; } };
+  let at = -Infinity, hidden = new Set();
+  return () => {
+    if (!roots.length || clock() - at < 5000) return hidden;
+    at = clock();
+    const next = new Set(), dirs = new Set();
+    const reuse = (prefix) => { for (const [dir, ids] of byDir) if (dir === prefix || dir.startsWith(prefix + path.sep)) { dirs.add(dir); ids.forEach((id) => next.add(id)); } };
+    const subdirs = (dir) => { const all = listed(dir); if (!all) reuse(dir); return (all || []).filter((d) => d.isDirectory()).map((d) => path.join(dir, d.name)); };
+    for (const root of roots) for (const org of subdirs(root)) for (const dir of subdirs(org)) {
+      const entries = listed(dir);
+      if (!entries) { reuse(dir); continue; }
+      const ids = new Set();
+      for (const entry of entries) {
+        if (entry.name.startsWith('deleted_')) { ids.add(entry.name.slice(8)); continue; }
+        if (!entry.isFile() || !/^local_.+\.json$/.test(entry.name)) continue;
+        const file = path.join(dir, entry.name), st = stat(file);
+        const sig = st && `${st.size}:${st.mtimeMs}`;
+        if (sig && cache.get(file)?.sig !== sig) {
+          const value = json(file);
+          // 正在写的文件读出来是坏的：沿用上次读到的
+          if (value) cache.set(file, { sig, cli: typeof value.cliSessionId === 'string' ? value.cliSessionId : null, archived: value.isArchived === true });
+        }
+        const item = cache.get(file);
+        if (item?.archived && item.cli) ids.add(item.cli);
+      }
+      byDir.set(dir, ids); dirs.add(dir);
+      ids.forEach((id) => next.add(id));
+      const present = new Set(entries.map((e) => path.join(dir, e.name)));
+      for (const file of cache.keys()) if (path.dirname(file) === dir && !present.has(file)) cache.delete(file);
+    }
+    for (const dir of byDir.keys()) if (!dirs.has(dir)) { byDir.delete(dir); for (const file of cache.keys()) if (path.dirname(file) === dir) cache.delete(file); }
+    hidden = next;
+    return hidden;
+  };
+}
 const runKeys = ['id', 'lane', 'kind', 'agent', 'model', 'group', 'plan', 'seat', 'role', 'title', 'status', 'started_at', 'ended_at', 'queued'];
 const pickRun = (run) => Object.fromEntries(runKeys.map((key) => [key, run[key]]));
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -95,11 +153,20 @@ function summaryOf(session, all, now, hours, prices, meter) {
   const failure = own.filter((r) => r.status !== 'running' && r.status !== 'done' && r.ended_at != null && r.ended_at >= now - 1800000)
     .sort((a, b) => b.ended_at - a.ended_at)[0];
   const alert = failure && session.promptAt <= failure.ended_at ? { kind: failure.status, run: failure.id, model: failure.model, at: failure.ended_at } : null;
+  // 还在进行的组里出了问题的席位（超时、失败、被停止……），宇宙表的状态列每席画一个点；
+  // 后来又有了新一轮的不算：同一条车道上续接的，或同一份计划同一席重新启动的（重启的任务不一定带 parent，车道会换）。
+  // 整组都结束以后不再列
+  const unitOf = (r) => r.group ?? r.plan ?? r.lane ?? r.id, laneOf = (r) => r.lane ?? r.id;
+  const sameSeat = (a, b) => laneOf(a) === laneOf(b) || a.plan != null && a.seat != null && a.plan === b.plan && a.seat === b.seat;
+  const live = new Set(own.filter((r) => r.status === 'running').map(unitOf));
+  const issues = own.filter((r) => r.status !== 'running' && r.status !== 'done' && r.ended_at != null && live.has(unitOf(r))
+    && !own.some((x) => x !== r && sameSeat(x, r) && x.started_at > r.started_at))
+    .sort((a, b) => a.ended_at - b.ended_at).slice(0, 12).map((r) => ({ status: r.status, run: r.id, model: r.model }));
   const state = stateOf(session, runs, now);
   return { id: session.id, project: keyOf(projectOf(session)), cwd: session.cwd, title: session.title ?? session.firstPrompt, model: session.model,
     state: state.state, waiting: state.waiting, started_at: session.started_at, last_at: session.last_at, runs, counts,
     // 还在跑的运行没有费用、有的模型不在价格表里：能算的照样加起来，另外标出不完整，不让整份变成未知
-    usage: meter ? meter.totals : usageTotals(usage), cost_usd: cost, cost_partial: costs.some((c) => c.cost_usd == null), alert };
+    usage: meter ? meter.totals : usageTotals(usage), cost_usd: cost, cost_partial: costs.some((c) => c.cost_usd == null), alert, issues };
 }
 
 function equalReplay(a, b) {
@@ -184,6 +251,7 @@ export function universeChanges(previous, next) {
 
 export function createUniverse(options) {
   const hours = options.windowH ?? 24, sessions = new Map(), runs = new Map(), folders = new Map();
+  const hiddenNow = desktopHidden(options.desktopRoots ?? []);
   const listings = new Map();
   let dirs = [], listedAt = -Infinity;
   let runNames = new Set(), runsScannedAt = -Infinity;
@@ -282,9 +350,12 @@ export function createUniverse(options) {
       }
     }
     for (const id of sessions.keys()) if (!found.has(id)) sessions.delete(id);
-    const all = readRuns(now), selected = [...sessions.values()].filter((s) => s.last_at != null && s.last_at >= cutoff).sort((a, b) => b.last_at - a.last_at || a.id.localeCompare(b.id)).slice(0, 200);
+    const hidden = hiddenNow();
+    const all = readRuns(now), selected = [...sessions.values()].filter((s) => s.last_at != null && s.last_at >= cutoff && !hidden.has(s.id)).sort((a, b) => b.last_at - a.last_at || a.id.localeCompare(b.id)).slice(0, 200);
     const summaries = selected.map((s) => summaryOf(s, all, now, hours, options.prices));
-    return { v: 3, now, window_h: hours, projects: projectsOf([...selected].sort((a, b) => b.cwdAt - a.cwdAt), older, folders), sessions: summaries, agents: agentSlots(config, all) };
+    return { v: 3, now, window_h: hours, projects: projectsOf([...selected].sort((a, b) => b.cwdAt - a.cwdAt), older, folders), sessions: summaries,
+      // 名额和对话列表同一个口径：桌面版里归档、删掉的对话，它的任务不占"同时运行"的格子（不然点了飞不进去）
+      agents: agentSlots(config, hidden.size ? all.filter((r) => !hidden.has(r.session)) : all) };
   };
   const hello = (now, replay = null) => ({ v: 3, level: 'all', mode: replay ? 'replay' : 'live', now, window_h: hours, replay });
   const replay = (params = {}, now = options.now?.() ?? Date.now()) => {

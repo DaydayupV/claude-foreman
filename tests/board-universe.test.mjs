@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
-import { createUniverse, universeAt, universeChanges, projectRoot } from '../foreman/skills/dispatch/scripts/board/universe.mjs';
+import { createUniverse, universeAt, universeChanges, projectRoot, desktopHidden } from '../foreman/skills/dispatch/scripts/board/universe.mjs';
 import { createFeed, selectScope, buildReplay } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
 import { loadPrices } from '../foreman/skills/dispatch/scripts/prices.mjs';
 
@@ -736,4 +736,61 @@ test('image route serves only the image files a run recorded, by index', { timeo
   assert.equal((await fetch(`${address}image?run=${id}&n=2`)).status, 404);
   for (const bad of ['..%2F..%2Fx', '20261023-120000-img1%2F..', 'x']) assert.equal((await fetch(`${address}image?run=${bad}&n=0`)).status, 400);
   assert.equal((await fetch(`${address}image?run=${id}&n=-1`)).status, 400);
+});
+
+test('state column lists failed seats of groups that are still running, skips resumed lanes and clears when the group ends', (t) => {
+  const f = temp(t); f.session('s', [row('user', now - 40000, 'title')]);
+  f.run('a1', { group: 'g', status: 'running', ended_at: null });
+  f.run('a2', { group: 'g', status: 'timed_out', started_at: now - 9000, ended_at: now - 4000 });
+  f.run('a3', { group: 'g', status: 'timed_out', started_at: now - 9000, ended_at: now - 3000 });
+  // 被停下以后又续接了：车道上有更晚的一轮，不算
+  f.run('a4', { group: 'g', status: 'cancelled', started_at: now - 9000, ended_at: now - 3500 });
+  f.run('a5', { group: 'g', status: 'running', parent: 'a4', started_at: now - 2000, ended_at: null });
+  // 别的组已经全部结束：它的失败不再列
+  f.run('b1', { group: 'h', status: 'failed', started_at: now - 9000, ended_at: now - 2000 });
+  const s = createUniverse(f.options).read().sessions[0];
+  assert.deepEqual(s.issues.map((x) => [x.run, x.status]), [['a2', 'timed_out'], ['a3', 'timed_out']]);
+  f.run('a1', { group: 'g', status: 'done' }); f.run('a5', { group: 'g', status: 'done', parent: 'a4', started_at: now - 2000 });
+  assert.deepEqual(createUniverse(f.options).read().sessions[0].issues, []);
+});
+
+test('conversations archived or deleted in the desktop app are left out of the universe, other ones stay', (t) => {
+  const f = temp(t);
+  for (const id of ['keep', 'archived', 'deleted', 'cli-only']) f.session(id, [row('user', now - 40000, id)]);
+  const roots = [path.join(f.root, 'desktop', 'claude-code-sessions')], account = path.join(roots[0], 'org', 'account');
+  f.write(path.join(account, 'local_1.json'), { cliSessionId: 'keep', isArchived: false });
+  f.write(path.join(account, 'local_2.json'), { cliSessionId: 'archived', isArchived: true, title: sentinel });
+  f.write(path.join(account, 'deleted_deleted'), '1792231326911');
+  f.write(path.join(account, 'local_3.json'), '{"cliSessionId": "keep", "isArch');
+  const ids = (options) => createUniverse(options).read().sessions.map((s) => s.id).sort();
+  assert.deepEqual(ids({ ...f.options, desktopRoots: roots }), ['cli-only', 'keep']);
+  // 找不到桌面版的数据目录时全部照列
+  assert.deepEqual(ids(f.options), ['archived', 'cli-only', 'deleted', 'keep']);
+  // 在桌面版里取消归档：下一次重列时回来；元数据没变的文件不重读，5 秒内不重列
+  let clock = 0;
+  const hidden = desktopHidden(roots, () => clock);
+  assert.deepEqual([...hidden()].sort(), ['archived', 'deleted']);
+  f.write(path.join(account, 'local_2.json'), { cliSessionId: 'archived', isArchived: false });
+  clock = 4999; assert.deepEqual([...hidden()].sort(), ['archived', 'deleted']);
+  clock = 5000; assert.deepEqual([...hidden()].sort(), ['deleted']);
+  // 正在写、读出来是坏的：沿用上次读到的
+  f.write(path.join(account, 'local_2.json'), '{"cliSessionId": "archived", "isArchived": tr');
+  clock = 10000; assert.deepEqual([...hidden()].sort(), ['deleted']);
+  assert.deepEqual([...desktopHidden([])()], []);
+});
+
+test('a seat restarted in the same plan without a parent replaces its failed round, and archived conversations hold no slots', (t) => {
+  const f = temp(t); f.session('s', [row('user', now - 40000, 'title')]); f.session('gone', [row('user', now - 40000, 'gone')]);
+  f.run('r1', { group: 'g', plan: 'p', seat: 1, status: 'timed_out', started_at: now - 9000, ended_at: now - 6000 });
+  f.run('r2', { group: 'g', plan: 'p', seat: 1, status: 'running', started_at: now - 5000, ended_at: null });
+  f.run('r3', { group: 'g', plan: 'p', seat: 2, status: 'failed', started_at: now - 9000, ended_at: now - 4000 });
+  f.run('x1', { claude_session: 'gone', agent: 'configured', status: 'running', started_at: now - 3000, ended_at: null });
+  f.write(f.options.config, { agents: { configured: { type: 'opencode cli', max_parallel: 2 } } });
+  const account = path.join(f.root, 'desktop', 'claude-code-sessions', 'org', 'account');
+  f.write(path.join(account, 'local_1.json'), { cliSessionId: 'gone', isArchived: true });
+  const data = createUniverse({ ...f.options, desktopRoots: [path.join(f.root, 'desktop', 'claude-code-sessions')] }).read();
+  assert.deepEqual(data.sessions.map((s) => s.id), ['s']);
+  assert.deepEqual(data.sessions[0].issues.map((x) => x.run), ['r3']);
+  // 归档对话 gone 的 x1 还在跑，但不占格子；s 的 r2 占一格
+  assert.deepEqual(data.agents.find((a) => a.id === 'configured').running.map((r) => r.run).sort(), ['r2']);
 });

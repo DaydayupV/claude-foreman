@@ -172,17 +172,20 @@ A second way to watch, alongside the terminal live view, off by default: set `di
 
 - **Opening it**: when it's on, every handoff and every `/foreman-en:watch` gives a link besides the terminal tab. It opens in your default browser: you see the star map first, then fly into that conversation's board on your own (a reload goes straight back to the board); it never opens inside the Claude app.
 - **The star map**:
-  - Every Claude Code conversation on this computer from the last 24 hours is a galaxy, and conversations of the same project gather into a nebula.
+  - Every Claude Code conversation on this computer from the last 24 hours is a galaxy, and conversations of the same project gather into a nebula. Conversations archived or deleted in the Claude desktop app are left out, matching the app's conversation list.
   - Agents at work are stars circling their galaxy; a conversation waiting for you has an amber ring; one with a failure keeps a red dot.
-  - The table below has one row per conversation: hover a row to highlight its galaxy, click it to fly into that conversation. Each agent's parallel slots are at the top right, each slot lit in the color of the conversation using it.
+  - The table below has one row per conversation: hover a row to highlight its galaxy, click it to fly into that conversation. In the state column, each seat with a problem (timed out, failed, stopped) in a group that is still going gets a red dot, which goes away once the group has ended.
+  - The "Running now" panel at the top left lists the agents used in the four modules; each cell is one run the agent can have going at once, lit in the color of the conversation using it. Agents outside the modules only show up while they have a run going.
 - **One conversation's board**: click a galaxy or a row in the table, or keep scrolling in on a galaxy, to fly into that conversation's board; Esc, clicking FOREMAN at the top left or zooming all the way out takes you back to the star map. The board shows:
   - cards for Claude Code and each seat, with light paths between the models;
   - animations for the dispatch plan, the cross-check and the verdict;
-  - the usage table below (scroll on it when there are many rows) and each seat's terminal (keep scrolling past the end of the usage table).
+  - the usage table below (scroll on it when there are many rows), ordered like the terminal section: running groups first, each group under a line with its title and status counts; hovering a row brings that seat forward on the board and dims the rest;
+  - each seat's terminal (keep scrolling past the end of the usage table): running groups in the top row; a minute after a group ends it moves to the "finished" row below, looking the same and still open.
+  - Status colors follow the same split as the terminal live view: running; done; partly done and questions returned; failed and timed out; resumed — one color each.
 - **Cost**: the usage table always prices each model at its official API price (hover over it to see this), to compare what the models cost; it may differ from what you're actually charged: Codex and Claude Code on a subscription aren't charged per token, and opencode and pi bill through their own accounts. Claude Code's reports in the conversation and `stats` use the same price table (the plugin's `prices.json`); models missing from it aren't counted, and the total gets a `+`.
 - **The board server**:
   - One local process shared by every conversation on this computer, reachable only on 127.0.0.1 with a one-time token.
-  - It only reads your conversation records and run records.
+  - It only reads your conversation records and run records, plus the archived flag of each conversation in the Claude desktop app's list (nothing else from it).
   - It exits after 30 minutes with nobody looking and nothing running.
 - **Replay (for debugging)**: every link the plugin gives is live. To play a finished conversation back in time to look into a problem, run `node <the plugin's scripts folder>/cli.mjs board --replay <conversation id, run id, group or all>` in a terminal. Add `--speed <N>` to speed it up and `--maxgap <sec>` to shorten idle gaps.
   - It starts a separate, temporary replay server and prints a link. The server exits after ten minutes with no one watching, and leaves the live page alone.

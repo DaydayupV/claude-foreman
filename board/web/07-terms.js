@@ -7,7 +7,7 @@
 //  - Claude Code 自己的对话流单独一栏，放在最前
 // 有新内容时自动滚到底，往上翻看时不打扰。以后做多对话，切换对话就是换一组车道（termUnits）重画，标题跟着换。
 
-const PANEL = { cols: new Map(), open: new Set(), seen: false, numbers: new Map(), doneRows: new Map(), openDone: new Set(), allDone: false };
+const PANEL = { cols: new Map(), open: new Set(), seen: false, numbers: new Map(), allDone: false };
 const groupPlans = (group, t) => [...new Map(B.life.filter((p) => p.k === 'fplan' && p.group === group && p.ts <= t).map((p) => [p.plan, p])).values()];
 function dispatchQueue(t) {
   const snapshot = B.laneById.get('dispatch_queue')?.events.filter((e) => e.ts <= t).at(-1);
@@ -24,9 +24,7 @@ addEventListener('scroll', () => {
 }, { passive: true });
 $('more').addEventListener('click', () => $('termsec').scrollIntoView({ behavior: 'smooth' }));
 $('termsec').addEventListener('click', (e) => {
-  // 已完成列表：点一行展开或收起这一组的完整摘要；"更多"列出全部
-  const line = e.target.closest('#termdone .dline');
-  if (line) { const id = line.parentNode.dataset.unit; if (!PANEL.openDone.delete(id)) PANEL.openDone.add(id); B.version++; wake(); return; }
+  // 已结束的组多于 DONE_SHOWN 时，最后的按钮列出全部
   if (e.target.closest('#termdone .more')) { PANEL.allDone = true; B.version++; wake(); return; }
   const seat = e.target.closest('.seat');
   if (!seat) return;
@@ -56,8 +54,8 @@ function termUnits(t, L) {
   return units;
 }
 
-// 正在跑的组和刚出结果的组展开在上面；全部结束一分钟以后折进下面的"已完成"列表（一行一组，点开是完整摘要），
-// 和刻度带脱钩：结果被 Claude Code 读走、席位离开刻度带以后照样留着
+// 正在跑的组和刚出结果的组在上面一排；全部结束一分钟以后挪到下面一排（"finished"），样子和上面完全一样、照样展开，
+// 和刻度带脱钩：结果被 Claude Code 读走、席位离开刻度带以后照样留着。最新结束的在最前，先列 DONE_SHOWN 组
 const DONE_AFTER = 60000, DONE_SHOWN = 20;
 const unitLanes = (u) => (u.group ? u.lanes : [u.lane]);
 const unitEnd = (u, t) => Math.max(0, ...unitLanes(u).map((l) => currentRun(l, t)?.ended_at ?? 0));
@@ -68,42 +66,32 @@ function unitFinished(u, t) {
   const end = unitEnd(u, t);
   return end > 0 && t - end > DONE_AFTER;
 }
-function doneLine(u, t) {
-  const lanes = unitLanes(u), runs = lanes.map((l) => currentRun(l, t)), shown = runs.map(Display.displayRun);
-  const title = u.group ? Display.groupTask(shown).text : Display.taskLine(shown[0].meta);
-  const counts = Display.countsText(lanes.map((l, i) => seatStatus(l, runs[i], t)));
-  const cost = runs.reduce((n, r) => n + (r.cost_usd || 0), 0);
-  return [title, counts, `ended ${hhmm(Display.recordedTime(unitEnd(u, t), displayPoints()))}`, cost ? `$${fmtUsd(cost)}` : null].filter(Boolean).join(' · ');
+// 一排终端栏：按 units 的顺序放进 row（已有的栏复用），填好内容
+function fillRow(row, units, t, seen) {
+  units.forEach((u, i) => {
+    let col = PANEL.cols.get(u.id);
+    if (!col) { col = u.group ? groupColumn(u.id) : termColumn(u.id); PANEL.cols.set(u.id, col); }
+    seen.add(u.id);
+    // 先放进页面再填内容，滚到底才量得到高度
+    if (row.children[i] !== col) row.insertBefore(col, row.children[i] || null);
+    if (u.group) fillGroup(col, u, t); else fillColumn(col, u.lane, t);
+  });
 }
 function renderDone(done, t, seen) {
   const box = $('termdone');
   box.hidden = !done.length;
   if (!done.length) return;
-  if (!box.firstChild) box.innerHTML = '<header><b>FINISHED</b><span class="n"></span></header><div class="rows"></div><button type="button" class="more"></button>';
-  setText(box.querySelector('.n'), String(done.length));
-  const list = box.querySelector('.rows'), shown = PANEL.allDone ? done : done.slice(0, DONE_SHOWN), ids = new Set();
-  shown.forEach((u, i) => {
-    let row = PANEL.doneRows.get(u.id);
-    if (!row) {
-      row = document.createElement('section'); row.className = 'drow'; row.dataset.unit = u.id;
-      row.innerHTML = '<div class="dline"></div><div class="dbody"></div>'; PANEL.doneRows.set(u.id, row);
-    }
-    ids.add(u.id);
-    if (list.children[i] !== row) list.insertBefore(row, list.children[i] || null);
-    const open = PANEL.openDone.has(u.id), body = row.querySelector('.dbody');
-    row.classList.toggle('open', open);
-    setText(row.querySelector('.dline'), `${open ? '▾' : '▸'} ${doneLine(u, t)}`);
-    if (!open) { if (body.firstChild) body.replaceChildren(); return; }
-    let col = PANEL.cols.get(u.id);
-    if (!col) { col = u.group ? groupColumn(u.id) : termColumn(u.id); PANEL.cols.set(u.id, col); }
-    seen.add(u.id);
-    if (col.parentNode !== body) body.replaceChildren(col);
-    if (u.group) fillGroup(col, u, t); else fillColumn(col, u.lane, t);
-  });
-  for (const [id, row] of PANEL.doneRows) if (!ids.has(id)) { row.remove(); PANEL.doneRows.delete(id); }
-  const more = box.querySelector('.more'), rest = done.length - shown.length;
-  more.hidden = rest <= 0;
-  setText(more, `show ${rest} more`);
+  if (!box.firstChild) box.innerHTML = '<div class="sub"></div><div class="row"></div>';
+  setText(box.firstChild, `finished · ${done.length}`);
+  const row = box.lastChild, shown = PANEL.allDone ? done : done.slice(0, DONE_SHOWN);
+  fillRow(row, shown, t, seen);
+  let more = row.querySelector(':scope > .more');
+  const rest = done.length - shown.length;
+  if (rest > 0) {
+    if (!more) { more = document.createElement('button'); more.type = 'button'; more.className = 'more'; }
+    setText(more, `show ${rest} more`);
+    if (row.lastChild !== more) row.append(more);
+  } else more?.remove();
 }
 
 function renderTerms(t, L) {
@@ -112,14 +100,7 @@ function renderTerms(t, L) {
   if (!termsNear()) return;
   const box = $('terms'), seen = new Set(), units = termUnits(t, L);
   const done = units.filter((u) => unitFinished(u, t)).sort((a, b) => unitEnd(b, t) - unitEnd(a, t));
-  units.filter((u) => !done.includes(u)).forEach((u, i) => {
-    let col = PANEL.cols.get(u.id);
-    if (!col) { col = u.group ? groupColumn(u.id) : termColumn(u.id); PANEL.cols.set(u.id, col); }
-    seen.add(u.id);
-    // 先放进页面再填内容，滚到底才量得到高度
-    if (box.children[i] !== col) box.insertBefore(col, box.children[i] || null);
-    if (u.group) fillGroup(col, u, t); else fillColumn(col, u.lane, t);
-  });
+  fillRow(box, units.filter((u) => !done.includes(u)), t, seen);
   renderDone(done, t, seen);
   for (const [id, col] of PANEL.cols) if (!seen.has(id)) { col.remove(); PANEL.cols.delete(id); }
 }
@@ -161,6 +142,7 @@ function fillColumn(col, lane, t) {
   setAvatar(col.querySelector('img'), key);
   setText(col.querySelector('b'), isCC ? 'Claude Code' : Display.modelLabel(Display.displayRun(r).meta));
   setText(col.querySelector('.st'), `${st.mark} ${st.word} ${Display.clock(laneElapsed(lane, t) * 1000)}`);
+  col.querySelector('.st').dataset.tone = st.tone;
   setText(col.querySelector('.task'), isCC ? [shortModel(r.model), r.title].filter(Boolean).join(' · ')
     : Display.taskLine(Display.displayRun(r).meta, { round }));
   fillFlow(col.querySelector('.term'), timeline(lane, t, { open: true }).slice(-400));
@@ -176,7 +158,8 @@ function groupColumn(id) {
   return col;
 }
 
-function fillGroup(col, u, t) {
+// 一组的席位块（Claude Code 席在前）和席位号，按号排好；终端栏和用量表的组共用，号码和顺序两边一样
+function groupSeats(u, t) {
   const history = [...B.runs.values()].filter((r) => r.group === u.group && r.started_at <= t).map(Display.displayRun);
   const chosen = new Set(Display.current(history).map((r) => r.id));
   const hosts = history.filter((r) => r.meta.participant === 'host' && chosen.has(r.id));
@@ -189,10 +172,17 @@ function fillGroup(col, u, t) {
   PANEL.numbers.set(numberKey, numbers);
   blocks.sort((a, b) => numbers.runs.get((a.host || currentRun(a.lane, t)).id) - numbers.runs.get((b.host || currentRun(b.lane, t)).id));
   all.sort((a, b) => numbers.runs.get(a.id) - numbers.runs.get(b.id));
-  for (const run of all) { const b = blocks.find((b) => (b.host || currentRun(b.lane, t)).id === run.id); if (b.lane) run.meta.round = roundOf(b.lane, t); }
   const queue = dispatchQueue(t).filter((q) => q.group === u.group || q.group == null && all.some((r) => r.meta.plan === q.plan))
     .filter((q) => !Display.queuedStarted(q, history));
-  const head = Display.groupTask(all, plans, queue), states = blocks.map((b) => b.host ? { kind: 'ok' } : seatStatus(b.lane, currentRun(b.lane, t), t));
+  // 各席此刻的状态（Claude Code 席算交过了）：组头计数和用量表组行的计数共用
+  const states = blocks.map((b) => b.host ? { kind: 'ok' } : seatStatus(b.lane, currentRun(b.lane, t), t));
+  return { history, blocks, all, plans, numbers, queue, states };
+}
+
+function fillGroup(col, u, t) {
+  const { history, blocks, all, plans, numbers, queue, states } = groupSeats(u, t);
+  for (const run of all) { const b = blocks.find((b) => (b.host || currentRun(b.lane, t)).id === run.id); if (b.lane) run.meta.round = roundOf(b.lane, t); }
+  const head = Display.groupTask(all, plans, queue);
   setText(col.querySelector('header b'), head.text);
   const notes = Display.planNotes(plans, history.map((r) => ({ ...r,
     outcome: Display.resultOutcome(r.meta.ended_at != null && r.meta.ended_at <= t || r.meta.participant === 'host' ? r.result : { status: 'running' }, r.meta) })));
@@ -203,7 +193,7 @@ function fillGroup(col, u, t) {
   const count = col.querySelector('.cnt'); count.replaceChildren();
   for (const p of Display.countParts([...states, ...queue.map(() => ({ kind: 'queued' }))])) {
     if (count.children.length) count.append(' ');
-    const part = document.createElement('i'); part.className = p.kind; part.textContent = p.text; count.append(part);
+    const part = document.createElement('i'); part.className = p.kind; part.dataset.tone = Display.toneOf(p.kind); part.textContent = p.text; count.append(part);
   }
   col.classList.toggle('running', states.some((s) => s.running) || queue.length > 0);
   const box = col.querySelector('.seats'), seen = new Set();
@@ -234,7 +224,7 @@ function seatShell(id) {
   const el = document.createElement('section');
   el.className = 'seat';
   el.dataset.lane = id;
-  el.innerHTML = '<div class="id"><span class="no"></span><img alt=""><b></b><span class="st"></span></div><div class="role"></div><ol class="term"></ol><div class="use"><span></span><span class="rid"></span></div>';
+  el.innerHTML = '<div class="id"><span class="no"></span><img alt=""><i class="mk"></i><b></b><span class="st"></span></div><div class="role"></div><ol class="term"></ol><div class="use"><span></span><span class="rid"></span></div>';
   return el;
 }
 
@@ -245,10 +235,12 @@ function fillSeat(el, lane, t, no, split = false) {
   el.style.setProperty('--tint', rgba(key));
   el.classList.toggle('running', !!st.running); el.classList.toggle('open', open);
   el.classList.toggle('bad', st.kind === 'failed');
-  el.dataset.kind = st.kind || ''; // 样式按状态上色：部分完成、交回问题、已续接、排队
+  el.dataset.kind = st.kind || '';
+  el.dataset.tone = Display.toneOf(st.kind); // 状态记号和状态词按色调上色，和终端一致
   setAvatar(el.querySelector('img'), key);
   setText(el.querySelector('.no'), String(no));
-  setText(el.querySelector('b'), `${st.style.mark} ${Display.modelLabel(run.meta)}`);
+  setText(el.querySelector('.mk'), st.style.mark);
+  setText(el.querySelector('b'), Display.modelLabel(run.meta));
   setText(el.querySelector('.st'), st.right.filter(Boolean).join(' '));
   setText(el.querySelector('.role'), Display.seatLine(run.meta, { title: split }));
   const ol = el.querySelector('.term'), width = Math.max(20, Math.floor((ol.clientWidth || 560) / 6.6) - 4);
@@ -265,9 +257,11 @@ function fillHostSeat(el, h, no = 0) {
   const run = Display.displayRun(h), open = PANEL.open.has(el.dataset.lane);
   const st = Display.seatState(run.meta, run.result, {}, 0);
   el.style.setProperty('--tint', rgba('claude')); el.classList.add('host'); el.classList.toggle('open', open);
+  el.dataset.tone = Display.toneOf(st.kind);
   setAvatar(el.querySelector('img'), 'claude');
   setText(el.querySelector('.no'), String(no));
-  setText(el.querySelector('b'), `${st.style.mark} ${Display.modelLabel(run.meta)}`);
+  setText(el.querySelector('.mk'), st.style.mark);
+  setText(el.querySelector('b'), Display.modelLabel(run.meta));
   setText(el.querySelector('.st'), st.right.filter(Boolean).join(' '));
   setText(el.querySelector('.role'), Display.seatLine(run.meta));
   const ol = el.querySelector('.term'), width = Math.max(20, Math.floor((ol.clientWidth || 560) / 6.6) - 4);

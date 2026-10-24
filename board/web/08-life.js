@@ -82,24 +82,36 @@ function drawDispatchBirth(L, t) {
   }
 }
 
-// 离开的组：卡片溶解成一团模型颜色的光点，往右上方飘散
+// 离开的组（结果都被 Claude Code 读走了）：卡片溶解成一团模型颜色的光点，先散开一点，再沿弧线飞进 Claude Code 卡片，
+// 到的时候 Claude Code 卡片的入口亮一下
 function drawLeave(L) {
+  const cc = L.cc, port = [cc.x + cc.w, cc.y + cc.h * 0.5];
+  let arrive = 0;
   for (const g of L.groups) {
     if (!g.leave || g.collapsed) continue;
-    const e = ease(clamp01(g.leave)), fadeOut = 1 - clamp01(g.leave);
+    const k = clamp01(g.leave);
     for (const lane of g.lanes) {
       const row = L.rows.get(lane.id);
       if (!row || lane.ghost) continue;
       const c = row.card, color = tintOf(lane.id), rand = rng(hash(`leave|${lane.id}`));
-      if (g.leave < 0.25) { ctx.strokeStyle = color(0.8 * (1 - g.leave / 0.25)); ctx.lineWidth = 1.5 * FX.lw; ctx.strokeRect(c.x, c.y, c.w, c.h); }
+      if (k < 0.25) { ctx.strokeStyle = color(0.8 * (1 - k / 0.25)); ctx.lineWidth = 1.5 * FX.lw; ctx.strokeRect(c.x, c.y, c.w, c.h); }
       for (let i = 0; i < 34; i++) {
-        const x0 = c.x + rand() * c.w, y0 = c.y + rand() * c.h, vx = (rand() - 0.25) * 110, vy = (rand() - 0.7) * 80, s = 1.1 + rand() * 1.8;
-        const a = fadeOut * (0.5 + 0.5 * rand()) * row.vis, x = x0 + vx * e, y = y0 + vy * e;
-        if (i % 5 === 0) glowDot(x, y, s, color, a);
-        else { ctx.fillStyle = i % 4 ? color(a) : HI(a); ctx.beginPath(); ctx.arc(x, y, s * FX.lw, 0, 6.283); ctx.fill(); }
+        const x0 = c.x + rand() * c.w, y0 = c.y + rand() * c.h, delay = rand() * 0.3, s = 1.1 + rand() * 1.8, lift = 30 + rand() * 70;
+        const sx = x0 + (rand() - 0.5) * 40, sy = y0 + (rand() - 0.5) * 30, flash = rand();
+        const u = clamp01((k - delay) / (1 - delay)), e = ease(u);
+        // 前 20% 原地散开，之后沿二次曲线飞向 Claude Code 卡片的入口（控制点在两头中间偏上，划出一道弧）
+        const spread = clamp01(u / 0.2), fly = ease(clamp01((u - 0.2) / 0.8));
+        const ax = x0 + (sx - x0) * spread, ay = y0 + (sy - y0) * spread, mx = (ax + port[0]) / 2, my = Math.min(ay, port[1]) - lift;
+        const x = (1 - fly) ** 2 * ax + 2 * (1 - fly) * fly * mx + fly ** 2 * port[0], y = (1 - fly) ** 2 * ay + 2 * (1 - fly) * fly * my + fly ** 2 * port[1];
+        const a = (0.5 + 0.5 * flash) * row.vis * (u < 1 ? 1 - 0.6 * e ** 4 : 0);
+        if (a <= 0) continue;
+        if (i % 5 === 0) glowDot(x, y, s * (1 - 0.4 * fly), color, a);
+        else { ctx.fillStyle = i % 4 ? color(a) : HI(a); ctx.beginPath(); ctx.arc(x, y, s * (1 - 0.4 * fly) * FX.lw, 0, 6.283); ctx.fill(); }
       }
     }
+    arrive = Math.max(arrive, k);
   }
+  if (arrive > 0.6) ring(port[0], port[1], (arrive - 0.6) / 0.4, tintOf('cc'), 6, 40);
 }
 
 // ① 建计划

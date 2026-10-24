@@ -43,7 +43,7 @@ function renderUniTable() {
     if (tr.className !== cls) tr.className = cls;
     setText(c[1], s.title || s.id.slice(0, 8));
     setText(c[2], U.projects.get(s.project)?.name || s.project);
-    setText(c[3], s.state === 'waiting' && s.waiting?.header ? TEXT.asking(s.waiting.header) : s.alert ? `${STATE_WORD[s.state]} · ${s.alert.kind}` : STATE_WORD[s.state]);
+    fillUniState(c[3], s);
     setText(c[4], n ? `● ${n}` : '—');
     setText(c[5], `${s.counts.done} · ${s.counts.failed}`);
     setText(c[6], inAll ? `${fmtTok(inAll)} · ${Math.round((100 * (u.cached || 0)) / inAll)}%` : '—');
@@ -79,6 +79,18 @@ function renderUniTable() {
     for (const x of cells) { const s = document.createElement('span'); s.textContent = x; total.append(s); }
     total.children[8].title = TEXT.costTitle;
   }
+}
+
+// 状态列：对话此刻在做什么，后面每个出了问题的席位一个点（颜色和终端的状态色一致：超时、失败、被停止都是红的），
+// 只列还在进行的组里的（服务端算好的 issues）；整组结束以后点就没了。悬停看是哪几席
+function fillUniState(cell, s) {
+  const word = s.state === 'waiting' && s.waiting?.header ? TEXT.asking(s.waiting.header) : STATE_WORD[s.state], issues = s.issues || [];
+  // 签名带上每席的 run 和模型：同样个数、同样状态但换了席位时，悬停说明也要跟着换
+  const sig = `${word}|${issues.map((x) => `${x.run}:${x.status}:${x.model}`).join(',')}`;
+  if (cell.dataset.sig === sig) return;
+  cell.dataset.sig = sig; cell.replaceChildren(word);
+  for (const x of issues) { const dot = document.createElement('i'); dot.className = 'issue'; dot.dataset.tone = 'bad'; cell.append(dot); }
+  cell.title = issues.map((x) => `${Display.D.statusName(x.status)} · ${shortModel(x.model) || '?'}`).join('\n');
 }
 
 // 宇宙层的顶栏：范围、宇宙层自己的时钟和回放进度、连接状态（看板的 renderTop 在宇宙层不跑，不清掉会留着上一个对话的）

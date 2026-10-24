@@ -439,7 +439,9 @@ function groupTask(all, plans = [], queue = []) {
   const same = (key) => (new Set(metas.map((m) => m[key] ?? null)).size === 1 ? metas[0]?.[key] : null);
   const titles = [...new Set(metas.map((m) => withoutRole(oneLine(m.title || ''), m.role)).filter(Boolean))];
   const round = same('round');
-  return { split: module === 'run' && titles.length > 1, text: taskLine({ ...metas[0], level: same('level'), cell: same('cell') }, { mode, title: titles.join(' / '), round }) };
+  return { split: module === 'run' && titles.length > 1, text: taskLine({ ...metas[0], level: same('level'), cell: same('cell') }, { mode, title: titles.join(' / '), round }),
+    // 简短的组标题（网页用量表的组行）：只写类型和标题
+    short: D.dots([moduleOf(metas[0]), titles.length && oneLine(titles.join(' / '))]) };
 }
 
 // 只算查看画面的计划提示；准入和登记仍由 plan.mjs/records.mjs 负责。
@@ -569,6 +571,9 @@ function seatState(meta, result, api, now, C = unpainted, outcome = resultOutcom
   return { style, right: [style.word, Number.isFinite(sec) ? clock(sec * 1000) : null],
     kind: outcome.resumed ? 'resumed' : outcome.ok ? 'ok' : outcome.blocked ? 'blocked' : outcome.partial ? 'partial' : 'failed' };
 }
+// 各状态的色调，和终端的上色一致（运行中、完成、部分完成/交回问题/排队、失败、已续接和没开始）；网页按色调取同一组颜色
+const TONES = { running: 'run', queued: 'warn', ok: 'ok', partial: 'warn', blocked: 'warn', resumed: 'dim', not_started: 'dim', failed: 'bad' };
+const toneOf = (kind) => TONES[kind] || 'dim';
 const COUNT_MARKS = { running: '●', queued: '⋯', ok: '✔', partial: '◐', blocked: '?', resumed: '↪', failed: '✗' };
 const countParts = (states) => Object.entries(COUNT_MARKS).flatMap(([kind, mark]) => {
   const n = states.filter((s) => s.kind === kind).length;
@@ -627,6 +632,6 @@ function elapsedOf(r, t, points, lastActivity) {
 
 export { D, seatLine, shortModel, fullModel, modelLabel, agentTypeOf, moduleOf, taskLine, clock, took, shownStatus, outcomeStyle, agentTotal, changedText, changedFor,
   formatUsd, usageLine, toolLabel, commandAction, errorAction, foldText, thoughtLine, wrapAtDots, realErrors, durationOf, reviewFinding, reviewCounts, reviewConclusion, finalLines, liveLines,
-  groupTask, current, planNotes, seatNumbers, roundOf, resultOutcome, liveStatus, seatState, COUNT_MARKS, countParts, countsText, seatUsage, queuedLine, queuedStarted, collapseLines, dashFooter,
+  groupTask, current, planNotes, seatNumbers, roundOf, resultOutcome, liveStatus, seatState, toneOf, COUNT_MARKS, countParts, countsText, seatUsage, queuedLine, queuedStarted, collapseLines, dashFooter,
   displayRun, recordedTime, elapsedOf, textWidth, fitWidth, wrapWidth };
 

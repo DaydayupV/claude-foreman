@@ -39,7 +39,8 @@ function board(lang = 'zh') {
     latest: (l) => l.runs.at(-1), avatarFor: () => 'model', rgba: () => '', avatarSrc: () => '', look: () => ({ name: 'model' }),
     laneStatus: () => ({ running: false, word: 'done' }), shortModel: (m) => m, verdictCounts: () => null,
     setText: (e, text) => { e.textContent = text; }, thinkingLine: () => '', decorateCard() {},
-    $: () => table, UI: { tableRows: new Map() }, seatLanes: () => api.B.lanes.filter((l) => l.id !== 'cc') });
+    $: () => table, UI: { tableRows: new Map() }, seatLanes: () => api.B.lanes.filter((l) => l.id !== 'cc'),
+    termUnits: () => api.B.lanes.filter((l) => l.id !== 'cc').map((lane) => ({ id: lane.id, lane })), unitLanes: (u) => [u.lane], unitEnd: () => 0, dispatchQueue: () => [] });
   vm.runInContext(`${source}\nglobalThis.api = { B, TEXT, onRun, onEv, onHello, onBacklog, loadSnapshot, segments, laneStats, fillCard, renderTable };`, context);
   api = context.api;
   return Object.assign(api, { table, card });

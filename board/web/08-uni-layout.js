@@ -64,9 +64,9 @@ function uniFitGoal() {
   const r = viewEl.getBoundingClientRect(), b = UV.bounds;
   // 视图还没有大小时不适配（和看板的 fitGoal 一样），留着原来的镜头
   if (!(r.width > 0 && r.height > 0)) return { k: UV.k > 0 ? UV.k : 1, tx: UV.tx, ty: UV.ty, bounds: b };
-  // 让开左边的对话列表和右上的名额带（收起或没显示时不让）
+  // 让开左上的名额面板（收起或没显示时不让）
   const side = (id, edge) => { const e = $(id).getBoundingClientRect(); return e.width ? (edge === 'l' ? e.right - r.left : r.right - e.left) + 8 : 0; };
-  const left = 0, right = FLY.mode === 'universe' ? side('uslots', 'r') : 0;
+  const left = FLY.mode === 'universe' ? side('uslots', 'l') : 0, right = 0;
   const w = Math.max(200, r.width - left - right), k = Math.min(w / b.w, r.height / b.h) * 0.86;
   return (UV.fitCache = { k, tx: left + w / 2 - (b.x + b.w / 2) * k, ty: r.height / 2 - (b.y + b.h / 2) * k, bounds: b });
 }

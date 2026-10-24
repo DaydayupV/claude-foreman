@@ -34,6 +34,8 @@ function loadFinals() {
     for (const ev of s.events) { const id = ev.lane || ev.run; if (!FINAL_EV.has(id)) FINAL_EV.set(id, []); FINAL_EV.get(id).push(ev); }
     for (const list of FINAL_EV.values()) list.sort((a, b) => a.ts - b.ts);
     for (const lane of B.lanes) lane.segs = null;
+    // 补齐的是历史用量，不是输出加快：加速脉冲的基线从补齐后的速度重新算（08-surge.js）
+    if (typeof SURGE !== 'undefined') SURGE.clear();
     B.version++;
   }).catch(() => {});
 }

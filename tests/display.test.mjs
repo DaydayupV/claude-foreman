@@ -394,6 +394,8 @@ function buildPage() {
   new vm.Script(/<script>([\s\S]*?)<\/script>/.exec(builtPage)[1]);
   return builtPage;
 }
+// 网页席位的身份行：状态记号（.mk）+ 模型名（b），和终端的一行对得上
+const webSeatHead = (el) => `${el.querySelector('.mk').textContent} ${el.querySelector('b').textContent}`;
 class DisplayElement {
   children = []; nodes = new Map(); dataset = {}; clientWidth = 161 * 6.6; clientHeight = 0; scrollHeight = 0;
   style = { setProperty() {} }; classes = new Set();
@@ -437,7 +439,7 @@ test('构建内联可调用的纯显示函数，老格式 run 消息仍能渲染
   assert.equal(b.Display.usageLine({}, { participant: 'host' }), D.watchHostNoUsage);
   const r = { id: 'legacy', model: 'old', kind: 'exec', started_at: 0, ended_at: 65000, status: 'done', report_head: 'old summary', usage: { input: 100, cached: 20, output: 3 } };
   b.onRun(r); const seat = new DisplayElement(); b.fillSeat(seat, b.B.lanes[0], 70000, 1);
-  assert.equal(seat.querySelector('b').textContent, '✔ old · Codex CLI');
+  assert.equal(webSeatHead(seat), '✔ old · Codex CLI');
   assert.equal(seat.querySelector('.st').textContent, 'done 1:05');
   assert.deepEqual(Array.from(seat.fullLines, (l) => l.text), ['old summary']);
   assert.equal(seat.querySelector('.use').firstChild.textContent, 'changes not tracked · tokens: in 100 (cached 20%) · out 3');
@@ -473,7 +475,7 @@ test('同一记录在真实终端组汇总和两种语言的网页席位块中�
       const out = cli.stdout.split('\n').map(plain), compact = (s) => s.replace(/\s+/g, ' ').trim();
       assert.ok(out.some((l) => l.startsWith(col.querySelector('header b').textContent)), cli.stdout);
       for (const [id, seat] of col.seats) {
-        const identity = compact(seat.querySelector('b').textContent + ' ' + seat.querySelector('.st').textContent);
+        const identity = compact(webSeatHead(seat) + ' ' + seat.querySelector('.st').textContent);
         const at = out.findIndex((l) => compact(l) === identity);
         assert.ok(at >= 0, identity + '\n' + cli.stdout);
         const role = seat.querySelector('.role').textContent;
@@ -486,7 +488,7 @@ test('同一记录在真实终端组汇总和两种语言的网页席位块中�
       }
       if (group === 'discuss') {
         const host = col.seats.get('host:20000101-000001-host');
-        assert.equal(host.querySelector('b').textContent, '✔ host-model · Claude Code');
+        assert.equal(webSeatHead(host), '✔ host-model · Claude Code');
         assert.equal(host.querySelector('.use').firstChild.textContent, 'answer submitted by Claude Code · its tokens count for the whole conversation, not per seat');
       }
       if (group === 'exec') assert.equal(b.seatStatus(b.B.laneById.get('20000101-000005-ask'), messages.find((r) => r.id.endsWith('-ask')), Date.now()).style.word, 'resumed');
@@ -665,7 +667,7 @@ const readFrame = (watch, height) => {
   const lines = `\x1b[1;1H${part}`.split(/\x1b\[\d+;1H\x1b\[2K/).slice(1).map((l) => plain(l.replace(/\x1b\[\d+;1H\x1b\[J$/, '')));
   return lines.length === height ? lines : null;
 };
-const boardSeats = (col) => col.querySelector('.seats').children.map((el) => [Number(el.querySelector('.no').textContent), el.querySelector('b').textContent.split(' ')[1]]);
+const boardSeats = (col) => col.querySelector('.seats').children.map((el) => [Number(el.querySelector('.no').textContent), el.querySelector('b').textContent.split(' ')[0]]);
 const terminalSeats = (frame) => frame.flatMap((l) => { const m = /^(\d+) [✔●] (\S+)/.exec(l); return m ? [[Number(m[1]), m[2]]] : []; });
 
 test('多计划各保留最新 Claude Code 席，撞号从全部声明席位重建；持续观看、重开及网页一致', async (t) => {
@@ -783,8 +785,9 @@ test('Claude Code 和无 agent_type 的老记录用共用接入标签，保留�
   const card = new DisplayElement(); b.fillCard(card, b.B.laneById.get('cc'), 2000); b.renderTable(2000);
   assert.equal(card.querySelector('.model').title, 'opus · Claude Code');
   const rows = b.el('usage').querySelector('.tbody').children;
-  assert.equal(rows[0].children[1].textContent, 'opus · Claude Code'); assert.equal(rows[1].children[1].textContent, 'legacy · Codex CLI');
-  assert.equal(rows[1].children[1].title, 'task · g · old'); assert.equal(b.Display.agentTypeOf({}), 'codex cli');
+  // 组 g 前面有一行简短的组标题（类型 · 标题，右边是各状态的个数），车道行在它下面
+  assert.equal(rows[0].children[1].textContent, 'opus · Claude Code'); assert.equal(rows[1].children[0].textContent, 'run · task'); assert.equal(rows[1].children[1].textContent, '✗1');
+  assert.equal(rows[2].children[1].textContent, 'legacy · Codex CLI'); assert.equal(rows[2].children[1].title, 'task · g · old'); assert.equal(b.Display.agentTypeOf({}), 'codex cli');
 });
 
 test('打开和生成图片使用不同文字，组计数分段有对应状态 class 且文字仍一致', () => {
@@ -822,4 +825,28 @@ test('问题和报错带原来的条数：列表截到 30 条以后摘要写"还
     questions: [{ source: 'decision_request', question: long }] } }, 'root');
   assert.ok(Buffer.byteLength(JSON.stringify(big.display)) <= 65536);
   assert.equal(big.display.questions[0].question.length, 4000);
+});
+
+test('状态色调和终端的上色一一对应：运行中、完成、部分完成/交回问题/排队、失败、已续接和没开始', () => {
+  const C = Object.fromEntries(['dim', 'bold', 'red', 'green', 'yellow', 'cyan'].map((k) => [k, (s) => `${k}:${s}`]));
+  const colorOf = (style) => style.color('x').split(':')[0], expectTone = { cyan: 'run', green: 'ok', yellow: 'warn', red: 'bad', dim: 'dim' };
+  const cases = { running: { running: true }, ok: { ok: true, status: 'done' }, blocked: { blocked: true, status: 'done' }, partial: { partial: true, status: 'done' },
+    failed: { status: 'timed_out' }, resumed: { resumed: true }, not_started: { status: 'not_started' } };
+  for (const [kind, outcome] of Object.entries(cases)) assert.equal(Display.toneOf(kind), expectTone[colorOf(Display.outcomeStyle(outcome, C))], kind);
+  assert.equal(Display.toneOf('queued'), expectTone[colorOf(Display.liveStatus({ started_at: 0 }, { queued: true }, 0, C))]);
+  assert.equal(Display.toneOf('whatever'), 'dim');
+});
+
+test('用量表和终端区一样排：Claude Code、正在跑的组、已结束的组（新的在前），组前一行简短标题和计数，组里按席位号', () => {
+  const b = displayBoard();
+  b.onRun({ id: 'cc', lane: 'cc', kind: 'host', agent_type: 'host', model: 'opus', status: 'idle', started_at: 0 });
+  b.onRun({ id: 'old1', kind: 'exec', model: 'm1', title: 'old task', group: 'old', status: 'done', started_at: 0, ended_at: 1000, display: { status: 'done', report: { status: 'completed' } } });
+  b.onRun({ id: 'live2', kind: 'review', model: 'm3', title: 'check', group: 'live', plan: 'p', seat: 2, status: 'running', started_at: 500, ended_at: null });
+  b.onRun({ id: 'live1', kind: 'review', model: 'm2', title: 'check', group: 'live', plan: 'p', seat: 1, status: 'timed_out', started_at: 600, ended_at: 1500 });
+  b.renderTable(2000);
+  const rows = b.el('usage').querySelector('.tbody').children;
+  const shown = rows.map((tr) => (String(tr.className).includes('gh') ? `# ${tr.children[0].textContent} | ${tr.children[1].children.map((i) => `${i.textContent}:${i.dataset.tone}`).join(' ')}` : tr.children[1].textContent));
+  assert.deepEqual(shown, ['opus · Claude Code', '# review · check | ●1:run ✗1:bad', 'm2 · Codex CLI', 'm3 · Codex CLI', '# run · old task | ✔1:ok', 'm1 · Codex CLI']);
+  // 状态列按色调上色
+  assert.deepEqual([rows[2], rows[3], rows[5]].map((tr) => tr.children[2].dataset.tone), ['bad', 'run', 'ok']);
 });

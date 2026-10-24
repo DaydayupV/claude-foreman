@@ -37,9 +37,9 @@ const UI = { open: new Set(), collapsed: new Set(), cards: new Map(), outs: new 
 
 function laneStatus(lane, t) {
   const r = currentRun(lane, t);
-  if (lane.id === 'cc' && r) return { mark: r.status === 'idle' ? '○' : '●', word: r.status === 'idle' ? 'idle' : 'active', running: r.status !== 'idle' };
+  if (lane.id === 'cc' && r) return { mark: r.status === 'idle' ? '○' : '●', word: r.status === 'idle' ? 'idle' : 'active', running: r.status !== 'idle', tone: r.status === 'idle' ? 'dim' : 'run' };
   const st = seatStatus(lane, r, t);
-  return { ...st, mark: st.style.mark, word: st.style.word, running: !!st.running };
+  return { ...st, mark: st.style.mark, word: st.style.word, running: !!st.running, tone: Display.toneOf(st.kind) };
 }
 
 // 对话是否正在活跃进行（光束只在这时有基础流动）：席位看任务是否在运行；Claude Code 看最近 60 秒（记录时间）里有没有新动作
