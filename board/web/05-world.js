@@ -27,13 +27,15 @@ function stepReel(nowMs) {
   // 放得下时：滚出去的卡片在鼠标移开后自动回到竖直居中
   if (!REEL.overflow && !REEL.hover && !drag.on) { REEL.off *= Math.exp(-dt / 0.45); if (Math.abs(REEL.off) < 0.3) REEL.off = 0; }
 }
-// 鼠标在不在刻度带上（不论放大到多少，在刻度带上滚轮都是滚动卡片）
+// 鼠标在不在刻度带上（不论放大到多少，在刻度带上滚轮都是滚动卡片）。刻度带还没出现（没有席位卡片）时不算，那里照常缩放
 function reelZone(sx) {
+  if (!FX.layout?.rows.size) return false;
   const wx = (sx - VIEW.tx) / VIEW.k;
   return wx >= WL.bandX - 12 && wx <= WL.bandX + WL.bandW + 12;
 }
 // hot：鼠标停在用量表哪一行（车道 id），画面上突出这条车道、其余的压暗；只是看得清楚，不触发任何操作
-const UI = { open: new Set(), collapsed: new Set(), cards: new Map(), outs: new Map(), heads: new Map(), tableRows: new Map(), hot: null };
+// ver：界面操作（悬停、点开收起、折叠组）每次加一，主循环看到就马上重画；数据变了看 B.version，最快每 250 毫秒重画一次
+const UI = { open: new Set(), collapsed: new Set(), cards: new Map(), outs: new Map(), heads: new Map(), tableRows: new Map(), hot: null, ver: 0 };
 
 function laneStatus(lane, t) {
   const r = currentRun(lane, t);
@@ -176,7 +178,7 @@ function stepView(H) {
   worldEl.style.transform = `translate(${VIEW.tx}px, ${VIEW.ty}px) scale(${VIEW.k})`;
   // 显示档位看卡片在屏幕上有多高
   const px = WL.cardH * VIEW.k, lod = px < 150 ? 0 : px < 270 ? 1 : 2;
-  if (worldEl.dataset.lod !== String(lod)) { worldEl.dataset.lod = lod; worldEl.className = `lod${lod}`; B.version++; }
+  if (worldEl.dataset.lod !== String(lod)) { worldEl.dataset.lod = lod; worldEl.className = `lod${lod}`; UI.ver++; }
   setText($('zoom-val'), `${Math.round((VIEW.k / kFit()) * 100)}%`);
   return moving;
 }
@@ -248,7 +250,7 @@ function toggleGroup(key) {
   const g = FX.layout && FX.layout.groups.find((x) => x.key === key);
   if (g) REEL.anchor = { key, y: g.head.y };
   if (!UI.collapsed.delete(key)) UI.collapsed.add(key);
-  B.version++; wake();
+  UI.ver++; wake();
 }
 
 // 单击卡片时飞到这张卡片，放大到详情档位

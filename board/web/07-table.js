@@ -21,7 +21,7 @@ function renderTable(t) {
     const body = table.querySelector('.tbody');
     body.addEventListener('scroll', (e) => markMore(e.target), { passive: true });
     // 鼠标停在某一行时突出画面上的这条车道（和宇宙表悬停星系一样），单击不做任何事
-    const hover = (id) => { if (UI.hot !== id) { UI.hot = id; B.version++; wake(); } };
+    const hover = (id) => { if (UI.hot !== id) { UI.hot = id; UI.ver++; wake(); } };
     body.addEventListener('pointerover', (e) => { if (table.dataset.mode !== 'uni') hover(e.target.closest('.tr[data-lane]')?.dataset.lane || null); });
     body.addEventListener('pointerleave', () => hover(null));
     for (const h of TABLE_HEAD) { const c = document.createElement('span'); c.textContent = h; table.firstChild.append(c); }
@@ -30,11 +30,18 @@ function renderTable(t) {
   const rows = tableRows(t), lanes = rows.filter((x) => x.lane).map((x) => x.lane);
   const body = table.querySelector('.tbody');
   const tot = { input: 0, cached: 0, output: 0, usage_unattributed: false, cost: null, partial: false, rate: 0 };
+  // 新建的行一次最多花约 12 毫秒（刚飞进长对话时有上百行），剩下的下一帧接着建；返回 false 表示还没建完。
+  // 每次至少新建 10 行：更新已有的行就用完预算时也往前走
+  const deadline = performance.now() + 12;
+  let done = true, created = 0;
   rows.forEach((row, i) => {
+    if (!done) return;
     if (row.head) { const tr = headRow(row); if (body.children[i] !== tr) body.insertBefore(tr, body.children[i] || null); return; }
     const lane = row.lane;
     let tr = UI.tableRows.get(lane.id);
+    if (!tr && created >= 10 && performance.now() > deadline) { done = false; return; }
     if (!tr) {
+      created++;
       tr = document.createElement('div');
       tr.className = 'tr';
       tr.innerHTML = '<span class="av"><img alt=""></span>' + '<span></span>'.repeat(TABLE_HEAD.length - 1);
@@ -70,6 +77,12 @@ function renderTable(t) {
   });
   while (body.children.length > rows.length) body.lastChild.remove();
   markMore(body);
+  // 行放不下时右下角出现"展开全部"；展开以后一直留着，好收起
+  if (document.body) {
+    const all = document.body.classList.contains('table-all'), toggle = tableToggle();
+    toggle.hidden = !all && body.scrollHeight <= body.clientHeight + 2;
+    setText(toggle, all ? TEXT.tableLess : TEXT.tableAll);
+  }
   const total = table.querySelector('.total');
   const sig = `${lanes.length}|${Math.round(tot.rate)}|${tot.input}|${tot.output}|${tot.usage_unattributed}|${fmtCost(tot.cost, tot.partial)}`;
   if (total.dataset.sig !== sig) {
@@ -81,6 +94,18 @@ function renderTable(t) {
     total.children[7].title = tot.usage_unattributed ? TEXT.usageUnattributed : '';
     total.children[6].title = tot.usage_unattributed ? TEXT.usageUnattributed : '';
   }
+  return done;
+}
+
+// 单对话视图里用量面板的"展开全部"按钮：点开以后面板按全部行的高度排开（往下推开终端区），再点一下收起
+function tableToggle() {
+  let btn = $('tall');
+  if (!btn) {
+    btn = document.createElement('button'); btn.id = 'tall'; btn.type = 'button'; btn.title = TEXT.tableAllTitle;
+    btn.addEventListener('click', () => { document.body.classList.toggle('table-all'); UI.ver++; wake(); });
+    $('table').append(btn);
+  }
+  return btn;
 }
 
 // 用量表的行：车道行 { lane }，组标题行 { head, id, text, counts }

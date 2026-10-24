@@ -82,6 +82,8 @@ function resetBoardView() {
   for (const m of [UI.cards, UI.outs, UI.heads, UI.tableRows]) m.clear();
   UI.open.clear(); UI.collapsed.clear(); UI.hot = null;
   for (const id of ['usage', 'terms', 'termdone']) { $(id).replaceChildren(); delete $(id).dataset.mode; }
+  // 用量面板的"展开全部"跟着对话走：换对话时收起
+  document.body?.classList.remove('table-all'); $('tall')?.remove();
   PANEL.allDone = false; PANEL.fold.clear(); PANEL.doneLines.clear();
   PANEL.cols.clear(); UNI_ROWS.clear();
   Object.assign(REEL, { s: 0, off: 0, anchor: null }); REEL.born.clear();
@@ -104,7 +106,7 @@ function openBoardFor(s) {
     else if (U.clock.mode === 'replay') { p.replay = 'all'; p.from = String(Math.round(uNow())); }
   }
   B.params = p;
-  started = false; drawnVersion = -1;
+  started = false; DOM.version = -1;
   connect();
 }
 

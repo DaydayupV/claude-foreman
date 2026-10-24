@@ -45,7 +45,7 @@
 | 字段 | 作用 | 默认 |
 |---|---|---|
 | `auto` | Claude 主动发起派活、讨论和审查前要不要先问用户：`true` 直接做并说一句，`false` 先问（见 skill 的"授权"） | `true` |
-| `watch` | 实时查看的两个开关，写成 `{ "terminal": true, "web": false }`，两项都要写：<br>`terminal`：终端里的实时查看。`true` 时只要派给了其他模型（执行、续接、讨论、审查），任务启动后就打开一个终端标签页；`false` 不主动打开，想看时用 `/foreman:watch`。<br>`web`：网页看板，在浏览器里用星图看本机所有 Claude Code 对话和派发进度。`true` 时每次派出都先在对话里给一个网页链接，再启动任务，由你点开在默认浏览器里看；`/foreman:watch` 也会给。看板服务这台电脑上所有对话共用，第一次用到时在后台启动，30 分钟没人看、也没有任务在跑就自己退出，插件被卸载或更新后也会退出。运行时服务约占 100–130 MB 内存，浏览器标签页约 60–90 MB；`/foreman:setup` 按内存决定开不开（总内存不到 8 GB 或可用不到 2 GB 时关着）。<br>旧版的写法（`watch` 写 `auto` 或 `off`、另有一个 `web`）照样能读，第一次加载时会先备份、再改写成这种写法 | `{ "terminal": true, "web": false }` |
+| `watch` | 实时查看的两个开关，写成 `{ "terminal": true, "web": false }`，两项都要写：<br>`terminal`：网页看板关着时的终端实时查看。`web` 为 `false`、`terminal` 为 `true` 时，只要派给了其他模型（执行、续接、讨论、审查），任务启动后就打开一个终端标签页、弹出终端面板；`terminal` 为 `false` 时不主动打开。`web` 为 `true` 时只用网页看板，不主动打开终端实时查看。想在终端里看时，两种情况都可以用 `/foreman:watch`。<br>`web`：网页看板，在浏览器里用星图看本机所有 Claude Code 对话和派发进度。`true` 时每次派出都先在对话里给一个网页链接，再启动任务，由你点开在默认浏览器里看；`/foreman:watch` 也会给。看板服务这台电脑上所有对话共用，第一次用到时在后台启动，30 分钟没人看、也没有任务在跑就自己退出，插件被卸载或更新后也会退出。运行时服务约占 100–130 MB 内存，浏览器标签页约 60–90 MB；`/foreman:setup` 按内存决定开不开（总内存不到 8 GB 或可用不到 2 GB 时关着）。<br>旧版的写法（`watch` 写 `auto` 或 `off`、另有一个 `web`）照样能读，第一次加载时会先备份、再改写成这种写法 | `{ "terminal": true, "web": false }` |
 | `intro` | 新派出的对话第一次打开实时查看时，先放一段启动动画：模型的像素头像、"正在启动"和几句玩笑，单个模型 5 秒、讨论 10 秒，按任意键跳过，任务提前结束会马上收尾。续接（讨论的下一轮、返工）不放。头像按模型名里的关键字认（gpt、deepseek、glm、kimi、qwen、mimo、minimax、gemini、claude 等），认不出的用 ??? 头像。`false` 关掉 | `true` |
 | `discuss_max_rounds` | 一场讨论最多几轮（第 1 轮加上之后的续接），每个参与方各自计数；超出后脚本拒绝续接 | `2` |
 | `timeout_min` | 单次任务的总超时（分钟） | `480` |
@@ -80,7 +80,7 @@
 
 不要靠改 `approval` 解决。Codex 0.162 的审批只有两个值：`never`（命令被挡住就直接把失败交回给模型）和 `on-request`（模型决定什么时候申请批准）。派出去的任务没人能批准，所以 foreman 默认用 `never`；沙箱坏了时两个值都一样跑不了命令。另外，`workspace-write` 默认不能联网，任务要装依赖时会失败，需要的话在 Codex 配置的 `[sandbox_workspace_write]` 里开 `network_access = true`。
 
-**`type: "opencode cli"`**（本机的 opencode CLI）
+**`type: "opencode cli"`**（本机的 Opencode CLI）
 
 | 字段 | 作用 |
 |---|---|
@@ -97,7 +97,7 @@
 
 两档都必须先拍改动快照才开始执行（不能 `--no-snapshot`），改动靠事后审查 diff 把关。
 
-**`type: "pi cli"`**（本机的 pi CLI，npm 包 `@earendil-works/pi-coding-agent`）
+**`type: "pi cli"`**（本机的 Pi CLI，npm 包 `@earendil-works/pi-coding-agent`）
 
 | 字段 | 作用 |
 |---|---|

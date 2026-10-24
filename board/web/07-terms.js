@@ -9,7 +9,14 @@
 
 const PANEL = { cols: new Map(), open: new Set(), seen: false, numbers: new Map(), fold: new Map(), doneLines: new Map(), allDone: false };
 const groupPlans = (group, t) => [...new Map(B.life.filter((p) => p.k === 'fplan' && p.group === group && p.ts <= t).map((p) => [p.plan, p])).values()];
+// 同一帧里用量表和终端区会对每一组各问一次：按此刻和数据版本记一份（回放暂停时此刻不变，数据变了也要重算）
+const QUEUE_AT = { t: null, v: -1, list: null };
 function dispatchQueue(t) {
+  if (QUEUE_AT.t === t && QUEUE_AT.v === B.version) return QUEUE_AT.list;
+  QUEUE_AT.t = t; QUEUE_AT.v = B.version; QUEUE_AT.list = queueAt(t);
+  return QUEUE_AT.list;
+}
+function queueAt(t) {
   const snapshot = B.laneById.get('dispatch_queue')?.events.filter((e) => e.ts <= t).at(-1);
   const tickets = snapshot ? snapshot.tickets : [...B.runs.values()].filter((r) => r.started_at <= t).flatMap((r) => r.dispatch_queue || []);
   return [...new Map(tickets.map((q) => [`${q.agent}:${q.sequence ?? q.position}:${q.queued_at}`, q])).values()]
@@ -19,19 +26,19 @@ function dispatchQueue(t) {
 const termsNear = () => $('termsec').getBoundingClientRect().top < innerHeight + 200;
 addEventListener('scroll', () => {
   const near = termsNear();
-  if (near && !PANEL.seen) { B.version++; wake(); }
+  if (near && !PANEL.seen) { UI.ver++; wake(); }
   PANEL.seen = near;
 }, { passive: true });
 $('more').addEventListener('click', () => $('termsec').scrollIntoView({ behavior: 'smooth' }));
 $('termsec').addEventListener('click', (e) => {
   // 已结束的组：点折起来的那一行展开成栏；点展开的栏头收回成一行
   const line = e.target.closest('#termdone .dline'), head = e.target.closest('#termdone .tcol > header');
-  if (line || head) { PANEL.fold.set((line || head.parentNode).dataset.lane, !!line); B.version++; wake(); return; }
+  if (line || head) { PANEL.fold.set((line || head.parentNode).dataset.lane, !!line); UI.ver++; wake(); return; }
   const seat = e.target.closest('.seat');
   if (!seat) return;
   const id = seat.dataset.lane;
   if (!PANEL.open.delete(id)) PANEL.open.add(id);
-  B.version++; wake();
+  UI.ver++; wake();
 });
 
 // 动效离场的席位仍留在终端区，才能和终端组视图一样回看整组。
@@ -88,7 +95,22 @@ function lastPromptAt(t) {
 }
 const doneOpen = (u, t, since) => PANEL.fold.get(u.id) ?? unitEnd(u, t) >= since;
 // 折起来的一行：和展开后的栏头写法一样（标题、各状态个数），再加结束时间和这一组所有轮次的费用
+// 结束的组内容不再变：这一组各轮的记录都没换过就沿用上次的文字（每小时重算一次，跨天时日期写法会变）。
+// 任务的记录一有更新（迟到的结果、改写的报告），页面就换成新的对象，所以按对象记号比较，不挑字段
+const RUN_MARK = new WeakMap();
+let runMarks = 0;
+const runMark = (r) => { if (!RUN_MARK.has(r)) RUN_MARK.set(r, ++runMarks); return RUN_MARK.get(r); };
+const DONE_TEXT = new Map();
 function doneLine(u, t) {
+  const own = u.group ? [...B.runs.values()].filter((r) => r.group === u.group && r.started_at <= t) : u.lane.runs.filter((x) => x.started_at <= t);
+  const sig = `${own.map((r) => `${runMark(r)}:${FINAL.has(r.id)}`).join(',')}|${u.group ? groupPlans(u.group, t).length : 0}|${Math.floor(t / 3600000)}`;
+  const hit = DONE_TEXT.get(u.id);
+  if (hit?.sig === sig) return hit.text;
+  const text = doneText(u, t);
+  DONE_TEXT.set(u.id, { sig, text });
+  return text;
+}
+function doneText(u, t) {
   // 不是今天结束的写上月-日，免得跨天时看着像倒着排
   const at = (ms) => new Date(Display.recordedTime(ms, displayPoints())), end = unitEnd(u, t), e = at(end);
   const date = e.toDateString() === at(t).toDateString() ? '' : `${String(e.getMonth() + 1).padStart(2, '0')}-${String(e.getDate()).padStart(2, '0')} `;
@@ -109,10 +131,10 @@ function doneLine(u, t) {
     && !zeroUsage(r.usage || FINAL.get(r.id)?.usage)));
   return `▸ ${[title, counts, when, cost ? fmtCost(cost, partial) : null].filter(Boolean).join(' · ')}`;
 }
-function renderDone(done, t, seen) {
+function renderDone(done, t, seen, deadline) {
   const box = $('termdone');
   box.hidden = !done.length;
-  if (!done.length) return;
+  if (!done.length) return true;
   if (!box.firstChild) {
     const sub = document.createElement('div'), row = document.createElement('div'), lines = document.createElement('div');
     sub.className = 'sub'; row.className = 'row'; lines.className = 'lines';
@@ -126,27 +148,36 @@ function renderDone(done, t, seen) {
   // 刚收起的栏移出这一排（栏本身由 renderTerms 最后统一回收）
   const keep = new Set(open.map((u) => PANEL.cols.get(u.id)));
   for (const c of [...row.children]) if (!keep.has(c)) c.remove();
+  let built = true, created = 0;
   closed.forEach((u, i) => {
+    if (!built) return;
     let el = PANEL.doneLines.get(u.id);
+    // 新的折叠行一次只建到预算用完，剩下的下一帧接着建；每次至少建 10 行，前面的栏用完预算时也往前走
+    if (!el && created >= 10 && performance.now() > deadline) { built = false; return; }
+    if (!el) created++;
     if (!el) { el = document.createElement('div'); el.className = 'dline'; el.dataset.lane = u.id; PANEL.doneLines.set(u.id, el); }
     if (lines.children[i] !== el) lines.insertBefore(el, lines.children[i] || null);
     setText(el, doneLine(u, t));
   });
-  for (const [id, el] of PANEL.doneLines) if (!closed.some((u) => u.id === id)) { el.remove(); PANEL.doneLines.delete(id); }
+  for (const [id, el] of PANEL.doneLines) if (!closed.some((u) => u.id === id)) { el.remove(); PANEL.doneLines.delete(id); DONE_TEXT.delete(id); }
+  return built;
 }
 
+// 返回 false 表示这一帧没建完（已结束的组很多时折叠行分几帧建）
 function renderTerms(t, L) {
+  const deadline = performance.now() + 12;
   const cc = B.laneById.get('cc'), title = cc && latest(cc) ? latest(cc).title : null;
   setText($('conv'), Display.D.conversation(title));
-  if (!termsNear()) return;
+  if (!termsNear()) return true;
   const box = $('terms'), seen = new Set(), units = termUnits(t, L);
   const done = units.filter((u) => unitFinished(u, t)).sort((a, b) => unitEnd(b, t) - unitEnd(a, t));
   const live = units.filter((u) => !done.includes(u));
   fillRow(box, live, t, seen);
   // 回到上面一排的栏（又续接了）去掉"可收起"的样子
   for (const u of live) PANEL.cols.get(u.id)?.classList.remove('done-open');
-  renderDone(done, t, seen);
+  const built = renderDone(done, t, seen, deadline);
   for (const [id, col] of PANEL.cols) if (!seen.has(id)) { col.remove(); PANEL.cols.delete(id); }
+  return built;
 }
 
 // 填一段对话流，默认跟着贴在底部；往上翻看时不再跟随，翻回底部又恢复。
@@ -202,8 +233,15 @@ function groupColumn(id) {
   return col;
 }
 
-// 一组的席位块（Claude Code 席在前）和席位号，按号排好；终端栏和用量表的组共用，号码和顺序两边一样
+// 一组的席位块（Claude Code 席在前）和席位号，按号排好；终端栏和用量表的组共用，号码和顺序两边一样。
+// 同一帧里两边各要一次：按（此刻、数据版本、组）记一份，下一帧重算
+const SEATS_AT = { t: null, v: -1, groups: new Map() };
 function groupSeats(u, t) {
+  if (SEATS_AT.t !== t || SEATS_AT.v !== B.version) { SEATS_AT.t = t; SEATS_AT.v = B.version; SEATS_AT.groups.clear(); }
+  if (!SEATS_AT.groups.has(u.id)) SEATS_AT.groups.set(u.id, seatsOf(u, t));
+  return SEATS_AT.groups.get(u.id);
+}
+function seatsOf(u, t) {
   const history = [...B.runs.values()].filter((r) => r.group === u.group && r.started_at <= t).map(Display.displayRun);
   const chosen = new Set(Display.current(history).map((r) => r.id));
   const hosts = history.filter((r) => r.meta.participant === 'host' && chosen.has(r.id));
@@ -224,7 +262,9 @@ function groupSeats(u, t) {
 }
 
 function fillGroup(col, u, t) {
-  const { history, blocks, all, plans, numbers, queue, states } = groupSeats(u, t);
+  const seats = groupSeats(u, t), { history, blocks, plans, numbers, queue, states } = seats;
+  // 写上轮次用的是副本：groupSeats 的结果同一帧里用量表也在用
+  const all = seats.all.map((run) => ({ ...run, meta: { ...run.meta } }));
   for (const run of all) { const b = blocks.find((b) => (b.host || currentRun(b.lane, t)).id === run.id); if (b.lane) run.meta.round = roundOf(b.lane, t); }
   const head = Display.groupTask(all, plans, queue);
   setText(col.querySelector('header b'), head.text);

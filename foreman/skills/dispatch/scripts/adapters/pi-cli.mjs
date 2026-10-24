@@ -1,4 +1,4 @@
-// pi CLI：守卫扩展限定工具和目录、JSON 事件翻译、模型清单和检查项。
+// Pi CLI：守卫扩展限定工具和目录、JSON 事件翻译、模型清单和检查项。
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';

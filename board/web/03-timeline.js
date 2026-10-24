@@ -51,16 +51,24 @@ function liveState(lane, r, t) {
   if (!state.api.req && r.queued && !state.speech && !state.recent.length) state.api.queued = true;
   return state;
 }
+// 已经结束的任务，状态只随"后来有没有续接"变：直播时按任务对象缓存（任务记录一更新，页面就换成新对象）。
+// 正在跑的才需要扫这一轮的事件看是在排队、思考还是回答；结束了的不扫
+const SEAT_STATES = new WeakMap();
 function seatStatus(lane, r, t) {
   if (!r) return { style: Display.outcomeStyle({ status: 'not_started' }), right: ['not started'], kind: 'not_started' };
-  const run = Display.displayRun(r), ended = r.ended_at != null && r.ended_at <= t;
+  const ended = r.ended_at != null && r.ended_at <= t, resumed = ended && lane.runs.some((x) => x.parent === r.id && x.started_at <= t);
+  const cache = ended && B.clock.mode === 'live', hit = cache && SEAT_STATES.get(r);
+  if (hit && hit.resumed === resumed) return hit.state;
+  const run = Display.displayRun(r);
   const result = ended || r.kind === 'answer' ? run.result : { status: 'running' };
   const outcome = Display.resultOutcome(result, run.meta);
-  outcome.resumed = ended && lane.runs.some((x) => x.parent === r.id && x.started_at <= t);
+  outcome.resumed = resumed;
   const meta = { ...run.meta, started_at: r.original_started_at ?? Display.recordedTime(r.started_at, displayPoints()),
     ended_at: ended ? r.original_ended_at ?? Display.recordedTime(r.ended_at, displayPoints()) : null,
     submitted_at: r.submitted_at ?? r.original_started_at ?? run.meta.submitted_at };
-  return Display.seatState(meta, result, liveState(lane, r, t).api, Display.recordedTime(t, displayPoints()), undefined, outcome);
+  const state = Display.seatState(meta, result, outcome.running ? liveState(lane, r, t).api : {}, Display.recordedTime(t, displayPoints()), undefined, outcome);
+  if (cache) SEAT_STATES.set(r, { resumed, state });
+  return state;
 }
 
 // 用量保留在结尾，JSON 报告只在完成时显示，避免重复正文。

@@ -45,7 +45,7 @@ Example:
 | Setting | What it does | Default |
 |---|---|---|
 | `auto` | Whether Claude asks before starting handoffs, discussions and reviews on its own: `true` goes ahead and says so, `false` asks first (see "Permission" in the skill) | `true` |
-| `watch` | The two live-view switches, written as `{ "terminal": true, "web": false }`; write both:<br>`terminal`: the live view in the terminal. When `true`, a terminal tab opens once work goes to another model (hands-on work, resumes, discussions, reviews) and has started; `false` doesn't, and you use `/foreman-en:watch` when you want to look.<br>`web`: the web board, a star map in the browser of every Claude Code conversation on this computer and its handoffs. When `true`, every handoff first gives a web link in the conversation, then starts the work, and you open the link in your default browser; `/foreman-en:watch` gives one too. One board server is shared by every conversation on this computer; it starts in the background the first time it's needed, exits after 30 minutes with nobody looking and nothing running, and also when the plugin is removed or updated. It takes about 100–130 MB of memory, and its browser tab about 60–90 MB; `/foreman-en:setup` decides from the memory (off when under 8 GB in total or under 2 GB available).<br>The old form (`watch` as `auto` or `off`, plus a separate `web`) still reads; the first load backs the file up and rewrites it in this form | `{ "terminal": true, "web": false }` |
+| `watch` | The two live-view switches, written as `{ "terminal": true, "web": false }`; write both:<br>`terminal`: the terminal live view while the web board is off. With `web` `false` and `terminal` `true`, a terminal tab opens and the terminal panel comes up once work goes to another model (hands-on work, resumes, discussions, reviews) and has started; with `terminal` `false` nothing opens by itself. With `web` `true` only the web board is used, and no terminal live view opens by itself. Either way, `/foreman-en:watch` shows the terminal view when you want it.<br>`web`: the web board, a star map in the browser of every Claude Code conversation on this computer and its handoffs. When `true`, every handoff first gives a web link in the conversation, then starts the work, and you open the link in your default browser; `/foreman-en:watch` gives one too. One board server is shared by every conversation on this computer; it starts in the background the first time it's needed, exits after 30 minutes with nobody looking and nothing running, and also when the plugin is removed or updated. It takes about 100–130 MB of memory, and its browser tab about 60–90 MB; `/foreman-en:setup` decides from the memory (off when under 8 GB in total or under 2 GB available).<br>The old form (`watch` as `auto` or `off`, plus a separate `web`) still reads; the first load backs the file up and rewrites it in this form | `{ "terminal": true, "web": false }` |
 | `intro` | The first time the live view opens for a newly dispatched conversation, play a short intro first: the model's pixel avatar, "Starting …" and a few jokes, 5 seconds for one model and 10 for a discussion. Any key skips it, and it wraps up at once if the run finishes early. Resumes (the next round of a discussion, a rework) don't get one. The avatar is picked by keywords in the model name (gpt, deepseek, glm, kimi, qwen, mimo, minimax, gemini, claude and so on), with a ??? avatar for anything else. `false` turns it off | `true` |
 | `discuss_max_rounds` | The most rounds one discussion can have (round 1 plus later resumes), counted per participant; the script refuses resumes beyond it | `2` |
 | `timeout_min` | Total time limit for one run, in minutes | `480` |
@@ -80,7 +80,7 @@ Run `check`: for each sandbox mode the task types actually use, it runs an echo 
 
 Don't fix it by changing `approval`. Codex 0.162 has two approval values: `never` (a blocked command's failure goes straight back to the model) and `on-request` (the model decides when to ask for approval). Nobody can approve in a handed-off task, so foreman uses `never` by default; with a broken sandbox neither value can run commands. Also, `workspace-write` has no network access by default, so tasks that install dependencies fail; if needed, turn on `network_access = true` under `[sandbox_workspace_write]` in the Codex config.
 
-**`type: "opencode cli"`** (the opencode CLI on this machine)
+**`type: "opencode cli"`** (the Opencode CLI on this machine)
 
 | Setting | What it does |
 |---|---|
@@ -97,7 +97,7 @@ For hands-on work, the injected agent can write files, and at the `shell` level 
 
 Both levels take a change snapshot before starting (`--no-snapshot` isn't allowed), and reviewing the diff afterwards is the check.
 
-**`type: "pi cli"`** (the pi CLI on this machine, npm package `@earendil-works/pi-coding-agent`)
+**`type: "pi cli"`** (the Pi CLI on this machine, npm package `@earendil-works/pi-coding-agent`)
 
 | Field | Meaning |
 |---|---|

@@ -3,9 +3,30 @@
 // 限帧：画面里的动作都很慢，静止时约 30 帧；拖动、缩放、镜头在走、飞入飞出时约 60 帧。
 // 不限的话会跟着显示器刷新率跑（144Hz 屏一秒重画 144 次），整页都卡。
 
-let raf = 0, drawnVersion = -1, tablesDeferred = false, lastDom = 0, lastFx = 0, started = false, lastFrame = 0, busyUntil = 0;
+let raf = 0, lastFx = 0, started = false, lastFrame = 0, busyUntil = 0;
 const FRAME_IDLE = 33, FRAME_BUSY = 16;
 function wake() { if (!raf) raf = requestAnimationFrame(frame); }
+
+// 这一帧要不要刷新卡片和面板，以及用量表、终端区画哪几块（返回 null 是这一帧不刷新）。
+// 数据一直在来的对话（正在干活的那个）事件很密：数据变了最快每 250 毫秒刷新一次；界面操作（UI.ver）马上刷新；没变也每半秒刷新一次。
+// 飞入动画进行中用量表和终端区在画面下方还没露出来，先不搭（一次要算整份统计、建整块 DOM），免得和动画抢同一帧；
+// 落地后先搭用量表，搭完了再搭终端区，两块不挤在同一帧里。
+// 用量表和终端区一次只新建约 12 毫秒的行（第一次搭、行一下多了很多时），没建完的下一帧接着建（again）
+const DOM = { version: -1, ui: -1, at: 0, deferred: false, again: false };
+function domStep(nowMs, landing) {
+  if (!(UI.ver !== DOM.ui || B.version !== DOM.version && nowMs - DOM.at >= 250 || nowMs - DOM.at > 500 || DOM.again || DOM.deferred && !landing)) return null;
+  DOM.version = B.version; DOM.ui = UI.ver; DOM.at = nowMs; DOM.again = false;
+  if (landing) { DOM.deferred = 'all'; return { table: false, terms: false }; }
+  if (DOM.deferred === 'all') return { table: true, terms: false };
+  if (DOM.deferred === 'terms') return { table: false, terms: true };
+  return { table: true, terms: true };
+}
+// 这一帧画了哪几块（dom，domStep 的返回）、画完没有：落地后的那一段按它往下走，没画完的下一帧再画
+function domDrawn(dom, table, terms) {
+  if (DOM.deferred === 'all') { if (dom.table) { if (table) DOM.deferred = 'terms'; else DOM.again = true; } return; }
+  if (DOM.deferred === 'terms') { if (dom.terms) { if (terms) DOM.deferred = false; else DOM.again = true; } return; }
+  if (dom.table && !table || dom.terms && !terms) DOM.again = true;
+}
 // 用户在操作：接下来一小段时间按忙时的帧率画
 function busy(ms = 400) { busyUntil = Math.max(busyUntil, performance.now() + ms); }
 for (const type of ['wheel', 'pointermove', 'pointerdown', 'keydown']) addEventListener(type, () => busy(), { passive: true, capture: true });
@@ -48,16 +69,14 @@ function step() {
   const L = computeLayout(t);
   if (!started) { started = true; VIEW.H = L.H; fitView(true); }
   const viewMoving = stepView(L.H);
-  // 飞入动画进行中：用量表和终端区在画面下方还没露出来，先不搭（一次要算整份统计、建整块 DOM），落地以后马上补上，免得和动画抢同一帧
-  const landing = FLY.mode === 'in';
-  if (B.version !== drawnVersion || nowMs - lastDom > 500 || tablesDeferred && !landing) {
-    drawnVersion = B.version;
-    lastDom = nowMs;
+  // 飞入落地以后镜头还在走的那一段也先不搭：第一次搭用量表和终端区要一两百毫秒，等画面停下再搭就看不出顿
+  const dom = domStep(nowMs, FLY.mode === 'in' || DOM.deferred === 'all' && viewMoving);
+  if (dom) {
     loadFinals();
     renderTop(t);
     renderWorld(t, L);
-    tablesDeferred = landing;
-    if (!landing) { renderTable(t); renderTerms(t, L); }
+    const table = dom.table ? renderTable(t) : true, terms = dom.terms ? renderTerms(t, L) : true;
+    domDrawn(dom, table, terms);
   }
   placeWorld(L, t);
   // 往下滚到终端、星图整个移出屏幕时不画画布

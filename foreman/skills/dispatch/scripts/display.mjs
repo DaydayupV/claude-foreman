@@ -41,7 +41,7 @@ const D = {
   watchAnswerSubmitted: (round) => `report submitted (round ${round})`,
   watchReplayOne: (command) => `replay a seat: ${command}`,
   dashCancelConfirm: (models) => `Press x again to stop ${models}, or any other key to cancel`,
-  channel: { codex: 'Codex CLI', api: 'API', opencode: 'opencode CLI', pi: 'pi CLI' },
+  channel: { codex: 'Codex CLI', api: 'API', opencode: 'Opencode CLI', pi: 'Pi CLI' },
   modelLabel: (model, channel, effort, fromConfig) => `${model}${effort ? ` ${effort}` : ''} · ${channel}${fromConfig ? ' · model from Codex config' : ''}`,
   watchReview: {
     issues_found: (n, parts) => `${n} issue${n === 1 ? '' : 's'}${parts ? ` · ${parts}` : ''}`,

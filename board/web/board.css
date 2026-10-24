@@ -203,6 +203,12 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 #table svg { width: 100%; height: 16px; display: block; }
 #table svg polyline { fill: none; stroke: var(--tint); stroke-width: 1.2; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 2px var(--tint)); }
 #table .total { border-top: 1px solid rgba(200,200,212,.14); color: var(--hi); }
+/* 单对话视图：用量面板行放不下时，合计行最右边（用时那一格本来是空的）放"展开全部"；展开后面板按全部行的高度排开，往下推开终端区 */
+#tall { position: absolute; right: 14px; bottom: 6px; height: 19px; padding: 0 8px; font-size: 10px; letter-spacing: .06em; z-index: 4; }
+/* 只对看板的用量表起作用：飞入飞出的过渡里 body 暂时没有 uni，#usage 里可能还是宇宙的对话表（data-mode="uni"） */
+#tall[hidden], body.uni #tall, #table:has(> #usage[data-mode="uni"]) #tall { display: none; }
+body.table-all #table:has(> #usage:not([data-mode="uni"])), body.table-all #usage:not([data-mode="uni"]) { height: auto; }
+body.table-all #usage:not([data-mode="uni"]) .tbody { overflow: visible; mask-image: none; }
 #status { position: absolute; right: 14px; top: calc(100vh - var(--table-h) - 22px); color: var(--dim); font-size: 11px; z-index: 3; }
 #status.bad { color: var(--bad); }
 
@@ -217,22 +223,21 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 /* 用量面板（右上角有往下看终端的提示）和下面的终端区 */
 #usage { display: grid; grid-template-rows: auto 1fr auto; height: 100%; min-height: 0; }
 #hud #more { width: auto; padding: 0 8px; letter-spacing: .08em; }
-#termsec { height: calc(100vh - var(--top-h) - 14px); margin-bottom: 8px; display: grid; grid-template-rows: auto 1fr auto; gap: 6px; }
+/* 终端区按内容伸长：运行中的一排占一屏高，下面已结束的一段接着往下排，用页面滚动看。
+   列宽不随内容撑开（minmax(0, 1fr)、min-width: 0），栏多时在各自那一排里横向滚动 */
+#termsec { --col-h: calc(100vh - var(--top-h) - 50px); height: auto; min-height: calc(100vh - var(--top-h) - 14px); margin-bottom: 8px; display: grid;
+  grid-template-columns: minmax(0, 1fr); grid-template-rows: auto var(--col-h) auto; align-content: start; gap: 6px; }
 /* 已结束的组：终端区下面一段。小标题缩进、不加粗，看得出是终端区里的一段，不和 TERMINAL 同级；
-   展开的组排成一排，栏的样子和上面运行中的一样（栏头可以点着收起）；折起来的一组一行，列在下面 */
-#termsec:has(#termdone:not([hidden])) { grid-template-rows: auto 1fr auto; }
-#termsec:has(#termdone .row > .tcol) { grid-template-rows: auto 1fr 1fr; }
-/* 上面一排没有正在运行的组时不占高度，结束的组用满整个终端区（不然展开的那组只剩半屏再被下面的列表挤矮） */
-#termsec:has(#terms:empty):has(#termdone:not([hidden])) { grid-template-rows: auto 0 1fr; }
-#termdone { display: flex; flex-direction: column; gap: 4px; min-height: 0; }
+   展开的组排成一排，栏的样子和高度都和上面运行中的一样（栏头可以点着收起）；折起来的一组一行，全部列在下面 */
+/* 上面一排没有正在运行的组时不占高度 */
+#termsec:has(#terms:empty) { grid-template-rows: auto 0 auto; }
+#termdone { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 #termdone[hidden] { display: none; }
 #termdone > .sub { flex: none; display: flex; align-items: center; gap: 8px; padding-left: 6px; color: var(--dim); font-size: 10px; }
 #termdone > .sub::after { content: ""; flex: 1; border-top: 1px dashed rgba(200,200,212,.12); }
-#termdone > .row { flex: 1 1 0; display: flex; gap: 8px; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
+#termdone > .row { flex: none; height: var(--col-h); display: flex; gap: 8px; min-width: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
 #termdone > .row:empty, #termdone > .lines:empty { display: none; }
-/* 展开的结束组至少留六成高度；折起来的列表在剩下的地方滚动 */
-#termdone > .row:not(:empty) { min-height: 60%; }
-#termdone > .lines { flex: 0 1 auto; min-height: 0; max-height: 30vh; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
+#termdone > .lines { flex: none; min-width: 0; }
 #termdone .dline { cursor: pointer; color: var(--mid); font-size: 10.5px; padding: 2px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #termdone .dline:hover { color: var(--text); background: rgba(255,255,255,.04); }
 .tcol.done-open > header { cursor: pointer; }
@@ -247,7 +252,7 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 #termsec > header span { color: var(--dim); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* 终端页：每个模型一栏，Claude Code 那栏宽一些；栏多时横向滚动 */
-#terms { display: flex; gap: 8px; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; }
+#terms { display: flex; gap: 8px; min-height: 0; min-width: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; }
 .tcol { flex: 1 0 260px; min-width: 260px; display: flex; flex-direction: column; min-height: 0; border: 1px solid rgba(170,170,182,.13); background: rgba(8,8,10,.55); }
 .tcol.cc { flex: 1.6 0 340px; }
 .tcol.running { border-color: color-mix(in srgb, var(--tint) 45%, transparent); box-shadow: inset 0 0 14px -10px var(--tint); }
@@ -330,8 +335,8 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
   #usage[data-mode="uni"] .tr { grid-template-columns: 18px 1.8fr .9fr .75fr 1fr; }
   #usage[data-mode="uni"] .tr > span:is(:nth-child(6), :nth-child(7), :nth-child(10)) { display: none; }
   #termsec { height: auto; min-height: calc(100vh - var(--top-h) - 14px); }
-  #terms, #termdone > .row { flex-direction: column; overflow: visible; }
-  #termsec:has(#termdone:not([hidden])), #termsec:has(#termdone .row > .tcol) { grid-template-rows: auto auto auto; }
+  #terms, #termdone > .row { flex-direction: column; overflow: visible; height: auto; }
+  #termsec, #termsec:has(#terms:empty) { grid-template-rows: auto auto auto; }
   .tcol, .tcol.cc, .tgroup { flex: none; min-width: 0; height: 70vh; }
 }
 

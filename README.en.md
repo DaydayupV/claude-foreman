@@ -164,11 +164,11 @@ Prompt templates, command options and the checks are in [references/image-assets
 - Color only means status: cyan for running, green for done, yellow for questions returned, waiting for an answer or queued, red for anything else that didn't finish. Task lines and model lines are bold, and the model line takes the status color; roles and the titles of split parts are bold; paths, token use, hints and times are dim.
 - Add `--verbose` for every detail: the raw reasoning, each command and its output, token use.
 - The first time it opens for a newly dispatched conversation, a few seconds of intro play first: the model's pixel avatar, "Starting …" and a few jokes (5 seconds for one model, 10 for a discussion). Any key skips it, and setting `dispatch.intro` to `false` turns it off. The avatar is picked by the model name, with a ??? avatar for anything it doesn't recognize.
-- In the Claude desktop app, the live view opens in the terminal panel by itself after each handoff; in the CLI, Claude Code sends you the command to run in another terminal.
+- In the Claude desktop app, the live view opens in the terminal panel by itself after each handoff (not while the web board is on: then you get the board link instead); in the CLI, Claude Code sends you the command to run in another terminal.
 
 ### The web board
 
-A second way to watch, alongside the terminal live view, off by default: set `dispatch.watch.web` to `true` in the config, or run `/foreman-en:setup` (it decides from this computer's memory).
+Another way to watch besides the terminal live view, off by default: set `dispatch.watch.web` to `true` in the config, or run `/foreman-en:setup` (it decides from this computer's memory). While it's on, handoffs give the board link and no longer open the terminal live view by themselves; use `/foreman-en:watch` when you want the terminal view.
 
 - **Opening it**: when it's on, every handoff first gives a link in the conversation, then starts the work; `/foreman-en:watch` gives one too. It opens in your default browser: you see the star map first, then fly into that conversation's board on your own (a reload goes straight back to the board); it never opens inside the Claude app.
 - **The star map**:
@@ -207,7 +207,7 @@ A second way to watch, alongside the terminal live view, off by default: set `di
 
 ## Install and setup
 
-**We recommend the Code tab of the Claude desktop app.** The plugin is mainly developed and tested there: after each handoff the live view opens in the terminal panel and comes to the front by itself, and the intro is tuned for the desktop app's terminal. The CLI works too, with the same handoffs, reviews and discussions; the only difference is that you run the live-view command Claude Code gives you in another terminal yourself.
+**We recommend the Code tab of the Claude desktop app.** The plugin is mainly developed and tested there: after each handoff the live view opens in the terminal panel and comes to the front by itself (while the web board is off), and the intro is tuned for the desktop app's terminal. The CLI works too, with the same handoffs, reviews and discussions; the only difference is that you run the live-view command Claude Code gives you in another terminal yourself.
 
 In Claude Code, run:
 

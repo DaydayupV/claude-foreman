@@ -5,7 +5,7 @@
 ## 1. 目标与范围
 
 **要做到**
-- CLI 工具（现在是 Codex CLI 和 opencode CLI）的执行、审查、讨论都能在配置里随意安排；API 模型只参加讨论。
+- CLI 工具（现在是 Codex CLI 和 Opencode CLI）的执行、审查、讨论都能在配置里随意安排；API 模型只参加讨论。
 - 同一种工具可以配多个协作方，各用不同模型；Codex 不再是必需的。
 - 每种任务的每一级都可以写 `"claude code"`，表示由 Claude 自己做，或者不找外部协作方。
 - 不论本机只有 Codex、只有 opencode、两者都有、只有 API key 还是什么都没有，初始配置和 `/foreman:setup` 都能引导到可用状态。
@@ -122,7 +122,7 @@
 | type | 说明 | 能做的任务 |
 |---|---|---|
 | `codex cli` | 本机的 Codex CLI | 执行、审查、讨论、出图 |
-| `opencode cli` | 本机的 opencode CLI | 执行（要显式开启）、审查、讨论 |
+| `opencode cli` | 本机的 Opencode CLI | 执行（要显式开启）、审查、讨论 |
 | `api` | 兼容 OpenAI 格式的模型接口 | 讨论 |
 
 - 各类型的字段：
@@ -237,7 +237,7 @@ export default {
   - 报告靠提示词附 schema，解析失败修复一次（见 6.3）。
   - 归属：写文件、改文件的工具事件。
   - 卡死检测见 6.4。
-- 启动行、`config` 输出和结果里都写明隔离方式，例如"opencode CLI，工具权限，无系统沙箱"。
+- 启动行、`config` 输出和结果里都写明隔离方式，例如"Opencode CLI，工具权限，无系统沙箱"。
 
 ### 5.2 审查（review）
 - **Codex**：没有审查重点时照旧用原生 `codex exec review`；有审查重点时照旧走普通 exec。
@@ -315,7 +315,7 @@ SKILL.md 改成"交给有出图能力的协作方"。配置里没有 `codex cli`
 ### 7.1 第一次运行时自动检测
 用户配置不存在时，任何子命令第一次运行都会先检测本机环境（不发模型请求，只看安装和登录）：
 - Codex CLI：能否启动、`codex login status` 是否已登录。
-- opencode CLI：能否启动、`opencode models` 列出了哪些模型（据此判断登录了哪些提供方，比如 `opencode-go/*`）。
+- Opencode CLI：能否启动、`opencode models` 列出了哪些模型（据此判断登录了哪些提供方，比如 `opencode-go/*`）。
 - API key：常见环境变量有没有设置（`DEEPSEEK_API_KEY`、`KIMI_API_KEY` / `MOONSHOT_API_KEY`、`MIMO_API_KEY` 等，名单和各家的接口地址、默认模型一起写在代码里）。
 
 ### 7.2 按环境生成初始配置
