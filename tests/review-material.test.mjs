@@ -178,9 +178,14 @@ for (const agent of ['oc', 'pi']) test(`${agent} 的历史提交超限时拒绝�
   assert.ok(scope.patch.includes('+const DONE_SHOWN = 20;')); assert.ok(!scope.patch.includes('currentOnly'));
   const material = reviewPatchText(scope, { budget: MAX_REVIEW_CHARS, readsFiles: true });
   assert.equal(material.tooLarge, true); assert.equal(material.patch, scope.patch);
-  const rejected = await h.bridge([...args(h), '--commit', sha]);
+  const source = `import fs from 'node:fs';
+    import adapter from ${JSON.stringify(pathToFileURL(path.join(ROOT, 'foreman/skills/dispatch/scripts/adapters', agent === 'oc' ? 'opencode-cli.mjs' : 'pi-cli.mjs')).href)};
+    await adapter.execute({ kind: 'review', reviewTarget: 'diff', reviewScope: JSON.parse(fs.readFileSync(0, 'utf8')),
+      cwd: process.cwd(), agent: {}, opts: { file: [] }, brief: '' });`;
+  const rejected = await h.start('--input-type=module', ['-e', source], { input: JSON.stringify({ ...scope, target: 'diff' }) }).done;
   assert.equal(rejected.code, 2); assert.equal(rejected.stdout, '');
-  assert.ok(rejected.stderr.includes(M.reviewTooLarge(material.chars, MAX_REVIEW_CHARS)), rejected.stderr);
+  // 已经在按提交审：不再建议按提交分开审
+  assert.ok(rejected.stderr.includes(M.reviewCommitTooLarge(material.chars, MAX_REVIEW_CHARS)), rejected.stderr);
   assert.equal(h.calls().length, 0); assert.equal(h.records().filter((m) => m.participant !== 'host').length, 0);
 });
 
@@ -216,16 +221,31 @@ for (const lang of ['zh', 'en']) test(`API 去掉生成文件后能审，剩余�
   assert.ok(prompt.includes(`- M generated.txt${m.reviewFileGenerated}`));
   assert.ok(prompt.includes(m.reviewMaterialNote(1, 0))); assert.ok(prompt.includes('+small change'));
   assert.ok(!prompt.includes('x'.repeat(100)));
+  h.write('generated.txt', 'baseline\n');
+  const source = `import fs from 'node:fs';
+    import adapter from ${JSON.stringify(pathToFileURL(path.join(ROOT, 'foreman/skills/dispatch/scripts/adapters/api.mjs')).href)};
+    const { scope, brief } = JSON.parse(fs.readFileSync(0, 'utf8'));
+    await adapter.execute({ kind: 'review', reviewTarget: 'diff', reviewScope: scope, cwd: process.cwd(),
+      agent: { api_key: 'synthetic-test-key' }, opts: { file: [] }, brief });`;
   for (const [length, brief, patchesTooLarge] of [[MAX_MATERIAL_CHARS + 1, 'focus', true], [MAX_MATERIAL_CHARS - 1500, 'focus'.repeat(1000), false]]) {
     h.write('source.txt', 'y'.repeat(length) + '\n');
-    assert.equal(reviewPatchText(await compute(h), { budget: MAX_MATERIAL_CHARS, readsFiles: false }).tooLarge, patchesTooLarge);
-    const rejected = await h.bridge(args(h), { env: { FOREMAN_LANG: lang }, input: brief });
-    assert.equal(rejected.code, 2); assert.equal(rejected.stdout, '');
-    const chars = Number((lang === 'zh' ? /仍有 (\d+) 字符/ : /still come to (\d+) characters/).exec(rejected.stderr)?.[1]);
-    assert.ok(chars > MAX_MATERIAL_CHARS, rejected.stderr);
-    assert.ok(rejected.stderr.includes(m.reviewTooLarge(chars, MAX_MATERIAL_CHARS)), rejected.stderr);
-    assert.ok(rejected.stderr.includes('--commit')); assert.ok(rejected.stderr.includes('Codex'));
-    assert.doesNotMatch(rejected.stderr, /opencode|\bpi\b/);
+    const scope = await compute(h), material = reviewPatchText(scope, { budget: MAX_MATERIAL_CHARS, readsFiles: false });
+    assert.equal(material.tooLarge, patchesTooLarge);
+    for (const kind of patchesTooLarge ? ['uncommitted', 'commit'] : ['uncommitted']) {
+      const rejected = await h.start('--input-type=module', ['-e', source], { env: { FOREMAN_LANG: lang }, input: JSON.stringify({ scope: { ...scope, kind }, brief }) }).done;
+      assert.equal(rejected.code, 2); assert.equal(rejected.stdout, '');
+      if (patchesTooLarge) {
+        assert.ok(rejected.stderr.includes(m[kind === 'commit' ? 'reviewCommitTooLarge' : 'reviewTooLarge'](material.chars, MAX_MATERIAL_CHARS)), rejected.stderr);
+        assert.ok(rejected.stderr.includes('Codex'));
+        if (kind === 'commit') assert.doesNotMatch(rejected.stderr, /--(?:commit|file)\b/);
+        else assert.ok(rejected.stderr.includes('--commit'));
+      } else {
+        const total = Number((lang === 'zh' ? /共 (\d+) 字符/ : /material is (\d+) characters/).exec(rejected.stderr)?.[1]);
+        assert.ok(total > MAX_MATERIAL_CHARS, rejected.stderr);
+        assert.ok(rejected.stderr.includes(m.materialsTooLarge(total, MAX_MATERIAL_CHARS, '')), rejected.stderr);
+      }
+      assert.doesNotMatch(rejected.stderr, /opencode|\bpi\b/);
+    }
   }
   assert.equal(api.requests.length, 1);
   assert.equal(h.records().filter((m) => m.participant !== 'host').length, 1);

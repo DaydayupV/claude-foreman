@@ -136,7 +136,8 @@ test('API 非 Git 的 diff 沿用普通开头，材料超限在登记和请求�
   for (const target of ['diff', 'files', 'claims']) {
     const rejected = await h.bridge(args(h, ['--target', target, '--file', 'source.txt']));
     assert.equal(rejected.code, 2); assert.equal(rejected.stdout, '');
-    assert.ok(rejected.stderr.includes(target === 'diff' ? '要审查的改动去掉生成文件后仍有' : '材料共'), rejected.stderr);
+    // diff 的材料在建计划时就按这一席的预算检查（单席 review 也走计划），files、claims 在启动时按整份材料检查
+    assert.ok(rejected.stderr.includes(target === 'diff' ? '要审查的改动去掉生成文件后放不下这几席' : '材料共'), rejected.stderr);
   }
   assert.equal(h.records().filter((m) => m.participant !== 'host').length, 1); assert.equal(api.requests.length, 1);
 });

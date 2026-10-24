@@ -784,19 +784,25 @@ test('state column lists failed seats of groups that are still running, skips re
 
 test('排队票按对话保持组的问题点和派发状态，每次扫描只读一次票据', (t) => {
   const f = temp(t), dir = path.join(f.options.runs, '.state', 'queue', 'configured'), at = Date.now();
-  for (const id of ['s', 'other', 'queue-only']) f.session(id, [row('user', now - 50000, id), answer(now - 40000)]);
+  for (const id of ['other', 'queue-only', 'reused']) f.session(id, [row('user', now - 50000, id), answer(now - 40000)]);
+  // reused 的失败结束在排队票之前 11 分多钟（同一个组名隔了很久又用），不算这一批，不再亮
+  f.session('s', [row('user', now - 900000, 's'), answer(now - 40000)]);
   f.session('waiting', [row('user', now - 50000, 'waiting'), tool(now - 40000)]);
-  f.run('group-failed', { group: 'g', plan: 'shared', status: 'timed_out', started_at: now - 800000, ended_at: now - 700000 });
+  // 排队票在样例时间 now - 1000 排上；group-failed 结束得早（不在近期任务列表里），但同组的 group-done 一直跑到 now - 200000，
+  // 前后接得上，算同一批
+  f.run('group-failed', { group: 'g', plan: 'shared', status: 'timed_out', started_at: now - 800000, ended_at: now - 650000 });
+  f.run('group-done', { group: 'g', plan: 'shared', status: 'done', started_at: now - 700000, ended_at: now - 200000 });
   f.run('other-group', { group: 'h', plan: 'shared', status: 'failed', ended_at: now - 1000 });
   f.run('plan-failed', { group: 'j', plan: 'fallback', status: 'failed', ended_at: now - 3000 });
   f.run('ungrouped-failed', { plan: 'ungrouped', status: 'failed', ended_at: now - 2000 });
   f.run('other-session', { claude_session: 'other', group: 'g', status: 'failed' });
+  f.run('old-failed', { claude_session: 'reused', group: 'g2', status: 'failed', started_at: now - 800000, ended_at: now - 700000 });
   const ticket = { pid: process.pid, pid_started_at: new Date(Math.ceil(performance.timeOrigin)).toISOString(),
-    queued_at: new Date(at - 1000).toISOString(), expires_at: new Date(at + 60000).toISOString(), agent: 'configured' };
+    queued_at: new Date(now - 1000).toISOString(), expires_at: new Date(at + 60000).toISOString(), agent: 'configured' };
   const files = [
     { claude_session: 's', group: 'g', plan: 'shared' }, { claude_session: 's', plan: 'fallback' },
     { claude_session: 's', plan: 'ungrouped' }, { claude_session: 'queue-only', group: 'new' },
-    { claude_session: 'waiting', group: 'g' }, { claude_session: 'missing', group: 'h' },
+    { claude_session: 'waiting', group: 'g' }, { claude_session: 'missing', group: 'h' }, { claude_session: 'reused', group: 'g2' },
   ].map((fields, i) => { const file = path.join(dir, `${i + 1}.json`); f.write(file, { ...ticket, ...fields }); return file; });
   const readdir = fs.readdirSync, read = fs.readFileSync, listed = new Map(), reads = new Map();
   t.mock.method(fs, 'readdirSync', function (file, ...args) {
@@ -816,6 +822,7 @@ test('排队票按对话保持组的问题点和派发状态，每次扫描只�
     assert.equal(sessions.get('queue-only').state, 'dispatching'); assert.deepEqual(sessions.get('queue-only').runs, []);
     assert.equal(sessions.get('other').state, 'idle'); assert.deepEqual(sessions.get('other').issues, []);
     assert.equal(sessions.get('waiting').state, 'waiting');
+    assert.equal(sessions.get('reused').state, 'dispatching'); assert.deepEqual(sessions.get('reused').issues, []);
     assert.equal(listed.get(dir), round); assert.equal(listed.get(path.dirname(dir)), round);
     for (const file of files) assert.equal(reads.get(file), round);
   }
@@ -864,4 +871,13 @@ test('a seat restarted in the same plan without a parent replaces its failed rou
   assert.deepEqual(data.sessions[0].issues.map((x) => x.run), ['r3']);
   // 归档对话 gone 的 x1 还在跑，但不占格子；s 的 r2 占一格
   assert.deepEqual(data.agents.find((a) => a.id === 'configured').running.map((r) => r.run).sort(), ['r2']);
+});
+
+test('问题点按这一批算：进行中用户又发了消息，这一批还没处理的失败照样亮', (t) => {
+  const f = temp(t);
+  f.session('mid', [row('user', now - 300000, 'mid'), answer(now - 290000), row('user', now - 50000, 'more'), answer(now - 40000)]);
+  f.run('mid-failed', { claude_session: 'mid', group: 'm', status: 'failed', started_at: now - 200000, ended_at: now - 100000 });
+  f.run('mid-running', { claude_session: 'mid', group: 'm', status: 'running', started_at: now - 200000, ended_at: null });
+  const s = createUniverse(f.options).read(now).sessions.find((x) => x.id === 'mid');
+  assert.equal(s.state, 'dispatching'); assert.deepEqual(s.issues.map((r) => r.run), ['mid-failed']);
 });

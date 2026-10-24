@@ -7,7 +7,7 @@ const source = readFileSync(new URL('../board/web/04-rates.js', import.meta.url)
 const stateSource = readFileSync(new URL('../board/web/01-state.js', import.meta.url), 'utf8');
 function board(mode = 'live') {
   const context = vm.createContext({ window: { __BOARD_FIXTURE__: true }, location: { search: '' }, URLSearchParams, wake: () => {} });
-  vm.runInContext(`${stateSource}\n${source}\nglobalThis.rates = { B, onRun, onEv, segments, rateSample, liveRate, rateAt, sparkline, laneStats, FINAL, FINAL_EV };`, context);
+  vm.runInContext(`${stateSource}\n${source}\nglobalThis.rates = { B, onRun, onEv, onBacklog, segments, rateSample, liveRate, rateAt, sparkline, laneStats, FINAL, FINAL_EV, commandSpans, overlapsCommand };`, context);
   context.rates.B.clock.mode = mode;
   return context.rates;
 }
@@ -382,4 +382,49 @@ test('速度曲线画这条车道的全部时长，结束以后停住不再往�
   // 还没开始的车道是一条平线
   const idle = board(), later = lane(idle, 'later', [], { started_at: 60000 });
   assert.deepEqual(Array.from(idle.sparkline(later, 30000, 3)), [0, 0, 0]);
+});
+
+test('命令时段的重叠判断用二分查找，和逐个比较的结果一致', () => {
+  const b = board();
+  let seed = 7;
+  const rand = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  for (let round = 0; round < 50; round++) {
+    // 随机的命令开始、结束（含嵌套和没结束的），交给 commandSpans 并成互不重叠的时段
+    const events = [];
+    for (let t = 0, open = 0; t < 2000; t += 1 + rand(20)) {
+      if (open && rand(2)) { events.push({ run: 'r', ts: t, k: 'cmd_done' }); open--; } else { events.push({ run: 'r', ts: t, k: 'cmd' }); open++; }
+    }
+    const spans = b.commandSpans(events).get('r') || [];
+    for (let i = 0; i < 40; i++) {
+      const from = rand(2100), to = from + 1 + rand(200);
+      assert.equal(b.overlapsCommand(spans, from, to), spans.some((c) => c.a < to && c.b > from), `${from}-${to}`);
+    }
+  }
+});
+
+test('结束车道的曲线缓存跟着速度分段走：补发重置换掉等长的统计历史后，曲线随之更新', () => {
+  const b = board(), l = lane(b, 'seat', [[0, 'turn'], [10000, 'usage', { u: { out: 100 } }]], { status: 'done', ended_at: 10000 });
+  const before = Array.from(b.sparkline(l, 20000, 4));
+  // 同样条数的历史整份换掉：用量提前到 5000
+  b.onBacklog({ run: 'seat', reset: true, events: [{ run: 'seat', ts: 0, k: 'turn' }, { run: 'seat', ts: 5000, k: 'usage', u: { out: 100 } }],
+    rate_events: [{ run: 'seat', ts: 0, k: 'turn' }, { run: 'seat', ts: 5000, k: 'usage', u: { out: 100 } }] });
+  const after = Array.from(b.sparkline(l, 20000, 4));
+  assert.notDeepEqual(after, before);
+  // 和不经缓存、从头算的一样
+  const fresh = board(), l2 = lane(fresh, 'seat', [[0, 'turn'], [5000, 'usage', { u: { out: 100 } }]], { status: 'done', ended_at: 10000 });
+  assert.deepEqual(after, Array.from(fresh.sparkline(l2, 20000, 4)));
+});
+
+test('估速起点的缓存看车道的事件版本：统计历史满了以后中间插进迟到的回合，估速照样更新', () => {
+  const b = board(), l = lane(b, 'seat', [], { status: 'running', ended_at: null });
+  b.onEv({ run: 'seat', ts: 0, k: 'turn' }); b.onEv({ run: 'seat', ts: 10000, k: 'usage', u: { out: 100 } }); b.onEv({ run: 'seat', ts: 11000, k: 'turn' });
+  // 填满 20000 条（用不影响估速的事件），再插一条迟到的回合到中间
+  for (let i = 0; l.rate_events.length < 20000; i++) b.onEv({ run: 'seat', ts: 12000 + i, k: 'think' });
+  const first = b.liveRate(l, 40000);
+  b.onEv({ run: 'seat', ts: 31000, k: 'turn' });
+  assert.equal(l.rate_events.length, 20000);
+  const again = b.liveRate(l, 40000), fresh = board(), copy = lane(fresh, 'seat', [], { status: 'running', ended_at: null });
+  copy.rate_events = [...l.rate_events]; copy.ver = 1;
+  assert.notEqual(again, first);
+  assert.equal(again, fresh.liveRate(copy, 40000));
 });

@@ -7,6 +7,9 @@ import { pathToFileURL } from 'node:url';
 import { plannedSandbox as sandbox, hostArgs, output, failed, baseConfig, seedRun, liveStart, taskArgs, write, json, poll, opencodeAgent, piAgent, apiAgent, ROOT, BRIDGE, MESSAGES } from './helpers.mjs';
 import { discussion } from './fixtures/reports.mjs';
 import { apiServer } from './fake/api-server.mjs';
+import { MAX_REVIEW_CHARS, reviewPatchText } from '../foreman/skills/dispatch/scripts/review-scope.mjs';
+import { MAX_MATERIAL_CHARS } from '../foreman/skills/dispatch/scripts/util.mjs';
+import { API_BRIEF_RESERVE } from '../foreman/skills/dispatch/scripts/adapters/api.mjs';
 const M = MESSAGES.zh;
 const planArgs = (h, module = 'discuss', seats = ['codex']) => ['plan', '--cwd', h.cwd, '--module', module, '--cell', 'complex', '--group', 'plan-group', ...seats.flatMap((seat) => ['--seat', seat])];
 const launch = (plan, module = plan.module, seat = 1) => [module, '--plan', plan.plan_id, '--seat', seat, '--brief', '-'];
@@ -50,6 +53,51 @@ test('计划先校验格子、候选、必选和参数，失败不落盘', async
     [base.map((v) => v === 'plan-group' ? 'bad group' : v), M.badGroupName('bad group')],
   ]) failed(await h.bridge(args), message);
   assert.equal(fs.existsSync(path.join(h.runs, 'plans')), false);
+  assert.equal(h.records().length, 0); assert.equal(h.calls().length, 0);
+});
+
+for (const lang of ['zh', 'en']) test(`diff 计划按每席预算汇总超限席，拒绝前不落盘（${lang}）`, async (t) => {
+  const h = sandbox(t), c = baseConfig(), m = MESSAGES[lang]; h.env.FOREMAN_LANG = lang;
+  c.agents.reader = { ...c.agents.codex }; c.agents.oc = opencodeAgent(); c.agents.pi = piAgent();
+  c.agents['kimi-k2.6-api'] = apiAgent('http://127.0.0.1:1');
+  const seats = ['reader', 'oc', 'pi', 'kimi-k2.6-api'];
+  c.modules.review.complex = seats.map((agent) => ({ agent })); c.modules.review.seats.complex = seats.length; h.config(c); h.initGit();
+  for (const [length, commit] of [[MAX_MATERIAL_CHARS + 1, false], [MAX_REVIEW_CHARS + 1, true], [MAX_MATERIAL_CHARS + 1, true]]) {
+    h.write('source.txt', 'x'.repeat(length) + '\n');
+    if (commit) { h.git(['add', 'source.txt']); h.git(['commit', '--quiet', '-m', 'synthetic oversized commit']); }
+    const options = commit ? { commit: h.git(['rev-parse', 'HEAD']) } : {};
+    const scope = output(await h.start(path.join(ROOT, 'tests/fixtures/review-scope.mjs'), [JSON.stringify({ cwd: h.cwd, ...options })]).done);
+    const material = reviewPatchText(scope, { budget: MAX_MATERIAL_CHARS, readsFiles: false }), { chars } = material;
+    const apiChars = (`${m.apiReviewPrompt.diff(scope.description)}\n\n\n\n${m.reviewMaterial(material.fileList, material.patch, material.fence, material.note)}\n\n${m.apiMaterials('source.txt', 1, [])}`).length + API_BRIEF_RESERVE;
+    const rejectedSeats = commit ? chars > MAX_MATERIAL_CHARS ? [2, 3, 4] : [2, 3] : [4];
+    const labels = rejectedSeats.map((n) => lang === 'zh' ? `第 ${n} 席（${seats[n - 1]}）${n === 4 ? apiChars : chars} 字符` : `seat ${n} (${seats[n - 1]}) ${n === 4 ? apiChars : chars} characters`);
+    const rejected = await h.bridge([...planArgs(h, 'review', seats), ...(commit ? ['--commit', options.commit] : [])]);
+    failed(rejected, m.planReviewTooLarge(m.list(labels), { cli: MAX_REVIEW_CHARS, api: MAX_MATERIAL_CHARS, reserve: API_BRIEF_RESERVE }));
+    assert.ok(!rejected.stderr.includes('reader'));
+    assert.equal(fs.existsSync(path.join(h.runs, 'plans')), false);
+    assert.equal(h.records().length, 0); assert.equal(h.calls().length, 0);
+  }
+});
+
+test('diff 计划保留工作区和 base 的行号降级、生成文件过滤及 Codex 豁免', async (t) => {
+  const h = sandbox(t), c = baseConfig();
+  c.agents.reader = { ...c.agents.codex }; c.agents.oc = opencodeAgent(); c.agents.pi = piAgent(); c.agents.api = apiAgent('http://127.0.0.1:1');
+  const seats = ['reader', 'oc', 'pi', 'api'];
+  c.modules.review.complex = seats.map((agent) => ({ agent })); c.modules.review.seats.complex = seats.length; h.config(c);
+  const base = h.initGit(); h.write('source.txt', 'x'.repeat(MAX_REVIEW_CHARS + 1) + '\n');
+  for (const range of [[], ['--base', base]]) {
+    const plan = output(await h.bridge([...planArgs(h, 'review', seats), ...range]));
+    assert.deepEqual(plan.seats.map((seat) => seat.agent), seats); assert.ok(plan.review.fingerprint);
+  }
+  h.write('.gitattributes', 'generated.txt linguist-generated=true\n'); h.write('source.txt', 'small change\n');
+  h.write('generated.txt', 'x'.repeat(MAX_MATERIAL_CHARS + 1) + '\n');
+  h.git(['add', '.']); h.git(['commit', '--quiet', '-m', 'synthetic generated change']);
+  const generated = output(await h.bridge([...planArgs(h, 'review', seats), '--commit', h.git(['rev-parse', 'HEAD'])]));
+  assert.equal(generated.seats.length, seats.length);
+  h.write('source.txt', 'x'.repeat(MAX_MATERIAL_CHARS + 1) + '\n');
+  h.git(['add', 'source.txt']); h.git(['commit', '--quiet', '-m', 'synthetic Codex-only change']);
+  const codex = output(await h.bridge([...planArgs(h, 'review', ['reader']), '--commit', h.git(['rev-parse', 'HEAD']), '--count-why', '仅派 Codex 读取完整提交']));
+  assert.equal(codex.seats[0].agent, 'reader');
   assert.equal(h.records().length, 0); assert.equal(h.calls().length, 0);
 });
 

@@ -233,3 +233,32 @@ test('a question popup becomes ask, and its answer becomes ask_done with the sam
   // 还没回答：只有 ask
   assert.deepEqual(parseTranscriptLines([ask], ctx).events.map((e) => e.k), ['ask']);
 });
+
+test('live stream sends the Claude Code lane before the seats and keeps returned events older than the last 200', { timeout: 15000 }, async (t) => {
+  const temp = fs.mkdtempSync(path.join(here, 'fixtures/board/cc-order-')), runRoot = path.join(temp, 'runs'), file = path.join(temp, 'synthetic.jsonl');
+  const id = '20261018-214001-seat', dir = path.join(runRoot, id); fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ mode: 'exec', agent: 'demo', group: 'demo', status: 'done', started_at: iso(2000), ended_at: iso(3000) }));
+  // 交回在最前面，后面还有 250 条用户消息：只留最后 200 条的话交回会被裁掉
+  fs.writeFileSync(file, [tool('Bash', { command: 'node "C:/demo/cli.mjs" run --agent demo' }), row('user', [{ type: 'tool_result', tool_use_id: 'tool_0', content: 'Command running in background with ID: taskdemo' }], 1),
+    row('user', '<task-notification><task-id>taskdemo</task-id><status>completed</status></task-notification>', 3), ...Array.from({ length: 250 }, (_, i) => row('user', `later ${i}`, 10 + i))].map((r) => JSON.stringify(r)).join('\n') + '\n');
+  const child = spawn(process.execPath, [path.join(here, '../foreman/skills/dispatch/scripts/board/server.mjs'), '--runs', runRoot, '--claude-dir', temp, '--config', path.join(temp, 'config.json'), '--transcript', file, '--prices', path.join(here, 'fixtures/board/prices-test.json')], { cwd: here, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(async () => { if (child.exitCode == null) { child.kill(); await once(child, 'exit'); } assert.equal(path.dirname(temp), path.join(here, 'fixtures/board')); fs.rmSync(temp, { recursive: true, force: true }); });
+  const [ready] = await once(child.stdout, 'data'), address = String(ready).match(/board: (http:\/\/\S+?)\?/)[1];
+  const res = await fetch(`${address}stream?group=demo`, { signal: AbortSignal.timeout(10000) }), reader = res.body.getReader(), decoder = new TextDecoder();
+  let buffer = '', ccBacklog = null; const order = [];
+  try {
+    while (!ccBacklog || order.length < 2) {
+      const { value, done } = await reader.read(); if (done) break; buffer += decoder.decode(value, { stream: true });
+      let end;
+      while ((end = buffer.indexOf('\n\n')) >= 0) {
+        const frame = buffer.slice(0, end); buffer = buffer.slice(end + 2);
+        const event = /^event: (.+)$/m.exec(frame)?.[1], json = /^data: (.+)$/m.exec(frame)?.[1]; if (!json) continue; const data = JSON.parse(json);
+        if (event === 'run') order.push(data.id);
+        if (event === 'backlog' && data.run === 'cc') ccBacklog = data;
+      }
+    }
+  } finally { await reader.cancel(); }
+  assert.deepEqual(order, ['cc', id]);
+  assert.ok(ccBacklog.events.length <= 200);
+  assert.equal(ccBacklog.events.filter((e) => e.k === 'returned').length, 1);
+});

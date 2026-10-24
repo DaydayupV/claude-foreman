@@ -231,3 +231,13 @@ for (const lang of ['zh', 'en']) test(`${lang} 卡住时问一下服务：已经
     assert.equal(b.notices.at(-1), b.TEXT[last]); assert.equal(b.requests.filter((url) => url === 'health').length, 1);
   }
 });
+
+test('在后台时没连上的页面回到前台，马上请其他看板标签页让出，不用等它们隐藏满 10 分钟', () => {
+  const b = board({ visibility: 'hidden' }); b.seed();
+  assert.equal(b.U.es.readyState, 0); assert.deepEqual(b.channel.sent, []);
+  b.visibility('visible');
+  assert.deepEqual(b.channel.sent, ['release']);
+  // 已经连上的页面回到前台不打扰别人
+  const ok = board(); ok.seed(); ok.U.es.emit('open'); ok.visibility('hidden'); ok.visibility('visible');
+  assert.deepEqual(ok.channel.sent, []);
+});
