@@ -444,11 +444,11 @@ function displayBoard(lang = 'zh') {
     performance: { now: () => 0 }, innerHeight: 1000, ResizeObserver: class { observe() {} }, addEventListener() {}, wake() {}, document: { getElementById: el,
       createElement: () => new DisplayElement(), documentElement: {}, querySelector: () => null },
     worldEl: { dataset: { lod: 0 } }, avatarFor: () => 'claude', rgba: () => '', avatarSrc: () => '', look: () => ({ name: 'test' }),
-    hash: () => 1, verdictCounts: () => null, reduceMotion: { matches: false }, FX_PULSE: 2.4, ageOf: (ev, t) => (t - ev.ts) / 1000 });
+    hash: () => 1, verdictCounts: () => null, reduceMotion: { matches: false }, FX_PULSE: 2.4, FX_LIFE: 2.6, FX_MAX_LABELS: 16, LABEL_KINDS: new Set(['read', 'edit', 'search', 'web', 'image']), ageOf: (ev, t) => (t - ev.ts) / 1000 });
   const page = buildPage(), shared = page.slice(page.indexOf('const Display ='), page.indexOf('// ---- 00-text.js'));
   const names = ['00-text', '01-state', '03-timeline', '04-life', '04-rates', '05-world', '06-states', '06-cards', '07-table', '07-terms', '08-surge', '08-labels'];
   const source = names.map((name) => fs.readFileSync(new URL(`../board/web/${name}.js`, import.meta.url), 'utf8')).join('\n');
-  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, conclusion, painted, outOfScope, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd, onBacklog, SETTLE, settleTerms, ccAway, CC_AWAY, viewAt, beatsAt, trackSurges, surgeAge, SURGE, recentPulses };', context);
+  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, conclusion, painted, outOfScope, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd, onBacklog, SETTLE, settleTerms, ccAway, CC_AWAY, viewAt, beatsAt, trackSurges, surgeAge, SURGE, recentPulses, recentLabels };', context);
   return { ...context.api, el, context };
 }
 
@@ -1131,6 +1131,10 @@ test('席位的加速脉冲按报上来的分段用量放：连上时已有的�
   b.onEv({ run: 'old', ts: t + 1000, k: 'usage', tot: 1, u: { out: 900 } });
   const rate = (r) => new Map([['cc', r], ['old', r]]);
   clock.ms += 16; b.trackSurges(rate(5), false, t + 11000);
+  // 刚建的条目头 4 秒不按速度放
+  clock.ms += 16; b.trackSurges(rate(60), false, t + 11000);
+  assert.equal(b.surgeAge('cc'), null);
+  clock.ms += 5000; b.trackSurges(rate(5), false, t + 11000);
   clock.ms += 16; b.trackSurges(rate(12), false, t + 11000);
   assert.equal(b.surgeAge('cc'), null); assert.equal(b.surgeAge('old'), null);
   clock.ms += 16; b.trackSurges(rate(60), false, t + 11000);
@@ -1158,6 +1162,11 @@ test('直播里光路上的事件脉冲从页面第一次看到事件起算：�
   // 晚了 2 分钟以上的不放
   b.onEv({ run: 'seat', ts: t + 700 - 130000, k: 'end' });
   assert.ok(!b.recentPulses(t + 800).some((p) => p.out && p.age === 0));
+  // Claude Code 一条回复里并行改的两个文件：时刻不同，同一帧一起到，也只放一道；文件名标签同样从第一次看到起算
+  b.onEv({ run: 'cc', ts: t - 3000, k: 'edit', t: 'update src/x.mjs' });
+  b.onEv({ run: 'cc', ts: t - 1000, k: 'edit', t: 'update src/y.mjs' });
+  assert.equal(b.recentPulses(t + 900).filter((p) => p.lane === 'cc' && p.out).length, 1);
+  assert.equal(JSON.stringify(b.recentLabels(t + 900).filter((l) => l.lane === 'cc').map((l) => l.age)), JSON.stringify([0, 0]));
   // 回放照旧按事件的时刻，同一时刻的几件事也只放一次
   const c = displayBoard();
   Object.assign(c.B.clock, { mode: 'replay', speed: 1 });
@@ -1171,8 +1180,8 @@ test('断开一阵再连上，补回来的用量让速度一下子回来，不�
   b.context.performance.now = () => clock.ms;
   b.B.clock.mode = 'live'; b.B.synced = true;
   b.onRun({ id: 'cc', lane: 'cc', kind: 'host', agent_type: 'host', model: 'opus', status: 'running', started_at: 0 });
-  const go = (rate) => { clock.ms += 16; b.trackSurges(new Map([['cc', rate]]), false, 1000); };
-  go(2); go(2);
+  const go = (rate, ms = 16) => { clock.ms += ms; b.trackSurges(new Map([['cc', rate]]), false, 1000); };
+  go(2); go(2, 5000);
   Object.assign(b.B, { hello: { v: 2 }, synced: false });
   go(40);
   b.B.synced = true;
