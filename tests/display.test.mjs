@@ -448,9 +448,15 @@ function displayBoard(lang = 'zh') {
   const page = buildPage(), shared = page.slice(page.indexOf('const Display ='), page.indexOf('// ---- 00-text.js'));
   const names = ['00-text', '01-state', '03-timeline', '04-life', '04-rates', '05-world', '06-states', '06-cards', '07-table', '07-terms', '08-surge', '08-labels'];
   const source = names.map((name) => fs.readFileSync(new URL(`../board/web/${name}.js`, import.meta.url), 'utf8')).join('\n');
-  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, conclusion, painted, outOfScope, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd, onBacklog, SETTLE, settleTerms, ccAway, CC_AWAY, viewAt, beatsAt, trackSurges, surgeAge, SURGE, recentPulses, recentLabels };', context);
+  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, conclusion, painted, outOfScope, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd, onBacklog, SETTLE, settleTerms, ccAway, CC_AWAY, viewAt, beatsAt, trackSurges, surgeAge, SURGE, recentPulses, recentLabels, fmtCost };', context);
   return { ...context.api, el, context };
 }
+
+test('the cost column shows ? on a finished row whose cost is unknown (where the total\'s + comes from), and — while it runs', () => {
+  const b = displayBoard();
+  assert.equal(b.fmtCost(null, true), '?'); assert.equal(b.fmtCost(null, true, false), '—'); assert.equal(b.fmtCost(null), '—');
+  assert.match(b.fmtCost(1.5, true), /^\$1\.5\d*\+$/);
+});
 
 test('构建内联可调用的纯显示函数，老格式 run 消息仍能渲染', () => {
   const b = displayBoard();

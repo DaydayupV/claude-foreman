@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { normalize, laneOf, selectScope, buildReplay, snapshotAt, createFeed, runMessage, hostCost, usageTotals } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
+import { normalize, laneOf, selectScope, buildReplay, snapshotAt, createFeed, runMessage, hostCost, usageTotals, keepUsage } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
 import { sandbox, seedRun, write } from './helpers.mjs';
 
 const start = Date.parse('2026-10-18T13:40:00Z');
@@ -304,6 +304,26 @@ test('a resumed conversation counts the Claude Code usage of its earlier transcr
   // 星图已经读过的记录借星图的（这里故意给不同的数，证明没再读 old.jsonl），没读过的照旧读文件
   const borrowed = [{ id: 'm9', ts: start - 50000, t: 'claude-opus-5-5', u: { in: 1, cached: null, cache_write: null, out: 1000 } }];
   assert.equal(read({ conversation: () => new Set(['new', 'old', 'older']), knownUsage: (id) => (id === 'old' ? borrowed : null) }).usage.output, 1940);
+});
+
+test('the board counts a conversation\'s whole Claude Code usage from the star map\'s reading, even without tasks; a zero-usage copy never replaces the real one', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'board-whole-')), projects = path.join(root, 'claude', 'demo'), runs = path.join(root, 'runs');
+  fs.mkdirSync(projects, { recursive: true }); fs.mkdirSync(runs);
+  t.after(() => { assert.equal(path.dirname(root), os.tmpdir()); fs.rmSync(root, { recursive: true, force: true }); });
+  const answer = (id, at, out) => ({ type: 'assistant', timestamp: new Date(at).toISOString(), message: { id, model: 'claude-opus-5-5', content: [{ type: 'text', text: id }], usage: { input_tokens: 10, output_tokens: out } } });
+  fs.writeFileSync(path.join(projects, 'solo.jsonl'), [{ type: 'user', timestamp: new Date(start - 3600000).toISOString(), message: { content: 'go' } },
+    answer('a0', start - 3500000, 700), answer('a1', start - 60000, 30)].map((r) => JSON.stringify(r)).join('\n') + '\n');
+  const read = (options) => createFeed(runs, { claudeDir: path.dirname(projects), now: () => start, ...options }).read({ session: 'solo' }).runs.find((r) => r.id === 'cc');
+  // 没有任务的对话，时间线只取最近半小时；星图没读过这份记录时用量也只有这半小时
+  assert.equal(read({}).usage.output, 30);
+  // 星图读过整份：用量是这个对话的全部，和星图那一行一致
+  const whole = [{ id: 'a0', t: 'claude-opus-5-5', u: { in: 10, cached: null, cache_write: null, out: 700 } }, { id: 'a1', t: 'claude-opus-5-5', u: { in: 10, cached: null, cache_write: null, out: 30 } }];
+  assert.equal(read({ knownUsage: (id) => (id === 'solo' ? whole : null) }).usage.output, 730);
+  const kept = new Map(), zero = { in: 0, cached: 0, cache_write: 0, out: 0 };
+  keepUsage(kept, { id: 'x', u: { in: 1, cached: 2, cache_write: 3, out: 4 } });
+  assert.equal(keepUsage(kept, { id: 'x', u: zero }), false); assert.equal(kept.get('x').u.out, 4);
+  assert.equal(keepUsage(kept, { id: 'x', u: { in: 1, cached: 0, cache_write: 0, out: 9 } }), true); assert.equal(kept.get('x').u.out, 9);
+  assert.equal(keepUsage(kept, { id: 'y', u: zero }), true);
 });
 
 test('a conversation of 200k lines opens without overflowing the stack (no push(...lines))', (t) => {

@@ -933,13 +933,15 @@ test('each conversation lists every model it used with their output, for the gal
   ]);
 });
 
-test('a resumed conversation counts earlier transcripts older than the window: their usage once each and the runs they dispatched', (t) => {
+test('a resumed conversation counts earlier transcripts older than the window: their usage once each (a zero-usage copy made on resume does not replace the real one) and the runs they dispatched', (t) => {
   const f = temp(t), day = 86400000;
   // 两份先前的记录都在时间窗口以外；m0 从最早那份抄进了中间那份，只算一次
   f.session('oldest', [row('user', now - 3 * day, 'title'), answer(now - 3 * day + 1000, { id: 'm0', usage: { input_tokens: 10, output_tokens: 500 } })], 'demo', now - 3 * day);
   f.session('old', [answer(now - 3 * day + 1000, { id: 'm0', usage: { input_tokens: 10, output_tokens: 500 } }),
     answer(now - 2 * day, { id: 'm1', usage: { input_tokens: 10, output_tokens: 200 } })], 'demo', now - 2 * day);
-  f.session('new', [row('user', now - 30000, 'title'), answer(now - 20000, { id: 'm2', usage: { input_tokens: 5, output_tokens: 40 } })]);
+  // 恢复时新记录抄了上一份正在进行的那条消息 m1，用量全写成 0：不顶掉原来那份
+  f.session('new', [answer(now - 2 * day, { id: 'm1', usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }),
+    row('user', now - 30000, 'title'), answer(now - 20000, { id: 'm2', usage: { input_tokens: 5, output_tokens: 40 } })]);
   f.run('r-oldest', { claude_session: 'oldest', started_at: now - 3 * day, ended_at: now - 3 * day + 5000 });
   f.run('r-new', { claude_session: 'new' });
   const roots = [path.join(f.root, 'desktop', 'claude-code-sessions')];

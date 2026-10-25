@@ -21,6 +21,16 @@ function temp(t) {
 const row = (id, dt, content, usage, cwd = 'C:/demo') => ({ type: 'assistant', timestamp: new Date(base + dt).toISOString(), cwd, sessionId: 's', message: { id, model: 'claude-opus-5-5', content, ...(usage ? { usage } : {}) } });
 const write = (file, rows, append = false) => fs[append ? 'appendFileSync' : 'writeFileSync'](file, rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
 
+test('readLines with a needle parses only the lines containing it and still reads to the end', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'board-needle-')), file = path.join(dir, 'x.jsonl');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  // 多字节字符跨在被跳过的行里，不能影响后面的行
+  fs.writeFileSync(file, ['{"a":"跳过的一行 ✓"}', '{"usage":1}', '{"b":"又一行"}', '{"usage":2,"t":"中文"}'].join('\n') + '\n');
+  const seen = [], read = readLines(file, newTail(), (row) => seen.push(row), undefined, Buffer.from('"usage"'));
+  assert.deepEqual(seen, [{ usage: 1 }, { usage: 2, t: '中文' }]);
+  assert.equal(read.tail.offset, fs.statSync(file).size);
+});
+
 test('live fixture output matches the original parser including versions and revisions', () => {
   const runs = path.join(here, 'fixtures/board/runs'), transcript = path.join(here, 'fixtures/board/transcript-sample.jsonl');
   const feed = createFeed(runs, { transcript, prices: loadPrices(path.join(here, 'fixtures/board/prices-test.json')) });
