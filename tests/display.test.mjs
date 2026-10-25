@@ -1117,7 +1117,14 @@ test('席位的加速脉冲按报上来的分段用量放：连上时已有的�
   assert.equal(b.surgeAge('seat'), null);
   b.onEv({ run: 'seat', ts: t + 11000, k: 'usage', u: { out: 120 } });
   step(t + 11000);
-  assert.equal(b.surgeAge('seat'), 0); assert.ok(near(b.SURGE.get('seat').k, 0.4 + 0.6 * 0.2));
+  assert.equal(b.surgeAge('seat'), 0); assert.ok(near(b.SURGE.get('seat').k, 0.55 + 0.45 * 0.2));
+  // 重连（新的 hello）：开头那一批里的用量又是旧的，不放
+  Object.assign(b.B, { hello: { v: 3 }, synced: false });
+  b.onEv({ run: 'seat', ts: t + 19000, k: 'usage', u: { out: 300 } });
+  step(t + 20000, 7000);
+  b.B.synced = true;
+  step(t + 20000);
+  assert.equal(b.surgeAge('seat'), null);
   // Claude Code，以及还没有分段用量的席位（旧记录只有整轮总数）：速度一下子高出平均一截才放
   b.onRun({ id: 'cc', lane: 'cc', kind: 'host', agent_type: 'host', model: 'opus', status: 'running', started_at: 0 });
   b.onRun({ id: 'old', model: 'm', kind: 'exec', status: 'running', started_at: t, ended_at: null });
