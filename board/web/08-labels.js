@@ -1,30 +1,43 @@
 'use strict';
 // 脉冲、文件名光点和说明框（世界坐标；文件名的字号按屏幕固定，像地图上的地名）。
 
+// 直播里一件事第一次出现在页面上的时刻（毫秒），事件脉冲和文件名标签共用。事件要过一会儿才到页面（看板服务每秒推一次；
+// Claude Code 的工具调用要等整条回复生成完才写进记录），按事件自己的时刻算，到的时候光束已经走了一半、文件名已经淡了，
+// 所以直播时都从第一次看到起算，和节拍一样（04-life.js 的 BEAT）。连上服务时开头那一批（服务发 synced 之前，以及之后算的第一帧）
+// 和晚到 SEEN.late 秒以上的返回 null（旧的，不放）。每帧第一次调用时更新连接状态，同一帧里再调用用同一个判断
+const SEEN = { late: 120, map: new Map(), hello: undefined, synced: false, frame: null, old: true };
+function seenAt(key, ts, t) {
+  if (SEEN.frame !== t) {
+    SEEN.frame = t;
+    if (SEEN.hello !== B.hello) { SEEN.hello = B.hello; SEEN.map.clear(); SEEN.synced = false; }
+    SEEN.old = !B.synced || !SEEN.synced;
+    if (B.synced) SEEN.synced = true;
+    for (const [k, v] of SEEN.map) if (v.ts <= t - SEEN.late * 1000) SEEN.map.delete(k);
+  }
+  if (!SEEN.map.has(key)) SEEN.map.set(key, { ts, at: SEEN.old || ts <= t - SEEN.late * 1000 ? null : t });
+  return SEEN.map.get(key).at;
+}
+
 // 脉冲：Claude Code 派活（dir 1）、结果回来或被读取（dir -1）；产出（写文件、交报告、结束，out）。
 // 没有 Claude Code 记录时，用任务的开始和结束代替派活和结果回来，交互光线照样有反应。
-// 直播里事件要过一会儿才到页面（看板服务每秒推一次；Claude Code 的工具调用要等整条回复生成完才写进记录），按事件自己的时刻算，
-// 到的时候光束已经走了一半或早就走完了：直播时从页面第一次看到它起算，和节拍一样（04-life.js 的 BEAT）。连上服务时开头那一批
-// （服务发 synced 之前，以及之后算的第一帧）不放，晚到 PULSE.late 秒以上的也不放。回放照旧按事件的时刻。
-// 同一条车道同一时刻的几件事（一次改了几个文件）只放一次，几道一样的光束叠在一起会变成一条过亮的白条
-const PULSE = { late: 120, seen: new Map(), hello: undefined, synced: false };
+// 直播时从第一次看到起算（seenAt），回放照旧按事件的时刻。同一条车道同一类、同时出现的几件事只放一道：几道一样的光束叠在一起
+// 会变成一条过亮的白条。直播里"同时"是同一帧第一次看到（Claude Code 一条回复里并行改的几个文件时刻各不相同，却一起到页面），
+// 回放里是同一个时刻（Codex 一次报的几个文件改动）
 function recentPulses(t) {
-  const out = [], cc = B.laneById.get('cc'), live = B.clock.mode !== 'replay', once = new Set();
+  const out = [], cc = B.laneById.get('cc'), live = B.clock.mode !== 'replay', once = new Set(), from = t - SEEN.late * 1000;
   const hasLinks = !!(cc && cc.events.some((e) => e.target && e.target.length));
-  if (live && PULSE.hello !== B.hello) { PULSE.hello = B.hello; PULSE.seen.clear(); PULSE.synced = false; }
-  const old = !B.synced || !PULSE.synced, from = t - PULSE.late * 1000;
-  if (live && B.synced) PULSE.synced = true;
   const add = (pulse, ts) => {
     let age = ageOf({ ts }, t);
     if (live ? ts <= from : age > FX_PULSE) return;
-    const key = `${pulse.lane}|${pulse.out ? 'out' : pulse.dir}|${ts}`;
-    if (once.has(key)) return;
-    once.add(key);
+    const kind = `${pulse.lane}|${pulse.out ? 'out' : pulse.dir}`;
+    let when = ts;
     if (live) {
-      if (!PULSE.seen.has(key)) PULSE.seen.set(key, { ts, at: old ? null : t });
-      const at = PULSE.seen.get(key).at;
-      age = at == null ? -1 : (t - at) / 1000;
+      const at = seenAt(`p|${kind}|${ts}`, ts, t);
+      if (at == null) return;
+      when = at; age = (t - at) / 1000;
     }
+    if (once.has(`${kind}|${when}`)) return;
+    once.add(`${kind}|${when}`);
     if (age >= 0 && age <= FX_PULSE) out.push({ ...pulse, age });
   };
   for (const lane of B.lanes) {
@@ -40,18 +53,21 @@ function recentPulses(t) {
       if (r.ended_at != null && r.ended_at <= t) add({ lane: lane.id, dir: -1 }, r.ended_at);
     }
   }
-  for (const [key, v] of PULSE.seen) if (v.ts <= from) PULSE.seen.delete(key);
   return out;
 }
 
+// 文件名标签：和脉冲一样，直播时从第一次看到起算（seenAt），晚到的改文件光束跑过去时也看得到改的是哪个文件
 function recentLabels(t) {
-  const list = [];
+  const list = [], live = B.clock.mode !== 'replay', from = t - SEEN.late * 1000;
   for (const lane of B.lanes) {
     for (let i = lane.events.length - 1; i >= 0; i--) {
-      const ev = lane.events[i], age = ageOf(ev, t);
-      if (age < 0) continue;
-      if (age > FX_LIFE) break;
-      if (LABEL_KINDS.has(ev.k) && ev.t) list.push({ ev, lane: lane.id, age });
+      const ev = lane.events[i];
+      if (ev.ts > t) continue;
+      let age = ageOf(ev, t);
+      if (live ? ev.ts <= from : age > FX_LIFE) break;
+      if (!LABEL_KINDS.has(ev.k) || !ev.t) continue;
+      if (live) { const at = seenAt(`l|${lane.id}|${ev.k}|${ev.ts}|${ev.t}`, ev.ts, t); if (at == null) continue; age = (t - at) / 1000; }
+      if (age <= FX_LIFE) list.push({ ev, lane: lane.id, age });
     }
   }
   return list.sort((a, b) => a.age - b.age).slice(0, FX_MAX_LABELS);
