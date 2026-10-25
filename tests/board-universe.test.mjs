@@ -137,7 +137,7 @@ test('states follow waiting, dispatching, thinking, idle priority and injectable
   assert.equal(summary(base + 800000).state, 'waiting'); assert.equal(summary(base + 800000).waiting.header, null);
 });
 
-test('run summaries cap at 16 / ten minutes, omit host, count the window, deduplicate usage and clear alerts on prompts', (t) => {
+test('run summaries cap at 16 / ten minutes, omit host, count the whole conversation (not just the window), deduplicate usage and clear alerts on prompts', (t) => {
   const f = temp(t), file = f.session('s', [row('user', now - 40000, 'title'),
     answer(now - 86400001, { usage: { input_tokens: 999 } }), answer(now - 30000, { id: 'same', usage: { input_tokens: 999 } }),
     answer(now - 29000, { id: 'same', usage: { input_tokens: 100, cache_read_input_tokens: 200, cache_creation_input_tokens: 30, output_tokens: 40 } })]);
@@ -150,18 +150,19 @@ test('run summaries cap at 16 / ten minutes, omit host, count the window, dedupl
   const universe = createUniverse(f.options);
   let s = universe.read().sessions[0];
   assert.equal(s.runs.length, 16); assert.equal(s.runs[0].id, 'quota'); assert.ok(!s.runs.some((r) => ['host', 'old'].includes(r.id)));
-  assert.deepEqual(s.counts, { running: 0, done: 18, failed: 2 });
-  assert.deepEqual(s.usage, { input: 100, cached: 200, cache_write: 30, output: 40 });
-  assert.equal(s.cost_usd, 20.00236); assert.equal(s.alert.kind, 'quota_exhausted');
+  // 窗口以外的任务（outside）和 Claude Code 用量（一天多以前那条 999）也算：一行是这个对话的全部，和看板一致
+  assert.deepEqual(s.counts, { running: 0, done: 19, failed: 2 });
+  assert.deepEqual(s.usage, { input: 1099, cached: 200, cache_write: 30, output: 40 });
+  assert.equal(s.cost_usd, 21.01235); // 21 个任务各 $1，加 Claude Code 的 0.00236 和 0.00999 assert.equal(s.alert.kind, 'quota_exhausted');
   assert.equal(Object.hasOwn(s, 'cost_paid_usd'), false); assert.equal(Object.hasOwn(s, 'cost_subscription_usd'), false);
   assert.equal(universe.read(now + 1799000).sessions[0].alert.kind, 'quota_exhausted');
   assert.equal(universe.read(now + 1799001).sessions[0].alert, null);
   fs.appendFileSync(file, JSON.stringify(answer(now - 28000, { id: 'same' })) + '\n');
-  assert.equal(universe.read().sessions[0].usage.input, null);
+  assert.equal(universe.read().sessions[0].usage.input, 999);
   fs.appendFileSync(file, JSON.stringify(row('user', now - 500, 'new prompt')) + '\n');
   assert.equal(universe.read().sessions[0].alert, null);
   fs.appendFileSync(file, JSON.stringify(answer(now - 400, { model: 'unpriced', usage: { input_tokens: 1 } })) + '\n');
-  s = universe.read().sessions[0]; assert.equal(s.cost_usd, 20); assert.equal(s.cost_partial, true);
+  s = universe.read().sessions[0]; assert.equal(s.cost_usd, 21.00999); assert.equal(s.cost_partial, true);
   assert.equal(Object.hasOwn(s, 'cost_paid_usd'), false); assert.equal(Object.hasOwn(s, 'cost_subscription_usd'), false);
   assert.equal(s.runs.some((r) => Object.hasOwn(r, 'report_head')), false);
 });
@@ -909,7 +910,7 @@ test('a run that ended normally without a valid report counts as failed, like th
   assert.ok(!JSON.stringify(createUniverse(f.options).read(now)).includes(sentinel));
 });
 
-test('each conversation lists the models it used in the window with their output, for the galaxy colours', (t) => {
+test('each conversation lists every model it used with their output, for the galaxy colours', (t) => {
   const f = temp(t);
   f.session('s', [row('user', now - 40000, 'title')]);
   const run = (id, model, agent, out, fields = {}) => {
@@ -917,7 +918,7 @@ test('each conversation lists the models it used in the window with their output
     if (out != null) f.write(path.join(f.options.runs, id, 'result.json'), { status: meta.status, cost_usd: 1, cost_source: 'api_price', usage: { input_tokens: 10, output_tokens: out } });
   };
   run('q1', 'opencode-go/qwen3.8-flash', 'qwen-oc', 300);
-  // 十分钟以前的也算（星系按整个时间窗口上色，不只看最近的任务）
+  // 十分钟以前、时间窗口以外的也算（星系按这个对话的全部任务上色，和看板一致）
   run('q2', 'opencode-go/qwen3.8-flash', 'qwen-oc', 200, { started_at: now - 700000, ended_at: now - 650000 });
   run('d1', 'deepseek/deepseek-flash', 'ds-pi', 900);
   run('r1', 'opencode-go/minimax-m3', 'mm-oc', null, { status: 'running', ended_at: null });
@@ -927,8 +928,27 @@ test('each conversation lists the models it used in the window with their output
   assert.deepEqual(s.models, [
     { agent: 'ds-pi', model: 'deepseek/deepseek-flash', out: 900, running: false },
     { agent: 'qwen-oc', model: 'opencode-go/qwen3.8-flash', out: 500, running: false },
+    { agent: 'gem', model: 'google/gemini-4-argon', out: 70, running: false },
     { agent: 'mm-oc', model: 'opencode-go/minimax-m3', out: 0, running: true },
   ]);
+});
+
+test('a resumed conversation counts earlier transcripts older than the window: their usage once each and the runs they dispatched', (t) => {
+  const f = temp(t), day = 86400000;
+  // 两份先前的记录都在时间窗口以外；m0 从最早那份抄进了中间那份，只算一次
+  f.session('oldest', [row('user', now - 3 * day, 'title'), answer(now - 3 * day + 1000, { id: 'm0', usage: { input_tokens: 10, output_tokens: 500 } })], 'demo', now - 3 * day);
+  f.session('old', [answer(now - 3 * day + 1000, { id: 'm0', usage: { input_tokens: 10, output_tokens: 500 } }),
+    answer(now - 2 * day, { id: 'm1', usage: { input_tokens: 10, output_tokens: 200 } })], 'demo', now - 2 * day);
+  f.session('new', [row('user', now - 30000, 'title'), answer(now - 20000, { id: 'm2', usage: { input_tokens: 5, output_tokens: 40 } })]);
+  f.run('r-oldest', { claude_session: 'oldest', started_at: now - 3 * day, ended_at: now - 3 * day + 5000 });
+  f.run('r-new', { claude_session: 'new' });
+  const roots = [path.join(f.root, 'desktop', 'claude-code-sessions')];
+  f.write(path.join(roots[0], 'org', 'account', 'local_1.json'), { cliSessionId: 'new', priorCliSessionIds: ['oldest', 'old'], isArchived: false });
+  const s = createUniverse({ ...f.options, desktopRoots: roots }).read().sessions;
+  assert.deepEqual(s.map((x) => x.id), ['new']);
+  assert.equal(s[0].usage.output, 740);
+  assert.deepEqual(s[0].counts, { running: 0, done: 2, failed: 0 });
+  assert.equal(s[0].started_at, now - 3 * day + 1000);
 });
 
 test('a conversation resumed under a new session id shows once, with the runs and usage of its earlier transcript; archiving hides both', (t) => {

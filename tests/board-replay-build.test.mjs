@@ -135,7 +135,7 @@ test('explicit sessions can name old files; omitted sessions preserve the live w
   assert.ok(createUniverse(f.options).replay({ sessions: ['old'] }, now).detail('old').timeline.some((m) => m.data.t === 'old prompt'));
 });
 
-test('replay keeps message replacement/retraction, unpriced usage and expiry boundaries', (t) => {
+test('replay keeps message replacement/retraction, unpriced usage, and the whole usage until the conversation leaves the window', (t) => {
   const f = temp(t), base = now - 100000;
   const answer = (dt, id, usage, model = 'claude-opus-5-5') => ({ type: 'assistant', timestamp: new Date(base + dt).toISOString(), cwd: 'D:/demo',
     message: { id, model, content: [], stop_reason: 'end_turn', ...(usage ? { usage: { input_tokens: usage } } : {}) } });
@@ -148,7 +148,8 @@ test('replay keeps message replacement/retraction, unpriced usage and expiry bou
   assert.equal(s(1000).usage.input, 2); assert.equal(s(2000).usage.input, 5); assert.equal(s(3000).usage.input, null);
   assert.equal(s(4000).usage.input, 1); assert.equal(s(4000).cost_usd, null); assert.equal(s(4000).cost_partial, true);
   assert.equal(s(604999).state, 'thinking'); assert.equal(s(605000).state, 'idle');
-  assert.equal(s(3604000).usage.input, 1); assert.equal(s(3604001).usage.input, null);
+  // 一行是对话的全部：用量不随窗口到期，对话还列着就一直在
+  assert.equal(s(3604000).usage.input, 1); assert.equal(s(3604001).usage.input, 1);
   assert.ok(s(3605000)); assert.equal(s(3605001), undefined);
   assert.equal(at(3605001).projects[0].older, 1);
   assert.equal(replay.detail('s').timeline.filter((m) => m.event === 'ev' && m.data.k === 'usage').length, 1);

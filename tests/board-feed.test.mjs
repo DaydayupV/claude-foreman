@@ -298,6 +298,9 @@ test('a resumed conversation counts the Claude Code usage of its earlier transcr
   const read = (options) => createFeed(runs, { claudeDir: path.dirname(projects), now: () => start, ...options }).read({ session: 'new' }).runs.find((r) => r.id === 'cc');
   assert.equal(read({}).usage.output, 140);
   assert.equal(read({ conversation: () => new Set(['new', 'old']) }).usage.output, 440);
+  // 再早一份：m0 也抄进了 old，只有 m00 是新增的；先前几份之间重复的也只算一次
+  fs.writeFileSync(path.join(projects, 'older.jsonl'), [answer('m00', start - 190000, 500), answer('m0', start - 90000, 300)].map((r) => JSON.stringify(r)).join('\n') + '\n');
+  assert.equal(read({ conversation: () => new Set(['new', 'old', 'older']) }).usage.output, 940);
 });
 
 test('a conversation of 200k lines opens without overflowing the stack (no push(...lines))', (t) => {
