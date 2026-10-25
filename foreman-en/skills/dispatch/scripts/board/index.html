@@ -66,6 +66,8 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 #uslots .cells i.over { border-color: var(--bad); }
 @keyframes slot-q { 50% { opacity: .3; } }
 #table .tr .av .mk { display: block; width: 8px; height: 8px; margin: 0 5px; border-radius: 50%; background: var(--tint); box-shadow: 0 0 6px var(--tint); }
+/* 对话表的状态列要放得下"waiting for you · 弹窗标题"，席位列只有几个点：两列的宽度和单对话的表对调 */
+#usage[data-mode="uni"] .tr { grid-template-columns: 22px 1.7fr .8fr 1.3fr .8fr .8fr 1.2fr .8fr 1fr .7fr; }
 #usage[data-mode="uni"] .tbody .tr span:nth-child(2) { font-family: "Microsoft YaHei", sans-serif; }
 #usage[data-mode="uni"] .tbody .tr span:nth-child(3) { color: var(--mid); }
 #usage[data-mode="uni"] .tbody .tr span:nth-child(4) { color: var(--text); }
@@ -323,7 +325,7 @@ body.table-all #usage:not([data-mode="uni"]) .tbody { overflow: visible; mask-im
   #table .tr { gap: 8px; }
   #usage:not([data-mode="uni"]) .tr { grid-template-columns: 22px 1.7fr .9fr .8fr .8fr 1.2fr .8fr .9fr; }
   #usage:not([data-mode="uni"]) .tr > span:nth-child(5), #usage:not([data-mode="uni"]) .tr > span:nth-child(10) { display: none; }
-  #usage[data-mode="uni"] .tr { grid-template-columns: 22px 1.6fr .8fr 1.05fr 1.2fr .8fr .85fr .65fr; }
+  #usage[data-mode="uni"] .tr { grid-template-columns: 22px 1.25fr 1.25fr 1.05fr 1.1fr .75fr .8fr .6fr; }
   #usage[data-mode="uni"] .tr > span:nth-child(3), #usage[data-mode="uni"] .tr > span:nth-child(5) { display: none; }
 }
 @media (max-width: 600px) {
@@ -342,7 +344,7 @@ body.table-all #usage:not([data-mode="uni"]) .tbody { overflow: visible; mask-im
   #table .tr { gap: 6px; }
   #usage:not([data-mode="uni"]) .tr { grid-template-columns: 18px 1.3fr .95fr .7fr .75fr 1.1fr; }
   #usage:not([data-mode="uni"]) .tr > span:is(:nth-child(4), :nth-child(7)) { display: none; }
-  #usage[data-mode="uni"] .tr { grid-template-columns: 18px 1.8fr .9fr .75fr 1fr; }
+  #usage[data-mode="uni"] .tr { grid-template-columns: 18px 1.6fr 1.1fr .75fr 1fr; }
   #usage[data-mode="uni"] .tr > span:is(:nth-child(6), :nth-child(7), :nth-child(10)) { display: none; }
   #termsec { height: auto; min-height: calc(100vh - var(--top-h) - 14px); }
   #terms, #termdone > .row { flex-direction: column; overflow: visible; height: auto; }
@@ -1089,8 +1091,6 @@ const GAP_ROLE = /^(补漏|gap)$/i;
 
 const TEXTS = {
   zh: {
-    states: { waiting: '等你确认', dispatching: '派发中', thinking: '思考中', idle: '空闲' },
-    asking: (header) => `等你确认 · ${header}`,
     gapSeat: '补漏席',
     gapReady: '其他席已结束 · 等去重后启动',
     gapWaiting: '等其他席结束',
@@ -1137,8 +1137,6 @@ const TEXTS = {
     },
   },
   en: {
-    states: { waiting: 'waiting for you', dispatching: 'dispatching', thinking: 'thinking', idle: 'idle' },
-    asking: (header) => `waiting for you · ${header}`,
     gapSeat: 'gap seat',
     gapReady: 'other seats done · starts after merging',
     gapWaiting: 'waiting for the other seats',
@@ -1186,6 +1184,9 @@ const TEXTS = {
   },
 };
 const TEXT = TEXTS[LANG];
+// 状态词和终端实时查看、status 里的一样，中英两个插件都用英文（和单对话用量表的状态列一致）
+TEXT.states = { waiting: 'waiting for you', dispatching: 'dispatching', thinking: 'thinking', idle: 'idle' };
+TEXT.asking = (header) => `waiting for you · ${header}`;
 
 // shell.html 里写死的中文（提示、按钮、无障碍标签）在英文插件里换掉
 if (LANG !== 'zh') {
@@ -4084,7 +4085,7 @@ const pickOf = (e) => e.target.closest('#uslots [data-session]')?.dataset.sessio
 // 飞进某个对话以后，07-table.js / 07-terms.js 换回这个对话的明细（08-uni-fly.js 的 resetBoardView 会清空这里留下的东西）。
 
 let uniHotRow = null; // 上一次滚到可见的悬停行
-const UNI_HEAD = ['', 'conversation', 'project', 'state', 'seats', 'done · failed', 'input · cache', 'output', 'cost', 'last'];
+const UNI_HEAD = ['', 'conversation', 'project', 'status', 'seats', 'done · failed', 'input · cache', 'output', 'cost', 'last'];
 const UNI_ROWS = new Map();
 // 记录时间里过去了多久：几秒、几分钟、几小时
 function fmtAgo(ms) {
@@ -4171,7 +4172,9 @@ function fillUniState(cell, s) {
   cell.dataset.sig = sig; cell.replaceChildren(word);
   // 等人回答是黄点，其余红点
   for (const x of issues) { const dot = document.createElement('i'); dot.className = 'issue'; dot.dataset.tone = Display.toneOf(x.status === 'needs_input' ? 'blocked' : 'failed'); cell.append(dot); }
-  cell.title = issues.map((x) => `${Display.D.statusName(x.status)} · ${shortModel(x.model) || '?'}`).join('\n');
+  // 等你确认时列宽可能放不下弹窗标题：悬停也写出整句
+  const asking = s.state === 'waiting' && s.waiting?.header ? [word] : [];
+  cell.title = [...asking, ...issues.map((x) => `${Display.D.statusName(x.status)} · ${shortModel(x.model) || '?'}`)].join('\n');
 }
 
 // 宇宙层的顶栏：范围、宇宙层自己的时钟和回放进度、连接状态（看板的 renderTop 在宇宙层不跑，不清掉会留着上一个对话的）
