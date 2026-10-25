@@ -1250,6 +1250,7 @@ ${schema}`,
   busyHint: (command, min) => `Queue check: run ${command} in the background (once per group). It exits when a participant has been queued over ${min} min; then decide whether to stop that participant as the skill's "When an API participant is busy" says, and tell the user afterwards`,
   started: (mode, who, level, dir) =>
     `${mode} started · ${who} · ${level ?? 'effort set directly'} · run dir ${dir}`,
+  boardLine: (url) => `web board ${url}`,
   trackingUnavailable: (err) => `Change tracking unavailable: ${err}`,
   trackingFailed: (err) => `Change tracking failed: ${err}`,
   snapshotDeadline: 'The snapshot reached its 60-second total deadline',
