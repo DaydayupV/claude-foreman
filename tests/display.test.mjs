@@ -448,7 +448,7 @@ function displayBoard(lang = 'zh') {
   const page = buildPage(), shared = page.slice(page.indexOf('const Display ='), page.indexOf('// ---- 00-text.js'));
   const names = ['00-text', '01-state', '03-timeline', '04-life', '04-rates', '05-world', '06-states', '06-cards', '07-table', '07-terms'];
   const source = names.map((name) => fs.readFileSync(new URL(`../board/web/${name}.js`, import.meta.url), 'utf8')).join('\n');
-  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, conclusion, painted, outOfScope, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd, onBacklog, SETTLE, settleTerms, ccAway, CC_AWAY };', context);
+  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, conclusion, painted, outOfScope, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd, onBacklog, SETTLE, settleTerms, ccAway, CC_AWAY, viewAt };', context);
   return { ...context.api, el, context };
 }
 
@@ -1002,4 +1002,19 @@ test('整个对话闲下来时 Claude Code 卡片离场（进度 0→1），重�
   assert.equal(b.ccAway(empty, quiet), 1);
   clock = 1600 + 1600; assert.equal(b.ccAway(empty, quiet), 0);
   assert.equal(b.CC_AWAY.away, false);
+});
+
+test('镜头按对数插值缩放、绕不动点缩放（滚轮下那一点始终不动），缩放不变时直接平移', () => {
+  const b = displayBoard(), a = { k: 1, tx: 0, ty: 0 };
+  // 以屏幕 (300, 200) 为中心放大 4 倍：目标里这一点下面还是同一个世界坐标
+  const goal = { k: 4, tx: 300 - (300 - 0) * 4, ty: 200 - (200 - 0) * 4 };
+  for (const u of [0.1, 0.5, 0.9]) {
+    const v = b.viewAt(a, goal, u), worldX = (300 - v.tx) / v.k, worldY = (200 - v.ty) / v.k;
+    assert.ok(Math.abs(worldX - 300) < 1e-9 && Math.abs(worldY - 200) < 1e-9, `u=${u}`);
+  }
+  // 一半的时候是几何平均（放大 4 倍走到一半是 2 倍，不是 2.5 倍）
+  assert.ok(Math.abs(b.viewAt(a, goal, 0.5).k - 2) < 1e-9);
+  assert.ok(Math.abs(b.viewAt(a, goal, 1).k - 4) < 1e-9);
+  // 缩放一样：直接平移
+  assert.deepEqual({ ...b.viewAt({ k: 2, tx: 0, ty: 0 }, { k: 2, tx: 100, ty: -50 }, 0.25) }, { k: 2, tx: 25, ty: -12.5 });
 });
