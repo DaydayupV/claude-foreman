@@ -98,7 +98,8 @@ function drawGalaxyOf(g, alpha, hover) {
   // 旧的回放数据没有 models，只看正在跑的
   const seats = (s.models || s.runs.filter((r) => r.status === 'running').map((r) => ({ ...r, out: 0, running: true })))
     .map((m) => ({ key: avatarFor(m.model, m.agent), out: m.out, running: m.running }));
-  drawMixNebula(g.x, g.y, GAL_R * 0.95 * M.size, M.flat + 0.06, nebulaMix(seats, s.usage?.output ?? 0, s.state !== 'idle'), alpha * 0.75 + (hover ? 0.25 : 0), g.seed, { spread: 0.45 });
+  // 每个对话一团聚拢的彩色光晕：几团往星系中心收拢、叠在一起，比星系盘大一圈；正在干活的亮一些
+  drawMixNebula(g.x, g.y, GAL_R * 2.6 * M.size, 0.8, nebulaMix(seats, s.usage?.output ?? 0, s.state !== 'idle'), alpha * (s.state === 'idle' ? 1 : 1.15) + (hover ? 0.25 : 0), g.seed, { spread: 0.35, size: 1.15 });
   // 旋臂：大部分是白色星点，带活的模型颜色点缀。按颜色和三档亮度分桶，每桶一次填充（逐点设颜色太慢）
   // 点的大小按屏幕像素算：远看 1 像素上下，放大时只慢慢变大（开平方），近看画成圆点，不显得方块化
   const grow = 1.2 * Math.sqrt(1 / FX.lw), round = grow * 1.4 >= 1.8, buckets = new Map();

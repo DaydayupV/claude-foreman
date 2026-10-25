@@ -39,8 +39,9 @@ function projectMix(p) {
 
 function drawNebulaOf(p) {
   const busy = p.sessions.reduce((n, s) => n + (s.state === 'idle' ? 0 : 1), 0);
-  // 星图里几团往中心收拢、叠在一起，中间不空
-  drawMixNebula(p.x, p.y, p.r * 1.1, 0.75, projectMix(p), 0.75 + 0.2 * Math.min(3, busy), hash(p.key), { spread: 0.35, size: 1.15 });
+  // 项目的星云是整片淡淡的底色，铺满项目所在的区域：一个项目常有好几个对话，中心不一定有星系，不能在那里聚成一团亮光。
+  // 聚拢的彩色光晕画在每个星系周围（08-uni-galaxy.js）
+  drawMixNebula(p.x, p.y, p.r * 1.1, 0.75, projectMix(p), 0.3 + 0.15 * Math.min(3, busy), hash(p.key));
   // 窗口外的旧对话：星云边上的星尘
   const dust = rng(hash(p.key) ^ 77);
   for (let i = 0, n = Math.min(80, p.older * 10); i < n; i++) {
