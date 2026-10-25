@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-// PreToolUse 钩子：网页看板开着时，每次派出任务（cli.mjs 的 run、resume、discuss、review、image）都把看板链接直接显示给用户。
-// 光靠 skill 让 Claude 先在回复里写链接不可靠（连着调用工具时常被跳过），这里用钩子的 systemMessage，由界面直接显示，不经过模型。
-// 只提示，不拦命令；同一个对话 3 分钟内只显示一次（同一条消息里一起派出的几个任务只显示一次）。
+// PreToolUse 钩子：网页看板开着时，派出任务（cli.mjs 的 run、resume、discuss、review、image）前把看板链接直接显示给用户。
+// 光靠 skill 让 Claude 先在回复里写链接不可靠（写链接的那句话常常只进了思考，没作为正文发出来），
+// 这里用钩子的 systemMessage，由界面直接显示，不经过模型。
+// 只提示，不拦命令；用户每发一条消息，派出任务时只显示一次（同一条消息里一起派出的几个任务只显示一次）。
+// 同一个脚本也挂在 UserPromptSubmit 上：用户发新消息时清掉"已显示"的标记，那时什么都不输出（输出会被加进用户的消息）。
 
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -13,7 +15,6 @@ import { base, splitSegments, stripHeredocs, tokensOf } from './shell-words.mjs'
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.join(HERE, '..', 'skills', 'dispatch', 'scripts', 'cli.mjs');
 const DISPATCH = new Set(['run', 'resume', 'discuss', 'review', 'image']);
-const QUIET_MS = 3 * 60000;
 const MESSAGES = {
   zh: (url) => `网页看板：${url}`,
   en: (url) => `Web board: ${url}`,
@@ -46,8 +47,7 @@ export function dispatchOf(command) {
 // 网页看板开没开：只看用户配置的 dispatch.watch.web（旧写法是 dispatch.web）；和 cli.mjs 一样，项目配置改不了它
 function webOn(configFile) {
   const user = readJson(configFile) || {}, watch = user.dispatch?.watch;
-  const on = watch && typeof watch === 'object' ? watch.web === true : user.dispatch?.web === true;
-  return { on, runs: user.dispatch?.runs_dir ? path.resolve(user.dispatch.runs_dir) : path.join(os.homedir(), '.claude', 'foreman', 'runs') };
+  return watch && typeof watch === 'object' ? watch.web === true : user.dispatch?.web === true;
 }
 
 // 看板地址由 board 子命令给：服务没在跑、锁是残留的、服务是旧版本时，它都会先处理好（不直接读锁文件，免得给出打不开的链接）
@@ -58,15 +58,16 @@ function boardUrl(configFile, session) {
   try { return JSON.parse(r.stdout).url ?? null; } catch { return null; }
 }
 
-// 同一个对话刚显示过（3 分钟内）就不再显示。时间按 3 分钟分段，每段在记录目录的 board-shown/ 下有一个标记文件
-// （<对话 id>.<段号>），用 wx 抢占：一起派出、钩子同时运行的几个任务只有一个抢到；上一段的标记不到 3 分钟也不显示。
-// 标记只新建、不回收，所以没有改名和删除的竞态。返回 false 表示不显示，返回标记文件（或读写失败时的 true）表示显示
+// 这条消息里已经显示过就不再显示。每个对话在 foreman 目录的 board-shown/ 下有一个标记文件 <对话 id>，用 wx 抢占：
+// 一起派出、钩子同时运行的几个任务只有一个抢到；用户发下一条消息时（UserPromptSubmit）删掉它。
+// 标记的位置只看钩子自己的环境（和 record-answers.mjs 一样），不看命令里写的 FOREMAN_CONFIG，两个时机找的是同一个文件。
+// 返回 false 表示不显示，返回标记文件（或读写失败时的 true）表示显示
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-function claimShow(runs, session, now) {
+const SHOWN_DIR = path.join(process.env.FOREMAN_CONFIG ? path.dirname(process.env.FOREMAN_CONFIG) : path.join(os.homedir(), '.claude', 'foreman'), 'board-shown');
+function claimShow(session, now) {
   if (!SAFE_ID.test(session || '')) return true;
-  const dir = path.join(runs, 'board-shown'), slot = Math.floor(now / QUIET_MS), file = path.join(dir, `${session}.${slot}`);
+  const dir = SHOWN_DIR, file = path.join(dir, session);
   try { fs.mkdirSync(dir, { recursive: true }); } catch { return true; }
-  try { if (now - fs.statSync(path.join(dir, `${session}.${slot - 1}`)).mtimeMs < QUIET_MS) return false; } catch { /* 上一段没显示过 */ }
   try { fs.closeSync(fs.openSync(file, 'wx')); } catch (error) { return error.code !== 'EEXIST'; }
   // 顺手清掉一天前的标记
   try {
@@ -85,17 +86,21 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   process.stdin.on('end', () => {
     let event;
     try { event = JSON.parse(input); } catch { process.exit(0); }
+    // 用户发了新消息：清掉这个对话的标记，下次派出再显示。这时不输出任何东西
+    if (event.hook_event_name === 'UserPromptSubmit') {
+      if (SAFE_ID.test(event.session_id || '')) { try { fs.rmSync(path.join(SHOWN_DIR, event.session_id), { force: true }); } catch { /* 删不掉就等一天后清理 */ } }
+      process.exit(0);
+    }
     const command = event.tool_input?.command, found = typeof command === 'string' ? dispatchOf(command) : null;
     if (!found) process.exit(0);
     const configFile = found.config || process.env.FOREMAN_CONFIG || path.join(os.homedir(), '.claude', 'foreman', 'config.json');
-    const { on, runs } = webOn(configFile);
-    const claimed = on && claimShow(runs, event.session_id, Date.now());
+    const claimed = webOn(configFile) && claimShow(event.session_id, Date.now());
     if (!claimed) process.exit(0);
     let lang = 'zh';
     try { lang = JSON.parse(fs.readFileSync(path.join(path.dirname(SCRIPT), 'language.json'), 'utf8')).language; } catch { /* 用默认 */ }
     const url = boardUrl(configFile, event.session_id);
     if (url) process.stdout.write(JSON.stringify({ systemMessage: (MESSAGES[lang] || MESSAGES.zh)(url) }));
-    // 没拿到链接时删掉自己抢到的标记（这一段只有自己建得出它），下次派出照样显示
+    // 没拿到链接时删掉自己抢到的标记，下次派出照样显示
     else if (typeof claimed === 'string') { try { fs.rmSync(claimed, { force: true }); } catch { /* 下次照样试 */ } }
     process.exit(0);
   });
