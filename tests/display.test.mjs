@@ -1024,7 +1024,9 @@ test('镜头按对数插值缩放、绕不动点缩放（滚轮下那一点始�
 });
 
 test('节拍取真实事件：派出最强，回一句话最轻；0.8 秒内不比上一下强的并掉（只算整体那一下），各车道照样记；1.2 秒以前的不算', () => {
+  // 回放里按记录时刻算
   const b = displayBoard(), t = 100000;
+  Object.assign(b.B.clock, { mode: 'replay', speed: 1 });
   b.onRun({ id: 'cc', lane: 'cc', kind: 'host', agent_type: 'host', model: 'opus', status: 'running', started_at: 0 });
   b.onRun({ id: 'seat', model: 'm', kind: 'exec', status: 'running', started_at: t - 500, ended_at: null });
   b.onEv({ run: 'cc', ts: t - 200, k: 'msg', t: 'started' });
@@ -1043,8 +1045,22 @@ test('节拍取真实事件：派出最强，回一句话最轻；0.8 秒内不�
   assert.equal(beat.env, 0); assert.equal(beat.lanes.size, 0);
   // 更强的一下离上一下再近也照算：先回一句话，0.2 秒后派出
   const c = displayBoard();
+  Object.assign(c.B.clock, { mode: 'replay', speed: 1 });
   c.onRun({ id: 'cc', lane: 'cc', kind: 'host', agent_type: 'host', model: 'opus', status: 'running', started_at: 0 });
   c.onEv({ run: 'cc', ts: t - 300, k: 'msg', t: 'on it' });
   c.onRun({ id: 'seat', model: 'm', kind: 'exec', status: 'running', started_at: t - 100, ended_at: null });
   assert.ok(near(c.beatsAt(t).env, at(0.9, 0.1)));
+});
+
+test('直播里节拍从页面第一次看到事件起算：晚到的照样最亮，第一次看到时已经过去 1.5 秒以上的不算', () => {
+  const b = displayBoard(), t = 100000, at = (s, age) => s * Math.exp(-age * 4.5), near = (x, y) => Math.abs(x - y) < 1e-9;
+  b.B.clock.mode = 'live';
+  b.onRun({ id: 'cc', lane: 'cc', kind: 'host', agent_type: 'host', model: 'opus', status: 'running', started_at: 0 });
+  // 0.6 秒前派出、现在才送到：从现在起算，正是最亮的时候；0.3 秒后按看到的时刻衰减
+  b.onRun({ id: 'late', model: 'm', kind: 'exec', status: 'running', started_at: t - 600, ended_at: null });
+  assert.ok(near(b.beatsAt(t).env, 0.9));
+  assert.ok(near(b.beatsAt(t + 300).env, at(0.9, 0.3)));
+  // 第一次看到时已经过去 2 秒（刚打开页面时的旧事件）：不算
+  b.onRun({ id: 'old', model: 'm', kind: 'exec', status: 'running', started_at: t + 300 - 2000, ended_at: null });
+  assert.equal(b.beatsAt(t + 300).lanes.get('old'), undefined);
 });
