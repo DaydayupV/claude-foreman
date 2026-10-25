@@ -7,7 +7,7 @@ const M = MESSAGES.zh;
 
 test('续接使用上一轮会话并沿用组、范围和 track，用量只算新增', async (t) => {
   const h = sandbox(t), s = h.scenario({ session_id: 'session-resume', calls: [
-    { stats: sessionStats, images: ['first.png'] },
+    { stats: sessionStats, images: ['first.png'], rollout_prompt: true },
     { stats: { ...sessionStats, info: { ...sessionStats.info, total_token_usage: Object.fromEntries(Object.entries(usage).map(([k, v]) => [k, v * 2])) } }, images: ['second.png'] },
   ] });
   const first = output(await h.bridge(taskArgs(h, 'run', ['--group', 'resume-group', '--scope', 'src', '--track', 'ignored.txt', '--no-snapshot']), { env: s.env }));
@@ -26,7 +26,33 @@ test('续接使用上一轮会话并沿用组、范围和 track，用量只算�
   assert.deepEqual(call.args.slice(-2), ['session-resume', '-']);
   assert.equal(call.cwd, h.cwd);
   assert.ok(call.stdin.includes(M.resumeFooter));
+  assert.ok(!call.stdin.includes('合成测试任务')); // 上一轮有用量：协作方的会话里有原来的说明，不再补发
+  assert.ok(!second.notes.includes(M.resumeUnsentNote));
   assert.equal(json(path.join(second.run_dir, 'meta.json')).parent, first.run_id);
+});
+
+test('上一轮的说明没进 Codex 的会话（刚派出就停了）：续接把当时发出的说明补在新说明前面；连着几轮没进也只补一份，进了就不补', async (t) => {
+  const meta = { type: 'session_meta', payload: { id: 'session-unsent' } };
+  const h = sandbox(t), s = h.scenario({ session_id: 'session-unsent', calls: [{ rollout: [meta] }, { rollout: [meta] }, { rollout_prompt: true }, {}] });
+  const first = output(await h.bridge(taskArgs(h, 'run', ['--no-snapshot']), { env: s.env }));
+  const resume = (run, input) => h.bridge(['resume', '--run', run, '--brief', '-', '--level', 'complex', '--reason', 'recover', '--no-snapshot'], { env: s.env, input });
+  const count = (text, word) => text.split(word).length - 1;
+  const second = output(await resume(first.run_id, '第二轮说明'));
+  const call = s.calls()[1].stdin;
+  assert.ok(call.startsWith('（调度方提示：上一轮在你收到任务说明之前就停了'));
+  assert.ok(call.indexOf('合成测试任务') < call.indexOf('## 这次续接的说明') && call.indexOf('## 这次续接的说明') < call.indexOf('第二轮说明'));
+  assert.ok(call.includes('## 固定约束（调度方自动附加）'));
+  assert.ok(second.notes.includes(M.resumeUnsentNote));
+  // 第二轮也没进会话：第三轮补发第二轮发出的那份（里面已经含第一轮），原说明只出现一次
+  const third = output(await resume(second.run_id, '第三轮说明'));
+  const again = s.calls()[2].stdin;
+  assert.equal(count(again, '合成测试任务'), 1); assert.equal(count(again, '第二轮说明'), 1);
+  assert.ok(again.indexOf('第二轮说明') < again.lastIndexOf('第三轮说明'));
+  // 第三轮进了会话：第四轮不补发
+  const fourth = output(await resume(third.run_id, '第四轮说明'));
+  const last = s.calls()[3].stdin;
+  assert.ok(!last.includes('调度方提示：上一轮在你收到任务说明之前就停了') && !last.includes('第三轮说明'));
+  assert.ok(!fourth.notes.includes(M.resumeUnsentNote));
 });
 
 test('讨论续接到轮数上限后拒绝再开一轮', async (t) => {

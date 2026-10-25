@@ -5,7 +5,7 @@ import { report, review } from '../fixtures/reports.mjs';
 
 const args = process.argv.slice(2);
 const operation = args[0] === '--version' ? 'version' : args[0] === 'login' ? 'login' : args[0] === 'debug' ? 'catalog' : args[0] === 'sandbox' ? 'sandbox' : 'exec';
-const { scenario: s } = await setup('codex', operation, args);
+const { scenario: s, input } = await setup('codex', operation, args);
 if (operation === 'version') {
   console.log(s.version || 'codex-cli synthetic-1.0');
 } else if (operation === 'catalog') {
@@ -27,11 +27,13 @@ if (operation === 'version') {
   console.log(JSON.stringify({ type: 'thread.started', thread_id: session }));
   await replay(s.steps, cwd);
   for (const [name, content] of Object.entries(s.files || {})) write(path.resolve(cwd, name), content);
-  // 会话记录：stats 写一条用量；rollout 是额外的原始记录（比如出图调用），没写时间的按现在补上。
-  if (s.stats || s.rollout) {
+  // 会话记录：stats 写一条用量；rollout 是额外的原始记录（比如出图调用），没写时间的按现在补上；
+  // rollout_prompt 时像真的 Codex 一样，先写一条环境说明、再写收到的提示，各是一条用户消息
+  if (s.stats || s.rollout || s.rollout_prompt) {
     const d = new Date();
     const dir = path.join(process.env.CODEX_HOME, 'sessions', String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0'));
-    const records = [...(s.rollout || []).map((r) => ({ timestamp: d.toISOString(), ...r })), ...(s.stats ? [{ type: 'event_msg', payload: { type: 'token_count', ...s.stats } }] : [])];
+    const user = (text) => ({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } });
+    const records = [...(s.rollout_prompt ? [user('<environment_context>synthetic</environment_context>'), user(input)] : []), ...(s.rollout || []).map((r) => ({ timestamp: d.toISOString(), ...r })), ...(s.stats ? [{ type: 'event_msg', payload: { type: 'token_count', ...s.stats } }] : [])];
     const file = path.join(dir, `rollout-${session}.jsonl`), text = records.map((r) => JSON.stringify(r)).join('\n') + (s.rollout_no_newline ? '' : '\n');
     if (s.append_rollout && fs.existsSync(file)) fs.appendFileSync(file, text);
     else write(file, text);

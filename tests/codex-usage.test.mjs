@@ -116,6 +116,19 @@ test('上一轮一次请求都没完成时，续接以 0 为基线，记这一�
   assert.equal(r.usage.input_tokens, usage.input_tokens); assert.equal(r.usage.output_tokens, usage.output_tokens);
 });
 
+test('上一轮的提示进没进 Codex 的会话：比完整的提示，开头相同、后面不同的旧提示不算；拆成几段的也认；读不到时不判断', (t) => {
+  const s = usageSession(t), dir = path.join(s.h.home, 'parent'), parent = { dir, meta: { session_id: sessionId, started_at: new Date().toISOString() } };
+  const prefix = '共同的开头。'.repeat(60), user = (...texts) => ({ type: 'response_item', payload: { type: 'message', role: 'user', content: texts.map((text) => ({ type: 'input_text', text })) } });
+  write(path.join(dir, 'brief.md'), `${prefix}\r\n改交图像 B\n`);
+  assert.equal(codex.lostPrompt(parent), null); // 还没有会话记录：判断不了
+  s.write([{ type: 'session_meta', payload: { id: sessionId } }, user('<environment_context>x</environment_context>'), user(`${prefix}\n交付图像 A`)]);
+  assert.equal(codex.lostPrompt(parent), `${prefix}\n改交图像 B`); // 只有开头相同的旧提示：没收到
+  s.write([user('<environment_context>x</environment_context>'), user(`${prefix}\n交付图像 A`), user(prefix, '\n改交图像 B\n')]);
+  assert.equal(codex.lostPrompt(parent), null); // 拆成两段写进会话：收到了
+  fs.rmSync(path.join(dir, 'brief.md'));
+  assert.equal(codex.lostPrompt(parent), null); // 提示读不到：判断不了
+});
+
 test('只有 token_count 时保留最新累计用量、最近请求和额度；整份记录都没有用量时标 no_requests，没有记录文件时为 null', (t) => {
   const s = usageSession(t);
   assert.equal(s.stats(), null);
