@@ -88,7 +88,7 @@ function buildWeb(R) {
 // 当前出场的模型（Claude Code 和各席）的颜色，核心网和星云按它上色
 function webPalette() {
   const keys = [...new Set(B.lanes.filter((l) => l.runs.length).map((l) => { const r = latest(l); return avatarFor(r.model, r.agent_type); }))];
-  return keys.map((k) => (a) => rgba(k, a));
+  return Object.assign(keys.map((k) => (a) => rgba(k, a)), { key: keys.join('|') });
 }
 // 星系的星点按它上色：Claude Code 加上此刻正在跑的席位，和宇宙里小星系的规则一样（08-uni-galaxy.js 的 drawGalaxyOf）
 function starPalette(t) {
@@ -102,12 +102,19 @@ function drawCore(c, intensity, pal) {
   const sec = performance.now() / 1000;
   ctx.save();
   ctx.beginPath(); ctx.rect(c.cx - c.R * 2, c.cy - c.R * 1.5, c.clipX - (c.cx - c.R * 2), c.R * 3); ctx.clip();
-  for (const [{ paths, dots }, alpha, width, speed] of FX.web) {
+  for (const [i, [{ paths, dots }, alpha, width, speed]] of FX.web.entries()) {
     ctx.save();
     ctx.translate(c.cx, c.cy);
     // 炸开时各层带着多转的角度甩出来，越往后越慢；线条先亮再回落到平常（FX.burst，见 burstOf）
     const b = FX.burst, boost = b ? 1 + 1.6 * b.boost : 1;
     ctx.rotate(Math.sin(sec * speed) * 0.35 + sec * speed * 0.2 + (b ? Math.sign(speed) * 2.4 * b.spin : 0));
+    // 最外面那层是远景：平时贴预先画好的半分辨率图（看着虚、远），炸开时照常一条条画
+    if (i === 0 && !b && farLayer(c.R, FX.web[0], pal)) {
+      ctx.globalAlpha *= (0.6 + 0.4 * intensity) * FAR.dim;
+      ctx.drawImage(FAR.cv, -FAR.half, -FAR.half, FAR.half * 2, FAR.half * 2);
+      ctx.restore();
+      continue;
+    }
     ctx.lineWidth = width * FX.lw;
     paths.forEach((p, j) => {
       const col = j && pal.length ? pal[(j - 1) % pal.length] : HI;
@@ -119,6 +126,27 @@ function drawCore(c, intensity, pal) {
     ctx.restore();
   }
   ctx.restore();
+}
+
+// 远景层：核心网最外面一层（弧线最多、最淡）预先画成一张图，每帧只按当前角度贴上去。
+// 按屏幕分辨率的一半画，放大贴上去自带柔边，看着在后面、有景深；比每帧描 170 条弧线省。
+// 出场模型的颜色变了、或者缩放档位变了（线宽和分辨率跟着变）才重画；亮度随输出强弱的变化在贴图时乘上去
+const FAR = { cv: document.createElement('canvas'), key: '', half: 0, dim: 0.85 };
+FAR.ctx = FAR.cv.getContext('2d');
+function farLayer(R, [{ paths, dots }, alpha, width], pal) {
+  const dpr = devicePixelRatio || 1, s = Math.min(1.2, Math.max(0.15, 0.5 * VIEW.k * dpr));
+  const key = `${R}|${pal.key}|${Math.round(Math.log(s) / Math.log(1.5))}|${Math.round(Math.log(FX.lw) / Math.log(1.3))}`;
+  if (FAR.key === key) return true;
+  const size = Math.ceil(2 * R * 1.05 * s), g = FAR.ctx;
+  if (size > 4096) return false;
+  FAR.cv.width = FAR.cv.height = size; FAR.half = size / 2 / s; FAR.key = key;
+  g.setTransform(s, 0, 0, s, size / 2, size / 2);
+  g.lineWidth = width * FX.lw;
+  paths.forEach((p, j) => { g.strokeStyle = (j && pal.length ? pal[(j - 1) % pal.length] : HI)(alpha * (j && pal.length ? 1.6 : 1)); g.stroke(p); });
+  g.fillStyle = HI(0.5);
+  const d = 1.3 * FX.lw;
+  for (const [x, y] of dots) g.fillRect(x, y, d, d);
+  return true;
 }
 
 // 竖直刻度带：半透明深底、两侧各一条双线导轨、发光的刻度、来回扫的亮线；组头和卡片都在带里。
