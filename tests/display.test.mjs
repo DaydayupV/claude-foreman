@@ -333,6 +333,26 @@ test('开工那一行中英两个插件都写 <模式> started · <模型> <强�
   }
 });
 
+test('网页看板开着、看板服务在跑时，开工那一行后面紧跟这个对话的看板地址；看板关着或服务没在跑时不给', async (t) => {
+  const h = sandbox(t), config = baseConfig(), lock = path.join(h.runs, 'board.lock.json');
+  const boardLine = (r) => r.stderr.split('\n').find((line) => line.startsWith('foreman: web board ')) ?? null;
+  config.dispatch.watch = { terminal: true, web: true };
+  h.config(config);
+  // 没有锁文件，或者锁里的进程已经不在：不给
+  assert.equal(boardLine(await h.bridge(taskArgs(h))), null);
+  write(lock, { pid: 2 ** 22 + 7, port: 4321, token: 'deadbeef' });
+  assert.equal(boardLine(await h.bridge(taskArgs(h))), null);
+  // 服务在跑（锁里是活着的进程）：紧跟在开工那一行后面，带上这个对话的 id
+  write(lock, { pid: process.pid, port: 4321, token: 'deadbeef' });
+  const r = await h.bridge(taskArgs(h)), lines = r.stderr.split('\n');
+  const at = lines.findIndex((line) => line.startsWith('foreman: run started · '));
+  assert.equal(lines[at + 1], 'foreman: web board http://127.0.0.1:4321/deadbeef/?level=all&lang=zh&s=test-session');
+  // 网页看板关着：不给
+  config.dispatch.watch = { terminal: true, web: false };
+  h.config(config);
+  assert.equal(boardLine(await h.bridge(taskArgs(h))), null);
+});
+
 test('子命令认 --help 和 -h：只打印这一条的用法，退出码 0，不生成配置文件，也不迁移旧版的配置', async (t) => {
   const h = sandbox(t, { config: false });
   // 旧版 codex-bridge 的配置还在、新配置还没有：平常第一次运行就会复制过去，--help 不该动它
