@@ -44,17 +44,60 @@ function cloud(x, y, rx, ry, color, a) {
   ctx.restore();
 }
 
-function drawNebula(L, P, t, rates, pal = []) {
-  if (!LOOK.nebula) return;
-  const c = L.core, sec = performance.now() / 1000;
-  // 打底的大团柔光用 Claude Code 的颜色，和宇宙里小星系的盘面柔光一样（08-uni-galaxy.js）；偏上那团白光留着做层次
-  cloud(c.cx, c.cy, c.R * 1.25, c.R * 0.95, (a) => rgba('claude', a * 0.75), 0.09);
-  cloud(c.cx + c.R * 0.25, c.cy - c.R * 0.2, c.R * 0.8, c.R * 0.55, (a) => `rgba(240,240,248,${a * 0.6})`, 0.05);
-  // 各模型颜色的几团淡云，绕着核心慢慢转，和上色的弧线一起成星云
-  pal.forEach((col, i) => {
-    const ang = (i / pal.length) * 6.283 + sec * 0.02, r = c.R * (0.35 + 0.15 * Math.sin(i * 2.3));
-    cloud(c.cx + Math.cos(ang) * r, c.cy + Math.sin(ang) * r * 0.8, c.R * 0.6, c.R * 0.42, col, 0.045);
+// 星云的配色：这个对话里用过的模型（席位）加上 Claude Code 自己，按输出量开平方定分量（只跑过一次的小模型也留一缕颜色）；
+// Claude Code 最多占四成，免得橙色又盖住一切；颜色太多会糊，席位最多取四种。
+// seats: [{ key: 颜色键, out: 输出 token, running }]；返回 [{ key, w, running }]，w 加起来是 1，Claude Code 在最前
+function nebulaMix(seats, ccOut, ccRunning) {
+  const by = new Map([['claude', { key: 'claude', raw: Math.sqrt(Math.max(1, ccOut || 0)), running: !!ccRunning }]]);
+  for (const s of seats) {
+    const e = by.get(s.key) || { key: s.key, raw: 0, running: false };
+    e.raw += Math.sqrt(Math.max(1, s.out || 0)); e.running ||= !!s.running; by.set(s.key, e);
+  }
+  const cc = by.get('claude'), others = [...by.values()].filter((e) => e !== cc).sort((a, b) => b.raw - a.raw).slice(0, 4);
+  if (!others.length) return [{ key: 'claude', w: 1, running: cc.running }];
+  const sum = others.reduce((s, e) => s + e.raw, 0), ccW = Math.min(0.4, cc.raw / (cc.raw + sum));
+  return [{ key: 'claude', w: ccW, running: cc.running }, ...others.map((e) => ({ key: e.key, w: (1 - ccW) * e.raw / sum, running: e.running }))];
+}
+
+// 单对话的配色：车道上的任务（不含 Claude Code 席的报告），数据一变才重算
+const MIX = { ver: -1, mix: null };
+function boardMix(t) {
+  if (MIX.ver === B.version && MIX.mix) return MIX.mix;
+  const seats = [];
+  for (const lane of B.lanes) {
+    if (lane.id === 'cc' || lane.ghost) continue;
+    for (const r of lane.runs) if (r.kind !== 'answer' && r.model) seats.push({ key: avatarFor(r.model, r.agent_type), out: usageOf(r)?.output ?? 0, running: r.status === 'running' });
+  }
+  const cc = B.laneById.get('cc'), host = cc && latest(cc);
+  MIX.ver = B.version; MIX.mix = nebulaMix(seats, host ? usageOf(host)?.output ?? 0 : 0, host?.status === 'running');
+  return MIX.mix;
+}
+
+// 交织的几团彩色星云：每种颜色按分量分成一到三团，摆在核心周围不同的角度和远近，各自慢慢漂；叠加混色，重叠的地方颜色自然混在一起。
+// 正在跑的模型那几团亮一些，历史上用过的淡一些。(x, y) 是中心，R 是半径，flat 是上下压扁的比例，fade 是整体透明度；
+// spread 是几团离中心多远（1 是绕着核心摆开，小于 1 往中心收拢、互相叠在一起），size 是每团的大小
+function drawMixNebula(x, y, R, flat, mix, fade, seed = 0, { spread = 1, size = 1 } = {}) {
+  const sec = performance.now() / 1000, prev = ctx.globalCompositeOperation;
+  ctx.globalCompositeOperation = 'lighter';
+  mix.forEach((m, i) => {
+    const rand = rng(hash(`neb|${m.key}`) + seed), lobes = 1 + Math.round(2 * Math.sqrt(m.w)), dir = i % 2 ? -1 : 1;
+    // 每种颜色占一个方向（按它在配色里的位置均分一圈），几团在这个方向两侧散开；整圈慢慢转，相邻两种颜色在交界处混在一起
+    const home = (i / mix.length) * 6.283 + rand() * 0.6;
+    for (let j = 0; j < lobes; j++) {
+      const ang = home + (j - (lobes - 1) / 2) * 0.85 + rand() * 0.35 + sec * (0.01 + 0.01 * rand()) * dir, r = R * spread * (0.3 + 0.32 * rand());
+      const rx = R * size * (0.36 + 0.3 * rand()) * (0.8 + 0.5 * Math.sqrt(m.w)), a = fade * (0.08 + 0.12 * Math.sqrt(m.w)) * (m.running ? 1.3 : 1);
+      cloud(x + Math.cos(ang) * r, y + Math.sin(ang) * r * flat, rx, rx * (0.55 + 0.25 * rand()) * Math.max(flat, 0.6), (al) => rgba(m.key, al), a);
+    }
   });
+  ctx.globalCompositeOperation = prev;
+}
+
+function drawNebula(L, P, t, rates) {
+  if (!LOOK.nebula) return;
+  const c = L.core;
+  // 打底的星云按这个对话用过的模型上色（和宇宙里小星系的盘面一样，08-uni-galaxy.js）；偏上那团白光留着做层次
+  drawMixNebula(c.cx, c.cy, c.R * 1.15, 0.8, boardMix(t), 1);
+  cloud(c.cx + c.R * 0.25, c.cy - c.R * 0.2, c.R * 0.8, c.R * 0.55, (a) => `rgba(240,240,248,${a * 0.6})`, 0.05);
   // 运行中的席位：在卡片和产出框之间留一团自己颜色的星云，越忙越亮；结束后只剩很淡的一点
   for (const [id, row] of L.rows) {
     const lane = B.laneById.get(id);

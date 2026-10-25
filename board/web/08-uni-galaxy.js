@@ -94,8 +94,11 @@ function drawGalaxyOf(g, alpha, hover) {
   // 整个盘面一起转（各点角速度相同），形状不会越转越卷
   const spin = flowPhase(`uspin|${s.id}`, smooth(`uspin|${s.id}`, GAL_SPIN[s.state], GAL_SPIN[s.state])) * M.speed * M.dir;
   const pal = [(a) => rgba('claude', a), ...s.runs.filter((r) => r.status === 'running').map((r) => (a) => rgba(runKey(r), a))];
-  // 盘面的柔光
-  cloud(g.x, g.y, GAL_R * 1.05 * M.size, GAL_R * (M.flat + 0.06) * M.size, pal[0], 0.07 * alpha + (hover ? 0.05 : 0));
+  // 盘面的星云：按这个对话在时间窗口里用过的模型上色（服务端的 models），和单对话弧线区的星云同一套（08-cosmos.js 的 drawMixNebula）。
+  // 旧的回放数据没有 models，只看正在跑的
+  const seats = (s.models || s.runs.filter((r) => r.status === 'running').map((r) => ({ ...r, out: 0, running: true })))
+    .map((m) => ({ key: avatarFor(m.model, m.agent), out: m.out, running: m.running }));
+  drawMixNebula(g.x, g.y, GAL_R * 0.95 * M.size, M.flat + 0.06, nebulaMix(seats, s.usage?.output ?? 0, s.state !== 'idle'), alpha * 0.75 + (hover ? 0.25 : 0), g.seed, { spread: 0.45 });
   // 旋臂：大部分是白色星点，带活的模型颜色点缀。按颜色和三档亮度分桶，每桶一次填充（逐点设颜色太慢）
   // 点的大小按屏幕像素算：远看 1 像素上下，放大时只慢慢变大（开平方），近看画成圆点，不显得方块化
   const grow = 1.2 * Math.sqrt(1 / FX.lw), round = grow * 1.4 >= 1.8, buckets = new Map();

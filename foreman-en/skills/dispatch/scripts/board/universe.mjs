@@ -88,6 +88,17 @@ export function desktopHidden(roots, clock = Date.now) {
 }
 const runKeys = ['id', 'lane', 'kind', 'agent', 'model', 'group', 'plan', 'seat', 'role', 'title', 'status', 'started_at', 'ended_at', 'queued'];
 const pickRun = (run) => Object.fromEntries(runKeys.map((key) => [key, run[key]]));
+// 这个对话在时间窗口里用过哪些模型、各输出了多少（星图里星系的星云按它上色，页面上的 08-uni-galaxy.js）：同一个协作方和模型合在一起，按输出量排，留前六个
+function modelMix(runs) {
+  const by = new Map();
+  for (const r of runs) {
+    if (r.kind === 'answer' || !r.model) continue;
+    const key = `${r.agent ?? ''}|${r.model}`, m = by.get(key) || { agent: r.agent ?? null, model: r.model, out: 0, running: false };
+    m.out += r.usage?.output ?? r.usage?.output_tokens ?? 0; m.running ||= r.status === 'running';
+    by.set(key, m);
+  }
+  return [...by.values()].sort((a, b) => b.out - a.out).slice(0, 6);
+}
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 function entryOf(row) {
@@ -198,7 +209,8 @@ function summaryOf(session, all, now, hours, prices, meter, waiting = []) {
     state: state.state, waiting: state.waiting, started_at: session.started_at, last_at: session.last_at, prompt_at: Number.isFinite(session.promptAt) ? session.promptAt : null, runs, counts,
     // 还在跑的运行没有费用、有的模型不在价格表里：能算的照样加起来，另外标出不完整，不让整份变成未知；
     // 用量明确记成全 0 的（一次请求都没完成）没有可算的费用，不算不完整（和单对话视图同一条规则）
-    usage: meter ? meter.totals : usageTotals(usage), cost_usd: cost, cost_partial: costs.some((c) => c.cost_usd == null && !zeroUsage(c.usage)), alert, issues };
+    usage: meter ? meter.totals : usageTotals(usage), cost_usd: cost, cost_partial: costs.some((c) => c.cost_usd == null && !zeroUsage(c.usage)), alert, issues,
+    models: modelMix(counted) };
 }
 
 function equalReplay(a, b) {

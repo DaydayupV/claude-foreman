@@ -25,21 +25,22 @@ function drawUniStars(w, h) {
   }
 }
 
-// 一个项目里出场的模型颜色：Claude Code 加上各对话最近的协作方
-function projectPalette(p) {
-  const keys = new Set(['claude']);
-  for (const s of p.sessions) for (const r of s.runs) keys.add(runKey(r));
-  return [...keys].map((k) => (a) => rgba(k, a));
+// 一个项目的星云配色：项目里各对话在时间窗口里用过的模型（服务端的 models）合在一起，加上 Claude Code 自己的输出量。
+// 和星系、单对话弧线区的星云同一套（08-cosmos.js 的 nebulaMix、drawMixNebula）；旧的回放数据没有 models，只看最近的协作方
+function projectMix(p) {
+  const seats = [];
+  let cc = 0, ccBusy = false;
+  for (const s of p.sessions) {
+    for (const m of s.models || s.runs.map((r) => ({ ...r, out: 0, running: r.status === 'running' }))) seats.push({ key: avatarFor(m.model, m.agent), out: m.out, running: m.running });
+    cc += s.usage?.output ?? 0; ccBusy ||= s.state !== 'idle';
+  }
+  return nebulaMix(seats, cc, ccBusy);
 }
 
 function drawNebulaOf(p) {
-  const pal = projectPalette(p), rand = rng(hash(p.key)), sec = performance.now() / 1000;
   const busy = p.sessions.reduce((n, s) => n + (s.state === 'idle' ? 0 : 1), 0);
-  const a = 0.05 + 0.04 * Math.min(3, busy);
-  for (let i = 0; i < 6; i++) {
-    const ang = rand() * 6.283 + sec * 0.01 * (i % 2 ? 1 : -1), d = p.r * (0.15 + rand() * 0.5);
-    cloud(p.x + Math.cos(ang) * d, p.y + Math.sin(ang) * d * 0.75, p.r * (0.55 + rand() * 0.4), p.r * (0.4 + rand() * 0.3), pal[i % pal.length], a);
-  }
+  // 星图里几团往中心收拢、叠在一起，中间不空
+  drawMixNebula(p.x, p.y, p.r * 1.1, 0.75, projectMix(p), 0.75 + 0.2 * Math.min(3, busy), hash(p.key), { spread: 0.35, size: 1.15 });
   // 窗口外的旧对话：星云边上的星尘
   const dust = rng(hash(p.key) ^ 77);
   for (let i = 0, n = Math.min(80, p.older * 10); i < n; i++) {
