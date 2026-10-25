@@ -7,13 +7,21 @@ const flag = (cmd, key) => new RegExp(`--${key}(?:=|\\s+)(?:"([^"]*)"|'([^']*)'|
 const slash = (v) => String(v).replace(/\\/g, '/');
 
 export function promptOf(row) {
-  if (row.isSidechain || row.type !== 'user') return null;
+  // 上下文压缩后的摘要也记成用户消息，不算
+  if (row.isSidechain || row.isCompactSummary || row.type !== 'user') return null;
   let value = text(row.message?.content).replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
   const origin = row.origin?.kind ?? row.turnOrigin;
+  const peer = /<cross-session-message\b[^>]*>([\s\S]*?)<\/cross-session-message>/.exec(value)?.[1];
   // 新记录按来源认用户和会话消息；旧记录排除元数据，再按去掉提醒块的正文判断。
-  if (origin != null ? !['human', 'peer'].includes(origin)
+  // 桌面版代发的记成 sdk：另一个会话启动这个会话时给的说明（只取 Task: 后面的任务）和另一个会话发来的消息算，
+  // 它对其他会话进展的通知（<side-sessions-event>）这类别的 sdk 消息不算
+  if (origin === 'sdk') {
+    const task = /^Background \(from the session that started this one\):[\s\S]*?\nTask:[^\S\n]*\n([\s\S]*)$/.exec(value)?.[1];
+    if (task == null && peer == null) return null;
+    value = task ?? peer;
+  } else if (origin != null ? !['human', 'peer'].includes(origin)
     : row.isMeta || /^<(?:system-reminder>|command-|local-command|task-notification>)/.test(value)) return null;
-  if (origin === 'peer') value = /<cross-session-message\b[^>]*>([\s\S]*?)<\/cross-session-message>/.exec(value)?.[1] ?? value;
+  if (origin === 'peer') value = peer ?? value;
   const command = /<command-name>([\s\S]*?)<\/command-name>/.exec(value)?.[1];
   if (command) value = [command.trim(), /<command-args>([\s\S]*?)<\/command-args>/.exec(value)?.[1]?.trim()].filter(Boolean).join(' ');
   return first(value) || null;
