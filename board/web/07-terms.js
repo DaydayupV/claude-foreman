@@ -23,12 +23,23 @@ function queueAt(t) {
     .filter((q) => q.queued_at <= Display.recordedTime(t, displayPoints()));
 }
 // 终端区离可见范围不远时才重画（滚到星图那里时不用一直算）；刚滚进来时马上画一次
-const termsNear = () => $('termsec').getBoundingClientRect().top < innerHeight + 200;
 addEventListener('scroll', () => {
-  const near = termsNear();
+  const top = $('termsec').getBoundingClientRect().top, near = top < innerHeight + 200;
+  showTerms(termsInView(top), true);
   if (near && !PANEL.seen) { UI.ver++; wake(); }
   PANEL.seen = near;
 }, { passive: true });
+// 终端区进了视口才加 inview：单车道栏的正文这时才排版（board.css 的 content-visibility），之前不占落地那一帧。
+// 滚动时一进视口就当场贴底（读 scrollHeight 时排一次版），这一帧画出来就在底部；
+// 只靠 content-visibility 自己的显示事件贴底要晚一帧，直接跳到终端区时会先闪一下最上面的几行。
+// 留 1 px：常见窗口里终端区刚好从视口底边开始，落地时不能算进了视口
+const termsInView = (top) => top < innerHeight - 1;
+function showTerms(on, snap = false) {
+  const sec = $('termsec');
+  if (sec.classList.contains('inview') === on) return;
+  sec.classList.toggle('inview', on);
+  if (on && snap) for (const ol of sec.querySelectorAll('.tcol:not(.tgroup) > .term')) if (ol.stick) ol.scrollTop = ol.scrollHeight;
+}
 $('more').addEventListener('click', () => $('termsec').scrollIntoView({ behavior: 'smooth' }));
 $('termsec').addEventListener('click', (e) => {
   // 已结束的组：点折起来的那一行展开成栏；点展开的栏头收回成一行
@@ -168,6 +179,8 @@ function renderTerms(t, L) {
   const deadline = performance.now() + 12;
   const cc = B.laneById.get('cc'), title = cc && latest(cc) ? latest(cc).title : null;
   setText($('conv'), Display.D.conversation(title));
+  // 没有滚动、终端区也可能进出视口（窗口缩放、上面的面板变高变矮）：这里只换样子，贴底留给下面的 settleTerms
+  showTerms(termsInView(viewBox().termsTop));
   if (!(viewBox().termsTop < innerHeight + 200)) return true;
   const box = $('terms'), seen = new Set(), units = termUnits(t, L);
   const done = units.filter((u) => unitFinished(u, t)).sort((a, b) => unitEnd(b, t) - unitEnd(a, t));
