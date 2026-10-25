@@ -91,8 +91,8 @@ function fillUniState(cell, s) {
   cell.dataset.sig = sig; cell.replaceChildren(word);
   // 等人回答是黄点，其余红点
   for (const x of issues) { const dot = document.createElement('i'); dot.className = 'issue'; dot.dataset.tone = Display.toneOf(x.status === 'needs_input' ? 'blocked' : 'failed'); cell.append(dot); }
-  // 等你确认时列宽可能放不下弹窗标题：悬停也写出整句
-  const asking = s.state === 'waiting' && s.waiting?.header ? [word] : [];
+  // 等你确认时列宽可能放不下（带弹窗标题时更长，手机宽度下光 waiting for you 也放不下）：悬停也写出整句
+  const asking = s.state === 'waiting' ? [word] : [];
   cell.title = [...asking, ...issues.map((x) => `${Display.D.statusName(x.status)} · ${shortModel(x.model) || '?'}`)].join('\n');
 }
 

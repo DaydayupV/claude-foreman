@@ -60,8 +60,8 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 #uslots .cells i.over { border-color: var(--bad); }
 @keyframes slot-q { 50% { opacity: .3; } }
 #table .tr .av .mk { display: block; width: 8px; height: 8px; margin: 0 5px; border-radius: 50%; background: var(--tint); box-shadow: 0 0 6px var(--tint); }
-/* 对话表的状态列要放得下"waiting for you · 弹窗标题"，席位列只有几个点：两列的宽度和单对话的表对调 */
-#usage[data-mode="uni"] .tr { grid-template-columns: 22px 1.7fr .8fr 1.3fr .8fr .8fr 1.2fr .8fr 1fr .7fr; }
+/* 对话表的状态列要放得下"waiting for you · 弹窗标题"，席位列只有几个点：状态列加宽、席位列收窄，多出来的给"done · failed"的表头 */
+#usage[data-mode="uni"] .tr { grid-template-columns: 22px 1.6fr .8fr 1.3fr .6fr 1.1fr 1.2fr .8fr 1fr .7fr; }
 #usage[data-mode="uni"] .tbody .tr span:nth-child(2) { font-family: "Microsoft YaHei", sans-serif; }
 #usage[data-mode="uni"] .tbody .tr span:nth-child(3) { color: var(--mid); }
 #usage[data-mode="uni"] .tbody .tr span:nth-child(4) { color: var(--text); }
@@ -338,7 +338,7 @@ body.table-all #usage:not([data-mode="uni"]) .tbody { overflow: visible; mask-im
   #table .tr { gap: 6px; }
   #usage:not([data-mode="uni"]) .tr { grid-template-columns: 18px 1.3fr .95fr .7fr .75fr 1.1fr; }
   #usage:not([data-mode="uni"]) .tr > span:is(:nth-child(4), :nth-child(7)) { display: none; }
-  #usage[data-mode="uni"] .tr { grid-template-columns: 18px 1.6fr 1.1fr .75fr 1fr; }
+  #usage[data-mode="uni"] .tr { grid-template-columns: 18px 1.3fr 1.5fr .7fr .9fr; }
   #usage[data-mode="uni"] .tr > span:is(:nth-child(6), :nth-child(7), :nth-child(10)) { display: none; }
   #termsec { height: auto; min-height: calc(100vh - var(--top-h) - 14px); }
   #terms, #termdone > .row { flex-direction: column; overflow: visible; height: auto; }
