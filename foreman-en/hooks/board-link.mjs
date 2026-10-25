@@ -79,6 +79,15 @@ function claimShow(session, now) {
   return file;
 }
 
+// 不是用户发的消息：后台任务的完成通知（<task-notification>）、桌面版通知其他会话的进展（<side-sessions-event>）、
+// 拉取请求的检查结果（<ci-monitor-event>），以及只有 <system-reminder> 的提醒。别的会话发来的消息照样算新消息
+const AUTOMATED = /^<(task-notification|side-sessions-event|ci-monitor-event)>/;
+export function automatedPrompt(prompt) {
+  if (typeof prompt !== 'string') return false;
+  const rest = prompt.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
+  return !rest ? prompt.trim() !== '' : AUTOMATED.test(rest);
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   let input = '';
   process.stdin.setEncoding('utf8');
@@ -86,9 +95,12 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   process.stdin.on('end', () => {
     let event;
     try { event = JSON.parse(input); } catch { process.exit(0); }
-    // 用户发了新消息：清掉这个对话的标记，下次派出再显示。这时不输出任何东西
+    // 用户发了新消息：清掉这个对话的标记，下次派出再显示。这时不输出任何东西。
+    // 后台任务的完成通知这类自动送进来的消息也会触发 UserPromptSubmit，它们不算新消息
     if (event.hook_event_name === 'UserPromptSubmit') {
-      if (SAFE_ID.test(event.session_id || '')) { try { fs.rmSync(path.join(SHOWN_DIR, event.session_id), { force: true }); } catch { /* 删不掉就等一天后清理 */ } }
+      if (SAFE_ID.test(event.session_id || '') && !automatedPrompt(event.prompt)) {
+        try { fs.rmSync(path.join(SHOWN_DIR, event.session_id), { force: true }); } catch { /* 删不掉就等一天后清理 */ }
+      }
       process.exit(0);
     }
     const command = event.tool_input?.command, found = typeof command === 'string' ? dispatchOf(command) : null;
