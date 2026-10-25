@@ -6,7 +6,7 @@ import { promptOf, toolsOf } from './claude-feed.mjs';
 import { queuedRuns } from '../records.mjs';
 import { resultOutcome } from '../display.mjs';
 import { ms, transient, stat, json, newTail, readLines, append, runMessage, laneOf, settleRun,
-  usageTotals, hostCost, costFields, createFeed, buildReplay, replayClock, usageReader } from './feed.mjs';
+  usageTotals, hostCost, costFields, createFeed, buildReplay, replayClock, usageReader, keepUsage } from './feed.mjs';
 
 const keyOf = (cwd) => cwd ? cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() : '?';
 // git worktree 归到主仓库：Claude Code 自己开的 .claude/worktrees/<名字> 看路径就知道（删掉以后也认得）；
@@ -425,7 +425,7 @@ export function createUniverse(options) {
     for (const id of sessions.keys()) if (!found.has(id)) sessions.delete(id);
     const { hidden, aliases } = desktop();
     // 同一个对话先前的对话记录（桌面版重启、恢复后换了会话 id）并进现在的那一份：不单独列，它派出的任务和 Claude Code 的用量
-    // 算到现在这个对话上（用量按消息 id 去重，几份记录之间抄过来的消息不重算）。先前的记录超出时间窗口的也算（星图一行是对话的全部）。
+    // 算到现在这个对话上（用量按消息 id 去重，几份记录之间抄过来的消息不重算，抄过来时用量写成 0 的那份不算，见 keepUsage）。先前的记录超出时间窗口的也算（星图一行是对话的全部）。
     // 现在那一份还没有（还没写出来、超出时间窗口）时照常单独列
     const merged = new Map();
     for (const [prior, id] of aliases) if ((sessions.has(prior) || oldFiles.has(prior)) && sessions.get(id)?.last_at != null) merged.set(prior, id);
@@ -437,10 +437,10 @@ export function createUniverse(options) {
       let started = session.started_at ?? Infinity;
       for (const prior of priors) {
         const known = sessions.get(prior);
-        for (const entry of known ? known.usage.values() : transcriptUsage(oldFiles.get(prior))) { usage.set(entry.id, entry); if (entry.ts < started) started = entry.ts; }
+        for (const entry of known ? known.usage.values() : transcriptUsage(oldFiles.get(prior))) { keepUsage(usage, entry); if (entry.ts < started) started = entry.ts; }
         if (known?.started_at != null) started = Math.min(started, known.started_at);
       }
-      for (const [key, entry] of session.usage) usage.set(key, entry);
+      for (const entry of session.usage.values()) keepUsage(usage, entry);
       return { ...session, usage, sig, started_at: Number.isFinite(started) ? started : session.started_at };
     };
     // 排队目录一时读不了（别的进程正在建、删票据，或者被占用）：这一拍按没有票据算，不让整份星图读不出来

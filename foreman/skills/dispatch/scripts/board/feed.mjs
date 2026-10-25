@@ -25,6 +25,14 @@ export const usageTotals = (events) => events.reduce((sum, e) => {
 // 用量全是 0 的消息（Claude Code 在 API 出错、被打断时自己补的，模型写成 <synthetic>）花不了钱：按 0 算，
 // 不因为价格表里没有它的模型就让费用带上 +
 const freeUsage = (u) => [u.in, u.cached, u.cache_write, u.out].every((v) => !v);
+// 几份对话记录里同一条消息按 id 只算一次。桌面版重启、恢复时，新记录会抄一份上一份记录正在进行的那条消息，用量全写成 0：
+// 用量为 0 的那份不顶掉有用量的那份，其余情况后面的顶掉前面的。记下了返回 true
+export function keepUsage(map, entry) {
+  const old = map.get(entry.id);
+  if (old && freeUsage(entry.u) && !freeUsage(old.u)) return false;
+  map.set(entry.id, entry);
+  return true;
+}
 export function hostCost(events, prices, out = {}) {
   const costs = events.map((e) => freeUsage(e.u) ? 0 : priceFor(e.t, { input: e.u.in, cached: e.u.cached, cache_write: e.u.cache_write, output: e.u.out }, prices));
   const priced = costs.filter((v) => v != null);
@@ -335,7 +343,8 @@ export function newTail(version = 0) { return { offset: 0, parts: [], decoder: n
 // 沿用同一个流式解码器（文件开头的 BOM 照旧只去掉一次）；没读完的半行按字节片段留着，一行再长也不反复拼接。
 // 给了 onLine 就每解析出一行交出去一行，不攒成数组（宇宙层只要累计值）；没给照旧返回 lines。
 const CHUNK = 1024 * 1024, SAMPLE = 4096;
-export function readLines(file, tail, onLine, onReset) {
+// needle：只要含这几个字节的行（其余的不解码、不解析），只读某一类行时省下大部分解析时间；行都以换行结尾，跳过不会切开字符
+export function readLines(file, tail, onLine, onReset, needle) {
   const lines = [], st = stat(file);
   if (!st) return { tail, lines };
   const reset = () => { tail = newTail(tail.version + 1); onReset?.(tail); };
@@ -372,6 +381,7 @@ export function readLines(file, tail, onLine, onReset) {
           let piece = buf.subarray(start, i + 1);
           start = i + 1;
           if (tail.parts.length) { piece = Buffer.concat([...tail.parts, piece]); tail.parts = []; }
+          if (needle && piece.indexOf(needle) < 0) continue;
           let raw;
           try { raw = JSON.parse(tail.decoder.decode(piece, { stream: true })); } catch { continue; }
           if (onLine) onLine(raw); else lines.push(raw);
@@ -415,6 +425,7 @@ export function settleRun(run) {
 
 // 一份对话记录里 Claude Code 每条消息的用量（不含子 agent），给星图和看板算先前记录的用量用。按文件大小和修改时间缓存：
 // 先前的记录不会再变，只读一次；同一个对话的几份记录可能都很大（一百多 MB），所以服务端只建一个、两边共用
+const USAGE_NEEDLE = Buffer.from('"usage"');
 export function usageReader() {
   const cache = new Map();
   return (file) => {
@@ -428,7 +439,7 @@ export function usageReader() {
         const m = row?.type === 'assistant' && !row.isSidechain ? row.message : null, u = m?.usage;
         if (m?.id && u) usage.set(m.id, { id: m.id, ts: Date.parse(row.timestamp), t: m.model,
           u: { in: u.input_tokens ?? null, cached: u.cache_read_input_tokens ?? null, cache_write: u.cache_creation_input_tokens ?? null, out: u.output_tokens ?? null } });
-      });
+      }, undefined, USAGE_NEEDLE);
       hit = { sig, entries: [...usage.values()] }; cache.set(file, hit);
     }
     return hit.entries;
@@ -534,19 +545,22 @@ export function createFeed(root, options = {}) {
     }
     const m = parsed.meta;
     if (m.started_at == null) return data;
-    // 同一个对话先前的对话记录（桌面版重启、恢复前）里 Claude Code 的用量也算进来，和星图那一行一致；新记录开头抄过来的消息按 id 去重
+    // Claude Code 那一行是这个对话的全部用量，和星图那一行同一个口径：时间线只画窗口里的事件，用量不按窗口截。
+    // 星图读过这份记录时用它的整份用量（没读过时用窗口里解析出来的）；同一个对话先前的对话记录（桌面版重启、恢复前）也算进来，
+    // 几份记录之间抄过来的消息只算一次（keepUsage）
     let usage = m.usage;
-    if (session && params.replay == null && params.sessions?.size > 1) {
-      const seen = new Set(parsed.events.filter((e) => e.k === 'usage' && e.messageId).map((e) => e.messageId));
-      // 先前的几份记录之间也会互相抄（每次恢复都把之前的消息带过去），一条消息只算一次
-      const extra = [];
-      for (const e of priorUsageOf([...params.sessions].filter((id) => id !== data.scope.value))) if (!seen.has(e.id)) { seen.add(e.id); extra.push(e); }
-      if (extra.length) {
-        const priced = {}, more = hostCost(extra, options.prices, priced);
-        usage = { ...m.usage };
-        for (const e of extra) for (const [key, name] of [['in', 'input'], ['cached', 'cached'], ['cache_write', 'cache_write'], ['out', 'output']]) if (e.u[key] != null) usage[name] = (usage[name] ?? 0) + e.u[key];
-        cost = cost == null && more == null ? null : (cost ?? 0) + (more ?? 0); costPartial ||= !!priced.partial || more == null;
-      }
+    const whole = session && params.replay == null ? options.knownUsage?.(data.scope.value) : null;
+    if (whole || session && params.replay == null && params.sessions?.size > 1) {
+      // 先前的记录在前、现在这份在后，和星图合并的顺序一样（费用逐条相加，顺序不同小数末位会差一点）
+      const kept = new Map();
+      if (params.sessions?.size > 1) for (const e of priorUsageOf([...params.sessions].filter((id) => id !== data.scope.value))) keepUsage(kept, e);
+      for (const e of whole ?? parsed.events.filter((e) => e.k === 'usage' && e.messageId).map((e) => ({ id: e.messageId, t: e.t, u: e.u }))) keepUsage(kept, e);
+      const list = [...kept.values()];
+      usage = usageTotals(list);
+      // 用量没变就沿用上次算的费用（每一拍都把几千条消息重新算价太浪费）
+      const sig = `${list.length}:${Object.values(usage).join(':')}`;
+      if (tail.wholeCost?.sig !== sig) { const priced = {}; tail.wholeCost = { sig, cost: hostCost(list, options.prices, priced), partial: !!priced.partial }; }
+      cost = tail.wholeCost.cost; costPartial = tail.wholeCost.partial;
     }
     data.runs.push({ id: 'cc', lane: 'cc', kind: 'host', agent: 'claude code', agent_type: 'host', model: m.model, session: m.session || path.basename(file, '.jsonl'), title: m.title, cwd: m.cwd,
       status: params.replay != null || now - Math.max(m.latest_at, tail.appendedAt ?? -Infinity) < 90000 ? 'running' : 'idle', started_at: m.started_at, ended_at: null, usage, ...costFields(cost, cost == null ? 'unknown' : 'api_price'), ...(costPartial && cost != null ? { cost_partial: true } : {}) });
