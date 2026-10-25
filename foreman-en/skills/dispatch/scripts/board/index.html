@@ -2306,11 +2306,23 @@ function ccAway(L, t) {
 // 相关的光路短暂变宽（08-fx.js 的 drawFx 和 08-beams.js 用）。派出和交回最明显，读走结果、记下裁决次之，Claude Code 回一句话最轻。
 // 按记录时间算，回放、暂停、拖动时间线时和直播一样；几下叠在一起取最大值，离上一下不到 0.8 屏幕秒、又不比它强的就并掉
 // （同一次派出既有 Claude Code 的派出动作、又有那一席的任务启动，只算一下），事件密时不会一直闪。
-// 返回 { env: 整体强度 0–1, lanes: 车道 id → 这条车道的强度 }
-const BEAT = { window: 1.2, decay: 4.5, merge: 0.8, kinds: { dispatch: 0.9, result: 0.8, collect: 0.6, verdict: 0.6, msg: 0.45 } };
+// 直播里事件要过一会儿才送到页面（看板服务每秒推一次，晚 0.2–1 秒），按记录时刻算的话到的时候已经暗了：
+// 直播时一下从页面第一次看到它起算，到的时候正好最亮；第一次看到时已经过去 BEAT.late 秒以上的不算（刚打开页面时的旧事件）。
+// 回放照旧按记录时刻。返回 { env: 整体强度 0–1, lanes: 车道 id → 这条车道的强度 }
+const BEAT = { window: 1.2, decay: 4.5, merge: 0.8, late: 1.5, seen: new Map(), kinds: { dispatch: 0.9, result: 0.8, collect: 0.6, verdict: 0.6, msg: 0.45 } };
 function beatsAt(t) {
-  const from = t - recMs(BEAT.window), list = [];
-  const add = (ts, kind, lanes) => { if (ts > from && ts <= t) list.push({ ts, s: BEAT.kinds[kind], lanes }); };
+  const live = B.clock.mode !== 'replay', from = t - recMs(BEAT.window + (live ? BEAT.late : 0)), list = [];
+  const add = (ts, kind, lanes) => {
+    if (!(ts > from && ts <= t)) return;
+    let at = ts;
+    if (live) {
+      const key = `${kind}|${lanes[0]}|${ts}`;
+      if (!BEAT.seen.has(key)) BEAT.seen.set(key, { ts, at: t - ts > recMs(BEAT.late) ? -Infinity : t });
+      at = BEAT.seen.get(key).at;
+    }
+    if (at > t - recMs(BEAT.window)) list.push({ ts: at, s: BEAT.kinds[kind], lanes });
+  };
+  for (const [key, v] of BEAT.seen) if (v.ts < t - recMs(10)) BEAT.seen.delete(key);
   const cc = B.laneById.get('cc');
   if (cc) for (let i = cc.events.length - 1; i >= 0 && cc.events[i].ts > from; i--) {
     const e = cc.events[i];
@@ -2908,14 +2920,14 @@ function viewAt(a, b, u) {
 }
 // 平常跟着目标走的快慢：时间常数（秒），约等于原来 60 帧时每帧挪 22%；按真实经过的时间算，帧率高低不影响快慢
 const VIEW_TAU = 0.067;
-// 两个近景之间（缩放都在适配的 1.2 倍以上、差不多大）挪得远（超过视图宽度的 0.6）时，改成定时 0.7 秒的移动，
-// 中途先稍微拉远再推近，看得出是从哪里挪到哪里（点了另一张卡片飞过去时）
-const VIEW_HOP = { dur: 700, min: 0.6, depth: 0.12 };
+// 两个近景之间（缩放都在适配的 1.2 倍以上、差不多大）挪动超过视图宽度的 0.25 时（放大看着一张卡片、再点旁边的另一张），
+// 改成定时 0.7 秒的移动，中途先拉远再推近，看得出是从哪里挪到哪里；拉远 10% 起，每挪一个视图宽度多 10%，最多 30%
+const VIEW_HOP = { dur: 700, min: 0.25 };
 function newViewGoal(g, ms) {
   VIEW.seen = g; VIEW.hop = null;
   const kf = kFit(), far = Math.hypot(g.tx - VIEW.tx, g.ty - VIEW.ty) / (viewBox().cw || 1);
   if (VIEW.k > kf * 1.2 && g.k > kf * 1.2 && Math.abs(Math.log(g.k / VIEW.k)) < 0.3 && far > VIEW_HOP.min)
-    VIEW.hop = { from: { k: VIEW.k, tx: VIEW.tx, ty: VIEW.ty }, t0: ms, depth: Math.min(0.3, VIEW_HOP.depth * far) };
+    VIEW.hop = { from: { k: VIEW.k, tx: VIEW.tx, ty: VIEW.ty }, t0: ms, depth: Math.min(0.3, 0.1 + 0.1 * far) };
 }
 
 // 每帧把当前变换往目标挪一点（像地图那样平滑）；返回是否还在动
@@ -4467,6 +4479,13 @@ function drawGalaxy(c, intensity, pal = []) {
   const g = ctx.createRadialGradient(c.cx, c.cy, 0, c.cx, c.cy, c.R * 0.28);
   g.addColorStop(0, `rgba(255,244,232,${0.35 + 0.25 * intensity})`); g.addColorStop(0.25, rgba('claude', 0.14 + 0.1 * intensity)); g.addColorStop(1, rgba('claude', 0));
   ctx.fillStyle = g; ctx.beginPath(); ctx.arc(c.cx, c.cy, c.R * 0.28, 0, 6.283); ctx.fill();
+  // 节拍（04-life.js 的 beatsAt）：亮核另闪一团光，不跟着输出强度封顶
+  const beat = FX.beat?.env || 0;
+  if (beat > 0.01) {
+    const f = ctx.createRadialGradient(c.cx, c.cy, 0, c.cx, c.cy, c.R * 0.34);
+    f.addColorStop(0, `rgba(255,246,236,${0.6 * beat})`); f.addColorStop(0.3, rgba('claude', 0.28 * beat)); f.addColorStop(1, rgba('claude', 0));
+    ctx.fillStyle = f; ctx.beginPath(); ctx.arc(c.cx, c.cy, c.R * 0.34, 0, 6.283); ctx.fill();
+  }
   ctx.restore();
 }
 
@@ -4580,11 +4599,12 @@ function drawCore(c, intensity, pal) {
     ctx.save();
     ctx.translate(c.cx, c.cy);
     // 炸开时各层带着多转的角度甩出来，越往后越慢；线条先亮再回落到平常（FX.burst，见 burstOf）
-    const b = FX.burst, boost = b ? 1 + 1.6 * b.boost : 1;
+    // 节拍让线条亮一下：乘在亮度上，对话正忙、输出强度已经很高时也看得出来
+    const b = FX.burst, boost = (b ? 1 + 1.6 * b.boost : 1) * (1 + 1.2 * (FX.beat?.env || 0));
     ctx.rotate(Math.sin(sec * speed) * 0.35 + sec * speed * 0.2 + Math.sign(speed) * (FX.kick || 0) * Math.abs(speed) / 0.02 + (b ? Math.sign(speed) * 2.4 * b.spin : 0));
     // 最外面那层是远景：平时贴预先画好的半分辨率图（看着虚、远），炸开时照常一条条画
     if (i === 0 && !b && farLayer(c.R, FX.web[0], pal)) {
-      ctx.globalAlpha *= (0.6 + 0.4 * intensity) * FAR.dim;
+      ctx.globalAlpha = Math.min(1, ctx.globalAlpha * (0.6 + 0.4 * intensity) * FAR.dim * boost);
       ctx.drawImage(FAR.cv, -FAR.half, -FAR.half, FAR.half * 2, FAR.half * 2);
       ctx.restore();
       continue;
@@ -4745,8 +4765,8 @@ function drawFx(t, L) {
     try {
       drawNebula(L, P, t, rates, pal);
       drawDust(L);
-      drawCore(L.core, Math.min(1, total + 0.5 * beat.env), pal);
-      drawGalaxy(L.core, Math.min(1, total + 0.9 * beat.env), starPalette(t, lanes, live));
+      drawCore(L.core, total, pal);
+      drawGalaxy(L.core, total, starPalette(t, lanes, live));
     } finally { ctx.restore(); FX.burst = null; FX.lw = lw; glowFlush(ctx); }
   }
   if (burst) drawFlash(burst, L.core.R);
