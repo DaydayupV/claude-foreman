@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { sandbox, baseConfig, json, poll, ROOT } from './helpers.mjs';
 
 // 网页看板开着时，派出任务的命令运行前由钩子把看板链接直接显示给用户（board-link.mjs）
-const { dispatchOf } = await import(pathToFileURL(path.join(ROOT, 'foreman/hooks/board-link.mjs')).href);
+const { dispatchOf, automatedPrompt } = await import(pathToFileURL(path.join(ROOT, 'foreman/hooks/board-link.mjs')).href);
 const cli = 'C:/x/plugin/skills/dispatch/scripts/cli.mjs';
 
 test('认出用 cli.mjs 派出任务的命令和命令里写的 FOREMAN_CONFIG', () => {
@@ -23,6 +23,16 @@ test('认出用 cli.mjs 派出任务的命令和命令里写的 FOREMAN_CONFIG',
   assert.deepEqual(dispatchOf(`node "${cli}" run --title --help --level simple`), { config: undefined });
   for (const command of [`node "${cli}" plan --module run`, `node "${cli}" board`, `node "${cli}" run --help`, `node "${cli}" run --level simple -h`, `node other/cli.mjs run`,
     `cat <<'EOF'\nnode ${cli} run\nEOF`, `echo "node ${cli} run"`]) assert.equal(dispatchOf(command), null, command);
+});
+
+test('后台任务的完成通知、其他会话的进展、检查结果和只有提醒的消息不算用户发的新消息', () => {
+  for (const prompt of ['<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>',
+    '<system-reminder>\nThe session you started finished a turn.\n</system-reminder>\n<side-sessions-event>None of the sessions is working now.</side-sessions-event>',
+    '<ci-monitor-event>checks passed</ci-monitor-event>', '<system-reminder>\nThe user started your proposal.\n</system-reminder>'])
+    assert.equal(automatedPrompt(prompt), true, prompt);
+  for (const prompt of ['继续', '<system-reminder>context</system-reminder>\n改成每发一条消息显示一次', '用 <task-notification> 这个标签做什么？',
+    'Another Claude session sent a message:\n<cross-session-message from="local_x">开始第 2 阶段</cross-session-message>', '', undefined])
+    assert.equal(automatedPrompt(prompt), false, String(prompt));
 });
 
 test('网页看板开着时显示带对话 id 的链接（服务没在跑就启动），用户每发一条消息只显示一次；关着时不显示', async (t) => {
@@ -48,6 +58,10 @@ test('网页看板开着时显示带对话 id 的链接（服务没在跑就启�
     assert.equal(prompt.stdout, '');
     assert.equal((await run('s2')).stdout, '');
     assert.match((await run('s1')).stdout, /&s=s1"/);
+    assert.equal((await run('s1')).stdout, '');
+    // 后台任务的完成通知也会触发 UserPromptSubmit：不算新消息，标记留着，这条消息里接着派出也不显示
+    const notice = await h.hook('board-link.mjs', { cwd: h.cwd, session_id: 's1', hook_event_name: 'UserPromptSubmit', prompt: '<task-notification>\n<task-id>b1</task-id>\n</task-notification>' });
+    assert.equal(notice.code, 0, notice.stderr); assert.equal(notice.stdout, '');
     assert.equal((await run('s1')).stdout, '');
     // 标记放在 foreman 目录里，不看命令里写的 FOREMAN_CONFIG：命令换了配置文件，这条消息里也不再显示
     const other = path.join(h.home, 'other-config.json');
