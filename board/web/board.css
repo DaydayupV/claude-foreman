@@ -299,7 +299,7 @@ body.table-all #usage:not([data-mode="uni"]) .tbody { overflow: visible; mask-im
 .tcol .seat .term li { padding-left: 2ch; text-indent: -2ch; }
 .seat:not(.open) .term li.act, .seat:not(.open) .term li.fold { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .seat:not(.open) .term li:not(.act):not(.plain) { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-/* 共用规则已经排好的行（运行中的正文、折叠后的结论）照原样显示，不再截成三行 */
+/* 共用规则已经排好的行（运行中的正文、结束后的结论）照原样显示，不再截成三行 */
 .seat .term li.plain { white-space: pre-wrap; }
 /* 组里的计划缺口和还没开始的派发：一行一条，跟在标题和席位下面 */
 .tgroup .plan-notes, .tgroup .dispatch-queue { flex: none; padding: 2px 6px; font-size: 10px; color: rgb(232,194,122); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
