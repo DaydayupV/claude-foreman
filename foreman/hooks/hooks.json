@@ -1,5 +1,5 @@
 {
-  "description": "会话开始时提醒 Claude 加载 dispatch skill，并带上用户和项目的偏好文件；拦下直接调用 codex exec / codex review、opencode run 和用 pi 跑任务的命令，要求通过 foreman 的脚本调用协作方；记下图像路线弹窗的问题和回答，建图像计划时用来核对用户选的路线；网页看板开着时，用户每发一条消息，派出任务时把看板链接直接显示一次",
+  "description": "会话开始时提醒 Claude 加载 dispatch skill，并带上用户和项目的偏好文件；拦下直接调用 codex exec / codex review、opencode run 和用 pi 跑任务的命令，要求通过 foreman 的脚本调用协作方；记下图像路线弹窗的问题和回答，建图像计划时用来核对用户选的路线；网页看板开着时，用户每发一条消息，派出任务时把看板链接直接显示一次；派出命令在后台启动后，提醒 Claude 先在正文里写“已派出”那句话、附上链接",
   "hooks": {
     "SessionStart": [
       {
@@ -62,6 +62,19 @@
               "${CLAUDE_PLUGIN_ROOT}/hooks/record-answers.mjs"
             ],
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/board-link.mjs"
+            ],
+            "timeout": 15
           }
         ]
       }

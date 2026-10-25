@@ -4,6 +4,8 @@
 // 这里用钩子的 systemMessage，由界面直接显示，不经过模型。
 // 只提示，不拦命令；用户每发一条消息，派出任务时只显示一次（同一条消息里一起派出的几个任务只显示一次）。
 // 同一个脚本也挂在 UserPromptSubmit 上：用户发新消息时清掉"已显示"的标记，那时什么都不输出（输出会被加进用户的消息）。
+// 还挂在 PostToolUse 上：派出命令在后台启动以后，提醒 Claude 先在正文里写"已派出"那句话、附上链接，再调用下一个工具。
+// 桌面版把上面的 systemMessage 折在工具调用里，用户常常看不到；派出后同一轮接着干别的时，那句话又容易只写进思考。
 
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -18,6 +20,11 @@ const DISPATCH = new Set(['run', 'resume', 'discuss', 'review', 'image']);
 const MESSAGES = {
   zh: (url) => `网页看板：${url}`,
   en: (url) => `Web board: ${url}`,
+};
+// 派出命令在后台启动以后给 Claude 的提醒（PostToolUse 的 additionalContext，用户看不到）
+const REMINDERS = {
+  zh: (url) => `foreman：刚在后台派出了任务。调用下一个工具或结束这一轮之前，先在回复正文里用一句话告诉用户"已派出：…"，句中附上 [网页看板](${url || '派出命令输出的 foreman: web board 那一行的地址'})；写在思考里用户看不到。同一条消息里一起派出的几个任务写成一句，附一次。`,
+  en: (url) => `foreman: work was just handed off in the background. Before your next tool call or ending the turn, tell the user in one sentence of your reply text that it was handed off, with [web board](${url || 'the address on the handoff command\'s foreman: web board line'}) in that sentence; your thinking isn't shown to the user. Several runs handed off together in one message get one sentence and one link.`,
 };
 
 const unquote = (s) => String(s ?? '').replace(/^["']|["']$/g, '');
@@ -106,10 +113,19 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const command = event.tool_input?.command, found = typeof command === 'string' ? dispatchOf(command) : null;
     if (!found) process.exit(0);
     const configFile = found.config || process.env.FOREMAN_CONFIG || path.join(os.homedir(), '.claude', 'foreman', 'config.json');
-    const claimed = webOn(configFile) && claimShow(event.session_id, Date.now());
-    if (!claimed) process.exit(0);
+    if (!webOn(configFile)) process.exit(0);
     let lang = 'zh';
     try { lang = JSON.parse(fs.readFileSync(path.join(path.dirname(SCRIPT), 'language.json'), 'utf8')).language; } catch { /* 用默认 */ }
+    // 派出命令运行完（PostToolUse）：只提醒在后台启动的。前台跑的这时已经跑完了，接下来本来就要汇报结果
+    if (event.hook_event_name === 'PostToolUse') {
+      if (event.tool_input?.run_in_background === true) {
+        const context = (REMINDERS[lang] || REMINDERS.zh)(boardUrl(configFile, event.session_id));
+        process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: context } }));
+      }
+      process.exit(0);
+    }
+    const claimed = claimShow(event.session_id, Date.now());
+    if (!claimed) process.exit(0);
     const url = boardUrl(configFile, event.session_id);
     if (url) process.stdout.write(JSON.stringify({ systemMessage: (MESSAGES[lang] || MESSAGES.zh)(url) }));
     // 没拿到链接时删掉自己抢到的标记，下次派出照样显示
