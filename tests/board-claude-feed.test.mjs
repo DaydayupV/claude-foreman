@@ -54,6 +54,11 @@ test('promptOf 按来源识别用户消息，旧记录排除元数据并剥离�
     ['peer turnOrigin', peer, { isMeta: true, turnOrigin: 'peer' }, '协作消息'],
     ['sdk 普通正文', '系统事件', { origin: { kind: 'sdk' } }, null],
     ['sdk 提醒', `${reminder}系统事件`, { promptSource: 'sdk', turnOrigin: 'sdk' }, null],
+    // 桌面版代发：启动这个会话时给的说明只取 Task: 后面的任务；另一个会话发来的消息取消息正文；其他会话进展的通知不算
+    ['sdk 启动说明', `${reminder}Background (from the session that started this one):\n背景第一行\n\nTask:\n复测 A7：看板链接\n第二行`, { promptSource: 'sdk', turnOrigin: 'sdk' }, '复测 A7：看板链接'],
+    ['sdk 会话消息', `${reminder}\n<cross-session-message from="local_demo" name="demo">\n请开始第 2 阶段\n第二行</cross-session-message>`, { promptSource: 'sdk', turnOrigin: 'sdk' }, '请开始第 2 阶段'],
+    ['sdk 其他会话的进展', `${reminder}\n<side-sessions-event>None of the sessions you started is working now.</side-sessions-event>`, { promptSource: 'sdk', turnOrigin: 'sdk' }, null],
+    ['sdk 没有任务的背景', 'Background (from the session that started this one):\n只有背景', { promptSource: 'sdk', turnOrigin: 'sdk' }, null],
     ['task origin', '<task-notification>任务完成</task-notification>', { origin: { kind: 'task-notification' }, turnOrigin: 'task_notification' }, null],
     ['task turnOrigin', '任务完成', { turnOrigin: 'task_notification' }, null],
     ['scheduled', '定时唤醒', { isMeta: true, promptSource: 'system', turnOrigin: 'scheduled' }, null],
@@ -70,6 +75,7 @@ test('promptOf 按来源识别用户消息，旧记录排除元数据并剥离�
     ['本地命令说明', '<local-command-caveat>说明</local-command-caveat>', {}, null],
     ['工具结果', [{ type: 'tool_result', tool_use_id: 'unused', content: '完成' }], {}, null],
     ['sidechain', '用户输入', { turnOrigin: 'human', isSidechain: true }, null],
+    ['压缩摘要', 'This session is being continued from a previous conversation.', { isCompactSummary: true, isVisibleInTranscriptOnly: true }, null],
     ['assistant', '助手输出', { type: 'assistant', turnOrigin: 'human' }, null],
   ];
   for (const [name, content, fields, expected] of cases) {
