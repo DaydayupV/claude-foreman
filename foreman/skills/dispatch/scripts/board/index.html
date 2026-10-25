@@ -1113,7 +1113,7 @@ const TEXTS = {
     decisionWritten: '决策记录已写成',
     backToUniverse: '回到所有对话（Esc）',
     conversations: (n) => `${n} 个对话`,
-    costTitle: '根据模型官方 API 价格计算（插件自带的价格表），和实际扣费不一定相同；+ 表示有的模型不在价格表里，这部分没算进去',
+    costTitle: '根据模型官方 API 价格计算（插件自带的价格表），和实际扣费不一定相同；+ 表示有一部分算不出费用、没算进去（模型不在价格表里，或者任务没有记下用量），算不出的那一行显示 ?',
     nowTitle: '近 10 秒的估算，可能借用同一模型之前的样本',
     recentTitle: '这条车道全部时长的速度曲线（估算）：从第一轮开始画到最后一轮结束，结束后停住；40 个点，每个点是它之前约两格时长内的输出 token 除以这段时间；运行中可能借用实时估速',
     genAvgTitle: '本席各轮累计输出 ÷ 估算的生成时长；已扣掉能识别的跑命令时段，仍可能含等待和读文件的时间',
@@ -1159,7 +1159,7 @@ const TEXTS = {
     decisionWritten: 'decision record written',
     backToUniverse: 'Back to all conversations (Esc)',
     conversations: (n) => `${n} ${n === 1 ? 'conversation' : 'conversations'}`,
-    costTitle: "Computed from each model's official API price (the plugin's price table); may differ from what you're actually charged. + means some models aren't in the table and weren't counted",
+    costTitle: "Computed from each model's official API price (the plugin's price table); may differ from what you're actually charged. + means part of it couldn't be priced and isn't included (a model not in the table, or a run with no recorded usage); a row that couldn't be priced shows ?",
     nowTitle: 'Estimate over the last 10 seconds; may borrow earlier samples of the same model',
     recentTitle: "Speed over this lane's whole time (estimated): drawn from its first round's start to its last round's end, then it stays put; 40 points, each the output tokens in about two points' worth of time before it divided by that time; while running it may use the live estimate",
     genAvgTitle: "This seat's total output ÷ estimated generation time; command time that can be recognised is excluded, waiting and file reads may remain",
@@ -3441,7 +3441,8 @@ const TABLE_HEAD = ['', 'model', 'status', 'now ≈tok/s', 'tok/s over time', 'g
 // 费用：一律按模型官方 API 价格算（插件自带的价格表），悬停在表头和单元格上有说明；+ 表示有的模型不在价格表里
 // 不到 1 美分的按两位有效数字写（便宜的 API 模型一次常常只有零点零几美分），免得显示成 $0.00
 const fmtUsd = (n) => (n > 0 && n < 0.01 ? n.toPrecision(2) : n.toFixed(2));
-const fmtCost = (cost, partial = false) => (cost == null ? '—' : `$${fmtUsd(cost)}${partial ? '+' : ''}`);
+// 算不出费用：结束了的写 ?（合计的 + 就是它带来的，用户能找到是哪一行），还在跑的写 —
+const fmtCost = (cost, partial = false, ended = true) => (cost == null ? (partial && ended ? '?' : '—') : `$${fmtUsd(cost)}${partial ? '+' : ''}`);
 // 面板里下面还有没露出来的行时，最后一行淡出
 const markMore = (body) => body.classList.toggle('more', body.scrollHeight - body.scrollTop - body.clientHeight > 2);
 // 速度的估算窗口不同，和费用一样把口径放在表头悬停说明里。
@@ -3503,7 +3504,7 @@ function renderTable(t) {
     c[6].title = s.usage_unattributed ? TEXT.usageUnattributed : '';
     setText(c[7], s.output ? fmtTok(s.output) : '—');
     c[7].title = s.usage_unattributed ? TEXT.usageUnattributed : '';
-    setText(c[8], fmtCost(s.cost, s.costPartial)); c[8].title = TEXT.costTitle;
+    setText(c[8], fmtCost(s.cost, s.costPartial, !s.running)); c[8].title = TEXT.costTitle;
     setText(c[9], Display.clock(laneElapsed(lane, t, true) * 1000));
     if (body.children[i] !== tr) body.insertBefore(tr, body.children[i] || null);
     tot.input += inAll; tot.cached += s.cached; tot.output += s.output; tot.rate += s.rate;
