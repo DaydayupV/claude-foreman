@@ -2861,16 +2861,48 @@ function zoomToBox(b) {
   VIEW.auto = false;
 }
 
+// 从 a 到 b 走到 u（0–1）时的镜头：缩放按对数插值（放大十倍和缩小十倍一样匀速，不会开头猛冲、结尾磨蹭）。
+// a 到 b 是绕一个不动点的缩放（滚轮缩放时就是鼠标下那一点），中间每一步也绕它缩放，那一点在屏幕上始终不动；
+// 缩放几乎不变（纯平移）时直接平移
+function viewAt(a, b, u) {
+  const k = Math.exp(Math.log(a.k) + (Math.log(b.k) - Math.log(a.k)) * u);
+  if (Math.abs(Math.log(b.k / a.k)) < 1e-3) return { k, tx: a.tx + (b.tx - a.tx) * u, ty: a.ty + (b.ty - a.ty) * u };
+  const sx = (b.tx * a.k - a.tx * b.k) / (a.k - b.k), sy = (b.ty * a.k - a.ty * b.k) / (a.k - b.k), f = k / a.k;
+  return { k, tx: sx - (sx - a.tx) * f, ty: sy - (sy - a.ty) * f };
+}
+// 平常跟着目标走的快慢：时间常数（秒），约等于原来 60 帧时每帧挪 22%；按真实经过的时间算，帧率高低不影响快慢
+const VIEW_TAU = 0.067;
+// 两个近景之间（缩放都在适配的 1.2 倍以上、差不多大）挪得远（超过视图宽度的 0.6）时，改成定时 0.7 秒的移动，
+// 中途先稍微拉远再推近，看得出是从哪里挪到哪里（点了另一张卡片飞过去时）
+const VIEW_HOP = { dur: 700, min: 0.6, depth: 0.12 };
+function newViewGoal(g, ms) {
+  VIEW.seen = g; VIEW.hop = null;
+  const kf = kFit(), far = Math.hypot(g.tx - VIEW.tx, g.ty - VIEW.ty) / (viewBox().cw || 1);
+  if (VIEW.k > kf * 1.2 && g.k > kf * 1.2 && Math.abs(Math.log(g.k / VIEW.k)) < 0.3 && far > VIEW_HOP.min)
+    VIEW.hop = { from: { k: VIEW.k, tx: VIEW.tx, ty: VIEW.ty }, t0: ms, depth: Math.min(0.3, VIEW_HOP.depth * far) };
+}
+
 // 每帧把当前变换往目标挪一点（像地图那样平滑）；返回是否还在动
 function stepView(H) {
   if (H !== VIEW.H) { VIEW.H = H; if (VIEW.auto) VIEW.goal = fitGoal(); }
-  const g = VIEW.goal;
+  const g = VIEW.goal, ms = performance.now();
   let moving = false;
   if (g) {
-    const a = 0.22;
-    for (const key of ['k', 'tx', 'ty']) VIEW[key] += (g[key] - VIEW[key]) * a;
-    moving = Math.abs(g.k - VIEW.k) > g.k * 0.001 || Math.abs(g.tx - VIEW.tx) > 0.3 || Math.abs(g.ty - VIEW.ty) > 0.3;
-    if (!moving) { Object.assign(VIEW, { k: g.k, tx: g.tx, ty: g.ty }); VIEW.goal = null; }
+    // 新目标：从这一刻的镜头出发（正在拉远的那一下也从它此刻的样子接着走，不跳）
+    if (g !== VIEW.seen) { newViewGoal(g, ms); VIEW.stepAt = ms - 16; }
+    const dt = Math.min(0.1, (ms - VIEW.stepAt) / 1000);
+    VIEW.stepAt = ms;
+    if (VIEW.hop) {
+      const h = VIEW.hop, u = clamp01((ms - h.t0) / VIEW_HOP.dur), e = ease(u), v = viewAt(h.from, g, e);
+      // 拉远：绕视图中心缩小，中途最远，两头不变
+      const f = 1 - h.depth * Math.sin(Math.PI * e), cx = viewBox().cw / 2, cy = viewBox().ch / 2;
+      Object.assign(VIEW, { k: v.k * f, tx: cx - (cx - v.tx) * f, ty: cy - (cy - v.ty) * f });
+      moving = u < 1;
+    } else {
+      Object.assign(VIEW, viewAt(VIEW, g, 1 - Math.exp(-dt / VIEW_TAU)));
+      moving = Math.abs(g.k - VIEW.k) > g.k * 0.001 || Math.abs(g.tx - VIEW.tx) > 0.3 || Math.abs(g.ty - VIEW.ty) > 0.3;
+    }
+    if (!moving) { Object.assign(VIEW, { k: g.k, tx: g.tx, ty: g.ty }); VIEW.goal = null; VIEW.hop = null; }
   }
   worldEl.style.transform = `translate(${VIEW.tx}px, ${VIEW.ty}px) scale(${VIEW.k})`;
   // 显示档位看卡片在屏幕上有多高
@@ -6187,11 +6219,15 @@ function uniZoomAt(sx, sy, f) {
   UV.goal = { k, tx: sx - (sx - g.tx) * (k / g.k), ty: sy - (sy - g.ty) * (k / g.k) };
   UV.auto = false;
 }
+// 和看板的镜头一样按对数插值、绕不动点缩放、按真实时间走（05-world.js 的 viewAt）；时间常数约等于原来 60 帧时每帧挪 16%。
+// 自动适配时目标每帧都是新算的，认不出"新目标"：一帧最多按 50 毫秒算，停了一阵再画也不会一下跳太远
+const UNI_TAU = 0.096;
 function stepUni() {
   if (UV.auto) UV.goal = uniFitGoal();
-  const g = UV.goal;
+  const g = UV.goal, ms = performance.now(), dt = Math.min(0.05, (ms - (UV.stepAt ?? ms - 16)) / 1000);
+  UV.stepAt = ms;
   if (!g) return (UV.moving = false);
-  for (const key of ['k', 'tx', 'ty']) UV[key] += (g[key] - UV[key]) * 0.16;
+  Object.assign(UV, viewAt(UV, g, 1 - Math.exp(-Math.max(dt, 0.001) / UNI_TAU)));
   const moving = Math.abs(g.k - UV.k) > g.k * 0.001 || Math.abs(g.tx - UV.tx) > 0.3 || Math.abs(g.ty - UV.ty) > 0.3;
   if (!moving) { Object.assign(UV, { k: g.k, tx: g.tx, ty: g.ty }); if (!UV.auto) UV.goal = null; }
   // 自动适配全貌时 goal 一直在，是否在动看这里（限帧用）
