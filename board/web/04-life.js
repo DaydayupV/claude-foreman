@@ -234,8 +234,9 @@ function outLook(life) {
 const CC_AWAY_ANIM = 1.6; // 屏幕秒：前 40% 卡片缩成光点，后 60% 光点飞进亮核
 const CC_AWAY = { lane: null, away: false, at: -Infinity };
 function ccAway(L, t) {
-  const cc = B.laneById.get('cc');
-  const want = !!cc && !!latest(cc) && !L.groups.length && !laneStatus(cc, t).running && ccLife(t).phase === 'none';
+  // 看板只读最近一段时间的 Claude Code 记录：闲了很久的对话没有这条车道，也算闲下来了（不然卡片一直挂着"还没有记录"）
+  const cc = B.laneById.get('cc'), quiet = !cc || !latest(cc) || !laneStatus(cc, t).running && ccLife(t).phase === 'none';
+  const want = !L.groups.length && quiet;
   const now = performance.now(), dur = CC_AWAY_ANIM * 1000, u = clamp01((now - CC_AWAY.at) / dur);
   if (CC_AWAY.lane !== cc) Object.assign(CC_AWAY, { lane: cc, away: want, at: -Infinity });
   else if (want !== CC_AWAY.away) Object.assign(CC_AWAY, { away: want, at: now - (1 - u) * dur });

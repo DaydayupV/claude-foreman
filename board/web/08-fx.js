@@ -90,10 +90,11 @@ function webPalette() {
   const keys = [...new Set(B.lanes.filter((l) => l.runs.length).map((l) => { const r = latest(l); return avatarFor(r.model, r.agent_type); }))];
   return Object.assign(keys.map((k) => (a) => rgba(k, a)), { key: keys.join('|') });
 }
-// 星系的星点按它上色：Claude Code 加上此刻正在跑的席位，和宇宙里小星系的规则一样（08-uni-galaxy.js 的 drawGalaxyOf）
-function starPalette(t) {
+// 星系的星点按它上色：Claude Code 加上此刻正在跑的席位，和宇宙里小星系的规则一样（08-uni-galaxy.js 的 drawGalaxyOf）。
+// 在不在跑用 drawFx 这一帧已经算好的活跃程度（live），不再逐条车道重算状态
+function starPalette(t, lanes, live) {
   const keys = new Set(['claude']);
-  for (const lane of seatLanes(t)) if (laneStatus(lane, t).running) { const r = currentRun(lane, t); keys.add(avatarFor(r.model, r.agent_type)); }
+  for (const lane of lanes) if (lane.id !== 'cc' && live.get(lane.id) > 0.5) { const r = currentRun(lane, t); if (r) keys.add(avatarFor(r.model, r.agent_type)); }
   return [...keys].map((k) => (a) => rgba(k, a));
 }
 
@@ -272,7 +273,7 @@ function drawFx(t, L) {
       drawNebula(L, P, t, rates, pal);
       drawDust(L);
       drawCore(L.core, Math.min(1, total + 0.5 * beat.env), pal);
-      drawGalaxy(L.core, Math.min(1, total + 0.9 * beat.env), starPalette(t));
+      drawGalaxy(L.core, Math.min(1, total + 0.9 * beat.env), starPalette(t, lanes, live));
     } finally { ctx.restore(); FX.burst = null; FX.lw = lw; glowFlush(ctx); }
   }
   if (burst) drawFlash(burst, L.core.R);
