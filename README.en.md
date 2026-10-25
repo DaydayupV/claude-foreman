@@ -168,7 +168,7 @@ Prompt templates, command options and the checks are in [references/image-assets
 
 ### The web board
 
-Another way to watch besides the terminal live view, off by default: set `dispatch.watch.web` to `true` in the config, or run `/foreman-en:setup` (it decides from this computer's memory). While it's on, handoffs give the board link and no longer open the terminal live view by themselves; use `/foreman-en:watch` when you want the terminal view. A plugin hook shows the board link right in the conversation when work is handed off (once per message you send, however many runs it hands off), without relying on Claude Code to write it.
+Another way to watch besides the terminal live view, off by default: set `dispatch.watch.web` to `true` in the config, or run `/foreman-en:setup` (it decides from this computer's memory). While it's on, handoffs give the board link and no longer open the terminal live view by themselves; use `/foreman-en:watch` when you want the terminal view. After handing work off, Claude Code adds the board link to the sentence that tells you so (once per message you send, however many runs it hands off). A plugin hook also shows the link right before the handoff command runs; the desktop app folds it into the tool calls.
 
 - **Opening it**: when it's on, every handoff first gives a link in the conversation, then starts the work; `/foreman-en:watch` gives one too. It opens in your default browser: you see the star map first, then fly into that conversation's board on your own (a reload goes straight back to the board); it never opens inside the Claude app.
 - **The star map**:

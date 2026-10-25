@@ -4,7 +4,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { HERE, M, die, need, resolveDir, readBrief, isGitRepo, isAscii, agentTypeOf, closestMatches, pathKey, pidExists, sleep, LANGUAGE } from './util.mjs';
+import { HERE, M, die, need, resolveDir, readBrief, isGitRepo, isAscii, agentTypeOf, closestMatches, pathKey, pidExists, sleep } from './util.mjs';
 
 // 只输出结果的子命令接到 head 这类提前关掉管道的命令上时，写 stdout 会抛 EPIPE：读的一方已经够了，安静退出，
 // 不打 Node 的堆栈。会派活、会改记录的子命令不这样处理（中途退出会丢掉收尾）
@@ -392,7 +392,7 @@ async function cmdBoard(o) {
     if (!lock) fail(reason, child.pid);
   }
   const session = o.session ?? CLAUDE_SESSION;
-  const url = `http://127.0.0.1:${lock.port}/${lock.token}/?level=all&lang=${encodeURIComponent(LANGUAGE)}${session ? `&s=${encodeURIComponent(session)}` : ''}`;
+  const url = records.boardUrl(lock, session);
   process.stdout.write(JSON.stringify({ enabled: true, url, started }, null, 2) + '\n');
 }
 

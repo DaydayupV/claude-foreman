@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ENTRY, defaultRunsRoot, runsMovedNow, resolveAgentAlias, DEFAULT_AGENT_PARALLEL } from './config.mjs';
-import { M, die, notice, pidExists, processStartTimes, sleep, pathKey, clip, oneLine, plainCommand, retryBusy, replaceFile, PROFILE, profile } from './util.mjs';
+import { M, die, notice, pidExists, processStartTimes, sleep, pathKey, clip, oneLine, plainCommand, retryBusy, replaceFile, PROFILE, profile, LANGUAGE } from './util.mjs';
 import { D } from './format.mjs';
 import { acquireLock } from './locks.mjs';
 
@@ -50,6 +50,17 @@ process.argv.splice(2, 0, 'watch');
 await import(pathToFileURL(candidates.find((p) => fs.existsSync(p)) ?? candidates[0]).href);
 `;
   try { fs.writeFileSync(path.join(RUNS_ROOT, 'watch.mjs'), launcher); } catch { /* 不影响主流程 */ }
+}
+
+// 网页看板的地址：直接进入这个对话（session 为空时进宇宙）
+const boardUrl = (lock, session = CLAUDE_SESSION) =>
+  `http://127.0.0.1:${lock.port}/${lock.token}/?level=all&lang=${encodeURIComponent(LANGUAGE)}${session ? `&s=${encodeURIComponent(session)}` : ''}`;
+// 派出时附带的看板地址：只读锁文件、看进程在不在，不等也不启动服务（钩子在派出前已经用 board 启动好了），没在跑就不给
+function liveBoardUrl() {
+  try {
+    const lock = JSON.parse(fs.readFileSync(path.join(RUNS_ROOT, 'board.lock.json'), 'utf8'));
+    return lock.port > 0 && lock.token && Number.isInteger(lock.pid) && pidExists(lock.pid) ? boardUrl(lock) : null;
+  } catch { return null; }
 }
 
 // 并发上限按协作方算，任何任务（分不分组、哪个会话）都要在锁内登记并做准入检查，调用方用完 release。
@@ -722,4 +733,4 @@ function isRunning(m, { query = true } = {}) {
 }
 const UNVERIFIED_LIMIT_MS = 25 * 3600000;
 
-export { RUNS_ROOT, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, saveMeta, metaWriteWarning, settleMeta, findRun, describeActivity, groupRuns, checkAdmission, readRunsLocked, runEnd, runOutcome, resumeVerdict, resultValid, resumedRuns, groupTally, groupSummary, groupScopeOwner, absolute, readMeta, checkRunners, isRunning, writesFiles };
+export { RUNS_ROOT, boardUrl, liveBoardUrl, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, saveMeta, metaWriteWarning, settleMeta, findRun, describeActivity, groupRuns, checkAdmission, readRunsLocked, runEnd, runOutcome, resumeVerdict, resultValid, resumedRuns, groupTally, groupSummary, groupScopeOwner, absolute, readMeta, checkRunners, isRunning, writesFiles };

@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { RUNS_ROOT, CLAUDE_SESSION, registerRun, concurrentExecRuns, absolute, isCancelled, cancelSource, saveMeta, metaWriteWarning, readMeta } from './records.mjs';
+import { RUNS_ROOT, CLAUDE_SESSION, liveBoardUrl, registerRun, concurrentExecRuns, absolute, isCancelled, cancelSource, saveMeta, metaWriteWarning, readMeta } from './records.mjs';
 import { makeTracker } from './tracker.mjs';
 import { computeReviewMaterial } from './review-scope.mjs';
 import { M, LANGUAGE, die, notice, relativePath, pathKey, modelOf, replaceFile, killTree, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision } from './util.mjs';
@@ -285,6 +285,9 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
   const { meta, writeMeta } = run;
   fs.writeFileSync(path.join(dir, 'brief.md'), prompt);
   process.stderr.write(`foreman: ${ctx.module === 'image' ? D.startedImage(mode === 'resume' ? 'resume' : 'image', modelLabel(meta, { source: true }), ctx.cell, '①②③④'[ctx.route - 1], dir) : D.started(mode, modelLabel(meta, { source: true }), level, dir)}\n`);
+  // 网页看板开着时紧接着给出这个对话的看板地址：Claude Code 写"已派出"那句话时照着附上（钩子显示的那条在桌面版里是折起来的）
+  const board = ctx.cfg.dispatch.watch.web ? liveBoardUrl() : null;
+  if (board) process.stderr.write(`foreman: ${D.boardLine(board)}\n`);
   if (snapshotRequired) notice(M.unsandboxedRun(agent.run_access));
 
   const warnings = [];
