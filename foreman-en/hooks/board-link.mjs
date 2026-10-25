@@ -24,8 +24,8 @@ const MESSAGES = {
 };
 // 要结束这一轮、正文里却还没写看板链接时拦下的理由（Stop 的 reason，Claude 照着补上再结束）
 const STOP_REASONS = {
-  zh: (url) => `foreman：这一轮在后台派出了任务，但回复正文里还没有告诉用户、附上看板链接。结束前先用一句话告诉用户"已派出：…"（派出没成功的话照实说明），句中附上 [网页看板](${url || '派出命令输出的 foreman: web board 那一行的地址'})，然后再结束这一轮。`,
-  en: (url) => `foreman: work was handed off in the background this turn, but your reply text hasn't told the user or given the board link. Before ending the turn, tell the user in one sentence that it was handed off (or, if the handoff failed, say so), with [web board](${url || 'the address on the handoff command\'s foreman: web board line'}) in that sentence.`,
+  zh: (url) => `foreman：这一轮在后台派出了任务，但回复正文里还没有告诉用户、附上看板链接。结束前先用一句话告诉用户"已派出：…"（派出没成功的话照实说明），句中附上 [网页看板](${url || '派出命令输出的 foreman: web board 那一行的地址'})，然后再结束这一轮。只写在思考里的不算，用户看不到；直接写这句话，不用向用户解释这条提示。`,
+  en: (url) => `foreman: work was handed off in the background this turn, but your reply text hasn't told the user or given the board link. Before ending the turn, tell the user in one sentence that it was handed off (or, if the handoff failed, say so), with [web board](${url || 'the address on the handoff command\'s foreman: web board line'}) in that sentence. A sentence only in your thinking doesn't count, since the user can't see it; just write the sentence, without explaining this notice to the user.`,
 };
 
 const unquote = (s) => String(s ?? '').replace(/^["']|["']$/g, '');
