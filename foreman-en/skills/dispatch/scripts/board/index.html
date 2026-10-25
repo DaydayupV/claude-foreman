@@ -1223,6 +1223,7 @@ const B = {
   total: 0,               // 收到的事件总数（含已丢掉的）
   connected: false,
   done: false,            // 回放已发完
+  synced: false,          // 直播连上后开头那一批已经收完（服务发 synced）：之后到的才是新发生的事（节拍只给它们，04-life.js）
   error: null,
   version: 0,             // 数据每变一次加一，面板据此决定要不要重画
   clock: { mode: 'live', start: 0, end: 0, speed: 1, perf0: 0, frozenAt: null },
@@ -1336,7 +1337,7 @@ function reset() {
 
 function onHello(h) {
   reset();
-  B.hello = h;
+  B.hello = h; B.synced = false;
   const c = B.clock;
   c.mode = h.mode;
   if (h.replay) Object.assign(c, { start: h.replay.start, end: h.replay.end, speed: h.replay.speed || 1 });
@@ -1530,6 +1531,7 @@ function connect() {
   on('ev_link', onEvLink);
   on('backlog', onBacklog);
   on('done', () => { B.done = true; B.version++; });
+  on('synced', () => { B.synced = true; });
   es.onopen = () => { B.connected = true; B.error = null; };
   es.onerror = () => { B.connected = false; B.error = es.readyState === 2 ? 'closed' : 'reconnecting'; };
 }
@@ -2306,23 +2308,30 @@ function ccAway(L, t) {
 // 相关的光路短暂变宽（08-fx.js 的 drawFx 和 08-beams.js 用）。派出和交回最明显，读走结果、记下裁决次之，Claude Code 回一句话最轻。
 // 按记录时间算，回放、暂停、拖动时间线时和直播一样；几下叠在一起取最大值，离上一下不到 0.8 屏幕秒、又不比它强的就并掉
 // （同一次派出既有 Claude Code 的派出动作、又有那一席的任务启动，只算一下），事件密时不会一直闪。
-// 直播里事件要过一会儿才送到页面（看板服务每秒推一次，晚 0.2–1 秒），按记录时刻算的话到的时候已经暗了：
-// 直播时一下从页面第一次看到它起算，到的时候正好最亮；第一次看到时已经过去 BEAT.late 秒以上的不算（刚打开页面时的旧事件）。
-// 回放照旧按记录时刻。返回 { env: 整体强度 0–1, lanes: 车道 id → 这条车道的强度 }
-const BEAT = { window: 1.2, decay: 4.5, merge: 0.8, late: 1.5, seen: new Map(), kinds: { dispatch: 0.9, result: 0.8, collect: 0.6, verdict: 0.6, msg: 0.45 } };
+// 直播里事件要过一会儿才送到页面：看板服务每秒推一次；Claude Code 一条回复里的文字和工具调用要等整条（包括后面的工具调用）
+// 生成完才一起写进记录，工具调用前的那句话会晚几秒到几十秒。按记录时刻算的话到的时候已经暗了：直播时一下从页面第一次看到它起算，
+// 到的时候正好最亮。连上服务（打开页面、换对话、重连）后开头那一批是旧事件（服务发 synced 之前，01-state.js），不算；
+// 之后新到的都算，晚了 BEAT.late 秒以上的除外。回放照旧按记录时刻。返回 { env: 整体强度 0–1, lanes: 车道 id → 这条车道的强度 }
+const BEAT = { window: 1.2, decay: 4.5, merge: 0.8, late: 120, seen: new Map(), hello: undefined, synced: false, kinds: { dispatch: 0.9, result: 0.8, collect: 0.6, verdict: 0.6, msg: 0.45 } };
 function beatsAt(t) {
   const live = B.clock.mode !== 'replay', from = t - recMs(BEAT.window + (live ? BEAT.late : 0)), list = [];
+  // 每次连上都会先收到新的 hello：上一次连接记下的不用了
+  if (live && BEAT.hello !== B.hello) { BEAT.hello = B.hello; BEAT.seen.clear(); BEAT.synced = false; }
+  // 收完开头那一批以后第一次算时，已经在的也都是旧的：那一批和 synced 常常一起到，中间不一定画过一帧
+  const old = !B.synced || !BEAT.synced;
+  if (live && B.synced) BEAT.synced = true;
   const add = (ts, kind, lanes) => {
     if (!(ts > from && ts <= t)) return;
     let at = ts;
     if (live) {
       const key = `${kind}|${lanes[0]}|${ts}`;
-      if (!BEAT.seen.has(key)) BEAT.seen.set(key, { ts, at: t - ts > recMs(BEAT.late) ? -Infinity : t });
+      if (!BEAT.seen.has(key)) BEAT.seen.set(key, { ts, at: old || t - ts > recMs(BEAT.late) ? -Infinity : t });
       at = BEAT.seen.get(key).at;
     }
     if (at > t - recMs(BEAT.window)) list.push({ ts: at, s: BEAT.kinds[kind], lanes });
   };
-  for (const [key, v] of BEAT.seen) if (v.ts < t - recMs(10)) BEAT.seen.delete(key);
+  // 记到看的范围以外为止（服务整份重发某个任务的事件时，范围里的不会再算一次）
+  for (const [key, v] of BEAT.seen) if (v.ts <= from) BEAT.seen.delete(key);
   const cc = B.laneById.get('cc');
   if (cc) for (let i = cc.events.length - 1; i >= 0 && cc.events[i].ts > from; i--) {
     const e = cc.events[i];
@@ -2905,7 +2914,8 @@ function zoomAt(sx, sy, factor) {
 }
 function zoomToBox(b) {
   const r = viewEl.getBoundingClientRect(), k = Math.min((r.height * 0.62) / b.h, (r.width * 0.4) / b.w);
-  VIEW.goal = { k, tx: r.width / 2 - (b.x + b.w / 2) * k, ty: r.height / 2 - (b.y + b.h / 2) * k };
+  // 只有点卡片飞过去才可能是"卡片间的移动"（newViewGoal）；滚轮、键盘缩放始终绕鼠标或中心走
+  VIEW.goal = { k, tx: r.width / 2 - (b.x + b.w / 2) * k, ty: r.height / 2 - (b.y + b.h / 2) * k, hop: true };
   VIEW.auto = false;
 }
 
@@ -2920,13 +2930,14 @@ function viewAt(a, b, u) {
 }
 // 平常跟着目标走的快慢：时间常数（秒），约等于原来 60 帧时每帧挪 22%；按真实经过的时间算，帧率高低不影响快慢
 const VIEW_TAU = 0.067;
-// 两个近景之间（缩放都在适配的 1.2 倍以上、差不多大）挪动超过视图宽度的 0.25 时（放大看着一张卡片、再点旁边的另一张），
-// 改成定时 0.7 秒的移动，中途先拉远再推近，看得出是从哪里挪到哪里；拉远 10% 起，每挪一个视图宽度多 10%，最多 30%
+// 点卡片时两个近景之间（缩放都在适配的 1.2 倍以上、差不多大）挪动超过视图宽度的 0.25（放大看着一张卡片、再点旁边的另一张），
+// 改成定时 0.7 秒的移动，中途先拉远再推近，看得出是从哪里挪到哪里；拉远 10% 起，每挪一个视图宽度多 10%，最多 30%。
+// 滚轮缩放不走这里：放大以后滚一格的平移也会超过 0.25 个视图宽，拉远会让鼠标下那一点跑掉
 const VIEW_HOP = { dur: 700, min: 0.25 };
 function newViewGoal(g, ms) {
   VIEW.seen = g; VIEW.hop = null;
   const kf = kFit(), far = Math.hypot(g.tx - VIEW.tx, g.ty - VIEW.ty) / (viewBox().cw || 1);
-  if (VIEW.k > kf * 1.2 && g.k > kf * 1.2 && Math.abs(Math.log(g.k / VIEW.k)) < 0.3 && far > VIEW_HOP.min)
+  if (g.hop && VIEW.k > kf * 1.2 && g.k > kf * 1.2 && Math.abs(Math.log(g.k / VIEW.k)) < 0.3 && far > VIEW_HOP.min)
     VIEW.hop = { from: { k: VIEW.k, tx: VIEW.tx, ty: VIEW.ty }, t0: ms, depth: Math.min(0.3, 0.1 + 0.1 * far) };
 }
 
