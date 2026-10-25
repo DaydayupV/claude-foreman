@@ -50,6 +50,12 @@ function webPalette() {
   const keys = [...new Set(B.lanes.filter((l) => l.runs.length).map((l) => { const r = latest(l); return avatarFor(r.model, r.agent_type); }))];
   return keys.map((k) => (a) => rgba(k, a));
 }
+// 星系的星点按它上色：Claude Code 加上此刻正在跑的席位，和宇宙里小星系的规则一样（08-uni-galaxy.js 的 drawGalaxyOf）
+function starPalette(t) {
+  const keys = new Set(['claude']);
+  for (const lane of seatLanes(t)) if (laneStatus(lane, t).running) { const r = currentRun(lane, t); keys.add(avatarFor(r.model, r.agent_type)); }
+  return [...keys].map((k) => (a) => rgba(k, a));
+}
 
 function drawCore(c, intensity, pal) {
   if (!FX.web || FX.webR !== c.R) buildWeb(c.R);
@@ -192,7 +198,7 @@ function drawFx(t, L) {
       drawNebula(L, P, t, rates, pal);
       drawDust(L);
       drawCore(L.core, total, pal);
-      drawGalaxy(L.core, total);
+      drawGalaxy(L.core, total, starPalette(t));
     } finally { ctx.restore(); FX.burst = null; FX.lw = lw; }
   }
   if (burst) drawFlash(burst, L.core.R);

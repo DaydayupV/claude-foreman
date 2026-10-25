@@ -47,7 +47,8 @@ function cloud(x, y, rx, ry, color, a) {
 function drawNebula(L, P, t, rates, pal = []) {
   if (!LOOK.nebula) return;
   const c = L.core, sec = performance.now() / 1000;
-  cloud(c.cx, c.cy, c.R * 1.25, c.R * 0.95, (a) => `rgba(210,210,222,${a * 0.75})`, 0.09);
+  // 打底的大团柔光用 Claude Code 的颜色，和宇宙里小星系的盘面柔光一样（08-uni-galaxy.js）；偏上那团白光留着做层次
+  cloud(c.cx, c.cy, c.R * 1.25, c.R * 0.95, (a) => rgba('claude', a * 0.75), 0.09);
   cloud(c.cx + c.R * 0.25, c.cy - c.R * 0.2, c.R * 0.8, c.R * 0.55, (a) => `rgba(240,240,248,${a * 0.6})`, 0.05);
   // 各模型颜色的几团淡云，绕着核心慢慢转，和上色的弧线一起成星云
   pal.forEach((col, i) => {
@@ -88,14 +89,18 @@ function drawDust(L) {
   }
 }
 
-// 星系核心：中心亮核、两道倾斜的轨道环（上面有光点在走）、闪烁的星点；画在核心网上面
+// 星系核心：中心亮核、两道倾斜的轨道环（上面有光点在走）、闪烁的星点；画在核心网上面。
+// 配色和宇宙里的小星系一样（08-uni-galaxy.js）：亮核是 Claude Code 的暖色，星点六成白、四成取出场模型的颜色（pal：
+// Claude Code 加上正在跑的席位），飞入时交过来的橙色亮核落地后还是橙色
 const TWINKLE = (() => {
-  const rand = rng(90127), list = [];
-  for (let i = 0; i < 70; i++) { const a = rand() * 6.283, r = Math.sqrt(rand()); list.push({ a, r, s: 0.8 + rand() * 1.6, f: 0.8 + rand() * 2.5, ph: rand() * 6.28 }); }
+  const rand = rng(90127), tints = rng(90128), list = [];
+  for (let i = 0; i < 70; i++) { const a = rand() * 6.283, r = Math.sqrt(rand()); list.push({ a, r, s: 0.8 + rand() * 1.6, f: 0.8 + rand() * 2.5, ph: rand() * 6.28, tint: tints() }); }
   return list;
 })();
+const starWhite = (a) => `rgba(248,248,252,${a})`;
+const starColor = (tint, pal) => (tint < 0.6 || !pal.length ? starWhite : pal[Math.floor(tint * 10) % pal.length]);
 
-function drawGalaxy(c, intensity) {
+function drawGalaxy(c, intensity, pal = []) {
   if (!LOOK.galaxy) return;
   const sec = performance.now() / 1000;
   ctx.save();
@@ -106,21 +111,22 @@ function drawGalaxy(c, intensity) {
     ctx.translate(c.cx, c.cy); ctx.rotate(tilt + Math.sin(sec * 0.05) * 0.06);
     ctx.strokeStyle = `rgba(235,235,242,${a})`; ctx.lineWidth = 0.8 * FX.lw;
     ctx.beginPath(); ctx.ellipse(0, 0, c.R * rx, c.R * ry, 0, 0, 6.283); ctx.stroke();
+    // 每道环上三颗光点：第一颗取出场模型的颜色（两道环取调色板里不同的两个），另两颗白色
     for (let j = 0; j < 3; j++) {
       const th = sec * spin * 6.283 + j * 2.09;
-      glowDot(Math.cos(th) * c.R * rx, Math.sin(th) * c.R * ry, 1.5, (x) => `rgba(240,240,248,${x})`, 0.8);
+      glowDot(Math.cos(th) * c.R * rx, Math.sin(th) * c.R * ry, 1.5, j ? starWhite : starColor(spin > 0 ? 0.6 : 0.7, pal), 0.8);
     }
     ctx.restore();
   }
   // 闪烁的星点
   for (const s of TWINKLE) {
     const a = 0.25 + 0.6 * Math.max(0, Math.sin(sec * s.f + s.ph));
-    ctx.fillStyle = `rgba(248,248,252,${a.toFixed(3)})`;
+    ctx.fillStyle = starColor(s.tint, pal)(a.toFixed(3));
     ctx.beginPath(); ctx.arc(c.cx + Math.cos(s.a) * s.r * c.R * 0.92, c.cy + Math.sin(s.a) * s.r * c.R * 0.92, s.s * FX.lw * 0.7, 0, 6.283); ctx.fill();
   }
-  // 中心亮核
+  // 中心亮核：正中一点暖白高光，外面一圈 Claude Code 的橙色光晕
   const g = ctx.createRadialGradient(c.cx, c.cy, 0, c.cx, c.cy, c.R * 0.28);
-  g.addColorStop(0, `rgba(248,248,252,${0.35 + 0.25 * intensity})`); g.addColorStop(0.25, `rgba(220,220,230,${0.14 + 0.1 * intensity})`); g.addColorStop(1, 'rgba(200,200,210,0)');
+  g.addColorStop(0, `rgba(255,244,232,${0.35 + 0.25 * intensity})`); g.addColorStop(0.25, rgba('claude', 0.14 + 0.1 * intensity)); g.addColorStop(1, rgba('claude', 0));
   ctx.fillStyle = g; ctx.beginPath(); ctx.arc(c.cx, c.cy, c.R * 0.28, 0, 6.283); ctx.fill();
   ctx.restore();
 }
