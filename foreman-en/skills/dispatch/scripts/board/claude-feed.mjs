@@ -21,6 +21,8 @@ export function promptOf(row) {
     value = task ?? peer;
   } else if (origin != null ? !['human', 'peer'].includes(origin)
     : row.isMeta || /^<(?:system-reminder>|command-|local-command|task-notification>)/.test(value)) return null;
+  // 按下停止时 Claude Code 记的一行中断标记，不是用户说的话（也没有来源字段）
+  if (/^\[Request interrupted by user[^\]]*\]$/.test(value)) return null;
   if (origin === 'peer') value = peer ?? value;
   const command = /<command-name>([\s\S]*?)<\/command-name>/.exec(value)?.[1];
   if (command) value = [command.trim(), /<command-args>([\s\S]*?)<\/command-args>/.exec(value)?.[1]?.trim()].filter(Boolean).join(' ');
