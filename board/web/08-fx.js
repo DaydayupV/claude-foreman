@@ -107,7 +107,7 @@ function drawCore(c, intensity, pal) {
     ctx.translate(c.cx, c.cy);
     // 炸开时各层带着多转的角度甩出来，越往后越慢；线条先亮再回落到平常（FX.burst，见 burstOf）
     const b = FX.burst, boost = b ? 1 + 1.6 * b.boost : 1;
-    ctx.rotate(Math.sin(sec * speed) * 0.35 + sec * speed * 0.2 + (b ? Math.sign(speed) * 2.4 * b.spin : 0));
+    ctx.rotate(Math.sin(sec * speed) * 0.35 + sec * speed * 0.2 + Math.sign(speed) * (FX.kick || 0) * Math.abs(speed) / 0.02 + (b ? Math.sign(speed) * 2.4 * b.spin : 0));
     // 最外面那层是远景：平时贴预先画好的半分辨率图（看着虚、远），炸开时照常一条条画
     if (i === 0 && !b && farLayer(c.R, FX.web[0], pal)) {
       ctx.globalAlpha *= (0.6 + 0.4 * intensity) * FAR.dim;
@@ -247,6 +247,11 @@ function drawFx(t, L) {
   const lanes = [B.laneById.get('cc'), ...seatLanes(t)].filter((l) => l && latest(l) && P.has(l.id));
   const rates = new Map(lanes.map((l) => [l.id, rateAt(l, t)]));
   const total = smooth('total', glow([...rates.values()].reduce((a, b) => a + b, 0)));
+  // 节拍（04-life.js 的 beatsAt）：再算上输出突然加快（08-surge.js）；转动被推一把按屏幕时间累加，减少动态效果时不推
+  const beat = FX.beat = beatsAt(t), ms = performance.now(), dt = Math.min(0.1, (ms - (FX.kickAt || ms)) / 1000);
+  for (const lane of lanes) { const age = surgeAge(lane.id); if (age != null && age < BEAT.window) { const e = 0.45 * Math.exp(-age * BEAT.decay); beat.env = Math.max(beat.env, e); beat.lanes.set(lane.id, Math.max(beat.lanes.get(lane.id) || 0, e)); } }
+  FX.kickAt = ms;
+  if (!reduceMotion.matches) FX.kick = (FX.kick || 0) + dt * 1.0 * beat.env;
   // 每个模型的活跃程度（0–1）平滑过渡，互联网光线和输出通道共用
   const live = new Map(lanes.map((l) => [l.id, smooth(`live|${l.id}`, laneActive(l, t) ? 1 : 0)]));
   // 刻度带的展开程度也平滑（最后一组离开时慢慢收起）
@@ -266,8 +271,8 @@ function drawFx(t, L) {
     try {
       drawNebula(L, P, t, rates, pal);
       drawDust(L);
-      drawCore(L.core, total, pal);
-      drawGalaxy(L.core, total, starPalette(t));
+      drawCore(L.core, Math.min(1, total + 0.5 * beat.env), pal);
+      drawGalaxy(L.core, Math.min(1, total + 0.9 * beat.env), starPalette(t));
     } finally { ctx.restore(); FX.burst = null; FX.lw = lw; glowFlush(ctx); }
   }
   if (burst) drawFlash(burst, L.core.R);

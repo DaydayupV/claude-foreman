@@ -98,7 +98,8 @@ const OUT_BASE_I = 0.06;
 function drawRibbon(lane, p, t, rate, pulses, live) {
   const life = outLife(lane, t), shown = life.phase === 'show' ? 1 : 0;
   const base = shown || life.phase === 'gather' && laneStatus(lane, t).running ? OUT_BASE_I : 0;
-  const I = smooth(`rI|${lane.id}`, Math.max(glow(rate), recentlyBusy(lane, t) ? 0.22 : 0, base));
+  // 节拍（04-life.js 的 beatsAt）让这条光路短暂变宽
+  const I = smooth(`rI|${lane.id}`, Math.max(glow(rate), recentlyBusy(lane, t) ? 0.22 : 0, base, 0.45 * (FX.beat?.lanes.get(lane.id) || 0)));
   live = Math.max(live || 0, 0.6 * smooth(`box|${lane.id}`, shown));
   // 框还没出现时通道收进那团汇聚的光（08-outlife.js）
   const tg = smoothTarget(lane.id, outTarget(p.outbox, life), p.outbox), c = p.card, x0 = c.x + c.w + 1, x1 = tg.x, mid = (x0 + x1) / 2, wf = 0.08 + 0.92 * Math.pow(I, 1.4);
@@ -115,7 +116,7 @@ function drawCCOut(cc, box, pulses, rate, live, t) {
   // Claude Code 的光团只在它活跃时出现（04-life.js 的 ccLife），所以光团在就按最低流速连着
   const life = ccLife(t), shown = life.phase === 'show' ? 1 : 0, base = shown || life.phase === 'gather' ? OUT_BASE_I : 0;
   live = Math.max(live || 0, 0.6 * smooth('box|cc', shown));
-  const c = cc.card, tg = smoothTarget('cc', outTarget(box, life), box), I = smooth('rI|cc', Math.max(glow(rate), base)), wf = 0.08 + 0.92 * Math.pow(I, 1.4);
+  const c = cc.card, tg = smoothTarget('cc', outTarget(box, life), box), I = smooth('rI|cc', Math.max(glow(rate), base, 0.45 * (FX.beat?.lanes.get('cc') || 0))), wf = 0.08 + 0.92 * Math.pow(I, 1.4);
   const half = tg.box ? tg.half * (0.35 + 0.65 * wf) : tg.half;
   const edge = (f) => {
     const s = 0.5 + (f - 0.5) * wf, xa = c.x + 6 + (c.w - 12) * s, yb = tg.y + (f - 0.5) * 2 * half, lift = Math.max(60, c.y - box.y) * (0.75 + 0.25 * (1 - s));

@@ -242,3 +242,38 @@ function ccAway(L, t) {
   const p = clamp01((now - CC_AWAY.at) / dur);
   return CC_AWAY.away ? p : 1 - p;
 }
+
+// ---- 节拍 ----
+// 用真实发生的事当节拍（不放假的节奏）：每一下产生一个很快衰减的强度，弧线区的亮核闪一下、核心网的转动被推一把、
+// 相关的光路短暂变宽（08-fx.js 的 drawFx 和 08-beams.js 用）。派出和交回最明显，读走结果、记下裁决次之，Claude Code 回一句话最轻。
+// 按记录时间算，回放、暂停、拖动时间线时和直播一样；几下叠在一起取最大值，离上一下不到 0.8 屏幕秒、又不比它强的就并掉
+// （同一次派出既有 Claude Code 的派出动作、又有那一席的任务启动，只算一下），事件密时不会一直闪。
+// 返回 { env: 整体强度 0–1, lanes: 车道 id → 这条车道的强度 }
+const BEAT = { window: 1.2, decay: 4.5, merge: 0.8, kinds: { dispatch: 0.9, result: 0.8, collect: 0.6, verdict: 0.6, msg: 0.45 } };
+function beatsAt(t) {
+  const from = t - recMs(BEAT.window), list = [];
+  const add = (ts, kind, lanes) => { if (ts > from && ts <= t) list.push({ ts, s: BEAT.kinds[kind], lanes }); };
+  const cc = B.laneById.get('cc');
+  if (cc) for (let i = cc.events.length - 1; i >= 0 && cc.events[i].ts > from; i--) {
+    const e = cc.events[i];
+    if (e.k === 'msg') add(e.ts, 'msg', ['cc']);
+    else if (e.k === 'dispatch' || e.k === 'collect') add(e.ts, e.k, ['cc', ...(e.target || [])]);
+  }
+  for (const lane of B.lanes) {
+    if (lane.id === 'cc' || lane.ghost) continue;
+    for (const r of lane.runs) { if (r.kind === 'answer') continue; add(r.started_at, 'dispatch', [lane.id]); if (r.ended_at != null) add(r.ended_at, 'result', [lane.id]); }
+  }
+  for (const v of B.life) if (v.k === 'verdict' && v.lane) add(v.ts, 'verdict', [v.lane]);
+  list.sort((a, b) => a.ts - b.ts);
+  const out = { env: 0, lanes: new Map() };
+  let last = -Infinity, lastS = 0;
+  for (const b of list) {
+    // 各条车道自己的光路照样跟着每一下变宽；并掉的只是整体那一下闪
+    const e = b.s * Math.exp(-secSince(b.ts, t) * BEAT.decay);
+    for (const id of b.lanes) out.lanes.set(id, Math.max(out.lanes.get(id) || 0, e));
+    if (secSince(last, b.ts) < BEAT.merge && b.s <= lastS) continue;
+    last = b.ts; lastS = b.s;
+    out.env = Math.max(out.env, e);
+  }
+  return out;
+}
