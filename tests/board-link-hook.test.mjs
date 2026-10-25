@@ -71,9 +71,23 @@ test('网页看板开着时显示带对话 id 的链接（服务没在跑就启�
     assert.ok(fs.existsSync(path.join(path.dirname(h.userConfig), 'board-shown', 's1')));
     // 不是派出任务的命令不显示
     assert.equal((await h.hook('board-link.mjs', { cwd: h.cwd, session_id: 's3', tool_input: { command: `node "${cli}" status` } })).stdout, '');
+    // 派出命令在后台启动以后（PostToolUse）：每次都提醒 Claude 先在正文里写"已派出"并附链接，和"已显示"的标记无关；
+    // 前台跑的（这时已经跑完）和不是派出任务的命令不提醒
+    const post = (input) => h.hook('board-link.mjs', { cwd: h.cwd, session_id: 's1', hook_event_name: 'PostToolUse', tool_input: input });
+    const background = { command: `node "${cli}" run --level simple`, run_in_background: true };
+    const reminded = await post(background);
+    assert.equal(reminded.code, 0, reminded.stderr);
+    const { hookSpecificOutput: out } = JSON.parse(reminded.stdout);
+    assert.equal(out.hookEventName, 'PostToolUse');
+    assert.ok(out.additionalContext.includes(`[网页看板](http://127.0.0.1:${lock.port}/${lock.token}/?level=all&lang=zh&s=s1)`), out.additionalContext);
+    assert.match(out.additionalContext, /正文/);
+    assert.ok((await post(background)).stdout);
+    assert.equal((await post({ command: `node "${cli}" run --level simple` })).stdout, '');
+    assert.equal((await post({ command: `node "${cli}" status`, run_in_background: true })).stdout, '');
     config.dispatch.watch = { terminal: true, web: false };
     h.config(config);
     assert.equal((await run('s4')).stdout, '');
+    assert.equal((await post(background)).stdout, '');
     // 和 cli.mjs 一样，项目配置关不掉网页看板
     config.dispatch.watch = { terminal: true, web: true };
     h.config(config); h.write('.claude/foreman.json', { dispatch: { watch: { web: false } } });
