@@ -83,16 +83,21 @@ function boardMix(t) {
 // spread 是几团离中心多远（1 是绕着核心摆开，小于 1 往中心收拢、互相叠在一起），size 是每团的大小
 // 近乎白色、灰色的颜色（ChatGPT、认不出的模型）当星云色叠多了是一层灰雾，把画面洗灰：这几种淡一半
 const PALE = new Set(['chatgpt', 'unknown']);
-function drawMixNebula(x, y, R, flat, mix, fade, seed = 0, { spread = 1, size = 1 } = {}) {
+// cap：几团加起来的亮度上限（相对 fade）。叠加混色时模型越多越亮，同时跑四五个模型会亮成一团；
+// 给了 cap 就按比例压到上限以内，一两种颜色时不受影响
+const lobesOf = (m) => 1 + Math.round(2 * Math.sqrt(m.w));
+const lobeAlpha = (m) => (0.08 + 0.12 * Math.sqrt(m.w)) * (m.running ? 1.3 : 1) * (PALE.has(m.key) ? 0.5 : 1);
+function drawMixNebula(x, y, R, flat, mix, fade, seed = 0, { spread = 1, size = 1, cap = Infinity } = {}) {
   const sec = performance.now() / 1000, prev = ctx.globalCompositeOperation;
+  const total = mix.reduce((sum, m) => sum + lobesOf(m) * lobeAlpha(m), 0), scale = total > cap ? cap / total : 1;
   ctx.globalCompositeOperation = 'lighter';
   mix.forEach((m, i) => {
-    const rand = rng(hash(`neb|${m.key}`) + seed), lobes = 1 + Math.round(2 * Math.sqrt(m.w)), dir = i % 2 ? -1 : 1;
+    const rand = rng(hash(`neb|${m.key}`) + seed), lobes = lobesOf(m), dir = i % 2 ? -1 : 1;
     // 每种颜色占一个方向（按它在配色里的位置均分一圈），几团在这个方向两侧散开；整圈慢慢转，相邻两种颜色在交界处混在一起
     const home = (i / mix.length) * 6.283 + rand() * 0.6;
     for (let j = 0; j < lobes; j++) {
       const ang = home + (j - (lobes - 1) / 2) * 0.85 + rand() * 0.35 + sec * (0.01 + 0.01 * rand()) * dir, r = R * spread * (0.3 + 0.32 * rand());
-      const rx = R * size * (0.36 + 0.3 * rand()) * (0.8 + 0.5 * Math.sqrt(m.w)), a = fade * (0.08 + 0.12 * Math.sqrt(m.w)) * (m.running ? 1.3 : 1) * (PALE.has(m.key) ? 0.5 : 1);
+      const rx = R * size * (0.36 + 0.3 * rand()) * (0.8 + 0.5 * Math.sqrt(m.w)), a = fade * scale * lobeAlpha(m);
       cloud(x + Math.cos(ang) * r, y + Math.sin(ang) * r * flat, rx, rx * (0.55 + 0.25 * rand()) * Math.max(flat, 0.6), (al) => rgba(m.key, al), a);
     }
   });
