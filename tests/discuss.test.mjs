@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { plannedSandbox as sandbox, taskArgs, output, failed, poll, json, read, write, baseConfig, apiAgent, opencodeAgent, MESSAGES } from './helpers.mjs';
+import { plannedSandbox as sandbox, taskArgs, output, failed, poll, json, read, write, baseConfig, apiAgent, opencodeAgent, piAgent, MESSAGES } from './helpers.mjs';
 import { discussion } from './fixtures/reports.mjs';
 import { apiServer } from './fake/api-server.mjs';
 const M = MESSAGES.zh;
@@ -15,6 +15,21 @@ function configure(h, agents) {
   h.config(c);
 }
 const discussArgs = (h, agent, extra = []) => taskArgs(h, 'discuss', ['--agent', agent, ...extra]);
+
+test('网页看板开着时，每类协作方的开工行后面都紧跟这个对话的看板地址', async (t) => {
+  const h = sandbox(t), api = await apiServer(t);
+  configure(h, { api: apiAgent(api.url), oc: opencodeAgent(), pi: piAgent() });
+  const c = json(h.userConfig); c.dispatch.watch = { terminal: false, web: true }; h.config(c);
+  // 看板服务在跑：锁文件里的进程号用测试进程自己的
+  write(path.join(h.runs, 'board.lock.json'), { port: 4321, token: 'tok', pid: process.pid });
+  for (const agent of ['codex', 'api', 'oc', 'pi']) {
+    const s = h.scenario({ last_message: discussion }), r = await h.bridge(discussArgs(h, agent), { env: s.env });
+    output(r);
+    const lines = r.stderr.split('\n'), at = lines.findIndex((line) => line.startsWith('foreman: discuss started'));
+    assert.ok(at >= 0, `${agent}: ${r.stderr}`);
+    assert.match(lines[at + 1], /^foreman: web board http:\/\/127\.0\.0\.1:4321\/tok\/\?level=all&lang=zh/, agent);
+  }
+});
 
 test('Codex 讨论解析报告并传递只读规则和附件范围', async (t) => {
   const h = sandbox(t), s = h.scenario({ last_message: discussion });
