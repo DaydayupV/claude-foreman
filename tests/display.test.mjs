@@ -1052,15 +1052,26 @@ test('节拍取真实事件：派出最强，回一句话最轻；0.8 秒内不�
   assert.ok(near(c.beatsAt(t).env, at(0.9, 0.1)));
 });
 
-test('直播里节拍从页面第一次看到事件起算：晚到的照样最亮，第一次看到时已经过去 1.5 秒以上的不算', () => {
+test('直播里节拍从页面第一次看到事件起算：连上时已经在的不算，之后晚到 4 秒以内的照样最亮', () => {
   const b = displayBoard(), t = 100000, at = (s, age) => s * Math.exp(-age * 4.5), near = (x, y) => Math.abs(x - y) < 1e-9;
   b.B.clock.mode = 'live';
   b.onRun({ id: 'cc', lane: 'cc', kind: 'host', agent_type: 'host', model: 'opus', status: 'running', started_at: 0 });
+  // 刚打开页面：0.3 秒前的一句回话已经在了，第一次算时就是旧的
+  b.onEv({ run: 'cc', ts: t - 300, k: 'msg', t: 'before open' });
+  assert.equal(b.beatsAt(t).env, 0);
   // 0.6 秒前派出、现在才送到：从现在起算，正是最亮的时候；0.3 秒后按看到的时刻衰减
-  b.onRun({ id: 'late', model: 'm', kind: 'exec', status: 'running', started_at: t - 600, ended_at: null });
-  assert.ok(near(b.beatsAt(t).env, 0.9));
-  assert.ok(near(b.beatsAt(t + 300).env, at(0.9, 0.3)));
-  // 第一次看到时已经过去 2 秒（刚打开页面时的旧事件）：不算
-  b.onRun({ id: 'old', model: 'm', kind: 'exec', status: 'running', started_at: t + 300 - 2000, ended_at: null });
-  assert.equal(b.beatsAt(t + 300).lanes.get('old'), undefined);
+  b.onRun({ id: 'late', model: 'm', kind: 'exec', status: 'running', started_at: t + 100 - 600, ended_at: null });
+  assert.ok(near(b.beatsAt(t + 100).env, 0.9));
+  assert.ok(near(b.beatsAt(t + 400).env, at(0.9, 0.3)));
+  // Claude Code 的回话晚了 2.5 秒才到：照样满值；晚了 5 秒的多半是补发的旧记录，不算
+  const t2 = t + 3000;
+  b.onEv({ run: 'cc', ts: t2 - 2500, k: 'msg', t: 'slow write' });
+  assert.ok(near(b.beatsAt(t2).env, 0.45));
+  b.onRun({ id: 'old', model: 'm', kind: 'exec', status: 'running', started_at: t2 - 5000, ended_at: null });
+  assert.equal(b.beatsAt(t2).lanes.get('old'), undefined);
+  // 重连（新的 hello）：这时已经在的又都算旧的
+  const t3 = t2 + 3000;
+  b.B.hello = { v: 3 };
+  b.onRun({ id: 'again', model: 'm', kind: 'exec', status: 'running', started_at: t3 - 200, ended_at: null });
+  assert.equal(b.beatsAt(t3).env, 0);
 });
