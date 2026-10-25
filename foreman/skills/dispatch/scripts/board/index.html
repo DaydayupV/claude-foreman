@@ -2291,13 +2291,49 @@ function outLook(life) {
 const CC_AWAY_ANIM = 1.6; // 屏幕秒：前 40% 卡片缩成光点，后 60% 光点飞进亮核
 const CC_AWAY = { lane: null, away: false, at: -Infinity };
 function ccAway(L, t) {
-  const cc = B.laneById.get('cc');
-  const want = !!cc && !!latest(cc) && !L.groups.length && !laneStatus(cc, t).running && ccLife(t).phase === 'none';
+  // 看板只读最近一段时间的 Claude Code 记录：闲了很久的对话没有这条车道，也算闲下来了（不然卡片一直挂着"还没有记录"）
+  const cc = B.laneById.get('cc'), quiet = !cc || !latest(cc) || !laneStatus(cc, t).running && ccLife(t).phase === 'none';
+  const want = !L.groups.length && quiet;
   const now = performance.now(), dur = CC_AWAY_ANIM * 1000, u = clamp01((now - CC_AWAY.at) / dur);
   if (CC_AWAY.lane !== cc) Object.assign(CC_AWAY, { lane: cc, away: want, at: -Infinity });
   else if (want !== CC_AWAY.away) Object.assign(CC_AWAY, { away: want, at: now - (1 - u) * dur });
   const p = clamp01((now - CC_AWAY.at) / dur);
   return CC_AWAY.away ? p : 1 - p;
+}
+
+// ---- 节拍 ----
+// 用真实发生的事当节拍（不放假的节奏）：每一下产生一个很快衰减的强度，弧线区的亮核闪一下、核心网的转动被推一把、
+// 相关的光路短暂变宽（08-fx.js 的 drawFx 和 08-beams.js 用）。派出和交回最明显，读走结果、记下裁决次之，Claude Code 回一句话最轻。
+// 按记录时间算，回放、暂停、拖动时间线时和直播一样；几下叠在一起取最大值，离上一下不到 0.8 屏幕秒、又不比它强的就并掉
+// （同一次派出既有 Claude Code 的派出动作、又有那一席的任务启动，只算一下），事件密时不会一直闪。
+// 返回 { env: 整体强度 0–1, lanes: 车道 id → 这条车道的强度 }
+const BEAT = { window: 1.2, decay: 4.5, merge: 0.8, kinds: { dispatch: 0.9, result: 0.8, collect: 0.6, verdict: 0.6, msg: 0.45 } };
+function beatsAt(t) {
+  const from = t - recMs(BEAT.window), list = [];
+  const add = (ts, kind, lanes) => { if (ts > from && ts <= t) list.push({ ts, s: BEAT.kinds[kind], lanes }); };
+  const cc = B.laneById.get('cc');
+  if (cc) for (let i = cc.events.length - 1; i >= 0 && cc.events[i].ts > from; i--) {
+    const e = cc.events[i];
+    if (e.k === 'msg') add(e.ts, 'msg', ['cc']);
+    else if (e.k === 'dispatch' || e.k === 'collect') add(e.ts, e.k, ['cc', ...(e.target || [])]);
+  }
+  for (const lane of B.lanes) {
+    if (lane.id === 'cc' || lane.ghost) continue;
+    for (const r of lane.runs) { if (r.kind === 'answer') continue; add(r.started_at, 'dispatch', [lane.id]); if (r.ended_at != null) add(r.ended_at, 'result', [lane.id]); }
+  }
+  for (const v of B.life) if (v.k === 'verdict' && v.lane) add(v.ts, 'verdict', [v.lane]);
+  list.sort((a, b) => a.ts - b.ts);
+  const out = { env: 0, lanes: new Map() };
+  let last = -Infinity, lastS = 0;
+  for (const b of list) {
+    // 各条车道自己的光路照样跟着每一下变宽；并掉的只是整体那一下闪
+    const e = b.s * Math.exp(-secSince(b.ts, t) * BEAT.decay);
+    for (const id of b.lanes) out.lanes.set(id, Math.max(out.lanes.get(id) || 0, e));
+    if (secSince(last, b.ts) < BEAT.merge && b.s <= lastS) continue;
+    last = b.ts; lastS = b.s;
+    out.env = Math.max(out.env, e);
+  }
+  return out;
 }
 
 // ---- 04-rates.js
@@ -4238,7 +4274,8 @@ const OUT_BASE_I = 0.06;
 function drawRibbon(lane, p, t, rate, pulses, live) {
   const life = outLife(lane, t), shown = life.phase === 'show' ? 1 : 0;
   const base = shown || life.phase === 'gather' && laneStatus(lane, t).running ? OUT_BASE_I : 0;
-  const I = smooth(`rI|${lane.id}`, Math.max(glow(rate), recentlyBusy(lane, t) ? 0.22 : 0, base));
+  // 节拍（04-life.js 的 beatsAt）让这条光路短暂变宽
+  const I = smooth(`rI|${lane.id}`, Math.max(glow(rate), recentlyBusy(lane, t) ? 0.22 : 0, base, 0.45 * (FX.beat?.lanes.get(lane.id) || 0)));
   live = Math.max(live || 0, 0.6 * smooth(`box|${lane.id}`, shown));
   // 框还没出现时通道收进那团汇聚的光（08-outlife.js）
   const tg = smoothTarget(lane.id, outTarget(p.outbox, life), p.outbox), c = p.card, x0 = c.x + c.w + 1, x1 = tg.x, mid = (x0 + x1) / 2, wf = 0.08 + 0.92 * Math.pow(I, 1.4);
@@ -4255,7 +4292,7 @@ function drawCCOut(cc, box, pulses, rate, live, t) {
   // Claude Code 的光团只在它活跃时出现（04-life.js 的 ccLife），所以光团在就按最低流速连着
   const life = ccLife(t), shown = life.phase === 'show' ? 1 : 0, base = shown || life.phase === 'gather' ? OUT_BASE_I : 0;
   live = Math.max(live || 0, 0.6 * smooth('box|cc', shown));
-  const c = cc.card, tg = smoothTarget('cc', outTarget(box, life), box), I = smooth('rI|cc', Math.max(glow(rate), base)), wf = 0.08 + 0.92 * Math.pow(I, 1.4);
+  const c = cc.card, tg = smoothTarget('cc', outTarget(box, life), box), I = smooth('rI|cc', Math.max(glow(rate), base, 0.45 * (FX.beat?.lanes.get('cc') || 0))), wf = 0.08 + 0.92 * Math.pow(I, 1.4);
   const half = tg.box ? tg.half * (0.35 + 0.65 * wf) : tg.half;
   const edge = (f) => {
     const s = 0.5 + (f - 0.5) * wf, xa = c.x + 6 + (c.w - 12) * s, yb = tg.y + (f - 0.5) * 2 * half, lift = Math.max(60, c.y - box.y) * (0.75 + 0.25 * (1 - s));
@@ -4457,8 +4494,48 @@ const cubicAt = (c, u) => { const v = 1 - u; return [0, 1].map((i) => v * v * v 
 function strokeCubic(c) { ctx.beginPath(); ctx.moveTo(...c[0]); ctx.bezierCurveTo(...c[1], ...c[2], ...c[3]); }
 function glowDot(x, y, r, color, a = 1) {
   r *= FX.lw;
-  ctx.fillStyle = color(0.2 * a); ctx.beginPath(); ctx.arc(x, y, r * 2.8, 0, 6.283); ctx.fill();
+  // 柔光进了辉光层（1/3 分辨率）会被摊薄，画得大一些、亮一些，放大合上去以后和原来的光晕差不多显眼
+  const g = glowCtx(), soft = g !== ctx;
+  g.fillStyle = color((soft ? 0.42 : 0.2) * a); g.beginPath(); g.arc(x, y, r * (soft ? 3.6 : 2.8), 0, 6.283); g.fill();
   ctx.fillStyle = HI(0.9 * a); ctx.beginPath(); ctx.arc(x, y, r, 0, 6.283); ctx.fill();
+}
+
+// ---- 辉光层 ----
+// 看板的两层画布（弧线区、上面那层）画的时候，光点外面那圈柔光不直接画上去，先画进一张 1/3 分辨率的离屏画布；
+// 整层画完后放大、用叠加（lighter）合上去：低分辨率放大自带柔边，再从它缩出一张 1/6 的叠一次，外面多一圈淡淡的光晕。
+// 不用 ctx.filter 做模糊：冷着色器缓存时滤镜很慢（落地那一帧的已知问题就是速度曲线的阴影滤镜）。
+// 宇宙层不经过这里，照旧直接画。?glow=0 关掉，用来对比和量帧
+const GLOW = { off: Q.get('glow') === '0', on: false, a: { cv: document.createElement('canvas') }, b: { cv: document.createElement('canvas') } };
+GLOW.a.ctx = GLOW.a.cv.getContext('2d'); GLOW.b.ctx = GLOW.b.cv.getContext('2d');
+function glowBegin(target) {
+  if (GLOW.off) return;
+  const W = Math.ceil(target.canvas.width / 3), H = Math.ceil(target.canvas.height / 3);
+  for (const [buf, w, h] of [[GLOW.a, W, H], [GLOW.b, Math.ceil(W / 2), Math.ceil(H / 2)]]) {
+    if (buf.cv.width !== w || buf.cv.height !== h) { buf.cv.width = w; buf.cv.height = h; }
+  }
+  GLOW.a.ctx.setTransform(1, 0, 0, 1, 0, 0); GLOW.a.ctx.clearRect(0, 0, W, H);
+  GLOW.on = true;
+}
+// 柔光画在哪：辉光层开着时是离屏画布（变换和透明度跟着当前画布走，缩成 1/3），否则就是当前画布
+function glowCtx() {
+  if (!GLOW.on) return ctx;
+  const m = ctx.getTransform(), g = GLOW.a.ctx;
+  g.setTransform(m.a / 3, m.b / 3, m.c / 3, m.d / 3, m.e / 3, m.f / 3);
+  g.globalAlpha = ctx.globalAlpha;
+  return g;
+}
+function glowFlush(target) {
+  if (!GLOW.on) return;
+  GLOW.on = false;
+  const a = GLOW.a.cv, b = GLOW.b.cv;
+  GLOW.b.ctx.setTransform(1, 0, 0, 1, 0, 0); GLOW.b.ctx.clearRect(0, 0, b.width, b.height);
+  GLOW.b.ctx.drawImage(a, 0, 0, b.width, b.height);
+  target.save();
+  target.setTransform(1, 0, 0, 1, 0, 0); target.globalAlpha = 1; target.globalCompositeOperation = 'lighter';
+  target.imageSmoothingEnabled = true; target.imageSmoothingQuality = 'high';
+  target.drawImage(a, 0, 0, a.width * 3, a.height * 3);
+  target.globalAlpha = 0.7; target.drawImage(b, 0, 0, b.width * 6, b.height * 6);
+  target.restore();
 }
 
 // 核心网：三层长弧线和散点，建一次 Path2D，每帧旋转。每层的弧线分进六个桶：一半留白，另一半按当前各模型的颜色上色，像一团星云
@@ -4484,12 +4561,13 @@ function buildWeb(R) {
 // 当前出场的模型（Claude Code 和各席）的颜色，核心网和星云按它上色
 function webPalette() {
   const keys = [...new Set(B.lanes.filter((l) => l.runs.length).map((l) => { const r = latest(l); return avatarFor(r.model, r.agent_type); }))];
-  return keys.map((k) => (a) => rgba(k, a));
+  return Object.assign(keys.map((k) => (a) => rgba(k, a)), { key: keys.join('|') });
 }
-// 星系的星点按它上色：Claude Code 加上此刻正在跑的席位，和宇宙里小星系的规则一样（08-uni-galaxy.js 的 drawGalaxyOf）
-function starPalette(t) {
+// 星系的星点按它上色：Claude Code 加上此刻正在跑的席位，和宇宙里小星系的规则一样（08-uni-galaxy.js 的 drawGalaxyOf）。
+// 在不在跑用 drawFx 这一帧已经算好的活跃程度（live），不再逐条车道重算状态
+function starPalette(t, lanes, live) {
   const keys = new Set(['claude']);
-  for (const lane of seatLanes(t)) if (laneStatus(lane, t).running) { const r = currentRun(lane, t); keys.add(avatarFor(r.model, r.agent_type)); }
+  for (const lane of lanes) if (lane.id !== 'cc' && live.get(lane.id) > 0.5) { const r = currentRun(lane, t); if (r) keys.add(avatarFor(r.model, r.agent_type)); }
   return [...keys].map((k) => (a) => rgba(k, a));
 }
 
@@ -4498,12 +4576,19 @@ function drawCore(c, intensity, pal) {
   const sec = performance.now() / 1000;
   ctx.save();
   ctx.beginPath(); ctx.rect(c.cx - c.R * 2, c.cy - c.R * 1.5, c.clipX - (c.cx - c.R * 2), c.R * 3); ctx.clip();
-  for (const [{ paths, dots }, alpha, width, speed] of FX.web) {
+  for (const [i, [{ paths, dots }, alpha, width, speed]] of FX.web.entries()) {
     ctx.save();
     ctx.translate(c.cx, c.cy);
     // 炸开时各层带着多转的角度甩出来，越往后越慢；线条先亮再回落到平常（FX.burst，见 burstOf）
     const b = FX.burst, boost = b ? 1 + 1.6 * b.boost : 1;
-    ctx.rotate(Math.sin(sec * speed) * 0.35 + sec * speed * 0.2 + (b ? Math.sign(speed) * 2.4 * b.spin : 0));
+    ctx.rotate(Math.sin(sec * speed) * 0.35 + sec * speed * 0.2 + Math.sign(speed) * (FX.kick || 0) * Math.abs(speed) / 0.02 + (b ? Math.sign(speed) * 2.4 * b.spin : 0));
+    // 最外面那层是远景：平时贴预先画好的半分辨率图（看着虚、远），炸开时照常一条条画
+    if (i === 0 && !b && farLayer(c.R, FX.web[0], pal)) {
+      ctx.globalAlpha *= (0.6 + 0.4 * intensity) * FAR.dim;
+      ctx.drawImage(FAR.cv, -FAR.half, -FAR.half, FAR.half * 2, FAR.half * 2);
+      ctx.restore();
+      continue;
+    }
     ctx.lineWidth = width * FX.lw;
     paths.forEach((p, j) => {
       const col = j && pal.length ? pal[(j - 1) % pal.length] : HI;
@@ -4515,6 +4600,27 @@ function drawCore(c, intensity, pal) {
     ctx.restore();
   }
   ctx.restore();
+}
+
+// 远景层：核心网最外面一层（弧线最多、最淡）预先画成一张图，每帧只按当前角度贴上去。
+// 按屏幕分辨率的一半画，放大贴上去自带柔边，看着在后面、有景深；比每帧描 170 条弧线省。
+// 出场模型的颜色变了、或者缩放档位变了（线宽和分辨率跟着变）才重画；亮度随输出强弱的变化在贴图时乘上去
+const FAR = { cv: document.createElement('canvas'), key: '', half: 0, dim: 0.85 };
+FAR.ctx = FAR.cv.getContext('2d');
+function farLayer(R, [{ paths, dots }, alpha, width], pal) {
+  const dpr = devicePixelRatio || 1, s = Math.min(1.2, Math.max(0.15, 0.5 * VIEW.k * dpr));
+  const key = `${R}|${pal.key}|${Math.round(Math.log(s) / Math.log(1.5))}|${Math.round(Math.log(FX.lw) / Math.log(1.3))}`;
+  if (FAR.key === key) return true;
+  const size = Math.ceil(2 * R * 1.05 * s), g = FAR.ctx;
+  if (size > 4096) return false;
+  FAR.cv.width = FAR.cv.height = size; FAR.half = size / 2 / s; FAR.key = key;
+  g.setTransform(s, 0, 0, s, size / 2, size / 2);
+  g.lineWidth = width * FX.lw;
+  paths.forEach((p, j) => { g.strokeStyle = (j && pal.length ? pal[(j - 1) % pal.length] : HI)(alpha * (j && pal.length ? 1.6 : 1)); g.stroke(p); });
+  g.fillStyle = HI(0.5);
+  const d = 1.3 * FX.lw;
+  for (const [x, y] of dots) g.fillRect(x, y, d, d);
+  return true;
 }
 
 // 竖直刻度带：半透明深底、两侧各一条双线导轨、发光的刻度、来回扫的亮线；组头和卡片都在带里。
@@ -4615,6 +4721,11 @@ function drawFx(t, L) {
   const lanes = [B.laneById.get('cc'), ...seatLanes(t)].filter((l) => l && latest(l) && P.has(l.id));
   const rates = new Map(lanes.map((l) => [l.id, rateAt(l, t)]));
   const total = smooth('total', glow([...rates.values()].reduce((a, b) => a + b, 0)));
+  // 节拍（04-life.js 的 beatsAt）：再算上输出突然加快（08-surge.js）；转动被推一把按屏幕时间累加，减少动态效果时不推
+  const beat = FX.beat = beatsAt(t), ms = performance.now(), dt = Math.min(0.1, (ms - (FX.kickAt || ms)) / 1000);
+  for (const lane of lanes) { const age = surgeAge(lane.id); if (age != null && age < BEAT.window) { const e = 0.45 * Math.exp(-age * BEAT.decay); beat.env = Math.max(beat.env, e); beat.lanes.set(lane.id, Math.max(beat.lanes.get(lane.id) || 0, e)); } }
+  FX.kickAt = ms;
+  if (!reduceMotion.matches) FX.kick = (FX.kick || 0) + dt * 1.0 * beat.env;
   // 每个模型的活跃程度（0–1）平滑过渡，互联网光线和输出通道共用
   const live = new Map(lanes.map((l) => [l.id, smooth(`live|${l.id}`, laneActive(l, t) ? 1 : 0)]));
   // 刻度带的展开程度也平滑（最后一组离开时慢慢收起）
@@ -4625,6 +4736,7 @@ function drawFx(t, L) {
   // 弧线区：切换中以星系亮核为中心按炸开的进度缩放；线宽和散点不跟着缩到看不见，小的时候是一团细亮的丝
   const burst = T ? burstOf(T) : null, lw = FX.lw;
   if (!burst || burst.s > 0.002) {
+    glowBegin(ctx);
     ctx.save();
     if (burst) {
       ctx.translate(burst.wx, burst.wy); ctx.scale(burst.s, burst.s); ctx.translate(-L.core.cx, -L.core.cy);
@@ -4633,9 +4745,9 @@ function drawFx(t, L) {
     try {
       drawNebula(L, P, t, rates, pal);
       drawDust(L);
-      drawCore(L.core, total, pal);
-      drawGalaxy(L.core, total, starPalette(t));
-    } finally { ctx.restore(); FX.burst = null; FX.lw = lw; }
+      drawCore(L.core, Math.min(1, total + 0.5 * beat.env), pal);
+      drawGalaxy(L.core, Math.min(1, total + 0.9 * beat.env), starPalette(t, lanes, live));
+    } finally { ctx.restore(); FX.burst = null; FX.lw = lw; glowFlush(ctx); }
   }
   if (burst) drawFlash(burst, L.core.R);
   // 其余的画在上面那层画布上，切换时整层淡入淡出（applyShare）
@@ -4645,8 +4757,9 @@ function drawFx(t, L) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     ctx.setTransform(dpr * VIEW.k, 0, 0, dpr * VIEW.k, dpr * VIEW.tx, dpr * VIEW.ty);
+    glowBegin(ctx);
     drawOverlay(t, L, P, lanes, rates, live, bandA, burst);
-  } finally { ctx = base; }
+  } finally { glowFlush(ctx); ctx = base; }
 }
 
 // 上面那层：核心网到卡片的汇流线、刻度带、席位到产出框的光带、产出框、状态、标签、交互光线。
@@ -5190,7 +5303,7 @@ function drawOutBeam(E0, E1, color, I, live, seed, ages) {
       const r = (1.3 + rand() * 1.3) * FX.lw;
       ctx.beginPath(); ctx.arc(x, y, r, 0, 6.283); ctx.fill();
       // 每三颗里有一颗带柔光，远看也看得出在流动
-      if (i % 3 === 0) { ctx.fillStyle = color(0.18 * a); ctx.beginPath(); ctx.arc(x, y, r * 3, 0, 6.283); ctx.fill(); }
+      if (i % 3 === 0) { const g = glowCtx(), soft = g !== ctx; g.fillStyle = color((soft ? 0.36 : 0.18) * a); g.beginPath(); g.arc(x, y, r * (soft ? 3.6 : 3), 0, 6.283); g.fill(); }
     }
     ctx.globalAlpha = ga;
   } else if (style === 'tube') {
