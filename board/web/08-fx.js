@@ -107,11 +107,12 @@ function drawCore(c, intensity, pal) {
     ctx.save();
     ctx.translate(c.cx, c.cy);
     // 炸开时各层带着多转的角度甩出来，越往后越慢；线条先亮再回落到平常（FX.burst，见 burstOf）
-    const b = FX.burst, boost = b ? 1 + 1.6 * b.boost : 1;
+    // 节拍让线条亮一下：乘在亮度上，对话正忙、输出强度已经很高时也看得出来
+    const b = FX.burst, boost = (b ? 1 + 1.6 * b.boost : 1) * (1 + 1.2 * (FX.beat?.env || 0));
     ctx.rotate(Math.sin(sec * speed) * 0.35 + sec * speed * 0.2 + Math.sign(speed) * (FX.kick || 0) * Math.abs(speed) / 0.02 + (b ? Math.sign(speed) * 2.4 * b.spin : 0));
     // 最外面那层是远景：平时贴预先画好的半分辨率图（看着虚、远），炸开时照常一条条画
     if (i === 0 && !b && farLayer(c.R, FX.web[0], pal)) {
-      ctx.globalAlpha *= (0.6 + 0.4 * intensity) * FAR.dim;
+      ctx.globalAlpha = Math.min(1, ctx.globalAlpha * (0.6 + 0.4 * intensity) * FAR.dim * boost);
       ctx.drawImage(FAR.cv, -FAR.half, -FAR.half, FAR.half * 2, FAR.half * 2);
       ctx.restore();
       continue;
@@ -272,8 +273,8 @@ function drawFx(t, L) {
     try {
       drawNebula(L, P, t, rates, pal);
       drawDust(L);
-      drawCore(L.core, Math.min(1, total + 0.5 * beat.env), pal);
-      drawGalaxy(L.core, Math.min(1, total + 0.9 * beat.env), starPalette(t, lanes, live));
+      drawCore(L.core, total, pal);
+      drawGalaxy(L.core, total, starPalette(t, lanes, live));
     } finally { ctx.restore(); FX.burst = null; FX.lw = lw; glowFlush(ctx); }
   }
   if (burst) drawFlash(burst, L.core.R);

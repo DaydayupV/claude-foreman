@@ -128,5 +128,12 @@ function drawGalaxy(c, intensity, pal = []) {
   const g = ctx.createRadialGradient(c.cx, c.cy, 0, c.cx, c.cy, c.R * 0.28);
   g.addColorStop(0, `rgba(255,244,232,${0.35 + 0.25 * intensity})`); g.addColorStop(0.25, rgba('claude', 0.14 + 0.1 * intensity)); g.addColorStop(1, rgba('claude', 0));
   ctx.fillStyle = g; ctx.beginPath(); ctx.arc(c.cx, c.cy, c.R * 0.28, 0, 6.283); ctx.fill();
+  // 节拍（04-life.js 的 beatsAt）：亮核另闪一团光，不跟着输出强度封顶
+  const beat = FX.beat?.env || 0;
+  if (beat > 0.01) {
+    const f = ctx.createRadialGradient(c.cx, c.cy, 0, c.cx, c.cy, c.R * 0.34);
+    f.addColorStop(0, `rgba(255,246,236,${0.6 * beat})`); f.addColorStop(0.3, rgba('claude', 0.28 * beat)); f.addColorStop(1, rgba('claude', 0));
+    ctx.fillStyle = f; ctx.beginPath(); ctx.arc(c.cx, c.cy, c.R * 0.34, 0, 6.283); ctx.fill();
+  }
   ctx.restore();
 }
