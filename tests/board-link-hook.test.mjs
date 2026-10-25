@@ -71,23 +71,38 @@ test('网页看板开着时显示带对话 id 的链接（服务没在跑就启�
     assert.ok(fs.existsSync(path.join(path.dirname(h.userConfig), 'board-shown', 's1')));
     // 不是派出任务的命令不显示
     assert.equal((await h.hook('board-link.mjs', { cwd: h.cwd, session_id: 's3', tool_input: { command: `node "${cli}" status` } })).stdout, '');
-    // 派出命令在后台启动以后（PostToolUse）：每次都提醒 Claude 先在正文里写"已派出"并附链接，和"已显示"的标记无关；
-    // 前台跑的（这时已经跑完）和不是派出任务的命令不提醒
-    const post = (input) => h.hook('board-link.mjs', { cwd: h.cwd, session_id: 's1', hook_event_name: 'PostToolUse', tool_input: input });
-    const background = { command: `node "${cli}" run --level simple`, run_in_background: true };
-    const reminded = await post(background);
-    assert.equal(reminded.code, 0, reminded.stderr);
-    const { hookSpecificOutput: out } = JSON.parse(reminded.stdout);
-    assert.equal(out.hookEventName, 'PostToolUse');
-    assert.ok(out.additionalContext.includes(`[网页看板](http://127.0.0.1:${lock.port}/${lock.token}/?level=all&lang=zh&s=s1)`), out.additionalContext);
-    assert.match(out.additionalContext, /正文/);
-    assert.ok((await post(background)).stdout);
-    assert.equal((await post({ command: `node "${cli}" run --level simple` })).stdout, '');
-    assert.equal((await post({ command: `node "${cli}" status`, run_in_background: true })).stdout, '');
+    // 要结束这一轮（Stop）：这一轮在后台派出过、之后的正文里没有看板链接时拦一次，理由里带这个对话的链接；
+    // 拦过一次（stop_hook_active）、正文里写了链接、这一轮没派出、派出是在前台跑的，都不拦
+    const transcript = path.join(h.home, 'transcript.jsonl'), rows = [];
+    const say = (role, content) => { rows.push(JSON.stringify({ type: role, message: { role, content } })); fs.writeFileSync(transcript, rows.join('\n') + '\n'); };
+    const tool = (command, background) => say('assistant', [{ type: 'tool_use', id: `t${rows.length}`, name: 'Bash', input: { command, ...(background ? { run_in_background: true } : {}) } }]);
+    const stop = (active = false) => h.hook('board-link.mjs', { cwd: h.cwd, session_id: 's1', hook_event_name: 'Stop', stop_hook_active: active, transcript_path: transcript });
+    say('user', '派出去吧');
+    tool(`node "${cli}" run --level simple --brief b.md`, true);
+    say('user', [{ type: 'tool_result', tool_use_id: 't1', content: 'Command running in background with ID: b1' }]);
+    say('assistant', [{ type: 'text', text: '我先做自己那一份。' }]);
+    tool('node own.mjs');
+    const blocked = await stop();
+    assert.equal(blocked.code, 0, blocked.stderr);
+    const out = JSON.parse(blocked.stdout);
+    assert.equal(out.decision, 'block');
+    assert.ok(out.reason.includes(`[网页看板](http://127.0.0.1:${lock.port}/${lock.token}/?level=all&lang=zh&s=s1)`), out.reason);
+    assert.equal((await stop(true)).stdout, '');
+    say('assistant', [{ type: 'text', text: `已派出：gpt-6-astra low · [网页看板](http://127.0.0.1:${lock.port}/${lock.token}/?level=all&lang=zh&s=s1)` }]);
+    assert.equal((await stop()).stdout, '');
+    // 链接之后又派出一次、没再写：照样拦；新的一轮（完成通知唤醒）里没派出，不拦；前台跑的派出不拦
+    tool(`node "${cli}" resume --run r1 --level simple`, true);
+    assert.equal(JSON.parse((await stop()).stdout).decision, 'block');
+    say('user', '<task-notification>\n<task-id>b1</task-id>\n</task-notification>');
+    say('assistant', [{ type: 'text', text: '验收完了。' }]);
+    assert.equal((await stop()).stdout, '');
+    tool(`node "${cli}" run --level simple --brief c.md`);
+    assert.equal((await stop()).stdout, '');
     config.dispatch.watch = { terminal: true, web: false };
     h.config(config);
     assert.equal((await run('s4')).stdout, '');
-    assert.equal((await post(background)).stdout, '');
+    tool(`node "${cli}" run --level simple --brief d.md`, true);
+    assert.equal((await stop()).stdout, '');
     // 和 cli.mjs 一样，项目配置关不掉网页看板
     config.dispatch.watch = { terminal: true, web: true };
     h.config(config); h.write('.claude/foreman.json', { dispatch: { watch: { web: false } } });
