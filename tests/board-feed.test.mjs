@@ -301,6 +301,9 @@ test('a resumed conversation counts the Claude Code usage of its earlier transcr
   // 再早一份：m0 也抄进了 old，只有 m00 是新增的；先前几份之间重复的也只算一次
   fs.writeFileSync(path.join(projects, 'older.jsonl'), [answer('m00', start - 190000, 500), answer('m0', start - 90000, 300)].map((r) => JSON.stringify(r)).join('\n') + '\n');
   assert.equal(read({ conversation: () => new Set(['new', 'old', 'older']) }).usage.output, 940);
+  // 星图已经读过的记录借星图的（这里故意给不同的数，证明没再读 old.jsonl），没读过的照旧读文件
+  const borrowed = [{ id: 'm9', ts: start - 50000, t: 'claude-opus-5-5', u: { in: 1, cached: null, cache_write: null, out: 1000 } }];
+  assert.equal(read({ conversation: () => new Set(['new', 'old', 'older']), knownUsage: (id) => (id === 'old' ? borrowed : null) }).usage.output, 1940);
 });
 
 test('a conversation of 200k lines opens without overflowing the stack (no push(...lines))', (t) => {

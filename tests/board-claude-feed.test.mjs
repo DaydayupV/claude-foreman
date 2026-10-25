@@ -138,6 +138,11 @@ test('prices strip providers, prefer specific models, fall back rates, and prese
   assert.equal(priceFor('unpriced', { input: 1 }, prices), null);
   assert.equal(priceFor('claude-opus-5', { input: 1 }, null), null);
   assert.equal(hostCost([{ t: 'anthropic/claude-fable-5-1', u: { in: 100, cached: 200, cache_write: 30, out: 40 } }], loadPrices()), 0.003425);
+  // Claude Code 自己补的 0 用量消息（<synthetic>）不在价格表里，但花不了钱：不让费用带上 +；有用量的未知模型照旧标不完整
+  const priced = {}, synthetic = { t: '<synthetic>', u: { in: 0, cached: 0, cache_write: 0, out: 0 } };
+  assert.equal(hostCost([{ t: 'anthropic/claude-fable-5-1', u: { in: 100, cached: 200, cache_write: 30, out: 40 } }, synthetic], loadPrices(), priced), 0.003425);
+  assert.equal(priced.partial, false);
+  hostCost([synthetic, { t: 'unpriced', u: { in: 1, cached: 0, cache_write: 0, out: 0 } }], loadPrices(), priced); assert.equal(priced.partial, true);
   const data = createFeed(root, { prices }).read({ replay: 'skills-roles-1018' }, start), gpt = data.runs.find((r) => r.agent === 'gpt-6-astra-codex-cli');
   assert.equal(gpt.cost_source, 'api_price'); assert.equal(data.runs.find((r) => r.agent === 'gemini-4-argon-contributor').cost_source, 'unknown');
   assert.equal(Object.hasOwn(gpt, 'cost_paid_usd'), false); assert.equal(Object.hasOwn(gpt, 'cost_subscription_usd'), false);
