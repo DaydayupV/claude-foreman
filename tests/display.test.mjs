@@ -1205,4 +1205,8 @@ test('星云配色按输出量开平方定分量：Claude Code 最多占四成�
   // 同一种颜色合在一起（两个 Qwen 席位、用 Claude 模型的席位并进 Claude Code），席位最多留四种
   const many = mix([{ key: 'qwen', out: 100 }, { key: 'qwen', out: 100 }, { key: 'claude', out: 900 }, { key: 'glm', out: 81 }, { key: 'kimi', out: 64 }, { key: 'grok', out: 49 }, { key: 'mimo', out: 36 }], 0, false);
   assert.equal(many.map((m) => m.key).join(' '), 'claude qwen glm kimi grok');
+  // 同一种颜色先把输出加起来再开平方（两个 Qwen 席各 100，和一个 200 的一样），任务多的模型不会因为任务多就占得多
+  assert.equal(w(mix([{ key: 'qwen', out: 100 }, { key: 'qwen', out: 100 }, { key: 'glm', out: 200 }], 0, false)), w(mix([{ key: 'qwen', out: 200 }, { key: 'glm', out: 200 }], 0, false)));
+  // 正在跑、还没有输出的模型，分量至少是最多那种的六成
+  assert.equal(w(mix([{ key: 'deepseek', out: 10000 }, { key: 'minimax', out: 0, running: true }], 0, false)), 'claude:0.006 deepseek:0.621 minimax:0.373*');
 });

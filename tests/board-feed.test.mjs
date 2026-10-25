@@ -287,6 +287,19 @@ test('explicit session isolates runs and selects its transcript without runs, re
   assert.deepEqual(selectScope(list, { session: 's' }, start).runs.map((r) => r.id), ['a']);
 });
 
+test('a resumed conversation counts the Claude Code usage of its earlier transcripts once (messages copied into the new one are not counted twice)', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'board-prior-')), projects = path.join(root, 'claude', 'demo'), runs = path.join(root, 'runs');
+  fs.mkdirSync(projects, { recursive: true }); fs.mkdirSync(runs);
+  t.after(() => { assert.equal(path.dirname(root), os.tmpdir()); fs.rmSync(root, { recursive: true, force: true }); });
+  const answer = (id, at, out) => ({ type: 'assistant', timestamp: new Date(at).toISOString(), message: { id, model: 'claude-opus-5-5', content: [{ type: 'text', text: id }], usage: { input_tokens: 10, output_tokens: out } } });
+  fs.writeFileSync(path.join(projects, 'new.jsonl'), [{ type: 'user', timestamp: new Date(start - 5000).toISOString(), message: { content: 'go' } }, answer('m1', start - 4000, 100), answer('m2', start - 3000, 40)].map((r) => JSON.stringify(r)).join('\n') + '\n');
+  // 先前那份记录里的两条：m1 已经抄进新记录，只有 m0 是新增的
+  const prior = [{ id: 'm0', ts: start - 90000, t: 'claude-opus-5-5', u: { in: 5, cached: null, cache_write: null, out: 300 } }, { id: 'm1', ts: start - 4000, t: 'claude-opus-5-5', u: { in: 10, cached: null, cache_write: null, out: 100 } }];
+  const read = (options) => createFeed(runs, { claudeDir: path.dirname(projects), now: () => start, ...options }).read({ session: 'new' }).runs.find((r) => r.id === 'cc');
+  assert.equal(read({}).usage.output, 140);
+  assert.equal(read({ priorUsage: (id) => (id === 'new' ? prior : []) }).usage.output, 440);
+});
+
 test('a conversation of 200k lines opens without overflowing the stack (no push(...lines))', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'board-long-')), projects = path.join(root, 'claude', 'demo'), runs = path.join(root, 'runs');
   fs.mkdirSync(projects, { recursive: true }); fs.mkdirSync(runs);
