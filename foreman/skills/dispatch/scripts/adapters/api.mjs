@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ENTRY, DISCUSS_SCHEMA, REVIEW_SCHEMA } from '../config.mjs';
-import { newRunDir, cancelSource } from '../records.mjs';
+import { newRunDir, cancelSource, announceBoard } from '../records.mjs';
 import { startRun, finishDiscussion, eventWriter, runLimits, watchCancellation, reportWithRepair, validateSchema } from '../runner.mjs';
 import { M, die, isObject, readAttachments, MAX_MATERIAL_CHARS, modelOf } from '../util.mjs';
 import { reviewPatchText } from '../review-scope.mjs';
@@ -83,6 +83,7 @@ async function executeApi(ctx) {
   fs.writeFileSync(path.join(dir, 'brief.md'), prompt);
   fs.writeFileSync(path.join(dir, 'messages.json'), JSON.stringify(history, null, 2));
   process.stderr.write(`foreman: ${D.started(mode, modelLabel(meta), level, dir)}\n`);
+  announceBoard(cfg);
   // 提醒 Claude 在后台启动排队检查：服务繁忙时好及时问用户要不要终止这一方
   if (cfg.dispatch.busy_ask_min > 0) {
     const target = meta.group != null ? `--group ${meta.group}` : `--run ${id}`;

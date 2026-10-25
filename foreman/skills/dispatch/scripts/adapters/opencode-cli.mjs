@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA } from '../config.mjs';
 import { MAX_REVIEW_CHARS, reviewPatchText } from '../review-scope.mjs';
-import { newRunDir, isCancelled, cancelSource } from '../records.mjs';
+import { newRunDir, isCancelled, cancelSource, announceBoard } from '../records.mjs';
 import { startRun, finishDiscussion, execute, eventWriter, runLimits, reportWithRepair, spawnCli, validateSchema } from '../runner.mjs';
 import { M, LANGUAGE, die, isObject, binCommand, pathCommand, npmEntry, killTree, readAttachments, focusFiles, relativePath, closestMatches } from '../util.mjs';
 import { D, modelLabel, toolLabel } from '../format.mjs';
@@ -184,6 +184,7 @@ async function executeOpencode(ctx) {
   const run = startRun(context);
   fs.writeFileSync(path.join(dir, 'brief.md'), prompt);
   process.stderr.write(`foreman: ${D.started(mode, modelLabel(run.meta), level, dir)}\n`);
+  announceBoard(ctx.cfg);
   return finishDiscussion(run, { ...await opencodeSession(run, schema, agentId), files, changesNote: M.opencodeNoChanges });
 }
 

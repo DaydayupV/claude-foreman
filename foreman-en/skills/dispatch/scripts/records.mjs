@@ -62,6 +62,12 @@ function liveBoardUrl() {
     return lock.port > 0 && lock.token && Number.isInteger(lock.pid) && pidExists(lock.pid) ? boardUrl(lock) : null;
   } catch { return null; }
 }
+// 网页看板开着时紧接着开工行给出这个对话的看板地址：Claude Code 写"已派出"那句话时照着附上（钩子显示的那条在桌面版里是折起来的）。
+// 各类协作方的开工行写在不同的地方，都调这一个
+function announceBoard(cfg) {
+  const board = cfg?.dispatch?.watch?.web ? liveBoardUrl() : null;
+  if (board) process.stderr.write(`foreman: ${D.boardLine(board)}\n`);
+}
 
 // 并发上限按协作方算，任何任务（分不分组、哪个会话）都要在锁内登记并做准入检查，调用方用完 release。
 async function newRunDir(ctx) {
@@ -733,4 +739,4 @@ function isRunning(m, { query = true } = {}) {
 }
 const UNVERIFIED_LIMIT_MS = 25 * 3600000;
 
-export { RUNS_ROOT, boardUrl, liveBoardUrl, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, saveMeta, metaWriteWarning, settleMeta, findRun, describeActivity, groupRuns, checkAdmission, readRunsLocked, runEnd, runOutcome, resumeVerdict, resultValid, resumedRuns, groupTally, groupSummary, groupScopeOwner, absolute, readMeta, checkRunners, isRunning, writesFiles };
+export { RUNS_ROOT, boardUrl, liveBoardUrl, announceBoard, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, saveMeta, metaWriteWarning, settleMeta, findRun, describeActivity, groupRuns, checkAdmission, readRunsLocked, runEnd, runOutcome, resumeVerdict, resultValid, resumedRuns, groupTally, groupSummary, groupScopeOwner, absolute, readMeta, checkRunners, isRunning, writesFiles };
