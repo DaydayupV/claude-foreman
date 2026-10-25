@@ -22,8 +22,11 @@ export const usageTotals = (events) => events.reduce((sum, e) => {
 }, { input: null, cached: null, cache_write: null, output: null });
 // 能定价的消息照算；有的消息算不出价（模型不在价格表里）时 out.partial 为真，显示时在费用后面加 +。
 // 一条都算不出才返回 null
+// 用量全是 0 的消息（Claude Code 在 API 出错、被打断时自己补的，模型写成 <synthetic>）花不了钱：按 0 算，
+// 不因为价格表里没有它的模型就让费用带上 +
+const freeUsage = (u) => [u.in, u.cached, u.cache_write, u.out].every((v) => !v);
 export function hostCost(events, prices, out = {}) {
-  const costs = events.map((e) => priceFor(e.t, { input: e.u.in, cached: e.u.cached, cache_write: e.u.cache_write, output: e.u.out }, prices));
+  const costs = events.map((e) => freeUsage(e.u) ? 0 : priceFor(e.t, { input: e.u.in, cached: e.u.cached, cache_write: e.u.cache_write, output: e.u.out }, prices));
   const priced = costs.filter((v) => v != null);
   out.partial = priced.length < costs.length;
   return priced.length ? priced.reduce((a, b) => a + b, 0) : null;
@@ -468,8 +471,9 @@ export function createFeed(root, options = {}) {
   const priorUsageOf = (ids) => {
     const out = [];
     for (const id of ids) {
-      const file = findTranscript([], false, id);
-      if (file) for (const entry of transcriptUsage(file)) out.push(entry);
+      // 星图已经读完的记录直接借它的（不再解析一遍），星图没读过的（超出时间窗口的）由读取器读
+      const known = options.knownUsage?.(id), file = !known && findTranscript([], false, id);
+      for (const entry of known ?? (file ? transcriptUsage(file) : [])) out.push(entry);
     }
     return out;
   };

@@ -218,7 +218,7 @@ async function main() {
   const conversation = (id) => { const ids = new Set([id]); for (const [prior, current] of desktop().aliases) if (current === id) ids.add(prior); return ids; };
   // 先前对话记录的用量星图和看板都要读，共用一个读取器：一百多 MB 的旧记录只解析一次
   const transcriptUsage = usageReader();
-  const feed = replayMode ? null : createFeed(root, { ...options, conversation, transcriptUsage }), universe = createUniverse({ ...options, runs: root, config: configFile, windowH, replayLimitBytes,
+  const feed = replayMode ? null : createFeed(root, { ...options, conversation, transcriptUsage, knownUsage: (id) => universe.usageOf(id) }), universe = createUniverse({ ...options, runs: root, config: configFile, windowH, replayLimitBytes,
     desktop, transcriptUsage }), clients = new Set(), muxes = new Map();
   const sessions = replayMode ? replaySessions(values.replay, root, options.claudeDir) : undefined;
   const sharedReplay = replayMode ? universe.replay({ speed: timing.speed, maxgap: timing.maxgap, sessions }, Date.now()) : null, details = new Map();

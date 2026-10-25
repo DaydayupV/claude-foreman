@@ -624,7 +624,9 @@ export function createUniverse(options) {
       } };
     return result;
   };
-  return { read, hello, replay };
+  // 星图已经读过的对话记录里 Claude Code 每条消息的用量（看板算先前记录的用量时借用）；没读过的给 null
+  const usageOf = (id) => sessions.has(id) ? [...sessions.get(id).usage.values()] : null;
+  return { read, hello, replay, usageOf };
 }
 
 export function universeAt(replay, t = Infinity) {
