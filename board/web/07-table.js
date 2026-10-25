@@ -6,7 +6,8 @@ const TABLE_HEAD = ['', 'model', 'status', 'now ≈tok/s', 'tok/s over time', 'g
 // 费用：一律按模型官方 API 价格算（插件自带的价格表），悬停在表头和单元格上有说明；+ 表示有的模型不在价格表里
 // 不到 1 美分的按两位有效数字写（便宜的 API 模型一次常常只有零点零几美分），免得显示成 $0.00
 const fmtUsd = (n) => (n > 0 && n < 0.01 ? n.toPrecision(2) : n.toFixed(2));
-const fmtCost = (cost, partial = false) => (cost == null ? '—' : `$${fmtUsd(cost)}${partial ? '+' : ''}`);
+// 算不出费用：结束了的写 ?（合计的 + 就是它带来的，用户能找到是哪一行），还在跑的写 —
+const fmtCost = (cost, partial = false, ended = true) => (cost == null ? (partial && ended ? '?' : '—') : `$${fmtUsd(cost)}${partial ? '+' : ''}`);
 // 面板里下面还有没露出来的行时，最后一行淡出
 const markMore = (body) => body.classList.toggle('more', body.scrollHeight - body.scrollTop - body.clientHeight > 2);
 // 速度的估算窗口不同，和费用一样把口径放在表头悬停说明里。
@@ -68,7 +69,7 @@ function renderTable(t) {
     c[6].title = s.usage_unattributed ? TEXT.usageUnattributed : '';
     setText(c[7], s.output ? fmtTok(s.output) : '—');
     c[7].title = s.usage_unattributed ? TEXT.usageUnattributed : '';
-    setText(c[8], fmtCost(s.cost, s.costPartial)); c[8].title = TEXT.costTitle;
+    setText(c[8], fmtCost(s.cost, s.costPartial, !s.running)); c[8].title = TEXT.costTitle;
     setText(c[9], Display.clock(laneElapsed(lane, t, true) * 1000));
     if (body.children[i] !== tr) body.insertBefore(tr, body.children[i] || null);
     tot.input += inAll; tot.cached += s.cached; tot.output += s.output; tot.rate += s.rate;
