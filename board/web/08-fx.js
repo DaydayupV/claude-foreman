@@ -21,8 +21,48 @@ const cubicAt = (c, u) => { const v = 1 - u; return [0, 1].map((i) => v * v * v 
 function strokeCubic(c) { ctx.beginPath(); ctx.moveTo(...c[0]); ctx.bezierCurveTo(...c[1], ...c[2], ...c[3]); }
 function glowDot(x, y, r, color, a = 1) {
   r *= FX.lw;
-  ctx.fillStyle = color(0.2 * a); ctx.beginPath(); ctx.arc(x, y, r * 2.8, 0, 6.283); ctx.fill();
+  // 柔光进了辉光层（1/3 分辨率）会被摊薄，画得大一些、亮一些，放大合上去以后和原来的光晕差不多显眼
+  const g = glowCtx(), soft = g !== ctx;
+  g.fillStyle = color((soft ? 0.42 : 0.2) * a); g.beginPath(); g.arc(x, y, r * (soft ? 3.6 : 2.8), 0, 6.283); g.fill();
   ctx.fillStyle = HI(0.9 * a); ctx.beginPath(); ctx.arc(x, y, r, 0, 6.283); ctx.fill();
+}
+
+// ---- 辉光层 ----
+// 看板的两层画布（弧线区、上面那层）画的时候，光点外面那圈柔光不直接画上去，先画进一张 1/3 分辨率的离屏画布；
+// 整层画完后放大、用叠加（lighter）合上去：低分辨率放大自带柔边，再从它缩出一张 1/6 的叠一次，外面多一圈淡淡的光晕。
+// 不用 ctx.filter 做模糊：冷着色器缓存时滤镜很慢（落地那一帧的已知问题就是速度曲线的阴影滤镜）。
+// 宇宙层不经过这里，照旧直接画。?glow=0 关掉，用来对比和量帧
+const GLOW = { off: Q.get('glow') === '0', on: false, a: { cv: document.createElement('canvas') }, b: { cv: document.createElement('canvas') } };
+GLOW.a.ctx = GLOW.a.cv.getContext('2d'); GLOW.b.ctx = GLOW.b.cv.getContext('2d');
+function glowBegin(target) {
+  if (GLOW.off) return;
+  const W = Math.ceil(target.canvas.width / 3), H = Math.ceil(target.canvas.height / 3);
+  for (const [buf, w, h] of [[GLOW.a, W, H], [GLOW.b, Math.ceil(W / 2), Math.ceil(H / 2)]]) {
+    if (buf.cv.width !== w || buf.cv.height !== h) { buf.cv.width = w; buf.cv.height = h; }
+  }
+  GLOW.a.ctx.setTransform(1, 0, 0, 1, 0, 0); GLOW.a.ctx.clearRect(0, 0, W, H);
+  GLOW.on = true;
+}
+// 柔光画在哪：辉光层开着时是离屏画布（变换和透明度跟着当前画布走，缩成 1/3），否则就是当前画布
+function glowCtx() {
+  if (!GLOW.on) return ctx;
+  const m = ctx.getTransform(), g = GLOW.a.ctx;
+  g.setTransform(m.a / 3, m.b / 3, m.c / 3, m.d / 3, m.e / 3, m.f / 3);
+  g.globalAlpha = ctx.globalAlpha;
+  return g;
+}
+function glowFlush(target) {
+  if (!GLOW.on) return;
+  GLOW.on = false;
+  const a = GLOW.a.cv, b = GLOW.b.cv;
+  GLOW.b.ctx.setTransform(1, 0, 0, 1, 0, 0); GLOW.b.ctx.clearRect(0, 0, b.width, b.height);
+  GLOW.b.ctx.drawImage(a, 0, 0, b.width, b.height);
+  target.save();
+  target.setTransform(1, 0, 0, 1, 0, 0); target.globalAlpha = 1; target.globalCompositeOperation = 'lighter';
+  target.imageSmoothingEnabled = true; target.imageSmoothingQuality = 'high';
+  target.drawImage(a, 0, 0, a.width * 3, a.height * 3);
+  target.globalAlpha = 0.7; target.drawImage(b, 0, 0, b.width * 6, b.height * 6);
+  target.restore();
 }
 
 // 核心网：三层长弧线和散点，建一次 Path2D，每帧旋转。每层的弧线分进六个桶：一半留白，另一半按当前各模型的颜色上色，像一团星云
@@ -189,6 +229,7 @@ function drawFx(t, L) {
   // 弧线区：切换中以星系亮核为中心按炸开的进度缩放；线宽和散点不跟着缩到看不见，小的时候是一团细亮的丝
   const burst = T ? burstOf(T) : null, lw = FX.lw;
   if (!burst || burst.s > 0.002) {
+    glowBegin(ctx);
     ctx.save();
     if (burst) {
       ctx.translate(burst.wx, burst.wy); ctx.scale(burst.s, burst.s); ctx.translate(-L.core.cx, -L.core.cy);
@@ -199,7 +240,7 @@ function drawFx(t, L) {
       drawDust(L);
       drawCore(L.core, total, pal);
       drawGalaxy(L.core, total, starPalette(t));
-    } finally { ctx.restore(); FX.burst = null; FX.lw = lw; }
+    } finally { ctx.restore(); FX.burst = null; FX.lw = lw; glowFlush(ctx); }
   }
   if (burst) drawFlash(burst, L.core.R);
   // 其余的画在上面那层画布上，切换时整层淡入淡出（applyShare）
@@ -209,8 +250,9 @@ function drawFx(t, L) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     ctx.setTransform(dpr * VIEW.k, 0, 0, dpr * VIEW.k, dpr * VIEW.tx, dpr * VIEW.ty);
+    glowBegin(ctx);
     drawOverlay(t, L, P, lanes, rates, live, bandA, burst);
-  } finally { ctx = base; }
+  } finally { glowFlush(ctx); ctx = base; }
 }
 
 // 上面那层：核心网到卡片的汇流线、刻度带、席位到产出框的光带、产出框、状态、标签、交互光线。

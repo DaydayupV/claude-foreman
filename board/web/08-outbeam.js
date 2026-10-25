@@ -67,7 +67,7 @@ function drawOutBeam(E0, E1, color, I, live, seed, ages) {
       const r = (1.3 + rand() * 1.3) * FX.lw;
       ctx.beginPath(); ctx.arc(x, y, r, 0, 6.283); ctx.fill();
       // 每三颗里有一颗带柔光，远看也看得出在流动
-      if (i % 3 === 0) { ctx.fillStyle = color(0.18 * a); ctx.beginPath(); ctx.arc(x, y, r * 3, 0, 6.283); ctx.fill(); }
+      if (i % 3 === 0) { const g = glowCtx(), soft = g !== ctx; g.fillStyle = color((soft ? 0.36 : 0.18) * a); g.beginPath(); g.arc(x, y, r * (soft ? 3.6 : 3), 0, 6.283); g.fill(); }
     }
     ctx.globalAlpha = ga;
   } else if (style === 'tube') {
