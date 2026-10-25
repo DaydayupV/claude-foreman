@@ -44,15 +44,19 @@ function cloud(x, y, rx, ry, color, a) {
   ctx.restore();
 }
 
-// 星云的配色：这个对话里用过的模型（席位）加上 Claude Code 自己，按输出量开平方定分量（只跑过一次的小模型也留一缕颜色）；
+// 星云的配色：这个对话里用过的模型（席位）加上 Claude Code 自己。同一种颜色的输出先加起来，再开平方定分量（只跑过一次的小模型也留一缕颜色；
+// 按任务逐个开平方的话，任务多的模型会盖过别的）。正在跑的模型还没有输出，分量至少给到最多那种的六成，干活时就看得出它的颜色。
 // Claude Code 最多占四成，免得橙色又盖住一切；颜色太多会糊，席位最多取四种。
 // seats: [{ key: 颜色键, out: 输出 token, running }]；返回 [{ key, w, running }]，w 加起来是 1，Claude Code 在最前
 function nebulaMix(seats, ccOut, ccRunning) {
-  const by = new Map([['claude', { key: 'claude', raw: Math.sqrt(Math.max(1, ccOut || 0)), running: !!ccRunning }]]);
+  const by = new Map([['claude', { key: 'claude', out: Math.max(0, ccOut || 0), running: !!ccRunning }]]);
   for (const s of seats) {
-    const e = by.get(s.key) || { key: s.key, raw: 0, running: false };
-    e.raw += Math.sqrt(Math.max(1, s.out || 0)); e.running ||= !!s.running; by.set(s.key, e);
+    const e = by.get(s.key) || { key: s.key, out: 0, running: false };
+    e.out += Math.max(0, s.out || 0); e.running ||= !!s.running; by.set(s.key, e);
   }
+  for (const e of by.values()) e.raw = Math.sqrt(Math.max(1, e.out));
+  const top = Math.max(1, ...[...by.values()].filter((e) => e.key !== 'claude').map((e) => e.raw));
+  for (const e of by.values()) if (e.key !== 'claude' && e.running) e.raw = Math.max(e.raw, 0.6 * top);
   const cc = by.get('claude'), others = [...by.values()].filter((e) => e !== cc).sort((a, b) => b.raw - a.raw).slice(0, 4);
   if (!others.length) return [{ key: 'claude', w: 1, running: cc.running }];
   const sum = others.reduce((s, e) => s + e.raw, 0), ccW = Math.min(0.4, cc.raw / (cc.raw + sum));
@@ -60,22 +64,25 @@ function nebulaMix(seats, ccOut, ccRunning) {
 }
 
 // 单对话的配色：车道上的任务（不含 Claude Code 席的报告），数据一变才重算
-const MIX = { ver: -1, mix: null };
+const MIX = { ver: -1, busy: null, mix: null };
 function boardMix(t) {
-  if (MIX.ver === B.version && MIX.mix) return MIX.mix;
-  const seats = [];
+  // Claude Code 算不算在干活：它的车道最近 90 秒有动静（host 记录的状态在对话还开着时一直是 running，不能用）
+  const cc = B.laneById.get('cc'), last = cc?.events.at(-1), busy = !!last && t - last.ts < 90000;
+  if (MIX.ver === B.version && MIX.busy === busy && MIX.mix) return MIX.mix;
+  const seats = [], host = cc && latest(cc);
   for (const lane of B.lanes) {
     if (lane.id === 'cc' || lane.ghost) continue;
     for (const r of lane.runs) if (r.kind !== 'answer' && r.model) seats.push({ key: avatarFor(r.model, r.agent_type), out: usageOf(r)?.output ?? 0, running: r.status === 'running' });
   }
-  const cc = B.laneById.get('cc'), host = cc && latest(cc);
-  MIX.ver = B.version; MIX.mix = nebulaMix(seats, host ? usageOf(host)?.output ?? 0 : 0, host?.status === 'running');
+  Object.assign(MIX, { ver: B.version, busy, mix: nebulaMix(seats, host ? usageOf(host)?.output ?? 0 : 0, busy) });
   return MIX.mix;
 }
 
 // 交织的几团彩色星云：每种颜色按分量分成一到三团，摆在核心周围不同的角度和远近，各自慢慢漂；叠加混色，重叠的地方颜色自然混在一起。
 // 正在跑的模型那几团亮一些，历史上用过的淡一些。(x, y) 是中心，R 是半径，flat 是上下压扁的比例，fade 是整体透明度；
 // spread 是几团离中心多远（1 是绕着核心摆开，小于 1 往中心收拢、互相叠在一起），size 是每团的大小
+// 近乎白色、灰色的颜色（ChatGPT、认不出的模型）当星云色叠多了是一层灰雾，把画面洗灰：这几种淡一半
+const PALE = new Set(['chatgpt', 'unknown']);
 function drawMixNebula(x, y, R, flat, mix, fade, seed = 0, { spread = 1, size = 1 } = {}) {
   const sec = performance.now() / 1000, prev = ctx.globalCompositeOperation;
   ctx.globalCompositeOperation = 'lighter';
@@ -85,7 +92,7 @@ function drawMixNebula(x, y, R, flat, mix, fade, seed = 0, { spread = 1, size = 
     const home = (i / mix.length) * 6.283 + rand() * 0.6;
     for (let j = 0; j < lobes; j++) {
       const ang = home + (j - (lobes - 1) / 2) * 0.85 + rand() * 0.35 + sec * (0.01 + 0.01 * rand()) * dir, r = R * spread * (0.3 + 0.32 * rand());
-      const rx = R * size * (0.36 + 0.3 * rand()) * (0.8 + 0.5 * Math.sqrt(m.w)), a = fade * (0.08 + 0.12 * Math.sqrt(m.w)) * (m.running ? 1.3 : 1);
+      const rx = R * size * (0.36 + 0.3 * rand()) * (0.8 + 0.5 * Math.sqrt(m.w)), a = fade * (0.08 + 0.12 * Math.sqrt(m.w)) * (m.running ? 1.3 : 1) * (PALE.has(m.key) ? 0.5 : 1);
       cloud(x + Math.cos(ang) * r, y + Math.sin(ang) * r * flat, rx, rx * (0.55 + 0.25 * rand()) * Math.max(flat, 0.6), (al) => rgba(m.key, al), a);
     }
   });
