@@ -177,7 +177,8 @@ function zoomAt(sx, sy, factor) {
 }
 function zoomToBox(b) {
   const r = viewEl.getBoundingClientRect(), k = Math.min((r.height * 0.62) / b.h, (r.width * 0.4) / b.w);
-  VIEW.goal = { k, tx: r.width / 2 - (b.x + b.w / 2) * k, ty: r.height / 2 - (b.y + b.h / 2) * k };
+  // 只有点卡片飞过去才可能是"卡片间的移动"（newViewGoal）；滚轮、键盘缩放始终绕鼠标或中心走
+  VIEW.goal = { k, tx: r.width / 2 - (b.x + b.w / 2) * k, ty: r.height / 2 - (b.y + b.h / 2) * k, hop: true };
   VIEW.auto = false;
 }
 
@@ -192,13 +193,14 @@ function viewAt(a, b, u) {
 }
 // 平常跟着目标走的快慢：时间常数（秒），约等于原来 60 帧时每帧挪 22%；按真实经过的时间算，帧率高低不影响快慢
 const VIEW_TAU = 0.067;
-// 两个近景之间（缩放都在适配的 1.2 倍以上、差不多大）挪动超过视图宽度的 0.25 时（放大看着一张卡片、再点旁边的另一张），
-// 改成定时 0.7 秒的移动，中途先拉远再推近，看得出是从哪里挪到哪里；拉远 10% 起，每挪一个视图宽度多 10%，最多 30%
+// 点卡片时两个近景之间（缩放都在适配的 1.2 倍以上、差不多大）挪动超过视图宽度的 0.25（放大看着一张卡片、再点旁边的另一张），
+// 改成定时 0.7 秒的移动，中途先拉远再推近，看得出是从哪里挪到哪里；拉远 10% 起，每挪一个视图宽度多 10%，最多 30%。
+// 滚轮缩放不走这里：放大以后滚一格的平移也会超过 0.25 个视图宽，拉远会让鼠标下那一点跑掉
 const VIEW_HOP = { dur: 700, min: 0.25 };
 function newViewGoal(g, ms) {
   VIEW.seen = g; VIEW.hop = null;
   const kf = kFit(), far = Math.hypot(g.tx - VIEW.tx, g.ty - VIEW.ty) / (viewBox().cw || 1);
-  if (VIEW.k > kf * 1.2 && g.k > kf * 1.2 && Math.abs(Math.log(g.k / VIEW.k)) < 0.3 && far > VIEW_HOP.min)
+  if (g.hop && VIEW.k > kf * 1.2 && g.k > kf * 1.2 && Math.abs(Math.log(g.k / VIEW.k)) < 0.3 && far > VIEW_HOP.min)
     VIEW.hop = { from: { k: VIEW.k, tx: VIEW.tx, ty: VIEW.ty }, t0: ms, depth: Math.min(0.3, 0.1 + 0.1 * far) };
 }
 
