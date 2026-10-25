@@ -5,7 +5,7 @@ import http from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { createFeed, buildReplay, snapshotAt, imagesOf } from './feed.mjs';
+import { createFeed, buildReplay, snapshotAt, imagesOf, usageReader } from './feed.mjs';
 import { loadPrices } from '../prices.mjs';
 import { createUniverse, universeChanges, universeAt, desktopRoots, desktopSessions } from './universe.mjs';
 import { buildId, buildStamp } from './build-id.mjs';
@@ -216,8 +216,10 @@ async function main() {
   // 单个对话的看板也把先前会话 id 派出的任务算进来。回放照原样
   const desktop = desktopSessions(replayMode ? [] : desktopRoots());
   const conversation = (id) => { const ids = new Set([id]); for (const [prior, current] of desktop().aliases) if (current === id) ids.add(prior); return ids; };
-  const feed = replayMode ? null : createFeed(root, { ...options, conversation }), universe = createUniverse({ ...options, runs: root, config: configFile, windowH, replayLimitBytes,
-    desktop }), clients = new Set(), muxes = new Map();
+  // 先前对话记录的用量星图和看板都要读，共用一个读取器：一百多 MB 的旧记录只解析一次
+  const transcriptUsage = usageReader();
+  const feed = replayMode ? null : createFeed(root, { ...options, conversation, transcriptUsage }), universe = createUniverse({ ...options, runs: root, config: configFile, windowH, replayLimitBytes,
+    desktop, transcriptUsage }), clients = new Set(), muxes = new Map();
   const sessions = replayMode ? replaySessions(values.replay, root, options.claudeDir) : undefined;
   const sharedReplay = replayMode ? universe.replay({ speed: timing.speed, maxgap: timing.maxgap, sessions }, Date.now()) : null, details = new Map();
   // 单个组或任务的回放：第一次请求时构建（现在只要几十毫秒），之后复用；范围里没有任务的记成 null（404）

@@ -410,6 +410,28 @@ export function settleRun(run) {
   }
 }
 
+// 一份对话记录里 Claude Code 每条消息的用量（不含子 agent），给星图和看板算先前记录的用量用。按文件大小和修改时间缓存：
+// 先前的记录不会再变，只读一次；同一个对话的几份记录可能都很大（一百多 MB），所以服务端只建一个、两边共用
+export function usageReader() {
+  const cache = new Map();
+  return (file) => {
+    const st = stat(file);
+    if (!st) return [];
+    const sig = `${st.size}:${st.mtimeMs}`;
+    let hit = cache.get(file);
+    if (hit?.sig !== sig) {
+      const usage = new Map();
+      readLines(file, newTail(), (row) => {
+        const m = row?.type === 'assistant' && !row.isSidechain ? row.message : null, u = m?.usage;
+        if (m?.id && u) usage.set(m.id, { id: m.id, ts: Date.parse(row.timestamp), t: m.model,
+          u: { in: u.input_tokens ?? null, cached: u.cache_read_input_tokens ?? null, cache_write: u.cache_creation_input_tokens ?? null, out: u.output_tokens ?? null } });
+      });
+      hit = { sig, entries: [...usage.values()] }; cache.set(file, hit);
+    }
+    return hit.entries;
+  };
+}
+
 export function createFeed(root, options = {}) {
   const cache = new Map(), changed = new Set();
   const transcripts = new Map(), recentWindows = new Map(), queueScopes = new Set();
@@ -441,26 +463,13 @@ export function createFeed(root, options = {}) {
     }
     return latest;
   };
-  // 同一个对话先前的对话记录（桌面版重启、恢复前）里 Claude Code 每条消息的用量：直接读那几份记录，按文件签名缓存；
-  // 先前的记录不会再变，只读一次。不借星图的数据：星图只留 24 小时窗口里的，看板算的是全部时间
-  const priorFiles = new Map();
+  // 同一个对话先前的对话记录（桌面版重启、恢复前）里 Claude Code 每条消息的用量：直接读那几份记录（服务端给的读取器和星图共用缓存）
+  const transcriptUsage = options.transcriptUsage ?? usageReader();
   const priorUsageOf = (ids) => {
     const out = [];
     for (const id of ids) {
-      const file = findTranscript([], false, id), st = file && stat(file);
-      if (!st) continue;
-      const sig = `${st.size}:${st.mtimeMs}`;
-      let hit = priorFiles.get(file);
-      if (hit?.sig !== sig) {
-        const usage = new Map();
-        readLines(file, newTail(), (row) => {
-          const m = row?.type === 'assistant' && !row.isSidechain ? row.message : null, u = m?.usage;
-          if (m?.id && u) usage.set(m.id, { id: m.id, ts: Date.parse(row.timestamp), t: m.model,
-            u: { in: u.input_tokens ?? null, cached: u.cache_read_input_tokens ?? null, cache_write: u.cache_creation_input_tokens ?? null, out: u.output_tokens ?? null } });
-        });
-        hit = { sig, entries: [...usage.values()] }; priorFiles.set(file, hit);
-      }
-      out.push(...hit.entries);
+      const file = findTranscript([], false, id);
+      if (file) for (const entry of transcriptUsage(file)) out.push(entry);
     }
     return out;
   };
@@ -525,7 +534,9 @@ export function createFeed(root, options = {}) {
     let usage = m.usage;
     if (session && params.replay == null && params.sessions?.size > 1) {
       const seen = new Set(parsed.events.filter((e) => e.k === 'usage' && e.messageId).map((e) => e.messageId));
-      const extra = priorUsageOf([...params.sessions].filter((id) => id !== data.scope.value)).filter((e) => !seen.has(e.id));
+      // 先前的几份记录之间也会互相抄（每次恢复都把之前的消息带过去），一条消息只算一次
+      const extra = [];
+      for (const e of priorUsageOf([...params.sessions].filter((id) => id !== data.scope.value))) if (!seen.has(e.id)) { seen.add(e.id); extra.push(e); }
       if (extra.length) {
         const priced = {}, more = hostCost(extra, options.prices, priced);
         usage = { ...m.usage };

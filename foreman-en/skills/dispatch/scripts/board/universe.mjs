@@ -6,7 +6,7 @@ import { promptOf, toolsOf } from './claude-feed.mjs';
 import { queuedRuns } from '../records.mjs';
 import { resultOutcome } from '../display.mjs';
 import { ms, transient, stat, json, newTail, readLines, append, runMessage, laneOf, settleRun,
-  usageTotals, hostCost, costFields, createFeed, buildReplay, replayClock } from './feed.mjs';
+  usageTotals, hostCost, costFields, createFeed, buildReplay, replayClock, usageReader } from './feed.mjs';
 
 const keyOf = (cwd) => cwd ? cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() : '?';
 // git worktree 归到主仓库：Claude Code 自己开的 .claude/worktrees/<名字> 看路径就知道（删掉以后也认得）；
@@ -101,7 +101,7 @@ export function desktopHidden(roots, clock = Date.now) {
 }
 const runKeys = ['id', 'lane', 'kind', 'agent', 'model', 'group', 'plan', 'seat', 'role', 'title', 'status', 'started_at', 'ended_at', 'queued'];
 const pickRun = (run) => Object.fromEntries(runKeys.map((key) => [key, run[key]]));
-// 这个对话在时间窗口里用过哪些模型、各输出了多少（星图里星系的星云按它上色，页面上的 08-uni-galaxy.js）：同一个协作方和模型合在一起，按输出量排，留前六个
+// 这个对话用过哪些模型、各输出了多少（星图里星系的星云按它上色，页面上的 08-uni-galaxy.js）：同一个协作方和模型合在一起，按输出量排，留前六个
 function modelMix(runs) {
   const by = new Map();
   for (const r of runs) {
@@ -170,8 +170,10 @@ export function stateOf(session, runs, now, queued = []) {
 // 宇宙表的问题点：同一个组里前后相隔不超过这么久的任务算同一批（见 summaryOf 的 batchStart）
 const BATCH_GAP = 10 * 60000;
 const zeroUsage = (u) => !!u && u.input === 0 && u.output === 0 && Object.values(u).every((v) => v === 0 || v == null);
-function summaryOf(session, all, now, hours, prices, meter, waiting = []) {
-  const cutoff = now - hours * 3600000, own = all.filter((r) => r.session === session.id && !r.host);
+// 星图里一行是这个对话的全部（和飞进去的看板同一个口径）：派过的任务、Claude Code 的用量和费用都不按时间窗口截；
+// 时间窗口只决定哪些对话列出来
+function summaryOf(session, all, now, prices, meter, waiting = []) {
+  const own = all.filter((r) => r.session === session.id && !r.host);
   const queued = waiting.filter((q) => q.claude_session === session.id);
   // 同一席后来又有了新一轮（同一条车道上续接的，或同一份计划同一席重新启动的；重启的任务不一定带 parent，车道会换）
   const unitOf = (r) => r.group ?? r.plan ?? r.lane ?? r.id, laneOf = (r) => r.lane ?? r.id;
@@ -180,14 +182,14 @@ function summaryOf(session, all, now, hours, prices, meter, waiting = []) {
   // 没做成、但已经续接或重启过的不算失败（和 status 的"已续接"一样），比如取消以后又续接成功的
   // 正常结束却没交回合格报告的（no_result）和看板一样按失败算
   const failed = (r) => r.status !== 'running' && (r.status !== 'done' || r.no_result);
-  const counted = own.filter((r) => r.started_at >= cutoff), counts = { running: 0, done: 0, failed: 0 };
-  for (const run of counted) {
+  const counts = { running: 0, done: 0, failed: 0 };
+  for (const run of own) {
     const kind = run.status === 'running' ? 'running' : !failed(run) ? 'done' : superseded(run) ? null : 'failed';
     if (kind) counts[kind]++;
   }
   const runs = own.filter((r) => r.status === 'running' || r.ended_at >= now - 600000)
     .sort((a, b) => b.started_at - a.started_at || a.id.localeCompare(b.id)).slice(0, 16).map(meter?.pick ?? pickRun);
-  const usage = meter ? null : [...session.usage.values()].filter((u) => u.ts >= cutoff), costs = [...counted];
+  const usage = meter ? null : [...session.usage.values()], costs = [...own];
   if (meter ? meter.count : usage.length) {
     const priced = {}, cost = meter ? meter.cost : hostCost(usage, prices, priced);
     costs.push(costFields(cost, cost == null ? 'unknown' : 'api_price'));
@@ -225,7 +227,7 @@ function summaryOf(session, all, now, hours, prices, meter, waiting = []) {
     // 还在跑的运行没有费用、有的模型不在价格表里：能算的照样加起来，另外标出不完整，不让整份变成未知；
     // 用量明确记成全 0 的（一次请求都没完成）没有可算的费用，不算不完整（和单对话视图同一条规则）
     usage: meter ? meter.totals : usageTotals(usage), cost_usd: cost, cost_partial: costs.some((c) => c.cost_usd == null && !zeroUsage(c.usage)), alert, issues,
-    models: modelMix(counted) };
+    models: modelMix(own) };
 }
 
 function equalReplay(a, b) {
@@ -237,14 +239,13 @@ function equalReplay(a, b) {
   return keys.length === Object.keys(b).length && keys.every((key) => equalReplay(a[key], b[key]));
 }
 function replayMeter(prices, pick) {
-  let totals = usageTotals([]), sum = 0, unknown = 0, count = 0, expires = Infinity, dirty = false;
+  let totals = usageTotals([]), sum = 0, unknown = 0, count = 0, dirty = false;
   const costs = new WeakMap(), fields = [['in', 'input'], ['cached', 'cached'], ['cache_write', 'cache_write'], ['out', 'output']];
   const add = (usage) => {
     for (const [key, name] of fields) {
       if (usage.u[key] != null) totals[name] = (totals[name] ?? 0) + usage.u[key];
     }
     const cost = costs.get(usage); sum += cost ?? 0; unknown += cost == null ? 1 : 0; count++;
-    expires = Math.min(expires, usage.ts);
   };
   return {
     entry(session, entry) {
@@ -253,11 +254,11 @@ function replayMeter(prices, pick) {
       addEntry(session, entry);
       if (entry.usage) { costs.set(entry.usage, hostCost([entry.usage], prices)); if (!dirty) add(entry.usage); }
     },
-    at(session, cutoff) {
-      // 替换消息或窗口到期时按 Map 原序重加，避免减法改变原有浮点结果。
-      if (dirty || expires < cutoff) {
-        totals = usageTotals([]); sum = 0; unknown = 0; count = 0; expires = Infinity;
-        for (const usage of session.usage.values()) if (usage.ts >= cutoff) add(usage);
+    at(session) {
+      // 替换消息时按 Map 原序重加，避免减法改变原有浮点结果。
+      if (dirty) {
+        totals = usageTotals([]); sum = 0; unknown = 0; count = 0;
+        for (const usage of session.usage.values()) add(usage);
         dirty = false;
       }
       return { totals: { ...totals }, cost: count && unknown < count ? sum : null, partial: unknown > 0, count, pick };
@@ -312,6 +313,19 @@ export function createUniverse(options) {
   const hours = options.windowH ?? 24, sessions = new Map(), runs = new Map(), folders = new Map();
   const desktop = options.desktop ?? desktopSessions(options.desktopRoots ?? []);
   const listings = new Map();
+  // 先前的对话记录超出了时间窗口、不在 sessions 里的，用量另外读（服务端和看板共用这个读取器的缓存）
+  const transcriptUsage = options.transcriptUsage ?? usageReader();
+  // 每个对话的用量合计和费用：对话记录读到哪儿没变就沿用，不每一拍都把全部消息重算一遍
+  const sums = new Map();
+  const meterOf = (session) => {
+    let hit = sums.get(session.id);
+    if (hit?.sig !== session.sig) {
+      const list = [...session.usage.values()], priced = {}, cost = list.length ? hostCost(list, options.prices, priced) : null;
+      hit = { sig: session.sig, meter: { totals: usageTotals(list), cost, partial: !!priced.partial, count: list.length, pick: pickRun } };
+      sums.set(session.id, hit);
+    }
+    return hit.meter;
+  };
   let dirs = [], listedAt = -Infinity;
   let runNames = new Set(), runsScannedAt = -Infinity;
   let config;
@@ -360,7 +374,7 @@ export function createUniverse(options) {
     });
   };
   const read = (now = options.now?.() ?? Date.now()) => {
-    const cutoff = now - hours * 3600000, found = new Set(), older = new Map();
+    const cutoff = now - hours * 3600000, found = new Set(), older = new Map(), oldFiles = new Map();
     if (now - listedAt >= 2000) {
       dirs = list(options.claudeDir).filter((d) => d.isDirectory()).map((d) => path.join(options.claudeDir, d.name)); listedAt = now;
       for (const dir of listings.keys()) if (!dirs.includes(dir)) { listings.delete(dir); folders.delete(dir); }
@@ -389,7 +403,7 @@ export function createUniverse(options) {
           if (!info) { if (sessions.has(id)) found.add(id); continue; }
           item.mtime = info.mtimeMs;
         }
-        if (item.mtime < cutoff) { older.set(dir, (older.get(dir) || 0) + 1); continue; }
+        if (item.mtime < cutoff) { older.set(dir, (older.get(dir) || 0) + 1); oldFiles.set(id, file); continue; }
         active = true;
         let session = sessions.get(id) || newSession(id, file, dir);
         session = readSession(session); sessions.set(id, session); found.add(id);
@@ -397,7 +411,6 @@ export function createUniverse(options) {
         // 文件夹按对话启动时的目录命名，旧对话的计数跟着启动目录走
         if (session.root && (!known || session.cwdAt >= known.at)) folders.set(dir, { cwd: session.root, at: session.cwdAt });
         if (session.last_at != null && session.last_at < cutoff) older.set(dir, (older.get(dir) || 0) + 1);
-        for (const [key, usage] of session.usage) if (usage.ts < cutoff) session.usage.delete(key);
       }
       if (!active && project.files.size) {
         const latest = [...project.files.values()].sort((a, b) => b.mtime - a.mtime || a.file.localeCompare(b.file))[0];
@@ -412,21 +425,31 @@ export function createUniverse(options) {
     for (const id of sessions.keys()) if (!found.has(id)) sessions.delete(id);
     const { hidden, aliases } = desktop();
     // 同一个对话先前的对话记录（桌面版重启、恢复后换了会话 id）并进现在的那一份：不单独列，它派出的任务和 Claude Code 的用量
-    // 算到现在这个对话上（用量按消息 id 去重，新记录开头抄过来的那段不重算）。现在那一份还没有（还没写出来、超出时间窗口）时照常单独列
+    // 算到现在这个对话上（用量按消息 id 去重，几份记录之间抄过来的消息不重算）。先前的记录超出时间窗口的也算（星图一行是对话的全部）。
+    // 现在那一份还没有（还没写出来、超出时间窗口）时照常单独列
     const merged = new Map();
-    for (const [prior, id] of aliases) if (sessions.has(prior) && sessions.get(id)?.last_at != null) merged.set(prior, id);
+    for (const [prior, id] of aliases) if ((sessions.has(prior) || oldFiles.has(prior)) && sessions.get(id)?.last_at != null) merged.set(prior, id);
     const view = (session) => {
-      const priors = [...merged].filter(([, id]) => id === session.id).map(([prior]) => sessions.get(prior));
-      if (!priors.length) return session;
-      return { ...session, usage: new Map([...priors.flatMap((p) => [...p.usage]), ...session.usage]),
-        started_at: Math.min(session.started_at ?? Infinity, ...priors.map((p) => p.started_at ?? Infinity)) };
+      const priors = [...merged].filter(([, id]) => id === session.id).map(([prior]) => prior);
+      const sig = [session, ...priors.map((p) => sessions.get(p))].map((x) => x ? `${x.tail.version}:${x.tail.offset}:${x.usage.size}` : 'old').join('|');
+      if (!priors.length) return { ...session, sig };
+      const usage = new Map();
+      let started = session.started_at ?? Infinity;
+      for (const prior of priors) {
+        const known = sessions.get(prior);
+        for (const entry of known ? known.usage.values() : transcriptUsage(oldFiles.get(prior))) { usage.set(entry.id, entry); if (entry.ts < started) started = entry.ts; }
+        if (known?.started_at != null) started = Math.min(started, known.started_at);
+      }
+      for (const [key, entry] of session.usage) usage.set(key, entry);
+      return { ...session, usage, sig, started_at: Number.isFinite(started) ? started : session.started_at };
     };
     // 排队目录一时读不了（别的进程正在建、删票据，或者被占用）：这一拍按没有票据算，不让整份星图读不出来
     let waiting = [];
     try { waiting = queuedRuns(null, options.runs); } catch { /* 下一拍再读 */ }
     const all = readRuns(now).map((r) => merged.has(r.session) ? { ...r, session: merged.get(r.session) } : r);
     const selected = [...sessions.values()].filter((s) => s.last_at != null && s.last_at >= cutoff && !hidden.has(s.id) && !merged.has(s.id)).sort((a, b) => b.last_at - a.last_at || a.id.localeCompare(b.id)).slice(0, 200);
-    const summaries = selected.map((s) => summaryOf(view(s), all, now, hours, options.prices, undefined, waiting));
+    const summaries = selected.map((s) => { const v = view(s); return summaryOf(v, all, now, options.prices, meterOf(v), waiting); });
+    for (const id of sums.keys()) if (!sessions.has(id)) sums.delete(id);
     return { v: 3, now, window_h: hours, projects: projectsOf([...selected].sort((a, b) => b.cwdAt - a.cwdAt), older, folders), sessions: summaries,
       // 名额和对话列表同一个口径：桌面版里归档、删掉的对话，它的任务不占"同时运行"的格子（不然点了飞不进去）
       agents: agentSlots(config, hidden.size ? all.filter((r) => !hidden.has(r.session)) : all) };
@@ -565,7 +588,7 @@ export function createUniverse(options) {
         if (!session) continue;
         if (session.last_at < at - hours * 3600000) { if (before) { gone.push(before); summaries.delete(id); projectsDirty = true; } continue; }
         if (!before) projectsDirty = true;
-        const next = summaryOf(session, [...(ownRuns.get(id)?.values() || [])], at, hours, options.prices, meters.get(id).at(session, at - hours * 3600000));
+        const next = summaryOf(session, [...(ownRuns.get(id)?.values() || [])], at, options.prices, meters.get(id).at(session));
         if (before) for (const key of ['runs', 'counts', 'usage', 'waiting', 'alert']) if (equalReplay(before[key], next[key])) next[key] = before[key];
         if (!equalReplay(before, next)) { summaries.set(id, next); changed.push(next); }
       }
