@@ -242,6 +242,8 @@ export function runMessage(run, lane, prices, byId, { display: includeDisplay = 
   return { ...message, started_at: ms(m.started_at), ended_at: ms(m.ended_at), duration_s: r?.duration_s ?? null,
     ...(includeDisplay ? { display: display && limitDisplay(JSON.parse(JSON.stringify(display))) } : {}), display_round: roundOf(m, byId ?? new Map()), module: m.module ?? (kind === 'exec' ? 'run' : kind),
     participant: m.participant ?? null, submitted_at: ms(m.submitted_at), author: !!m.author,
+    // 正常结束、却没交回合格报告的（看板上的"no valid result"）：不带 display 的地方（星图）也要能按失败算
+    ...(r?.status === 'done' && !o.blocked && o.valid === false && m.participant !== 'host' ? { no_result: true } : {}),
     model_name: clip(m.model_name), display_model: clip(m.model || m.model_name || m.model_shown), cell: clip(m.cell), route: m.route ?? null,
     usage, ...(r?.usage_scope != null ? { usage_scope } : {}), ...(usage_unattributed ? { usage_unattributed: true } : {}),
     ...costFields(cost.cost_usd, cost.cost_source), report_head: head ? String(head).slice(0, 160) : null,
@@ -439,6 +441,29 @@ export function createFeed(root, options = {}) {
     }
     return latest;
   };
+  // 同一个对话先前的对话记录（桌面版重启、恢复前）里 Claude Code 每条消息的用量：直接读那几份记录，按文件签名缓存；
+  // 先前的记录不会再变，只读一次。不借星图的数据：星图只留 24 小时窗口里的，看板算的是全部时间
+  const priorFiles = new Map();
+  const priorUsageOf = (ids) => {
+    const out = [];
+    for (const id of ids) {
+      const file = findTranscript([], false, id), st = file && stat(file);
+      if (!st) continue;
+      const sig = `${st.size}:${st.mtimeMs}`;
+      let hit = priorFiles.get(file);
+      if (hit?.sig !== sig) {
+        const usage = new Map();
+        readLines(file, newTail(), (row) => {
+          const m = row?.type === 'assistant' && !row.isSidechain ? row.message : null, u = m?.usage;
+          if (m?.id && u) usage.set(m.id, { id: m.id, ts: Date.parse(row.timestamp), t: m.model,
+            u: { in: u.input_tokens ?? null, cached: u.cache_read_input_tokens ?? null, cache_write: u.cache_creation_input_tokens ?? null, out: u.output_tokens ?? null } });
+        });
+        hit = { sig, entries: [...usage.values()] }; priorFiles.set(file, hit);
+      }
+      out.push(...hit.entries);
+    }
+    return out;
+  };
   const addClaude = (data, runs, params, now, transcript) => {
     const session = data.scope.kind === 'session', recent = data.scope.kind === 'recent' || session && !runs.length;
     const file = transcript?.file ?? findTranscript(runs, recent, session ? data.scope.value : undefined);
@@ -498,9 +523,9 @@ export function createFeed(root, options = {}) {
     if (m.started_at == null) return data;
     // 同一个对话先前的对话记录（桌面版重启、恢复前）里 Claude Code 的用量也算进来，和星图那一行一致；新记录开头抄过来的消息按 id 去重
     let usage = m.usage;
-    if (session && params.replay == null && options.priorUsage) {
+    if (session && params.replay == null && params.sessions?.size > 1) {
       const seen = new Set(parsed.events.filter((e) => e.k === 'usage' && e.messageId).map((e) => e.messageId));
-      const extra = options.priorUsage(data.scope.value).filter((e) => !seen.has(e.id));
+      const extra = priorUsageOf([...params.sessions].filter((id) => id !== data.scope.value)).filter((e) => !seen.has(e.id));
       if (extra.length) {
         const priced = {}, more = hostCost(extra, options.prices, priced);
         usage = { ...m.usage };

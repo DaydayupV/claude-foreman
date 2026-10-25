@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promptOf, toolsOf } from './claude-feed.mjs';
 import { queuedRuns } from '../records.mjs';
+import { resultOutcome } from '../display.mjs';
 import { ms, transient, stat, json, newTail, readLines, append, runMessage, laneOf, settleRun,
   usageTotals, hostCost, costFields, createFeed, buildReplay, replayClock } from './feed.mjs';
 
@@ -177,9 +178,11 @@ function summaryOf(session, all, now, hours, prices, meter, waiting = []) {
   const sameSeat = (a, b) => laneOf(a) === laneOf(b) || a.plan != null && a.seat != null && a.plan === b.plan && a.seat === b.seat;
   const superseded = (r) => own.some((x) => x !== r && x.started_at > r.started_at && sameSeat(x, r));
   // 没做成、但已经续接或重启过的不算失败（和 status 的"已续接"一样），比如取消以后又续接成功的
+  // 正常结束却没交回合格报告的（no_result）和看板一样按失败算
+  const failed = (r) => r.status !== 'running' && (r.status !== 'done' || r.no_result);
   const counted = own.filter((r) => r.started_at >= cutoff), counts = { running: 0, done: 0, failed: 0 };
   for (const run of counted) {
-    const kind = run.status === 'running' ? 'running' : run.status === 'done' ? 'done' : superseded(run) ? null : 'failed';
+    const kind = run.status === 'running' ? 'running' : !failed(run) ? 'done' : superseded(run) ? null : 'failed';
     if (kind) counts[kind]++;
   }
   const runs = own.filter((r) => r.status === 'running' || r.ended_at >= now - 600000)
@@ -192,9 +195,9 @@ function summaryOf(session, all, now, hours, prices, meter, waiting = []) {
     if (cost != null && (meter ? meter.partial : priced.partial)) costs.push(costFields(null, 'unknown'));
   }
   const cost = costs.some((c) => c.cost_usd != null) ? costs.reduce((sum, c) => sum + (c.cost_usd ?? 0), 0) : null;
-  const failure = own.filter((r) => r.status !== 'running' && r.status !== 'done' && r.ended_at != null && r.ended_at >= now - 1800000 && !superseded(r))
+  const failure = own.filter((r) => failed(r) && r.ended_at != null && r.ended_at >= now - 1800000 && !superseded(r))
     .sort((a, b) => b.ended_at - a.ended_at)[0];
-  const alert = failure && session.promptAt <= failure.ended_at ? { kind: failure.status, run: failure.id, model: failure.model, at: failure.ended_at } : null;
+  const alert = failure && session.promptAt <= failure.ended_at ? { kind: failure.no_result ? 'no_result' : failure.status, run: failure.id, model: failure.model, at: failure.ended_at } : null;
   // 还在进行的组里出了问题的席位（超时、失败、被停止……），宇宙表的状态列每席画一个点；
   // 后来又有了新一轮的不算（superseded）。整组都结束以后不再列
   const live = new Set(own.filter((r) => r.status === 'running' || queued.some((q) => q.group != null
@@ -212,9 +215,9 @@ function summaryOf(session, all, now, hours, prices, meter, waiting = []) {
     batchStart.set(unit, start);
   }
   // 超过 12 个时留最新的 12 个，仍按结束的先后排
-  const issues = own.filter((r) => r.status !== 'running' && r.status !== 'done' && r.ended_at != null && r.ended_at >= (batchStart.get(unitOf(r)) ?? Infinity) && live.has(unitOf(r))
+  const issues = own.filter((r) => failed(r) && r.ended_at != null && r.ended_at >= (batchStart.get(unitOf(r)) ?? Infinity) && live.has(unitOf(r))
     && !superseded(r))
-    .sort((a, b) => b.ended_at - a.ended_at).slice(0, 12).reverse().map((r) => ({ status: r.status, run: r.id, model: r.model }));
+    .sort((a, b) => b.ended_at - a.ended_at).slice(0, 12).reverse().map((r) => ({ status: r.no_result ? 'no_result' : r.status, run: r.id, model: r.model }));
   const state = stateOf(session, runs, now, queued);
   return { id: session.id, project: keyOf(projectOf(session)), cwd: session.cwd, title: session.title ?? session.firstPrompt, model: session.model,
     // prompt_at：最近一条用户消息的时间，宇宙列表里进行中的对话按它排（新的在上），不随动静跳来跳去
@@ -333,7 +336,8 @@ export function createUniverse(options) {
         const file = path.join(run.dir, `${name}.json`), st = stat(file), signature = st && `${st.size}:${st.mtimeMs}`;
         if (signature && signature !== run.signatures[name]) {
           const value = json(file);
-          if (value) { run[name] = name === 'result' ? Object.fromEntries(['status', 'duration_s', 'usage', 'usage_scope', 'cost_usd', 'cost_source', 'model', 'agent_type'].filter((k) => k in value).map((k) => [k, value[k]])) : value; run.signatures[name] = signature; }
+          // 结果只留几项；报告本身不留，只留它算出的有没有交回合格报告（valid），星图按它把没交回的算失败
+          if (value) { run[name] = name === 'result' ? { ...Object.fromEntries(['status', 'duration_s', 'usage', 'usage_scope', 'cost_usd', 'cost_source', 'model', 'agent_type', 'needs_decision'].filter((k) => k in value).map((k) => [k, value[k]])), valid: resultOutcome(value, run.meta).valid } : value; run.signatures[name] = signature; }
         }
       }
       if (!run.meta) continue;
@@ -597,9 +601,7 @@ export function createUniverse(options) {
       } };
     return result;
   };
-  // 这几份对话记录里 Claude Code 每条消息的用量（单个对话的看板把先前记录的用量算进来时用）；还没读过的记录没有
-  const usageOf = (ids) => ids.flatMap((id) => [...(sessions.get(id)?.usage.values() || [])]);
-  return { read, hello, replay, usageOf };
+  return { read, hello, replay };
 }
 
 export function universeAt(replay, t = Infinity) {
