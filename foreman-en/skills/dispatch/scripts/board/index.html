@@ -305,7 +305,7 @@ body.table-all #usage:not([data-mode="uni"]) .tbody { overflow: visible; mask-im
 .tcol .seat .term li { padding-left: 2ch; text-indent: -2ch; }
 .seat:not(.open) .term li.act, .seat:not(.open) .term li.fold { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .seat:not(.open) .term li:not(.act):not(.plain) { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-/* 共用规则已经排好的行（运行中的正文、折叠后的结论）照原样显示，不再截成三行 */
+/* 共用规则已经排好的行（运行中的正文、结束后的结论）照原样显示，不再截成三行 */
 .seat .term li.plain { white-space: pre-wrap; }
 /* 组里的计划缺口和还没开始的派发：一行一条，跟在标题和席位下面 */
 .tgroup .plan-notes, .tgroup .dispatch-queue { flex: none; padding: 2px 6px; font-size: 10px; color: rgb(232,194,122); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -3669,10 +3669,10 @@ function renderTerms(t, L) {
   return settleTerms() && built;
 }
 
-// 终端区的写和量分开：renderTerms 期间各栏先全部写完，最后集中量一次（各组要不要收起、各栏正文多宽），再统一贴底。
+// 终端区的写和量分开：renderTerms 期间各栏先全部写完，最后集中量一次（各栏正文多宽），再统一贴底。
 // 不在每栏写完立刻读高度和宽度：每读一次浏览器都得把整页重排一遍，落地后第一次搭终端区时这样要几十毫秒。
 // 不在 renderTerms 里直接调用（比如测试）时照旧当场量
-const SETTLE = { on: false, stick: new Set(), groups: new Map(), widths: new Set(), lastW: null, retries: 0 };
+const SETTLE = { on: false, stick: new Set(), widths: new Set(), lastW: null, retries: 0 };
 const termChars = (w) => Math.max(20, Math.floor((w || 560) / 6.6) - 4);
 // 正文按多少字折行：用上一次量到的这一栏的宽度；新栏先借别的栏的宽度，量出来不一样时整块重画一次
 function termWidth(ol) {
@@ -3681,21 +3681,9 @@ function termWidth(ol) {
   ol.usedW = ol.cw ?? SETTLE.lastW;
   return termChars(ol.usedW);
 }
-function collapseGroup(col, blocks) {
-  for (const b of blocks) {
-    const el = col.seats.get(b.id);
-    if (!PANEL.open.has(b.id)) fillFlow(el.querySelector('.term'), Display.collapseLines(el.fullLines, true, 'click to open').map((line) => typeof line === 'string' ? { cls: 'plain', text: line } : line));
-  }
-}
 // 返回 false 表示有新栏的宽度猜错了，下一帧重画
 function settleTerms() {
-  // 量：这时这一帧的 DOM 都写完了，只排一次版
-  const fold = [...SETTLE.groups].filter(([col]) => { const box = col.querySelector('.seats'); return box.clientHeight > 0 && box.scrollHeight > box.clientHeight; });
-  // 写：放不下的已结束组每席只留四行（贴底等下面一起做）
-  SETTLE.on = true;
-  try { for (const [col, blocks] of fold) collapseGroup(col, blocks); } finally { SETTLE.on = false; }
-  // 再量宽度：要在收起之后量，收起前全文放不下时组里有竖滚动条，量到的宽度比收起后窄，按它折行就一直少一个字。
-  // 这一次排版贴底也要用，之后只改滚动位置，不会再触发排版
+  // 量宽度：这时这一帧的 DOM 都写完了，只排一次版；贴底也用这一次排版，之后只改滚动位置，不会再触发排版
   let again = false;
   for (const ol of SETTLE.widths) {
     const w = ol.clientWidth;
@@ -3709,7 +3697,7 @@ function settleTerms() {
   if (SETTLE.retries > 2) again = false;
   // 贴底
   for (const ol of SETTLE.stick) ol.scrollTop = ol.scrollHeight;
-  SETTLE.stick.clear(); SETTLE.groups.clear(); SETTLE.widths.clear();
+  SETTLE.stick.clear(); SETTLE.widths.clear();
   return !again;
 }
 
@@ -3825,10 +3813,7 @@ function fillGroup(col, u, t) {
     if (b.host) fillHostSeat(el, b.host, numbers.runs.get(b.host.id)); else fillSeat(el, b.lane, t, numbers.runs.get(currentRun(b.lane, t).id), head.split);
   });
   for (const [id, el] of col.seats) if (!seen.has(id)) { el.remove(); col.seats.delete(id); }
-  // 先量全文实际高度，再决定是否每席保留四行，展开的席始终显示全文（renderTerms 里留到最后集中量）
-  const collapsible = !queue.length && !states.some((s) => s.running);
-  if (SETTLE.on) { if (collapsible) SETTLE.groups.set(col, blocks); }
-  else if (collapsible && box.clientHeight > 0 && box.scrollHeight > box.clientHeight) collapseGroup(col, blocks);
+  // 已结束的组每席照样显示完整结论，不像原生终端那样放不下时收成四行：组里放不下就在组内滚动
   let finished = col.querySelector('.all-done');
   if (!finished) { finished = document.createElement('div'); finished.className = 'all-done'; col.append(finished); }
   setText(finished, states.length && !queue.length && !states.some((s) => s.running) ? `✔ ${Display.D.dashAllFinishedShort}` : '');
