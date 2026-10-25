@@ -249,18 +249,22 @@ function ccAway(L, t) {
 // 相关的光路短暂变宽（08-fx.js 的 drawFx 和 08-beams.js 用）。派出和交回最明显，读走结果、记下裁决次之，Claude Code 回一句话最轻。
 // 按记录时间算，回放、暂停、拖动时间线时和直播一样；几下叠在一起取最大值，离上一下不到 0.8 屏幕秒、又不比它强的就并掉
 // （同一次派出既有 Claude Code 的派出动作、又有那一席的任务启动，只算一下），事件密时不会一直闪。
-// 直播里事件要过一会儿才送到页面（看板服务每秒推一次，晚 0.2–1 秒），按记录时刻算的话到的时候已经暗了：
-// 直播时一下从页面第一次看到它起算，到的时候正好最亮；第一次看到时已经过去 BEAT.late 秒以上的不算（刚打开页面时的旧事件）。
+// 直播里事件要过一会儿才送到页面（看板服务每秒推一次；Claude Code 的回话要等它写进记录，常晚 1–2.5 秒），按记录时刻算的话
+// 到的时候已经暗了：直播时一下从页面第一次看到它起算，到的时候正好最亮。连上看板服务（打开页面、换对话、重连）后第一次算时
+// 已经在的事件都是旧的，不算；之后新到的、晚了不到 BEAT.late 秒的都算，再晚的多半是补发的旧记录。
 // 回放照旧按记录时刻。返回 { env: 整体强度 0–1, lanes: 车道 id → 这条车道的强度 }
-const BEAT = { window: 1.2, decay: 4.5, merge: 0.8, late: 1.5, seen: new Map(), kinds: { dispatch: 0.9, result: 0.8, collect: 0.6, verdict: 0.6, msg: 0.45 } };
+const BEAT = { window: 1.2, decay: 4.5, merge: 0.8, late: 4, seen: new Map(), hello: undefined, kinds: { dispatch: 0.9, result: 0.8, collect: 0.6, verdict: 0.6, msg: 0.45 } };
 function beatsAt(t) {
   const live = B.clock.mode !== 'replay', from = t - recMs(BEAT.window + (live ? BEAT.late : 0)), list = [];
+  // 每次连上服务都会收到新的 hello（01-state.js 的 onHello），以它为界
+  const prime = live && BEAT.hello !== B.hello;
+  if (prime) { BEAT.hello = B.hello; BEAT.seen.clear(); }
   const add = (ts, kind, lanes) => {
     if (!(ts > from && ts <= t)) return;
     let at = ts;
     if (live) {
       const key = `${kind}|${lanes[0]}|${ts}`;
-      if (!BEAT.seen.has(key)) BEAT.seen.set(key, { ts, at: t - ts > recMs(BEAT.late) ? -Infinity : t });
+      if (!BEAT.seen.has(key)) BEAT.seen.set(key, { ts, at: prime || t - ts > recMs(BEAT.late) ? -Infinity : t });
       at = BEAT.seen.get(key).at;
     }
     if (at > t - recMs(BEAT.window)) list.push({ ts: at, s: BEAT.kinds[kind], lanes });
