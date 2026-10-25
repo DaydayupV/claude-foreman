@@ -1,5 +1,5 @@
 {
-  "description": "Reminds Claude at session start to load the dispatch skill and adds the user and project preference files; blocks commands that call codex exec / codex review, opencode run or pi tasks directly, so agents are always called through the foreman-en script; records the questions and answers of image route pop-ups, so an image plan can be checked against the route the user chose; while the web board is on, show the board link to the user once per user message, on the first handoff after it, and once a handoff command has started in the background, remind Claude to tell the user in its reply text that the work was handed off, with the link",
+  "description": "Reminds Claude at session start to load the dispatch skill and adds the user and project preference files; blocks commands that call codex exec / codex review, opencode run or pi tasks directly, so agents are always called through the foreman-en script; records the questions and answers of image route pop-ups, so an image plan can be checked against the route the user chose; while the web board is on, show the board link to the user once per user message, on the first handoff after it, and when a turn handed work off in the background but Claude's reply text has no board link, stop the turn from ending once so Claude adds the handed-off sentence with the link",
   "hooks": {
     "SessionStart": [
       {
@@ -64,19 +64,6 @@
             "timeout": 10
           }
         ]
-      },
-      {
-        "matcher": "Bash|PowerShell",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node",
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/hooks/board-link.mjs"
-            ],
-            "timeout": 15
-          }
-        ]
       }
     ],
     "UserPromptSubmit": [
@@ -89,6 +76,20 @@
               "${CLAUDE_PLUGIN_ROOT}/hooks/board-link.mjs"
             ],
             "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/board-link.mjs"
+            ],
+            "timeout": 15
           }
         ]
       }

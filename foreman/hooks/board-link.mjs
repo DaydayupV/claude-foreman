@@ -4,8 +4,9 @@
 // 这里用钩子的 systemMessage，由界面直接显示，不经过模型。
 // 只提示，不拦命令；用户每发一条消息，派出任务时只显示一次（同一条消息里一起派出的几个任务只显示一次）。
 // 同一个脚本也挂在 UserPromptSubmit 上：用户发新消息时清掉"已显示"的标记，那时什么都不输出（输出会被加进用户的消息）。
-// 还挂在 PostToolUse 上：派出命令在后台启动以后，提醒 Claude 先在正文里写"已派出"那句话、附上链接，再调用下一个工具。
-// 桌面版把上面的 systemMessage 折在工具调用里，用户常常看不到；派出后同一轮接着干别的时，那句话又容易只写进思考。
+// 还挂在 Stop 上：桌面版把上面的 systemMessage 折在工具调用里，用户常常看不到，链接要靠 Claude 写进"已派出"那句话；
+// 派出后同一轮接着干别的时，那句话又常常只写进思考。这一轮在后台派出过、正文里却没有看板链接时，拦下结束，让 Claude 补上。
+// （派出后用 PostToolUse 的 additionalContext 提醒试过：Claude 把它当成链接已经显示过了，连平常派出都不再写）
 
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -21,10 +22,10 @@ const MESSAGES = {
   zh: (url) => `网页看板：${url}`,
   en: (url) => `Web board: ${url}`,
 };
-// 派出命令在后台启动以后给 Claude 的提醒（PostToolUse 的 additionalContext，用户看不到）
-const REMINDERS = {
-  zh: (url) => `foreman：刚在后台派出了任务。调用下一个工具或结束这一轮之前，先在回复正文里用一句话告诉用户"已派出：…"，句中附上 [网页看板](${url || '派出命令输出的 foreman: web board 那一行的地址'})；写在思考里用户看不到。同一条消息里一起派出的几个任务写成一句，附一次。`,
-  en: (url) => `foreman: work was just handed off in the background. Before your next tool call or ending the turn, tell the user in one sentence of your reply text that it was handed off, with [web board](${url || 'the address on the handoff command\'s foreman: web board line'}) in that sentence; your thinking isn't shown to the user. Several runs handed off together in one message get one sentence and one link.`,
+// 要结束这一轮、正文里却还没写看板链接时拦下的理由（Stop 的 reason，Claude 照着补上再结束）
+const STOP_REASONS = {
+  zh: (url) => `foreman：这一轮在后台派出了任务，但回复正文里还没有告诉用户、附上看板链接。结束前先用一句话告诉用户"已派出：…"（派出没成功的话照实说明），句中附上 [网页看板](${url || '派出命令输出的 foreman: web board 那一行的地址'})，然后再结束这一轮。`,
+  en: (url) => `foreman: work was handed off in the background this turn, but your reply text hasn't told the user or given the board link. Before ending the turn, tell the user in one sentence that it was handed off (or, if the handoff failed, say so), with [web board](${url || 'the address on the handoff command\'s foreman: web board line'}) in that sentence.`,
 };
 
 const unquote = (s) => String(s ?? '').replace(/^["']|["']$/g, '');
@@ -86,6 +87,45 @@ function claimShow(session, now) {
   return file;
 }
 
+// 这一轮最后一次在后台派出任务以后，回复正文里有没有写过看板链接；没写过就返回那次派出（dispatchOf 的结果），否则 null。
+// 这一轮从记录里最后一条用户那边送来的消息（用户的话、完成通知这类，不算工具结果）算起。
+// 每一轮结束都会跑：只读记录末尾 4 MB，里面没有 cli.mjs 就不解析
+const TAIL = 4 * 1024 * 1024;
+const LINKED = /\[(?:网页看板|web board)\]\(http|http:\/\/127\.0\.0\.1:\d+\/\w+\/\?level=all/i;
+export function unannounced(file) {
+  let text;
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const size = fs.fstatSync(fd).size, start = Math.max(0, size - TAIL), buf = Buffer.alloc(size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      text = buf.toString('utf8');
+      if (start > 0) text = text.slice(text.indexOf('\n') + 1);
+    } finally { fs.closeSync(fd); }
+  } catch { return null; }
+  if (!text.includes('cli.mjs')) return null;
+  const rows = [];
+  for (const line of text.split('\n')) {
+    let row;
+    try { row = JSON.parse(line); } catch { continue; }
+    if (!row.isSidechain && (row.type === 'assistant' || row.type === 'user')) rows.push(row);
+  }
+  let from = 0;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const c = rows[i].message?.content;
+    if (rows[i].type === 'user' && !rows[i].isMeta && (typeof c === 'string' || Array.isArray(c) && c.some((b) => b.type === 'text'))) { from = i + 1; break; }
+  }
+  let pending = null;
+  for (const row of rows.slice(from)) {
+    if (row.type !== 'assistant' || !Array.isArray(row.message?.content)) continue;
+    for (const b of row.message.content) {
+      if (b.type === 'text' && LINKED.test(b.text || '')) pending = null;
+      else if (b.type === 'tool_use' && ['Bash', 'PowerShell'].includes(b.name) && b.input?.run_in_background === true && typeof b.input.command === 'string') pending = dispatchOf(b.input.command) || pending;
+    }
+  }
+  return pending;
+}
+
 // 不是用户发的消息：后台任务的完成通知（<task-notification>）、桌面版通知其他会话的进展（<side-sessions-event>）、
 // 拉取请求的检查结果（<ci-monitor-event>），以及只有 <system-reminder> 的提醒。别的会话发来的消息照样算新消息
 const AUTOMATED = /^<(task-notification|side-sessions-event|ci-monitor-event)>/;
@@ -110,18 +150,17 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       }
       process.exit(0);
     }
-    const command = event.tool_input?.command, found = typeof command === 'string' ? dispatchOf(command) : null;
+    // 要结束这一轮（Stop）：这一轮在后台派出过任务、正文里却还没写看板链接时，拦一次，让 Claude 补上再结束。
+    // 拦过一次以后（stop_hook_active）不再拦，免得来回打转
+    const stop = event.hook_event_name === 'Stop', command = event.tool_input?.command;
+    const found = stop ? (event.stop_hook_active ? null : unannounced(event.transcript_path)) : typeof command === 'string' ? dispatchOf(command) : null;
     if (!found) process.exit(0);
     const configFile = found.config || process.env.FOREMAN_CONFIG || path.join(os.homedir(), '.claude', 'foreman', 'config.json');
     if (!webOn(configFile)) process.exit(0);
     let lang = 'zh';
     try { lang = JSON.parse(fs.readFileSync(path.join(path.dirname(SCRIPT), 'language.json'), 'utf8')).language; } catch { /* 用默认 */ }
-    // 派出命令运行完（PostToolUse）：只提醒在后台启动的。前台跑的这时已经跑完了，接下来本来就要汇报结果
-    if (event.hook_event_name === 'PostToolUse') {
-      if (event.tool_input?.run_in_background === true) {
-        const context = (REMINDERS[lang] || REMINDERS.zh)(boardUrl(configFile, event.session_id));
-        process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: context } }));
-      }
+    if (stop) {
+      process.stdout.write(JSON.stringify({ decision: 'block', reason: (STOP_REASONS[lang] || STOP_REASONS.zh)(boardUrl(configFile, event.session_id)) }));
       process.exit(0);
     }
     const claimed = claimShow(event.session_id, Date.now());
