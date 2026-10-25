@@ -33,9 +33,10 @@ function trackSurges(rates, quiet, t) {
     const fire = (k) => { if (!quiet && !reduceMotion.matches && now - s.t0 > 6) { s.t0 = now; s.k = k; } };
     if (usage) {
       if (usage.ts > s.used) { s.used = usage.ts; if (s.synced) fire(0.55 + 0.45 * clamp01(usage.u.out / 600)); }
-    } else if (rate > s.base * 1.6 && rate - s.base >= 15) fire(0.4 + 0.6 * clamp01((rate - s.base) / 80));
+    } else if (s.synced && rate > s.base * 1.6 && rate - s.base >= 15) fire(0.4 + 0.6 * clamp01((rate - s.base) / 80));
+    // 开头那一批还没收完时平均速度直接跟上：断开一阵再连上，补回来的用量会让速度一下子回来，不算加快
+    s.base = s.synced ? s.base + (rate - s.base) * (1 - Math.exp(-dt / 4)) : rate;
     if (live && B.synced) s.synced = true;
-    s.base += (rate - s.base) * (1 - Math.exp(-dt / 4));
   }
   for (const id of [...SURGE.keys()]) if (!rates.has(id)) SURGE.delete(id);
 }
