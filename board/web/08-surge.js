@@ -27,13 +27,14 @@ function trackSurges(rates, quiet, t) {
   for (const [id, rate] of rates) {
     let s = SURGE.get(id);
     const lane = B.laneById.get(id), usage = id === 'cc' || !lane ? null : latestOutput(lane, t);
-    if (!s) { SURGE.set(id, { base: rate, at: now, t0: -Infinity, k: 0, used: usage?.ts ?? -Infinity, synced: !live || B.synced }); continue; }
+    if (!s) { SURGE.set(id, { base: rate, at: now, born: now, t0: -Infinity, k: 0, used: usage?.ts ?? -Infinity, synced: !live || B.synced }); continue; }
     const dt = Math.min(1, Math.max(0, now - s.at));
     s.at = now;
     const fire = (k) => { if (!quiet && !reduceMotion.matches && now - s.t0 > 6) { s.t0 = now; s.k = k; } };
     if (usage) {
       if (usage.ts > s.used) { s.used = usage.ts; if (s.synced) fire(0.55 + 0.45 * clamp01(usage.u.out / 600)); }
-    } else if (s.synced && rate > s.base * 1.6 && rate - s.base >= 15) fire(0.4 + 0.6 * clamp01((rate - s.base) / 80));
+    // 按速度判断要有一段平均：刚打开页面（条目刚建）的头 4 秒，平均速度只有一个样本，不放
+    } else if (s.synced && now - s.born > 4 && rate > s.base * 1.6 && rate - s.base >= 15) fire(0.4 + 0.6 * clamp01((rate - s.base) / 80));
     // 开头那一批还没收完时平均速度直接跟上：断开一阵再连上，补回来的用量会让速度一下子回来，不算加快
     s.base = s.synced ? s.base + (rate - s.base) * (1 - Math.exp(-dt / 4)) : rate;
     if (live && B.synced) s.synced = true;
