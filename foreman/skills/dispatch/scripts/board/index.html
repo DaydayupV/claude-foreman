@@ -267,6 +267,9 @@ body.table-all #usage:not([data-mode="uni"]) .tbody { overflow: visible; mask-im
 .tcol header b { color: var(--hi); overflow: hidden; text-overflow: ellipsis; }
 .tcol header .st { color: var(--mid); overflow: hidden; text-overflow: ellipsis; }
 .tcol .term { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 3px 6px 4px; list-style: none; font-size: 10.5px; line-height: 1.5; color: var(--mid); scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
+/* 单车道栏的正文很长（Claude Code 那一栏几百行）：不在屏幕上时不排版。飞进长对话、落地后第一次搭终端区时，
+   终端区还在视口下面，不用为了量尺寸把它整块排一遍（那一帧原来要五六十毫秒）。高度由栏撑满，和内容无关，显示出来时不跳 */
+.tcol:not(.tgroup) > .term { content-visibility: auto; contain-intrinsic-size: auto 300px; }
 .tcol .term li { padding-left: 8ch; text-indent: -8ch; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* 终端页的单任务栏：头部第二行是任务行 */
@@ -3688,6 +3691,11 @@ function collapseGroup(col, blocks) {
 function settleTerms() {
   // 量：这时这一帧的 DOM 都写完了，只排一次版
   const fold = [...SETTLE.groups].filter(([col]) => { const box = col.querySelector('.seats'); return box.clientHeight > 0 && box.scrollHeight > box.clientHeight; });
+  // 写：放不下的已结束组每席只留四行（贴底等下面一起做）
+  SETTLE.on = true;
+  try { for (const [col, blocks] of fold) collapseGroup(col, blocks); } finally { SETTLE.on = false; }
+  // 再量宽度：要在收起之后量，收起前全文放不下时组里有竖滚动条，量到的宽度比收起后窄，按它折行就一直少一个字。
+  // 这一次排版贴底也要用，之后只改滚动位置，不会再触发排版
   let again = false;
   for (const ol of SETTLE.widths) {
     const w = ol.clientWidth;
@@ -3699,10 +3707,7 @@ function settleTerms() {
   // 连着最多重画两次，免得滚动条一出一没让宽度来回变
   SETTLE.retries = again ? (SETTLE.retries || 0) + 1 : 0;
   if (SETTLE.retries > 2) again = false;
-  // 写：放不下的已结束组每席只留四行（贴底等下面一起做）
-  SETTLE.on = true;
-  try { for (const [col, blocks] of fold) collapseGroup(col, blocks); } finally { SETTLE.on = false; }
-  // 贴底：再排一次版，之后只改滚动位置，不会再触发排版
+  // 贴底
   for (const ol of SETTLE.stick) ol.scrollTop = ol.scrollHeight;
   SETTLE.stick.clear(); SETTLE.groups.clear(); SETTLE.widths.clear();
   return !again;
@@ -3721,6 +3726,8 @@ function fillFlow(ol, lines) {
       if (performance.now() - ol.userAt > 1000) return;
       ol.stick = ol.scrollHeight - ol.scrollTop - ol.clientHeight < 8;
     }, { passive: true });
+    // 不在屏幕上的正文不排版（board.css 的 content-visibility），那时贴底量不到真高度：一显示出来就再贴一次
+    ol.addEventListener('contentvisibilityautostatechange', (e) => { if (!e.skipped && ol.stick) ol.scrollTop = ol.scrollHeight; });
   }
   fillTerm(ol, lines);
   if (!ol.stick) return;

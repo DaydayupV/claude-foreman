@@ -178,7 +178,11 @@ async function cmdResume(o) {
     if (round > max) die(M.discussRoundsExceeded(rootId, done, max));
   }
   const cfg = load(parent.meta.cwd);
-  const brief = readBrief(o);
+  // 上一轮刚派出就被取消之类：协作方可能还没把那一轮的说明写进会话，续接时只发新说明它就不知道原来要做什么。
+  // 由协作方的适配器判断（目前是 Codex 看自己的会话记录），没收到就把当时发出的说明（含固定约束）补在前面
+  const lost = adapters[agentTypeOf(parent.meta)].lostPrompt?.(parent);
+  const brief = lost ? M.resumeUnsent(lost, readBrief(o)) : readBrief(o);
+  if (lost) resumeNote = [resumeNote, M.resumeUnsentNote].filter(Boolean);
   // 什么模型都没配置时沿用上一轮记录的模型，同一会话不中途换模型。
   const profile = resolveProfile(cfg, { module: image ? 'image' : discuss ? 'discuss' : 'run', cell: image ? parent.meta.cell : undefined,
     plan: parent.meta.plan, seat: parent.meta.seat, role: parent.meta.role, outside_cell: parent.meta.outside_cell,

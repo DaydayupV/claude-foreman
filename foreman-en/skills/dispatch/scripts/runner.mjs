@@ -287,7 +287,7 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
 
   const warnings = [];
   const notes = [];
-  if (ctx.resumeNote) notes.push(ctx.resumeNote);
+  notes.push(...[].concat(ctx.resumeNote || []));
   if (snapshotRequired && ctx.parent && ctx.previousRunAccess !== agent.run_access) notes.push(M.runAccessChanged(ctx.previousRunAccess, agent.run_access));
   let tracker = null;
   const cleanup = () => tracker?.cleanup();
