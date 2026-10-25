@@ -2283,6 +2283,23 @@ function outLook(life) {
   return { a: 0, s: 0.35 };
 }
 
+// ---- Claude Code 卡片离场 ----
+// 整个对话闲下来（Claude Code 是 idle、刻度带里一张席位卡都没有、它的产出框也已经收起）时，卡片缩成一颗光点、
+// 沿弧线飞进弧线区中央的亮核；重新活跃时倒着放：光点从亮核飞回来，长成卡片（08-life.js 的 drawCcAway）。
+// 返回 0–1：0 = 卡片在，1 = 已经离开。动画按屏幕时间放，中途反过来时从当前的进度接着倒放；
+// 刚打开页面或换了对话时直接停在那时的样子，不放动画。回放里 Claude Code 一直算 active，不会离开
+const CC_AWAY_ANIM = 1.6; // 屏幕秒：前 40% 卡片缩成光点，后 60% 光点飞进亮核
+const CC_AWAY = { lane: null, away: false, at: -Infinity };
+function ccAway(L, t) {
+  const cc = B.laneById.get('cc');
+  const want = !!cc && !!latest(cc) && !L.groups.length && !laneStatus(cc, t).running && ccLife(t).phase === 'none';
+  const now = performance.now(), dur = CC_AWAY_ANIM * 1000, u = clamp01((now - CC_AWAY.at) / dur);
+  if (CC_AWAY.lane !== cc) Object.assign(CC_AWAY, { lane: cc, away: want, at: -Infinity });
+  else if (want !== CC_AWAY.away) Object.assign(CC_AWAY, { away: want, at: now - (1 - u) * dur });
+  const p = clamp01((now - CC_AWAY.at) / dur);
+  return CC_AWAY.away ? p : 1 - p;
+}
+
 // ---- 04-rates.js
 'use strict';
 // token 速度和用量。各家记录用量的粒度都很粗，速度一律是估算（页面上写成 ≈）：
@@ -2799,6 +2816,9 @@ function computeLayout(t) {
   L.cc = { x: WL.ccX, y: L.H / 2 - WL.cardH / 2, w: WL.cardW, h: WL.cardH };
   const R = Math.max(300, L.H * 0.48);
   L.core = { cx: WL.ccX + WL.cardW + WL.coreGap + R, cy: L.H / 2, R, clipX: WL.bandX - 10 };
+  // Claude Code 卡片离场的进度（04-life.js 的 ccAway）和方向（true 是正在离开或已经离开）
+  L.ccAway = ccAway(L, t);
+  L.ccLeaving = CC_AWAY.away;
   return L;
 }
 
@@ -3224,6 +3244,9 @@ function placeWorld(L, t) {
   if (bh) setOpacity(bh, bandReveal(L, t));
   const cc = UI.outs.get('cc');
   if (cc) { const k = outLook(ccLife(t)); place(cc, L.ccOut); setOpacity(cc, k.a * L.ccDim); setScale(cc, k.s); }
+  // Claude Code 卡片离场：前 40% 缩成光点淡掉（光点在 08-life.js 的 drawCcAway 里画），回来时倒过来
+  const ccCard = UI.cards.get('cc');
+  if (ccCard) { const k = clamp01((L.ccAway || 0) / 0.4); setOpacity(ccCard, 1 - k); setScale(ccCard, 1 - 0.85 * k); }
 }
 const setScale = (el, s) => { const v = s >= 0.999 ? '' : `scale(${s.toFixed(3)})`; if (el.style.transform !== v) el.style.transform = v; };
 
@@ -4307,7 +4330,7 @@ function drawNebula(L, P, t, rates, pal = []) {
     cloud(x, y, 230, 85, tintOf(id), smooth(`neb|${id}`, on ? 0.07 + 0.08 * I : 0.018) * row.vis);
   }
   const cc = B.laneById.get('cc');
-  if (cc) cloud(L.cc.x + L.cc.w * 0.8, L.cc.y + L.cc.h / 2, 150, 90, tintOf('cc'), smooth('neb|cc', laneActive(cc, t) ? 0.07 : 0.025));
+  if (cc) cloud(L.cc.x + L.cc.w * 0.8, L.cc.y + L.cc.h / 2, 150, 90, tintOf('cc'), smooth('neb|cc', laneActive(cc, t) ? 0.07 : 0.025) * (1 - (L.ccAway || 0)));
 }
 
 // 宇宙尘：在世界里缓慢漂移，绕回；六成撒在光束区（刻度带右边到产出列之间）
@@ -4493,7 +4516,8 @@ function drawBand(b, t, a = 1) {
 // 卡片接口（世界坐标）：token 在左边（Claude Code 在右边）上部，交互在下部；折叠起来的组落在组头上
 function portsOf(L) {
   const P = new Map(), c = L.cc;
-  P.set('cc', { tok: [c.x + c.w, c.y + c.h * 0.3], link: [c.x + c.w, c.y + c.h * 0.72], out: [c.x + c.w * 0.65, c.y], card: c });
+  // Claude Code 卡片离场时（L.ccAway），连到它的光线跟着淡掉
+  P.set('cc', { tok: [c.x + c.w, c.y + c.h * 0.3], link: [c.x + c.w, c.y + c.h * 0.72], out: [c.x + c.w * 0.65, c.y], card: c, vis: 1 - (L.ccAway || 0) });
   for (const g of L.groups) for (const lane of g.lanes) {
     const row = L.rows.get(lane.id);
     if (row) P.set(lane.id, { tok: [row.card.x, row.card.y + row.card.h * 0.3], link: [row.card.x, row.card.y + row.card.h * 0.72], card: row.card, outbox: row.out, visible: true, vis: row.vis });
@@ -4595,7 +4619,9 @@ function drawOverlay(t, L, P, lanes, rates, live, bandA, burst = null) {
   each((lane) => { const age = surgeAge(lane.id); if (age != null && age < SURGE_CORE) drawSurgeCore(core, lane.id, age); });
   drawBand(L.band, t, bandA);
   each((lane) => { if (lane.id !== 'cc' && P.get(lane.id).visible) drawRibbon(lane, P.get(lane.id), t, rates.get(lane.id) || 0, pulses, live.get(lane.id)); });
+  ctx.globalAlpha = P.get('cc').vis;
   drawCCOut(P.get('cc'), L.ccOut, pulses, rates.get('cc') || 0, live.get('cc') || 0, t);
+  ctx.globalAlpha = 1;
   drawOutLife(L, P, t);
   drawStates(L, t);
   drawTags(L, t, rates);
@@ -5003,9 +5029,25 @@ function drawJudge(p, L, t) {
   hudText(TEXT.decisionWritten, box.x + box.w / 2, box.y - 14, HI(0.95), fade);
 }
 
+// Claude Code 卡片离场（04-life.js 的 ccAway）：前 40% 卡片缩小淡掉，中心聚起一颗光点；后 60% 光点拖着尾巴沿弧线飞进
+// 弧线区中央的亮核，到的时候亮核那里散开一圈。回来时倒着放：亮核亮一圈，光点飞到卡片的位置，再长成卡片
+function drawCcAway(L) {
+  const k = L.ccAway || 0;
+  if (k <= 0 || k >= 1) return;
+  const c = L.cc, sx = c.x + c.w / 2, sy = c.y + c.h / 2, ex = L.core.cx, ey = L.core.cy, color = tintOf('cc');
+  const shrink = clamp01(k / 0.4), fly = clamp01((k - 0.4) / 0.6);
+  if (fly <= 0) { glowDot(sx, sy, 1.6 + 2.4 * shrink, color, shrink); return; }
+  // 离开时从卡片飞向亮核，回来时从亮核飞向卡片：尾巴总在头的后面
+  const out = [[sx, sy], [sx + 70, sy - 110], [ex - 140, ey - 90], [ex, ey]];
+  const q = L.ccLeaving ? out : [...out].reverse(), u = L.ccLeaving ? fly : 1 - fly;
+  comet(q, u, color, 4 - 1.6 * fly, 12);
+  ring(ex, ey, (L.ccLeaving ? fly - 0.8 : 1 - fly) / 0.2, color, 4, 46);
+}
+
 function drawLife(L, t) {
   drawDispatchBirth(L, t);
   drawLeave(L);
+  drawCcAway(L);
   for (const p of plansAt(t)) {
     drawGate(p, L, t);
     drawPlanBirth(p, L, t);
