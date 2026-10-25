@@ -84,11 +84,15 @@ function uniZoomAt(sx, sy, f) {
   UV.goal = { k, tx: sx - (sx - g.tx) * (k / g.k), ty: sy - (sy - g.ty) * (k / g.k) };
   UV.auto = false;
 }
+// 和看板的镜头一样按对数插值、绕不动点缩放、按真实时间走（05-world.js 的 viewAt）；时间常数约等于原来 60 帧时每帧挪 16%。
+// 自动适配时目标每帧都是新算的，认不出"新目标"：一帧最多按 50 毫秒算，停了一阵再画也不会一下跳太远
+const UNI_TAU = 0.096;
 function stepUni() {
   if (UV.auto) UV.goal = uniFitGoal();
-  const g = UV.goal;
+  const g = UV.goal, ms = performance.now(), dt = Math.min(0.05, (ms - (UV.stepAt ?? ms - 16)) / 1000);
+  UV.stepAt = ms;
   if (!g) return (UV.moving = false);
-  for (const key of ['k', 'tx', 'ty']) UV[key] += (g[key] - UV[key]) * 0.16;
+  Object.assign(UV, viewAt(UV, g, 1 - Math.exp(-Math.max(dt, 0.001) / UNI_TAU)));
   const moving = Math.abs(g.k - UV.k) > g.k * 0.001 || Math.abs(g.tx - UV.tx) > 0.3 || Math.abs(g.ty - UV.ty) > 0.3;
   if (!moving) { Object.assign(UV, { k: g.k, tx: g.tx, ty: g.ty }); if (!UV.auto) UV.goal = null; }
   // 自动适配全貌时 goal 一直在，是否在动看这里（限帧用）
