@@ -224,13 +224,37 @@ fs.statSync = (file, ...args) => {
   // incomplete 只表示 60 秒用完；拍不稳的文件只进 unstable_files，只读审计照样拒绝开始（下面 discuss 没有调用模型）
   assert.equal(r.changes.incomplete, undefined);
   assert.deepEqual(r.changes.unstable_files, (kind === 'run' ? ['before', 'after'] : ['before']).map((phase) => ({ path: 'src/不稳定.txt', phase })));
-  assert.ok(r.notes.includes(M.unstableFiles(['src/不稳定.txt'], 'before')));
-  if (kind === 'run') assert.ok(r.notes.includes(M.unstableFiles(['src/不稳定.txt'], 'after')));
+  assert.ok(r.notes.includes(M.unstableFiles(['src/不稳定.txt'], 1, 'before', null)));
+  if (kind === 'run') assert.ok(r.notes.includes(M.unstableFiles(['src/不稳定.txt'], 1, 'after', null)));
+  assert.equal(r.changes.unstable_total, undefined); assert.equal(r.changes.unstable_list, undefined);
   assert.equal(s.calls().length, kind === 'run' ? 1 : 0);
   if (kind === 'discuss') {
     assert.equal(r.readonly, 'audited'); assert.equal(r.status, 'failed');
     assert.equal(r.not_started, true);
     assert.deepEqual(r.readonly_violation, []);
+  }
+});
+
+test('拍不稳的文件很多时，结果和提示里只列前 20 个，完整列表写进记录目录', async (t) => {
+  const h = sandbox(t), hot = Array.from({ length: 25 }, (_, i) => h.write(`hot/${String(i).padStart(2, '0')}.txt`, `file ${i}
+`));
+  const preload = write(path.join(h.home, 'many-unstable.mjs'), `import fs from 'node:fs';
+const stat = fs.statSync, hot = new Set(${JSON.stringify(hot)});
+fs.statSync = (file, ...args) => {
+  if (hot.has(file)) throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+  return stat(file, ...args);
+};`);
+  const r = output(await h.bridge(taskArgs(h), { env: { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` } }));
+  const all = ['before', 'after'].flatMap((phase) => hot.map((_, i) => ({ path: `hot/${String(i).padStart(2, '0')}.txt`, phase })));
+  assert.equal(r.changes.unstable_files.length, 20);
+  assert.equal(r.changes.unstable_total, 50);
+  assert.equal(r.changes.unstable_list, path.join(r.run_dir, 'unstable-files.json'));
+  assert.deepEqual(new Set(json(r.changes.unstable_list).map((f) => `${f.phase}:${f.path}`)), new Set(all.map((f) => `${f.phase}:${f.path}`)));
+  for (const phase of ['before', 'after']) {
+    const note = r.notes.find((n) => n.startsWith(phase === 'before' ? '开工快照有 25 个' : '结束快照有 25 个'));
+    assert.ok(note, phase);
+    assert.ok(note.includes(`等（只列出前 20 个，完整列表在 ${r.changes.unstable_list}）`), note);
+    assert.equal(all.filter((f) => f.phase === phase && note.includes(f.path)).length, 20);
   }
 });
 
