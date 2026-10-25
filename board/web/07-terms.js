@@ -206,6 +206,11 @@ function collapseGroup(col, blocks) {
 function settleTerms() {
   // 量：这时这一帧的 DOM 都写完了，只排一次版
   const fold = [...SETTLE.groups].filter(([col]) => { const box = col.querySelector('.seats'); return box.clientHeight > 0 && box.scrollHeight > box.clientHeight; });
+  // 写：放不下的已结束组每席只留四行（贴底等下面一起做）
+  SETTLE.on = true;
+  try { for (const [col, blocks] of fold) collapseGroup(col, blocks); } finally { SETTLE.on = false; }
+  // 再量宽度：要在收起之后量，收起前全文放不下时组里有竖滚动条，量到的宽度比收起后窄，按它折行就一直少一个字。
+  // 这一次排版贴底也要用，之后只改滚动位置，不会再触发排版
   let again = false;
   for (const ol of SETTLE.widths) {
     const w = ol.clientWidth;
@@ -217,10 +222,7 @@ function settleTerms() {
   // 连着最多重画两次，免得滚动条一出一没让宽度来回变
   SETTLE.retries = again ? (SETTLE.retries || 0) + 1 : 0;
   if (SETTLE.retries > 2) again = false;
-  // 写：放不下的已结束组每席只留四行（贴底等下面一起做）
-  SETTLE.on = true;
-  try { for (const [col, blocks] of fold) collapseGroup(col, blocks); } finally { SETTLE.on = false; }
-  // 贴底：再排一次版，之后只改滚动位置，不会再触发排版
+  // 贴底
   for (const ol of SETTLE.stick) ol.scrollTop = ol.scrollHeight;
   SETTLE.stick.clear(); SETTLE.groups.clear(); SETTLE.widths.clear();
   return !again;
@@ -239,6 +241,8 @@ function fillFlow(ol, lines) {
       if (performance.now() - ol.userAt > 1000) return;
       ol.stick = ol.scrollHeight - ol.scrollTop - ol.clientHeight < 8;
     }, { passive: true });
+    // 不在屏幕上的正文不排版（board.css 的 content-visibility），那时贴底量不到真高度：一显示出来就再贴一次
+    ol.addEventListener('contentvisibilityautostatechange', (e) => { if (!e.skipped && ol.stick) ol.scrollTop = ol.scrollHeight; });
   }
   fillTerm(ol, lines);
   if (!ol.stick) return;

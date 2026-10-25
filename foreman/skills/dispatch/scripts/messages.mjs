@@ -192,6 +192,16 @@ const zh = {
     recover: '这次续接写的是 --reason recover，但上一轮已经正常结束并交回了报告；按声明统计，不算返工。要求修正或补齐交付时应写 rework',
     rework: `这次续接写的是 --reason rework，但上一轮没有交回有效的报告（状态 ${status}）；照样算一次返工。只是从断点继续、没有纠错要求时应写 recover`,
   })[reason],
+  resumeUnsent: (sent, brief) => `（调度方提示：上一轮在你收到任务说明之前就停了，你的会话里没有它。下面先附上当时发出的说明，再接这次续接的说明。）
+
+${sent}
+
+---
+
+## 这次续接的说明
+
+${brief}`,
+  resumeUnsentNote: '协作方的会话里没有上一轮的任务说明（多半是刚派出就停了）：续接时把当时发出的说明补在了前面',
   resumeNotLatest: (id, latest) => `${id} 已经续接过，最新的一轮是 ${latest}。续接只能接最新的一轮：resume --run ${latest}`,
   resumeGroupFixed: (group) => (group ? `续接沿用原任务的组 ${group}，不能用 --group 改组；要换组就重新派出` : '原任务不在任务组里，续接时不能用 --group 加进组；要分组就重新派出'),
   admissionUnreadable: (files) => `这些任务的 meta.json 读不出来，确认不了它们是不是还在运行，为免超过并发上限或写入范围重叠，这次没有启动：${files}。稍后再试；确认那个任务早已结束、只是记录坏了的话，把它的记录目录移走再试`,
@@ -889,6 +899,16 @@ const en = {
     recover: "This resume says --reason recover, but the previous round ended normally with its report. It's counted as declared, not as rework; when the resume asks to fix or complete the work, use rework",
     rework: `This resume says --reason rework, but the previous round handed back no valid report (status ${status}). It still counts as rework; when it only continues from where it stopped, with nothing to fix, use recover`,
   })[reason],
+  resumeUnsent: (sent, brief) => `(Note from the dispatcher: the previous round stopped before you received its brief, so your session doesn't have it. The brief sent then comes first, followed by this resume's brief.)
+
+${sent}
+
+---
+
+## This resume's brief
+
+${brief}`,
+  resumeUnsentNote: "The agent's session doesn't hold the previous round's brief (it most likely stopped right after the handoff): the resume sent it again ahead of the new brief",
   resumeNotLatest: (id, latest) => `${id} has already been resumed; the latest round is ${latest}. Only the latest round can be resumed: resume --run ${latest}`,
   resumeGroupFixed: (group) => (group ? `A resume stays in the original run's group ${group}; --group can't change it. To use another group, start a new run` : "The original run isn't in a group, so a resume can't add it to one with --group. To group it, start a new run"),
   admissionUnreadable: (files) => `Couldn't read the meta.json of these runs, so there's no telling whether they're still running; to stay within the parallel limit and keep write scopes from overlapping, nothing was started: ${files}. Try again shortly; if that run is long finished and only its record is broken, move its record folder away and try again`,

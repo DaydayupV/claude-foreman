@@ -1,20 +1,21 @@
-// 量网页看板从宇宙飞进一个对话时的帧：node fly.mjs <root> [--session long] [--runs 3] [--no-shared] [--headed] [--profile] [--browser <路径>] [--check]
+// 量网页看板从宇宙飞进一个对话时的帧：node fly.mjs <root> | --url <看板地址> [--session long] [--runs 3] [--no-shared] [--headed] [--profile] [--browser <路径>] [--check]
 // <root> 是 long.mjs 生成的目录（只认系统临时目录里的）。起一个直播看板服务（锁文件写在 <root>/runs 里，不碰真实记录），
 // 每一次都新开浏览器（临时用户目录，冷启动），等宇宙载入后飞进 --session，记飞入 1.6 秒和落地后 2 秒的帧间隔，
 // 以及长动画帧（>50 ms）里排前面的脚本。--no-shared 去掉 SharedWorker，走页面直连流（Claude 桌面版内置浏览器就是这样）；
 // --headed 用有窗口的浏览器（真机 GPU）；--profile 另给出 CPU 剖析里按函数自身耗时排的前 15 名；
 // --check 时任何一次飞入或落地后有超过 50 ms 的帧就以退出码 1 结束。
+// --url：量一个已经在跑的看板（不起服务，不用 <root>），比如 board 子命令给的直播看板；--session 写对话 id
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const args = process.argv.slice(2), root = args[0];
+const args = process.argv.slice(2), live = args.includes('--url'), root = live ? null : args[0];
 const opt = (name, fallback) => { const i = args.indexOf(`--${name}`); return i < 0 ? fallback : args[i + 1]; };
 const has = (name) => args.includes(`--${name}`);
 const inside = root && path.relative(os.tmpdir(), path.resolve(root));
-if (!inside || inside.startsWith('..') || path.isAbsolute(inside)) { console.error(`root must be a folder inside ${os.tmpdir()}`); process.exit(2); }
+if (!live && (!inside || inside.startsWith('..') || path.isAbsolute(inside))) { console.error(`root must be a folder inside ${os.tmpdir()}`); process.exit(2); }
 const session = opt('session', 'long'), times = Number(opt('runs', 3));
 const SERVER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../foreman/skills/dispatch/scripts/board/server.mjs');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -33,10 +34,10 @@ function findBrowser() {
   return found;
 }
 
-// 看板服务：直播模式，数据和锁文件都在 <root> 里
-const server = spawn(process.execPath, [SERVER, '--runs', path.join(root, 'runs'), '--claude-dir', path.join(root, 'claude'), '--config', path.join(root, 'config.json'),
+// 看板服务：直播模式，数据和锁文件都在 <root> 里（--url 时用现成的看板）
+const server = live ? null : spawn(process.execPath, [SERVER, '--runs', path.join(root, 'runs'), '--claude-dir', path.join(root, 'claude'), '--config', path.join(root, 'config.json'),
   '--window-h', '48', '--idle-min', '30'], { stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true });
-const url = await new Promise((resolve, reject) => {
+const url = live ? opt('url') : await new Promise((resolve, reject) => {
   let out = '';
   server.stdout.on('data', (s) => { out += s; const m = /board: (\S+)/.exec(out); if (m) resolve(`${m[1].replace(/\?.*$/, '')}?level=all&lang=zh`); });
   server.once('exit', (code) => reject(new Error(`board server exited (${code})`)));
@@ -207,7 +208,7 @@ try {
     if (r.trace) { for (const line of r.trace.long || [r.trace.error]) console.log(`   main-thread task ${line}`); console.log(`   ${r.trace.gpu}`); }
   }
 } finally {
-  server.kill();
+  server?.kill();
   if (once.dir) fs.rmSync(once.dir, { recursive: true, force: true, maxRetries: 5 });
 }
 if (has('check') && failed) { console.log('FAIL: a frame over 50 ms'); process.exit(1); }

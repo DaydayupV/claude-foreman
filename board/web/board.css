@@ -261,6 +261,9 @@ body.table-all #usage:not([data-mode="uni"]) .tbody { overflow: visible; mask-im
 .tcol header b { color: var(--hi); overflow: hidden; text-overflow: ellipsis; }
 .tcol header .st { color: var(--mid); overflow: hidden; text-overflow: ellipsis; }
 .tcol .term { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 3px 6px 4px; list-style: none; font-size: 10.5px; line-height: 1.5; color: var(--mid); scrollbar-width: thin; scrollbar-color: rgba(200,200,212,.25) transparent; }
+/* 单车道栏的正文很长（Claude Code 那一栏几百行）：不在屏幕上时不排版。飞进长对话、落地后第一次搭终端区时，
+   终端区还在视口下面，不用为了量尺寸把它整块排一遍（那一帧原来要五六十毫秒）。高度由栏撑满，和内容无关，显示出来时不跳 */
+.tcol:not(.tgroup) > .term { content-visibility: auto; contain-intrinsic-size: auto 300px; }
 .tcol .term li { padding-left: 8ch; text-indent: -8ch; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* 终端页的单任务栏：头部第二行是任务行 */

@@ -537,6 +537,28 @@ export default {
   catalog: codexCatalog,
   execute: executeCodex,
   validateResume: (parent) => { if (!parent.meta.session_id) die(M.noSession(parent.id)); },
+  lostPrompt: codexLostPrompt,
   locate: codexCommand,
   stats: codexSessionStats,
 };
+
+// 上一轮发出的提示有没有进 Codex 的会话：刚派出就被取消时，Codex 可能还没把它写进会话，续接时只发新说明它就不知道原来要做什么。
+// 会话记录里没有一条用户消息含这份完整的提示时，返回当时的提示（上一轮的 brief.md，里面已经含更早补发过的），由续接补在前面；
+// 找到了，或者会话记录、提示读不到（判断不了）时返回 null。比完整的提示，不只比开头：更早一轮开头相同、后面要求不同的提示不算。
+// 万一 Codex 改写了提示、比对不上，结果只是多补一份说明
+function codexLostPrompt(parent) {
+  const norm = (s) => s.replace(/\r\n/g, '\n').trim();
+  let prompt, text;
+  try { prompt = norm(fs.readFileSync(path.join(parent.dir, 'brief.md'), 'utf8')); } catch { return null; }
+  const file = sessionFile(parent.meta.session_id, parent.meta.started_at);
+  if (!prompt || !file) return null;
+  try { text = fs.readFileSync(file, 'utf8'); } catch { return null; }
+  for (const line of text.split('\n')) {
+    if (!line.includes('"role":"user"')) continue;
+    let ev;
+    try { ev = JSON.parse(line); } catch { continue; }
+    const content = ev.payload?.content || [];
+    if (norm(content.map((c) => (typeof c.text === 'string' ? c.text : '')).join('')).includes(prompt)) return null;
+  }
+  return prompt;
+}
