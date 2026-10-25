@@ -161,6 +161,10 @@ test('two discussion rounds share five root lanes; newest session and recent lim
   assert.deepEqual(selectScope(recent, {}, start).runs.map((r) => r.id), ['r9', 'r8', 'r7', 'r6', 'r5', 'r4', 'r3', 'r2']);
   recent[0].activity = start + 100;
   assert.equal(selectScope(recent, {}, start).runs[0].id, 'r0');
+  // 按对话选：同一个对话先前的会话 id（桌面版重启、恢复后换过 id）派出的任务也算这个对话的，别的对话不算
+  const sessionRuns = [['a', 'new'], ['b', 'old'], ['c', 'other']].map(([id, session], i) => ({ id, meta: { claude_session: session, status: 'done', started_at: start + i, ended_at: start + i + 1 } }));
+  assert.deepEqual(selectScope(sessionRuns, { session: 'new' }, start).runs.map((r) => r.id), ['a']);
+  assert.deepEqual(selectScope(sessionRuns, { session: 'new', sessions: new Set(['new', 'old']) }, start).runs.map((r) => r.id).sort(), ['a', 'b']);
 });
 
 test('maxgap maps every clock and snapshotAt returns the state at elapsed replay seconds', () => {

@@ -1190,3 +1190,19 @@ test('断开一阵再连上，补回来的用量让速度一下子回来，不�
   go(100);
   assert.equal(b.surgeAge('cc'), 0);
 });
+
+test('星云配色按输出量开平方定分量：Claude Code 最多占四成，席位最多四种，同一种颜色合在一起；只用过 Claude Code 时全是它', () => {
+  const src = fs.readFileSync(new URL('../board/web/08-cosmos.js', import.meta.url), 'utf8'), at = src.indexOf('function nebulaMix(');
+  const mix = vm.runInNewContext(`(${src.slice(at, src.indexOf('\n}\n', at) + 2)})`);
+  const near = (x, y) => Math.abs(x - y) < 1e-9, w = (list) => list.map((m) => `${m.key}:${m.w.toFixed(3)}${m.running ? '*' : ''}`).join(' ');
+  assert.equal(w(mix([], 5000, true)), 'claude:1.000*');
+  // Claude Code 输出多得多，也最多占四成
+  assert.equal(w(mix([{ key: 'qwen', out: 100 }], 10000, false)), 'claude:0.400 qwen:0.600');
+  // 开平方：400 和 100 的输出分到 2:1；Claude Code 几乎没输出时分量很小
+  const two = mix([{ key: 'qwen', out: 400, running: true }, { key: 'deepseek', out: 100 }], 1, false);
+  assert.equal(w(two), 'claude:0.032 qwen:0.645* deepseek:0.323');
+  assert.ok(near(two.reduce((s, m) => s + m.w, 0), 1));
+  // 同一种颜色合在一起（两个 Qwen 席位、用 Claude 模型的席位并进 Claude Code），席位最多留四种
+  const many = mix([{ key: 'qwen', out: 100 }, { key: 'qwen', out: 100 }, { key: 'claude', out: 900 }, { key: 'glm', out: 81 }, { key: 'kimi', out: 64 }, { key: 'grok', out: 49 }, { key: 'mimo', out: 36 }], 0, false);
+  assert.equal(many.map((m) => m.key).join(' '), 'claude qwen glm kimi grok');
+});

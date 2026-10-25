@@ -50,14 +50,15 @@ function golden() {
 // 宇宙对话摘要加了 prompt_at（最近一条用户消息的时间）以后，timeline、snapshots 再更新；递归去掉 prompt_at 算出的七个哈希和改前完全一样
 test('replay output matches SHA256 after auditing original-time additions against the fixture baseline', () => {
   // 已与返工前消息逐字段核对：仅显示字段和历史队列载荷变化；开始消息不提前携带结论，时钟及调度不变。
+  // 对话摘要加了 models（用过的模型和输出量，星系的配色用）以后 timeline、snapshots 两个哈希更新；去掉 models 后和原来的一模一样。
   assert.deepEqual(golden(), {
     hello: 'dd6d6628b6d0fd85c66d16e1f24a2de8a5dfa93ecaebfcf40fcade0540733508',
     initial: '616a456690c5e135fd70a2b9767f92f7d530100cccdb86e75e9693c1f7b0e236',
-    timeline: 'e7da163d4b17359d846e7feaaf6376ccc68fefbb848735dc7c2dec8330e94c4e',
+    timeline: '44cdbf632a6314bcc0fe93078dbd3a798e64115acdd8a818f9064dd9a68ab80a',
     clock: '09ab08ee5a6cec0f81855ecc0900a233a658523e80cf31681f62870837f2fa49',
     detail: '59f25409291918485abb3af6065893facf4e00af6c5b849ae87510bb2992f119',
     buildReplay: '3be480362a19d718a0560a9c0573da0005d45cce222199207906ae81e26fe799',
-    snapshots: '2c2dad52448268c11f8625b0d66057df6074a74bbbd1719041e35965bfcadee3',
+    snapshots: 'b616d6f7040d9a57f7b47c1fe79e3af7917668f72ff66ff70a2e13d1a3b22a0f',
   });
 });
 

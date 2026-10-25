@@ -893,3 +893,47 @@ test('取消以后又续接成功的那一轮不算失败，也不再提醒；�
   s = createUniverse(f.options).read(now).sessions.find((x) => x.id === 's');
   assert.deepEqual(s.counts, { running: 0, done: 1, failed: 1 }); assert.equal(s.alert.run, 'lost');
 });
+
+test('each conversation lists the models it used in the window with their output, for the galaxy colours', (t) => {
+  const f = temp(t);
+  f.session('s', [row('user', now - 40000, 'title')]);
+  const run = (id, model, agent, out, fields = {}) => {
+    const meta = f.run(id, { model, agent, ...fields });
+    if (out != null) f.write(path.join(f.options.runs, id, 'result.json'), { status: meta.status, cost_usd: 1, cost_source: 'api_price', usage: { input_tokens: 10, output_tokens: out } });
+  };
+  run('q1', 'opencode-go/qwen3.8-flash', 'qwen-oc', 300);
+  // 十分钟以前的也算（星系按整个时间窗口上色，不只看最近的任务）
+  run('q2', 'opencode-go/qwen3.8-flash', 'qwen-oc', 200, { started_at: now - 700000, ended_at: now - 650000 });
+  run('d1', 'deepseek/deepseek-flash', 'ds-pi', 900);
+  run('r1', 'opencode-go/minimax-m3', 'mm-oc', null, { status: 'running', ended_at: null });
+  run('host', 'claude-opus-5-5', 'claude code', 50, { participant: 'host' });
+  run('outside', 'google/gemini-4-argon', 'gem', 70, { started_at: now - 86400001, ended_at: now - 86400000 });
+  const s = createUniverse(f.options).read().sessions[0];
+  assert.deepEqual(s.models, [
+    { agent: 'ds-pi', model: 'deepseek/deepseek-flash', out: 900, running: false },
+    { agent: 'qwen-oc', model: 'opencode-go/qwen3.8-flash', out: 500, running: false },
+    { agent: 'mm-oc', model: 'opencode-go/minimax-m3', out: 0, running: true },
+  ]);
+});
+
+test('a conversation resumed under a new session id shows once, with the runs and usage of its earlier transcript; archiving hides both', (t) => {
+  const f = temp(t);
+  // 新记录开头抄了旧记录的最后一段（同一条消息 m1），用量只算一次
+  f.session('old', [row('user', now - 90000, 'title'), answer(now - 80000, { id: 'm1', usage: { input_tokens: 10, output_tokens: 100 } })]);
+  f.session('new', [row('user', now - 30000, 'title'), answer(now - 80000, { id: 'm1', usage: { input_tokens: 10, output_tokens: 100 } }),
+    answer(now - 20000, { id: 'm2', usage: { input_tokens: 5, output_tokens: 40 } })]);
+  f.run('r-old', { claude_session: 'old' }); f.run('r-new', { claude_session: 'new' });
+  const roots = [path.join(f.root, 'desktop', 'claude-code-sessions')], meta = path.join(roots[0], 'org', 'account', 'local_1.json');
+  const read = () => createUniverse({ ...f.options, desktopRoots: roots }).read();
+  f.write(meta, { cliSessionId: 'new', priorCliSessionIds: ['old'], isArchived: false });
+  let data = read();
+  assert.deepEqual(data.sessions.map((s) => s.id), ['new']);
+  assert.deepEqual(data.sessions[0].counts, { running: 0, done: 2, failed: 0 });
+  assert.equal(data.sessions[0].usage.output, 140);
+  // 现在那一份还没有记录时，旧记录照常单独列
+  f.write(meta, { cliSessionId: 'newer', priorCliSessionIds: ['old', 'new'], isArchived: false });
+  assert.deepEqual(read().sessions.map((s) => s.id).sort(), ['new', 'old']);
+  // 归档：先前的记录一起不列
+  f.write(meta, { cliSessionId: 'new', priorCliSessionIds: ['old'], isArchived: true });
+  assert.deepEqual(read().sessions, []);
+});
