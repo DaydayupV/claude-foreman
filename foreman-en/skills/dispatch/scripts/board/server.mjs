@@ -325,7 +325,9 @@ async function main() {
   const startStream = (client, opened, data, replay = null) => {
     send(client, 'hello', replay?.hello || (client.all ? universe.hello(opened) : hello(data, opened)));
     if (replay) { if (client.all) send(client, 'universe', replay.initial); play(client, replay, opened); }
-    else if (client.all) universeUpdate(client, universe.read(opened)); else liveUpdate(client, data);
+    else if (client.all) universeUpdate(client, universe.read(opened));
+    // 开头这一批发完了：页面据此分开连上时已有的旧事件和之后新到的（节拍只给新到的）
+    else { liveUpdate(client, data); send(client, 'synced', {}); }
     updatePolling();
   };
   server = http.createServer(async (req, res) => {

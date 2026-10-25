@@ -23,6 +23,7 @@ const B = {
   total: 0,               // 收到的事件总数（含已丢掉的）
   connected: false,
   done: false,            // 回放已发完
+  synced: false,          // 直播连上后开头那一批已经收完（服务发 synced）：之后到的才是新发生的事（节拍只给它们，04-life.js）
   error: null,
   version: 0,             // 数据每变一次加一，面板据此决定要不要重画
   clock: { mode: 'live', start: 0, end: 0, speed: 1, perf0: 0, frozenAt: null },
@@ -136,7 +137,7 @@ function reset() {
 
 function onHello(h) {
   reset();
-  B.hello = h;
+  B.hello = h; B.synced = false;
   const c = B.clock;
   c.mode = h.mode;
   if (h.replay) Object.assign(c, { start: h.replay.start, end: h.replay.end, speed: h.replay.speed || 1 });
@@ -330,6 +331,7 @@ function connect() {
   on('ev_link', onEvLink);
   on('backlog', onBacklog);
   on('done', () => { B.done = true; B.version++; });
+  on('synced', () => { B.synced = true; });
   es.onopen = () => { B.connected = true; B.error = null; };
   es.onerror = () => { B.connected = false; B.error = es.readyState === 2 ? 'closed' : 'reconnecting'; };
 }
