@@ -192,14 +192,14 @@ function viewAt(a, b, u) {
 }
 // 平常跟着目标走的快慢：时间常数（秒），约等于原来 60 帧时每帧挪 22%；按真实经过的时间算，帧率高低不影响快慢
 const VIEW_TAU = 0.067;
-// 两个近景之间（缩放都在适配的 1.2 倍以上、差不多大）挪得远（超过视图宽度的 0.6）时，改成定时 0.7 秒的移动，
-// 中途先稍微拉远再推近，看得出是从哪里挪到哪里（点了另一张卡片飞过去时）
-const VIEW_HOP = { dur: 700, min: 0.6, depth: 0.12 };
+// 两个近景之间（缩放都在适配的 1.2 倍以上、差不多大）挪动超过视图宽度的 0.25 时（放大看着一张卡片、再点旁边的另一张），
+// 改成定时 0.7 秒的移动，中途先拉远再推近，看得出是从哪里挪到哪里；拉远 10% 起，每挪一个视图宽度多 10%，最多 30%
+const VIEW_HOP = { dur: 700, min: 0.25 };
 function newViewGoal(g, ms) {
   VIEW.seen = g; VIEW.hop = null;
   const kf = kFit(), far = Math.hypot(g.tx - VIEW.tx, g.ty - VIEW.ty) / (viewBox().cw || 1);
   if (VIEW.k > kf * 1.2 && g.k > kf * 1.2 && Math.abs(Math.log(g.k / VIEW.k)) < 0.3 && far > VIEW_HOP.min)
-    VIEW.hop = { from: { k: VIEW.k, tx: VIEW.tx, ty: VIEW.ty }, t0: ms, depth: Math.min(0.3, VIEW_HOP.depth * far) };
+    VIEW.hop = { from: { k: VIEW.k, tx: VIEW.tx, ty: VIEW.ty }, t0: ms, depth: Math.min(0.3, 0.1 + 0.1 * far) };
 }
 
 // 每帧把当前变换往目标挪一点（像地图那样平滑）；返回是否还在动
