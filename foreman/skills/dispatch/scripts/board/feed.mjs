@@ -496,8 +496,20 @@ export function createFeed(root, options = {}) {
     }
     const m = parsed.meta;
     if (m.started_at == null) return data;
+    // 同一个对话先前的对话记录（桌面版重启、恢复前）里 Claude Code 的用量也算进来，和星图那一行一致；新记录开头抄过来的消息按 id 去重
+    let usage = m.usage;
+    if (session && params.replay == null && options.priorUsage) {
+      const seen = new Set(parsed.events.filter((e) => e.k === 'usage' && e.messageId).map((e) => e.messageId));
+      const extra = options.priorUsage(data.scope.value).filter((e) => !seen.has(e.id));
+      if (extra.length) {
+        const priced = {}, more = hostCost(extra, options.prices, priced);
+        usage = { ...m.usage };
+        for (const e of extra) for (const [key, name] of [['in', 'input'], ['cached', 'cached'], ['cache_write', 'cache_write'], ['out', 'output']]) if (e.u[key] != null) usage[name] = (usage[name] ?? 0) + e.u[key];
+        cost = cost == null && more == null ? null : (cost ?? 0) + (more ?? 0); costPartial ||= !!priced.partial || more == null;
+      }
+    }
     data.runs.push({ id: 'cc', lane: 'cc', kind: 'host', agent: 'claude code', agent_type: 'host', model: m.model, session: m.session || path.basename(file, '.jsonl'), title: m.title, cwd: m.cwd,
-      status: params.replay != null || now - Math.max(m.latest_at, tail.appendedAt ?? -Infinity) < 90000 ? 'running' : 'idle', started_at: m.started_at, ended_at: null, usage: m.usage, ...costFields(cost, cost == null ? 'unknown' : 'api_price'), ...(costPartial && cost != null ? { cost_partial: true } : {}) });
+      status: params.replay != null || now - Math.max(m.latest_at, tail.appendedAt ?? -Infinity) < 90000 ? 'running' : 'idle', started_at: m.started_at, ended_at: null, usage, ...costFields(cost, cost == null ? 'unknown' : 'api_price'), ...(costPartial && cost != null ? { cost_partial: true } : {}) });
     append(data.events, parsed.events); data.versions.cc = `${file}:${tail.version}`; data.revisions.cc = '';
     data.hostEnd = session ? m.latest_at : end; return data;
   };

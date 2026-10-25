@@ -216,7 +216,9 @@ async function main() {
   // 单个对话的看板也把先前会话 id 派出的任务算进来。回放照原样
   const desktop = desktopSessions(replayMode ? [] : desktopRoots());
   const conversation = (id) => { const ids = new Set([id]); for (const [prior, current] of desktop().aliases) if (current === id) ids.add(prior); return ids; };
-  const feed = replayMode ? null : createFeed(root, { ...options, conversation }), universe = createUniverse({ ...options, runs: root, config: configFile, windowH, replayLimitBytes,
+  // 先前记录里 Claude Code 的用量由宇宙给（它已经读过这些记录，不再读一遍上百 MB 的旧文件）
+  const priorUsage = (id) => universe.usageOf([...conversation(id)].filter((prior) => prior !== id));
+  const feed = replayMode ? null : createFeed(root, { ...options, conversation, priorUsage }), universe = createUniverse({ ...options, runs: root, config: configFile, windowH, replayLimitBytes,
     desktop }), clients = new Set(), muxes = new Map();
   const sessions = replayMode ? replaySessions(values.replay, root, options.claudeDir) : undefined;
   const sharedReplay = replayMode ? universe.replay({ speed: timing.speed, maxgap: timing.maxgap, sessions }, Date.now()) : null, details = new Map();

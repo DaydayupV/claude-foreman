@@ -597,7 +597,9 @@ export function createUniverse(options) {
       } };
     return result;
   };
-  return { read, hello, replay };
+  // 这几份对话记录里 Claude Code 每条消息的用量（单个对话的看板把先前记录的用量算进来时用）；还没读过的记录没有
+  const usageOf = (ids) => ids.flatMap((id) => [...(sessions.get(id)?.usage.values() || [])]);
+  return { read, hello, replay, usageOf };
 }
 
 export function universeAt(replay, t = Infinity) {
