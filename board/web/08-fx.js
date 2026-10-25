@@ -121,7 +121,8 @@ function drawBand(b, t, a = 1) {
 // 卡片接口（世界坐标）：token 在左边（Claude Code 在右边）上部，交互在下部；折叠起来的组落在组头上
 function portsOf(L) {
   const P = new Map(), c = L.cc;
-  P.set('cc', { tok: [c.x + c.w, c.y + c.h * 0.3], link: [c.x + c.w, c.y + c.h * 0.72], out: [c.x + c.w * 0.65, c.y], card: c });
+  // Claude Code 卡片离场时（L.ccAway），连到它的光线跟着淡掉
+  P.set('cc', { tok: [c.x + c.w, c.y + c.h * 0.3], link: [c.x + c.w, c.y + c.h * 0.72], out: [c.x + c.w * 0.65, c.y], card: c, vis: 1 - (L.ccAway || 0) });
   for (const g of L.groups) for (const lane of g.lanes) {
     const row = L.rows.get(lane.id);
     if (row) P.set(lane.id, { tok: [row.card.x, row.card.y + row.card.h * 0.3], link: [row.card.x, row.card.y + row.card.h * 0.72], card: row.card, outbox: row.out, visible: true, vis: row.vis });
@@ -223,7 +224,9 @@ function drawOverlay(t, L, P, lanes, rates, live, bandA, burst = null) {
   each((lane) => { const age = surgeAge(lane.id); if (age != null && age < SURGE_CORE) drawSurgeCore(core, lane.id, age); });
   drawBand(L.band, t, bandA);
   each((lane) => { if (lane.id !== 'cc' && P.get(lane.id).visible) drawRibbon(lane, P.get(lane.id), t, rates.get(lane.id) || 0, pulses, live.get(lane.id)); });
+  ctx.globalAlpha = P.get('cc').vis;
   drawCCOut(P.get('cc'), L.ccOut, pulses, rates.get('cc') || 0, live.get('cc') || 0, t);
+  ctx.globalAlpha = 1;
   drawOutLife(L, P, t);
   drawStates(L, t);
   drawTags(L, t, rates);

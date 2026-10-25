@@ -136,6 +136,9 @@ function computeLayout(t) {
   L.cc = { x: WL.ccX, y: L.H / 2 - WL.cardH / 2, w: WL.cardW, h: WL.cardH };
   const R = Math.max(300, L.H * 0.48);
   L.core = { cx: WL.ccX + WL.cardW + WL.coreGap + R, cy: L.H / 2, R, clipX: WL.bandX - 10 };
+  // Claude Code 卡片离场的进度（04-life.js 的 ccAway）和方向（true 是正在离开或已经离开）
+  L.ccAway = ccAway(L, t);
+  L.ccLeaving = CC_AWAY.away;
   return L;
 }
 

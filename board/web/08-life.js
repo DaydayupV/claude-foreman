@@ -260,9 +260,25 @@ function drawJudge(p, L, t) {
   hudText(TEXT.decisionWritten, box.x + box.w / 2, box.y - 14, HI(0.95), fade);
 }
 
+// Claude Code 卡片离场（04-life.js 的 ccAway）：前 40% 卡片缩小淡掉，中心聚起一颗光点；后 60% 光点拖着尾巴沿弧线飞进
+// 弧线区中央的亮核，到的时候亮核那里散开一圈。回来时倒着放：亮核亮一圈，光点飞到卡片的位置，再长成卡片
+function drawCcAway(L) {
+  const k = L.ccAway || 0;
+  if (k <= 0 || k >= 1) return;
+  const c = L.cc, sx = c.x + c.w / 2, sy = c.y + c.h / 2, ex = L.core.cx, ey = L.core.cy, color = tintOf('cc');
+  const shrink = clamp01(k / 0.4), fly = clamp01((k - 0.4) / 0.6);
+  if (fly <= 0) { glowDot(sx, sy, 1.6 + 2.4 * shrink, color, shrink); return; }
+  // 离开时从卡片飞向亮核，回来时从亮核飞向卡片：尾巴总在头的后面
+  const out = [[sx, sy], [sx + 70, sy - 110], [ex - 140, ey - 90], [ex, ey]];
+  const q = L.ccLeaving ? out : [...out].reverse(), u = L.ccLeaving ? fly : 1 - fly;
+  comet(q, u, color, 4 - 1.6 * fly, 12);
+  ring(ex, ey, (L.ccLeaving ? fly - 0.8 : 1 - fly) / 0.2, color, 4, 46);
+}
+
 function drawLife(L, t) {
   drawDispatchBirth(L, t);
   drawLeave(L);
+  drawCcAway(L);
   for (const p of plansAt(t)) {
     drawGate(p, L, t);
     drawPlanBirth(p, L, t);

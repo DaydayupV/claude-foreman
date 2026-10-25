@@ -283,5 +283,8 @@ function placeWorld(L, t) {
   if (bh) setOpacity(bh, bandReveal(L, t));
   const cc = UI.outs.get('cc');
   if (cc) { const k = outLook(ccLife(t)); place(cc, L.ccOut); setOpacity(cc, k.a * L.ccDim); setScale(cc, k.s); }
+  // Claude Code 卡片离场：前 40% 缩成光点淡掉（光点在 08-life.js 的 drawCcAway 里画），回来时倒过来
+  const ccCard = UI.cards.get('cc');
+  if (ccCard) { const k = clamp01((L.ccAway || 0) / 0.4); setOpacity(ccCard, 1 - k); setScale(ccCard, 1 - 0.85 * k); }
 }
 const setScale = (el, s) => { const v = s >= 0.999 ? '' : `scale(${s.toFixed(3)})`; if (el.style.transform !== v) el.style.transform = v; };

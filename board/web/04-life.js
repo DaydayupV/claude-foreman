@@ -225,3 +225,20 @@ function outLook(life) {
   if (life.phase === 'collapse') { const m = clamp01(life.age / 0.35); return { a: 1 - m, s: 1 - 0.8 * m }; }
   return { a: 0, s: 0.35 };
 }
+
+// ---- Claude Code 卡片离场 ----
+// 整个对话闲下来（Claude Code 是 idle、刻度带里一张席位卡都没有、它的产出框也已经收起）时，卡片缩成一颗光点、
+// 沿弧线飞进弧线区中央的亮核；重新活跃时倒着放：光点从亮核飞回来，长成卡片（08-life.js 的 drawCcAway）。
+// 返回 0–1：0 = 卡片在，1 = 已经离开。动画按屏幕时间放，中途反过来时从当前的进度接着倒放；
+// 刚打开页面或换了对话时直接停在那时的样子，不放动画。回放里 Claude Code 一直算 active，不会离开
+const CC_AWAY_ANIM = 1.6; // 屏幕秒：前 40% 卡片缩成光点，后 60% 光点飞进亮核
+const CC_AWAY = { lane: null, away: false, at: -Infinity };
+function ccAway(L, t) {
+  const cc = B.laneById.get('cc');
+  const want = !!cc && !!latest(cc) && !L.groups.length && !laneStatus(cc, t).running && ccLife(t).phase === 'none';
+  const now = performance.now(), dur = CC_AWAY_ANIM * 1000, u = clamp01((now - CC_AWAY.at) / dur);
+  if (CC_AWAY.lane !== cc) Object.assign(CC_AWAY, { lane: cc, away: want, at: -Infinity });
+  else if (want !== CC_AWAY.away) Object.assign(CC_AWAY, { away: want, at: now - (1 - u) * dur });
+  const p = clamp01((now - CC_AWAY.at) / dur);
+  return CC_AWAY.away ? p : 1 - p;
+}

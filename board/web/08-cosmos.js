@@ -63,7 +63,7 @@ function drawNebula(L, P, t, rates, pal = []) {
     cloud(x, y, 230, 85, tintOf(id), smooth(`neb|${id}`, on ? 0.07 + 0.08 * I : 0.018) * row.vis);
   }
   const cc = B.laneById.get('cc');
-  if (cc) cloud(L.cc.x + L.cc.w * 0.8, L.cc.y + L.cc.h / 2, 150, 90, tintOf('cc'), smooth('neb|cc', laneActive(cc, t) ? 0.07 : 0.025));
+  if (cc) cloud(L.cc.x + L.cc.w * 0.8, L.cc.y + L.cc.h / 2, 150, 90, tintOf('cc'), smooth('neb|cc', laneActive(cc, t) ? 0.07 : 0.025) * (1 - (L.ccAway || 0)));
 }
 
 // 宇宙尘：在世界里缓慢漂移，绕回；六成撒在光束区（刻度带右边到产出列之间）
