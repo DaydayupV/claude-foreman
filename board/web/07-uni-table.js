@@ -4,7 +4,7 @@
 // 飞进某个对话以后，07-table.js / 07-terms.js 换回这个对话的明细（08-uni-fly.js 的 resetBoardView 会清空这里留下的东西）。
 
 let uniHotRow = null; // 上一次滚到可见的悬停行
-const UNI_HEAD = ['', 'conversation', 'project', 'state', 'seats', 'done · failed', 'input · cache', 'output', 'cost', 'last'];
+const UNI_HEAD = ['', 'conversation', 'project', 'status', 'seats', 'done · failed', 'input · cache', 'output', 'cost', 'last'];
 const UNI_ROWS = new Map();
 // 记录时间里过去了多久：几秒、几分钟、几小时
 function fmtAgo(ms) {
@@ -91,7 +91,9 @@ function fillUniState(cell, s) {
   cell.dataset.sig = sig; cell.replaceChildren(word);
   // 等人回答是黄点，其余红点
   for (const x of issues) { const dot = document.createElement('i'); dot.className = 'issue'; dot.dataset.tone = Display.toneOf(x.status === 'needs_input' ? 'blocked' : 'failed'); cell.append(dot); }
-  cell.title = issues.map((x) => `${Display.D.statusName(x.status)} · ${shortModel(x.model) || '?'}`).join('\n');
+  // 等你确认时列宽可能放不下弹窗标题：悬停也写出整句
+  const asking = s.state === 'waiting' && s.waiting?.header ? [word] : [];
+  cell.title = [...asking, ...issues.map((x) => `${Display.D.statusName(x.status)} · ${shortModel(x.model) || '?'}`)].join('\n');
 }
 
 // 宇宙层的顶栏：范围、宇宙层自己的时钟和回放进度、连接状态（看板的 renderTop 在宇宙层不跑，不清掉会留着上一个对话的）

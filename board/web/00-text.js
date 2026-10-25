@@ -8,8 +8,6 @@ const GAP_ROLE = /^(补漏|gap)$/i;
 
 const TEXTS = {
   zh: {
-    states: { waiting: '等你确认', dispatching: '派发中', thinking: '思考中', idle: '空闲' },
-    asking: (header) => `等你确认 · ${header}`,
     gapSeat: '补漏席',
     gapReady: '其他席已结束 · 等去重后启动',
     gapWaiting: '等其他席结束',
@@ -56,8 +54,6 @@ const TEXTS = {
     },
   },
   en: {
-    states: { waiting: 'waiting for you', dispatching: 'dispatching', thinking: 'thinking', idle: 'idle' },
-    asking: (header) => `waiting for you · ${header}`,
     gapSeat: 'gap seat',
     gapReady: 'other seats done · starts after merging',
     gapWaiting: 'waiting for the other seats',
@@ -105,6 +101,9 @@ const TEXTS = {
   },
 };
 const TEXT = TEXTS[LANG];
+// 状态词和终端实时查看、status 里的一样，中英两个插件都用英文（和单对话用量表的状态列一致）
+TEXT.states = { waiting: 'waiting for you', dispatching: 'dispatching', thinking: 'thinking', idle: 'idle' };
+TEXT.asking = (header) => `waiting for you · ${header}`;
 
 // shell.html 里写死的中文（提示、按钮、无障碍标签）在英文插件里换掉
 if (LANG !== 'zh') {
