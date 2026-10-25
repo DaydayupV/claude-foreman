@@ -535,7 +535,7 @@ test('79 列的已结束终端面板折叠长结论，按席位号后仍能读�
   assert.equal(watch.stderr, '');
 });
 
-test('放不下时结论保留四行和展开提示，79 列底部优先保留按键', () => {
+test('原生终端放不下时结论保留四行和展开提示，79 列底部优先保留按键；网页的已结束组照样显示完整结论', () => {
   const lines = Array.from({ length: 8 }, (_, i) => `line ${i}`);
   assert.deepEqual(Display.collapseLines(lines, false, 'press 2 to open'), lines);
   assert.deepEqual(Display.collapseLines(lines, true, 'press 2 to open'), [...lines.slice(0, 4), '… 4 more lines · press 2 to open']);
@@ -546,11 +546,10 @@ test('放不下时结论保留四行和展开提示，79 列底部优先保留�
   b.onRun(r); b.onEv({ run: r.id, ts: 1000, k: 'end', t: 'done' });
   const col = b.groupColumn('g'), box = col.querySelector('.seats'); box.clientHeight = 100; box.scrollHeight = 500;
   b.fillGroup(col, { group: 'g', lanes: b.B.lanes }, 2000);
-  const seat = col.seats.get('fold');
-  assert.equal(seat.querySelector('.term').children.length, 5);
-  assert.equal(seat.querySelector('.term').children.at(-1).textContent, '… 4 more lines · click to open');
-  b.PANEL.open.add('fold'); b.fillGroup(col, { group: 'g', lanes: b.B.lanes }, 2000);
-  assert.ok(seat.fullLines.length > 8);
+  const seat = col.seats.get('fold'), term = seat.querySelector('.term');
+  assert.equal(term.children.length, 8); // 8 行结论都在，没有收成四行加一行展开提示
+  assert.ok(!term.children.some((li) => li.textContent.includes('more line')));
+  assert.deepEqual(term.children.map((li) => li.textContent), Array.from(seat.fullLines, (l) => l.text));
 });
 
 test('部分完成、问题、续接、超时和排队共用状态词及计数，当前轮和累计用时分开', () => {
@@ -627,18 +626,18 @@ test('运行中说话、思考、读、搜、命令和重连提示在终端与�
   assert.deepEqual(Array.from(seat.fullLines, (l) => plain(l.text)), Display.liveLines(tl.state, 8, 80));
 });
 
-test('终端区在 renderTerms 里先全部写完再集中量：放不下的已结束组最后才收起，贴底集中做，新栏宽度猜错时要求重画', () => {
+test('终端区在 renderTerms 里先全部写完再集中量：放不下的已结束组不收起，贴底集中做，新栏宽度猜错时要求重画', () => {
   const lines = Array.from({ length: 8 }, (_, i) => `line ${i + 1}`);
   const b = displayBoard(), r = { id: 'fold', model: 'm', kind: 'discuss', group: 'g', status: 'done', started_at: 0, ended_at: 1000,
     display: { status: 'done', report: { position: lines.join('\n') } } };
   b.onRun(r); b.onEv({ run: r.id, ts: 1000, k: 'end', t: 'done' });
   const col = b.groupColumn('g'), box = col.querySelector('.seats'); box.clientHeight = 100; box.scrollHeight = 500;
   b.SETTLE.on = true; b.fillGroup(col, { group: 'g', lanes: b.B.lanes }, 2000); b.SETTLE.on = false;
-  const term = col.seats.get('fold').querySelector('.term');
-  assert.ok(term.children.length > 5); // 写的时候还没量，没收起
+  const term = col.seats.get('fold').querySelector('.term'), shown = term.children.length;
+  assert.ok(shown > 5);
   term.scrollHeight = 321;
   assert.equal(b.settleTerms(), false); // 新栏先按猜的宽度折行，量出来不一样：下一帧重画
-  assert.equal(term.children.length, 5); assert.equal(term.children.at(-1).textContent, '… 4 more lines · click to open');
+  assert.equal(term.children.length, shown); // 量完也不收成四行
   assert.equal(term.scrollTop, 321);
   b.SETTLE.on = true; b.fillGroup(col, { group: 'g', lanes: b.B.lanes }, 2000); b.SETTLE.on = false;
   assert.equal(b.settleTerms(), true); // 第二次用量到的宽度，不再重画
