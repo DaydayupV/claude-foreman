@@ -1,5 +1,5 @@
 {
-  "description": "Reminds Claude at session start to load the dispatch skill and adds the user and project preference files; blocks commands that call codex exec / codex review, opencode run or pi tasks directly, so agents are always called through the foreman-en script; records the questions and answers of image route pop-ups, so an image plan can be checked against the route the user chose; while the web board is on, show the board link to the user on every handoff",
+  "description": "Reminds Claude at session start to load the dispatch skill and adds the user and project preference files; blocks commands that call codex exec / codex review, opencode run or pi tasks directly, so agents are always called through the foreman-en script; records the questions and answers of image route pop-ups, so an image plan can be checked against the route the user chose; while the web board is on, show the board link to the user once per user message, on the first handoff after it",
   "hooks": {
     "SessionStart": [
       {
@@ -62,6 +62,20 @@
               "${CLAUDE_PLUGIN_ROOT}/hooks/record-answers.mjs"
             ],
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/board-link.mjs"
+            ],
+            "timeout": 5
           }
         ]
       }
