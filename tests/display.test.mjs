@@ -444,11 +444,11 @@ function displayBoard(lang = 'zh') {
     performance: { now: () => 0 }, innerHeight: 1000, ResizeObserver: class { observe() {} }, addEventListener() {}, wake() {}, document: { getElementById: el,
       createElement: () => new DisplayElement(), documentElement: {}, querySelector: () => null },
     worldEl: { dataset: { lod: 0 } }, avatarFor: () => 'claude', rgba: () => '', avatarSrc: () => '', look: () => ({ name: 'test' }),
-    hash: () => 1, verdictCounts: () => null, reduceMotion: { matches: false } });
+    hash: () => 1, verdictCounts: () => null, reduceMotion: { matches: false }, FX_PULSE: 2.4, ageOf: (ev, t) => (t - ev.ts) / 1000 });
   const page = buildPage(), shared = page.slice(page.indexOf('const Display ='), page.indexOf('// ---- 00-text.js'));
-  const names = ['00-text', '01-state', '03-timeline', '04-life', '04-rates', '05-world', '06-states', '06-cards', '07-table', '07-terms', '08-surge'];
+  const names = ['00-text', '01-state', '03-timeline', '04-life', '04-rates', '05-world', '06-states', '06-cards', '07-table', '07-terms', '08-surge', '08-labels'];
   const source = names.map((name) => fs.readFileSync(new URL(`../board/web/${name}.js`, import.meta.url), 'utf8')).join('\n');
-  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, conclusion, painted, outOfScope, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd, onBacklog, SETTLE, settleTerms, ccAway, CC_AWAY, viewAt, beatsAt, trackSurges, surgeAge, SURGE };', context);
+  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, conclusion, painted, outOfScope, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd, onBacklog, SETTLE, settleTerms, ccAway, CC_AWAY, viewAt, beatsAt, trackSurges, surgeAge, SURGE, recentPulses };', context);
   return { ...context.api, el, context };
 }
 
@@ -1135,4 +1135,49 @@ test('席位的加速脉冲按报上来的分段用量放：连上时已有的�
   assert.equal(b.surgeAge('cc'), null); assert.equal(b.surgeAge('old'), null);
   clock.ms += 16; b.trackSurges(rate(60), false, t + 11000);
   assert.equal(b.surgeAge('cc'), 0); assert.equal(b.surgeAge('old'), 0);
+});
+
+test('直播里光路上的事件脉冲从页面第一次看到事件起算：连上时开头那一批不放，晚到的照样从头走，太晚的不放；同一车道同一时刻的几件事只放一次', () => {
+  const b = displayBoard(), t = 100000, near = (x, y) => Math.abs(x - y) < 1e-9;
+  b.B.clock.mode = 'live';
+  b.onRun({ id: 'cc', lane: 'cc', kind: 'host', agent_type: 'host', model: 'opus', status: 'running', started_at: 0 });
+  b.onRun({ id: 'seat', model: 'm', kind: 'exec', status: 'running', started_at: t - 60000, ended_at: null });
+  b.onEv({ run: 'cc', ts: t - 500, k: 'dispatch', t: 'run x', target: ['seat'] });
+  b.onEv({ run: 'seat', ts: t - 400, k: 'edit', t: 'update a' });
+  // 开头那一批：synced 之前、之后算的第一帧都不放
+  assert.equal(b.recentPulses(t).length, 0);
+  b.B.synced = true;
+  assert.equal(b.recentPulses(t + 16).length, 0);
+  // 一次改了三个文件、晚了 3 秒才到：从现在起算，只有一道
+  for (const name of ['a', 'b', 'c']) b.onEv({ run: 'seat', ts: t - 2900, k: 'edit', t: `update ${name}` });
+  assert.equal(JSON.stringify(b.recentPulses(t + 100).map((p) => [p.lane, !!p.out, p.age])), JSON.stringify([['seat', true, 0]]));
+  assert.ok(near(b.recentPulses(t + 600)[0].age, 0.5));
+  // Claude Code 晚到的派出：交互光线上的光点也从现在起走
+  b.onEv({ run: 'cc', ts: t - 300, k: 'dispatch', t: 'run y', target: ['seat'] });
+  assert.equal(JSON.stringify(b.recentPulses(t + 700).filter((p) => p.dir).map((p) => [p.lane, p.dir, p.age])), JSON.stringify([['seat', 1, 0]]));
+  // 晚了 2 分钟以上的不放
+  b.onEv({ run: 'seat', ts: t + 700 - 130000, k: 'end' });
+  assert.ok(!b.recentPulses(t + 800).some((p) => p.out && p.age === 0));
+  // 回放照旧按事件的时刻，同一时刻的几件事也只放一次
+  const c = displayBoard();
+  Object.assign(c.B.clock, { mode: 'replay', speed: 1 });
+  c.onRun({ id: 'seat', model: 'm', kind: 'exec', status: 'running', started_at: t - 60000, ended_at: null });
+  for (const name of ['a', 'b']) c.onEv({ run: 'seat', ts: t - 400, k: 'edit', t: `update ${name}` });
+  assert.equal(JSON.stringify(c.recentPulses(t).map((p) => [p.lane, !!p.out, p.age])), JSON.stringify([['seat', true, 0.4]]));
+});
+
+test('断开一阵再连上，补回来的用量让速度一下子回来，不算加快；之后真的加快照常放', () => {
+  const b = displayBoard(), clock = { ms: 0 };
+  b.context.performance.now = () => clock.ms;
+  b.B.clock.mode = 'live'; b.B.synced = true;
+  b.onRun({ id: 'cc', lane: 'cc', kind: 'host', agent_type: 'host', model: 'opus', status: 'running', started_at: 0 });
+  const go = (rate) => { clock.ms += 16; b.trackSurges(new Map([['cc', rate]]), false, 1000); };
+  go(2); go(2);
+  Object.assign(b.B, { hello: { v: 2 }, synced: false });
+  go(40);
+  b.B.synced = true;
+  go(40); go(40);
+  assert.equal(b.surgeAge('cc'), null);
+  go(100);
+  assert.equal(b.surgeAge('cc'), 0);
 });
