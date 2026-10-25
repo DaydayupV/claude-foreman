@@ -30,11 +30,13 @@ function temp(t) {
     const file = path.join(options.claudeDir, folder, `${id}.jsonl`);
     write(file, rows.map((r) => JSON.stringify(r)).join('\n') + '\n'); fs.utimesSync(file, new Date(mtime), new Date(mtime)); return file;
   };
-  const run = (id, fields = {}, cost = 1, events = []) => {
+  const run = (id, { report: given, ...fields } = {}, cost = 1, events = []) => {
     const dir = path.join(options.runs, id), meta = { id, claude_session: 's', agent: 'configured', agent_type: 'opencode cli', kind: 'exec', model: 'claude-opus-5-5',
       status: 'done', started_at: now - 10000, ended_at: now - 5000, ...fields };
     write(path.join(dir, 'meta.json'), meta);
-    if (meta.status !== 'running') write(path.join(dir, 'result.json'), { status: meta.status, cost_usd: cost, cost_source: cost == null ? 'unknown' : 'api_price' });
+    // 正常结束的带一份报告（没交回报告的算失败，见 no_result 的测试）；report 给 null 时不带
+    const report = given !== undefined ? given : meta.status === 'done' ? { status: 'completed' } : undefined;
+    if (meta.status !== 'running') write(path.join(dir, 'result.json'), { status: meta.status, cost_usd: cost, cost_source: cost == null ? 'unknown' : 'api_price', ...(report ? { report } : {}) });
     write(path.join(dir, 'events.jsonl'), events.map((e) => JSON.stringify(e)).join('\n') + '\n'); return meta;
   };
   return { root, options, write, session, run };
@@ -892,6 +894,19 @@ test('取消以后又续接成功的那一轮不算失败，也不再提醒；�
   f.run('lost', { status: 'failed', started_at: now - 90000, ended_at: now - 80000 });
   s = createUniverse(f.options).read(now).sessions.find((x) => x.id === 's');
   assert.deepEqual(s.counts, { running: 0, done: 1, failed: 1 }); assert.equal(s.alert.run, 'lost');
+});
+
+test('a run that ended normally without a valid report counts as failed, like the board, and the star map keeps no report text', (t) => {
+  const f = temp(t);
+  f.session('s', [row('user', now - 300000, 'go'), answer(now - 290000)]);
+  f.run('live', { group: 'g', status: 'running', ended_at: null });
+  f.run('ok', { group: 'g', started_at: now - 9000, ended_at: now - 6000, report: { status: 'completed', summary: sentinel } });
+  f.run('empty', { group: 'g', started_at: now - 9000, ended_at: now - 4000, report: null });
+  const s = createUniverse(f.options).read(now).sessions.find((x) => x.id === 's');
+  assert.deepEqual(s.counts, { running: 1, done: 1, failed: 1 });
+  assert.deepEqual(s.issues.map((x) => [x.run, x.status]), [['empty', 'no_result']]);
+  assert.deepEqual([s.alert.run, s.alert.kind], ['empty', 'no_result']);
+  assert.ok(!JSON.stringify(createUniverse(f.options).read(now)).includes(sentinel));
 });
 
 test('each conversation lists the models it used in the window with their output, for the galaxy colours', (t) => {

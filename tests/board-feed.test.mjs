@@ -294,10 +294,10 @@ test('a resumed conversation counts the Claude Code usage of its earlier transcr
   const answer = (id, at, out) => ({ type: 'assistant', timestamp: new Date(at).toISOString(), message: { id, model: 'claude-opus-5-5', content: [{ type: 'text', text: id }], usage: { input_tokens: 10, output_tokens: out } } });
   fs.writeFileSync(path.join(projects, 'new.jsonl'), [{ type: 'user', timestamp: new Date(start - 5000).toISOString(), message: { content: 'go' } }, answer('m1', start - 4000, 100), answer('m2', start - 3000, 40)].map((r) => JSON.stringify(r)).join('\n') + '\n');
   // 先前那份记录里的两条：m1 已经抄进新记录，只有 m0 是新增的
-  const prior = [{ id: 'm0', ts: start - 90000, t: 'claude-opus-5-5', u: { in: 5, cached: null, cache_write: null, out: 300 } }, { id: 'm1', ts: start - 4000, t: 'claude-opus-5-5', u: { in: 10, cached: null, cache_write: null, out: 100 } }];
+  fs.writeFileSync(path.join(projects, 'old.jsonl'), [answer('m0', start - 90000, 300), answer('m1', start - 4000, 100)].map((r) => JSON.stringify(r)).join('\n') + '\n');
   const read = (options) => createFeed(runs, { claudeDir: path.dirname(projects), now: () => start, ...options }).read({ session: 'new' }).runs.find((r) => r.id === 'cc');
   assert.equal(read({}).usage.output, 140);
-  assert.equal(read({ priorUsage: (id) => (id === 'new' ? prior : []) }).usage.output, 440);
+  assert.equal(read({ conversation: () => new Set(['new', 'old']) }).usage.output, 440);
 });
 
 test('a conversation of 200k lines opens without overflowing the stack (no push(...lines))', (t) => {
