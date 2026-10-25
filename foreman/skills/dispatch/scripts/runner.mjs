@@ -10,6 +10,8 @@ import { D, modelLabel } from './format.mjs';
 import { costOf, loadPrices } from './prices.mjs';
 
 const INPUT_WAIT_MIN = 3;
+// 结果和提示里最多列出多少个拍不稳的文件，多的只写进记录目录的 unstable-files.json
+const UNSTABLE_LISTED = 20;
 
 function spawnCli(file, args, options, { onInput, busy = () => false, onStderrLine = () => {} }) {
   const child = spawn(file, args, options);
@@ -296,14 +298,17 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
     let before = null;
     let after = null;
     let incomplete = false;
-    const unstableFiles = [];
+    const unstableFiles = [], unstableList = path.join(dir, 'unstable-files.json');
     const noteUnstable = (snap, phase) => {
       // changes.incomplete 只表示拍快照用完了 60 秒；拍不稳的文件另列在 unstable_files（只读审计照样按快照不完整处理）
       incomplete ||= snap.timed_out;
       if (snap.timed_out) notes.push(M.snapshotDeadlineNote(phase));
       if (!snap.unstable.length) return;
       unstableFiles.push(...snap.unstable.map((path) => ({ path, phase })));
-      notes.push(M.unstableFiles(snap.unstable, phase));
+      // 大目录拍到时限时可能有上千个：结果和提示里只列前面几个，完整列表写进记录目录
+      const listed = unstableFiles.length > UNSTABLE_LISTED;
+      if (listed) { try { fs.writeFileSync(unstableList, JSON.stringify(unstableFiles, null, 2)); } catch { /* 写不了也不影响结果，结果里仍列前面几个 */ } }
+      notes.push(M.unstableFiles(snap.unstable.slice(0, UNSTABLE_LISTED), snap.unstable.length, phase, listed ? unstableList : null));
     };
     let snapshotError = null;
     if (!opts['no-snapshot']) {
@@ -388,7 +393,8 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
         if (audited) { r.status = 'failed'; r.code = 1; r.errors.push(M.auditedSnapshotIncomplete); }
       }
     }
-    if (unstableFiles.length) changes.unstable_files = unstableFiles;
+    if (unstableFiles.length) changes.unstable_files = unstableFiles.slice(0, UNSTABLE_LISTED);
+    if (unstableFiles.length > UNSTABLE_LISTED) Object.assign(changes, { unstable_total: unstableFiles.length, unstable_list: unstableList });
     if (incomplete) changes.incomplete = true;
     const tracked = [...(changes.files || []), ...(changes.large_files_changed || [])];
     // 归属分三种：agent 有工具事件作证据；reported 只有协作方在报告里自称改过（比如用脚本写的文件）；unknown 都没有，可能是别人改的。
