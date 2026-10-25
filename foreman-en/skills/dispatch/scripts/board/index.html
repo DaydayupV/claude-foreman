@@ -4832,23 +4832,44 @@ function drawOverlay(t, L, P, lanes, rates, live, bandA, burst = null) {
 
 // 脉冲：Claude Code 派活（dir 1）、结果回来或被读取（dir -1）；产出（写文件、交报告、结束，out）。
 // 没有 Claude Code 记录时，用任务的开始和结束代替派活和结果回来，交互光线照样有反应。
+// 直播里事件要过一会儿才到页面（看板服务每秒推一次；Claude Code 的工具调用要等整条回复生成完才写进记录），按事件自己的时刻算，
+// 到的时候光束已经走了一半或早就走完了：直播时从页面第一次看到它起算，和节拍一样（04-life.js 的 BEAT）。连上服务时开头那一批
+// （服务发 synced 之前，以及之后算的第一帧）不放，晚到 PULSE.late 秒以上的也不放。回放照旧按事件的时刻。
+// 同一条车道同一时刻的几件事（一次改了几个文件）只放一次，几道一样的光束叠在一起会变成一条过亮的白条
+const PULSE = { late: 120, seen: new Map(), hello: undefined, synced: false };
 function recentPulses(t) {
-  const out = [], cc = B.laneById.get('cc');
+  const out = [], cc = B.laneById.get('cc'), live = B.clock.mode !== 'replay', once = new Set();
   const hasLinks = !!(cc && cc.events.some((e) => e.target && e.target.length));
+  if (live && PULSE.hello !== B.hello) { PULSE.hello = B.hello; PULSE.seen.clear(); PULSE.synced = false; }
+  const old = !B.synced || !PULSE.synced, from = t - PULSE.late * 1000;
+  if (live && B.synced) PULSE.synced = true;
+  const add = (pulse, ts) => {
+    let age = ageOf({ ts }, t);
+    if (live ? ts <= from : age > FX_PULSE) return;
+    const key = `${pulse.lane}|${pulse.out ? 'out' : pulse.dir}|${ts}`;
+    if (once.has(key)) return;
+    once.add(key);
+    if (live) {
+      if (!PULSE.seen.has(key)) PULSE.seen.set(key, { ts, at: old ? null : t });
+      const at = PULSE.seen.get(key).at;
+      age = at == null ? -1 : (t - at) / 1000;
+    }
+    if (age >= 0 && age <= FX_PULSE) out.push({ ...pulse, age });
+  };
   for (const lane of B.lanes) {
     for (let i = lane.events.length - 1; i >= 0; i--) {
-      const ev = lane.events[i], age = ageOf(ev, t);
-      if (age < 0) continue;
-      if (age > FX_PULSE) break;
-      if (lane.id === 'cc' && ev.target) for (const id of ev.target) out.push({ lane: id, age, dir: ev.k === 'dispatch' ? 1 : -1 });
-      if (ev.k === 'edit' || ev.k === 'report' || ev.k === 'end') out.push({ lane: lane.id, age, out: true });
+      const ev = lane.events[i];
+      if (ev.ts > t) continue;
+      if (live ? ev.ts <= from : ageOf(ev, t) > FX_PULSE) break;
+      if (lane.id === 'cc' && ev.target) for (const id of ev.target) add({ lane: id, dir: ev.k === 'dispatch' ? 1 : -1 }, ev.ts);
+      if (ev.k === 'edit' || ev.k === 'report' || ev.k === 'end') add({ lane: lane.id, out: true }, ev.ts);
     }
     if (!hasLinks && lane.id !== 'cc') for (const r of lane.runs) {
-      const a1 = ageOf({ ts: r.started_at }, t), a2 = r.ended_at != null ? ageOf({ ts: r.ended_at }, t) : -1;
-      if (a1 >= 0 && a1 <= FX_PULSE) out.push({ lane: lane.id, age: a1, dir: 1 });
-      if (a2 >= 0 && a2 <= FX_PULSE) out.push({ lane: lane.id, age: a2, dir: -1 });
+      if (r.started_at <= t) add({ lane: lane.id, dir: 1 }, r.started_at);
+      if (r.ended_at != null && r.ended_at <= t) add({ lane: lane.id, dir: -1 }, r.ended_at);
     }
   }
+  for (const [key, v] of PULSE.seen) if (v.ts <= from) PULSE.seen.delete(key);
   return out;
 }
 
@@ -5660,9 +5681,10 @@ function trackSurges(rates, quiet, t) {
     const fire = (k) => { if (!quiet && !reduceMotion.matches && now - s.t0 > 6) { s.t0 = now; s.k = k; } };
     if (usage) {
       if (usage.ts > s.used) { s.used = usage.ts; if (s.synced) fire(0.55 + 0.45 * clamp01(usage.u.out / 600)); }
-    } else if (rate > s.base * 1.6 && rate - s.base >= 15) fire(0.4 + 0.6 * clamp01((rate - s.base) / 80));
+    } else if (s.synced && rate > s.base * 1.6 && rate - s.base >= 15) fire(0.4 + 0.6 * clamp01((rate - s.base) / 80));
+    // 开头那一批还没收完时平均速度直接跟上：断开一阵再连上，补回来的用量会让速度一下子回来，不算加快
+    s.base = s.synced ? s.base + (rate - s.base) * (1 - Math.exp(-dt / 4)) : rate;
     if (live && B.synced) s.synced = true;
-    s.base += (rate - s.base) * (1 - Math.exp(-dt / 4));
   }
   for (const id of [...SURGE.keys()]) if (!rates.has(id)) SURGE.delete(id);
 }
