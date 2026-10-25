@@ -1,21 +1,38 @@
 'use strict';
 // 输出突然加快时的脉冲：弧线区中心先闪一圈，一道亮光沿这条车道的汇流线从弧线区传到卡片，再沿光带从卡片传到产出框。
-// 判断加快：每条车道的速度和它最近几秒的平均（指数平滑，约 4 秒）比，一下子高出一截（高出 60% 以上、至少多 15 tok/s）
-// 就算一次加速；同一条车道 6 秒内只放一次。速度从 0 起步也算（开始出字时亮一下）。切换动画中、要求减少动效时不放。
-const SURGE = new Map(); // 车道 id → { base: 平滑后的速度, at: 上次更新（屏幕秒）, t0: 这次脉冲开始（屏幕秒）, k: 强度 0.4–1 }
+// Claude Code：速度和它最近几秒的平均（指数平滑，约 4 秒）比，一下子高出一截（高出 60% 以上、至少多 15 tok/s）就算一次加速。
+// 它的用量按一条条消息记，速度本来就一跳一跳的。
+// 席位：不看速度。一次请求的输出摊在整次请求里，请求进行中的实时估速又从 0 平滑升起，几乎不会"一下子高出一截"，
+// 所以改成每报上来一份有输出的用量（一次请求跑完）就放一次，强度按这一份的 token 数。还没有这种用量的席位（第一份还没到，
+// 或者是旧版本留下的、只有整轮总数或字数的记录）照旧看速度。直播里用量到页面要晚一会儿，按它到的那一刻放；
+// 连上服务时开头那一批（服务发 synced 之前，以及之后算的第一帧，和 04-life.js 的节拍一样）是旧的，不放。
+// 同一条车道 6 秒内只放一次。切换动画中、要求减少动效时不放。
+const SURGE = new Map(); // 车道 id → { base: 平滑后的速度, at: 上次更新（屏幕秒）, t0: 这次脉冲开始（屏幕秒）, k: 强度 0.4–1, used: 已经看过的最新用量的时刻, synced }
 const SURGE_CORE = 0.45, SURGE_BUNDLE = 1.05, SURGE_RIBBON = 1.3;
 const SURGE_TOTAL = SURGE_BUNDLE + SURGE_RIBBON;
 
-function trackSurges(rates, quiet) {
-  const now = performance.now() / 1000;
+// 这条车道 t 以前最新的一份有输出的分段用量（整轮总数不算：它不是一次请求）
+function latestOutput(lane, t) {
+  for (let i = lane.events.length - 1; i >= 0; i--) {
+    const ev = lane.events[i];
+    if (ev.ts <= t && ev.k === 'usage' && !ev.tot && ev.u?.out > 0) return ev;
+  }
+  return null;
+}
+
+function trackSurges(rates, quiet, t) {
+  const now = performance.now() / 1000, live = B.clock.mode !== 'replay';
   for (const [id, rate] of rates) {
     let s = SURGE.get(id);
-    if (!s) { SURGE.set(id, { base: rate, at: now, t0: -Infinity, k: 0 }); continue; }
+    const lane = B.laneById.get(id), usage = id === 'cc' || !lane ? null : latestOutput(lane, t);
+    if (!s) { SURGE.set(id, { base: rate, at: now, t0: -Infinity, k: 0, used: usage?.ts ?? -Infinity, synced: !live || B.synced }); continue; }
     const dt = Math.min(1, Math.max(0, now - s.at));
     s.at = now;
-    if (!quiet && !reduceMotion.matches && rate > s.base * 1.6 && rate - s.base >= 15 && now - s.t0 > 6) {
-      s.t0 = now; s.k = 0.4 + 0.6 * clamp01((rate - s.base) / 80);
-    }
+    const fire = (k) => { if (!quiet && !reduceMotion.matches && now - s.t0 > 6) { s.t0 = now; s.k = k; } };
+    if (usage) {
+      if (usage.ts > s.used) { s.used = usage.ts; if (s.synced) fire(0.4 + 0.6 * clamp01(usage.u.out / 600)); }
+    } else if (rate > s.base * 1.6 && rate - s.base >= 15) fire(0.4 + 0.6 * clamp01((rate - s.base) / 80));
+    if (live && B.synced) s.synced = true;
     s.base += (rate - s.base) * (1 - Math.exp(-dt / 4));
   }
   for (const id of [...SURGE.keys()]) if (!rates.has(id)) SURGE.delete(id);

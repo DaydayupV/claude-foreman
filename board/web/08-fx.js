@@ -296,7 +296,7 @@ function drawFx(t, L) {
 function drawOverlay(t, L, P, lanes, rates, live, bandA, burst = null) {
   const core = burst ? { ...L.core, cx: burst.wx, cy: burst.wy, R: L.core.R * Math.max(0.05, burst.s) } : L.core;
   // 输出突然加快的脉冲（08-surge.js）：切换中、定格（?t=）时不放
-  trackSurges(rates, !!burst || B.params.t != null);
+  trackSurges(rates, !!burst || B.params.t != null, t);
   const pulses = [...recentPulses(t), ...surgePulses(lanes)];
   // 滚到刻度带两头的席位跟着渐隐，它的光线也一起淡掉
   // 还没被光点拉到的卡片、正在离开的组，光线也跟着淡入淡出
