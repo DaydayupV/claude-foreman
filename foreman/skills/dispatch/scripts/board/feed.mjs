@@ -109,6 +109,7 @@ export function laneOf(run, byId) {
   return run.meta?.participant === 'host' ? 'cc' : run.id;
 }
 
+// 按对话选时，params.sessions 可以给出同一个对话的全部会话 id（桌面版重启、恢复后换过 id，先前的也算），没给就只认 value
 export function selectScope(runs, params, now) {
   const byId = new Map(runs.map((r) => [r.id, r]));
   let kind = params.session != null ? 'session' : params.group != null ? 'group' : params.run != null ? 'run' : 'recent';
@@ -116,11 +117,12 @@ export function selectScope(runs, params, now) {
   // 回放可以按组、按任务，也可以按对话（replay 写 Claude Code 会话 id，取这个对话派出的所有任务）
   if (params.replay != null && params.session == null) kind = runs.some((r) => r.meta?.group === value) ? 'group' : runs.some((r) => r.meta?.claude_session === value) ? 'session' : runs.some((r) => r.id === value) ? 'run' : 'session';
   let seeds = runs.filter((r) => r.meta);
+  const ids = params.sessions ?? new Set([value]);
   if (kind === 'group') {
     seeds = seeds.filter((r) => r.meta.group === value);
     const newest = seeds.reduce((a, b) => !a || ms(b.meta.started_at) > ms(a.meta.started_at) ? b : a, null);
     seeds = seeds.filter((r) => (r.meta.claude_session ?? null) === (newest?.meta.claude_session ?? null));
-  } else if (kind === 'session') seeds = seeds.filter((r) => r.meta.claude_session === value);
+  } else if (kind === 'session') seeds = seeds.filter((r) => ids.has(r.meta.claude_session));
   else if (kind === 'run') seeds = seeds.filter((r) => r.id === value);
   else seeds = seeds.filter((r) => r.meta.status === 'running' && r.meta.participant !== 'host' || ms(r.meta.ended_at) >= now - 1800000);
   const lanes = new Map();
@@ -131,7 +133,7 @@ export function selectScope(runs, params, now) {
   const roots = [...lanes].sort((a, b) => b[1] - a[1]).map(([id]) => id).filter((id) => id !== 'cc').slice(0, kind === 'recent' ? 8 : Infinity);
   if (lanes.has('cc')) roots.push('cc');
   // 主持答案共用 cc，但不能把其他范围的答案一同带入。
-  return { scope: { kind, value }, runs: runs.filter((r) => r.meta && (params.session == null || r.meta.claude_session === value) && roots.includes(laneOf(r, byId)) && (laneOf(r, byId) !== 'cc' || seeds.includes(r)))
+  return { scope: { kind, value }, runs: runs.filter((r) => r.meta && (params.session == null || ids.has(r.meta.claude_session)) && roots.includes(laneOf(r, byId)) && (laneOf(r, byId) !== 'cc' || seeds.includes(r)))
     .sort((a, b) => roots.indexOf(laneOf(a, byId)) - roots.indexOf(laneOf(b, byId)) || ms(a.meta.started_at) - ms(b.meta.started_at)) };
 }
 
@@ -618,6 +620,8 @@ export function createFeed(root, options = {}) {
       return recentNames(now, 24).map((id) => update(id, false)).some((r) => r.meta?.status === 'running' && r.meta.participant !== 'host' && ms(r.meta.started_at) >= now - 86400000);
     },
     read(params, now = options.now?.() ?? Date.now()) {
+      // 同一个对话先前的会话 id 派出的任务也算这个对话的（options.conversation 由服务端按桌面版的元数据给出）
+      if (params.session != null && params.replay == null && options.conversation) params = { ...params, sessions: options.conversation(params.session) };
       // watch 可能漏掉根目录通知；有客户端时也至多十秒重列一次。
       if (!watcher || now - scannedAt >= 10000) dirty = true;
       scan(now);
@@ -656,7 +660,7 @@ export function createFeed(root, options = {}) {
       const newestTicket = [...waiting].filter((q) => params.group == null || q.group === params.group).sort((a, b) => ms(b.queued_at) - ms(a.queued_at))[0];
       const session = params.session ?? options.session ?? (selected.runs.length ? selected.runs[0].meta.claude_session
         : newestTicket ? newestTicket.claude_session : CLAUDE_SESSION);
-      selected.queued = waiting.filter((q) => selected.scope.kind === 'session' ? q.claude_session === selected.scope.value
+      selected.queued = waiting.filter((q) => selected.scope.kind === 'session' ? (params.sessions ?? new Set([selected.scope.value])).has(q.claude_session)
         : selected.scope.kind === 'group' ? q.group === selected.scope.value && (q.claude_session ?? null) === (session ?? null)
           : selected.scope.kind === 'run' ? selected.runs.some((r) => r.meta.group === q.group && (r.meta.claude_session ?? null) === (q.claude_session ?? null)) : true)
         .filter((q) => !queuedStarted(q, selected.runs)).map((q) => ({ agent: clip(q.agent), model: clip(q.model), title: clip(q.title),

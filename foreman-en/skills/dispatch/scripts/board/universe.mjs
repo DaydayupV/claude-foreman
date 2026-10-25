@@ -46,45 +46,57 @@ export function desktopRoots() {
   add(path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'Claude'));
   return out;
 }
-// 桌面版里归档或删掉的对话（Claude Code 会话 id 的集合）。每 5 秒（真实时钟）重列一次目录，元数据文件没变就不重读
-export function desktopHidden(roots, clock = Date.now) {
+// 桌面版对话的元数据：归档或删掉的对话（hidden，Claude Code 会话 id 的集合），以及先前的对话记录归到哪个对话（aliases：旧 id → 现在的 id）。
+// 桌面版重启或恢复对话时，Claude Code 会换一个会话 id、另起一份对话记录，旧 id 记在 priorCliSessionIds 里；
+// 不合起来的话，同一个对话会在星图上出现两次，旧记录里派出的任务也看不到了。归档的对话连同先前的记录一起隐藏。
+// 每 5 秒（真实时钟）重列一次目录，元数据文件没变就不重读
+export function desktopSessions(roots, clock = Date.now) {
   // cache：元数据文件 → 上次读到的结果；byDir：目录 → 上次从它得出的隐藏 id。
   // 一时读不了（被占用、没权限）的目录和文件沿用上次的结果，不让已归档的对话闪回来
   const cache = new Map(), byDir = new Map();
   const listed = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { if (!transient(e)) throw e; return null; } };
-  let at = -Infinity, hidden = new Set();
+  let at = -Infinity, state = { hidden: new Set(), aliases: new Map() };
   return () => {
-    if (!roots.length || clock() - at < 5000) return hidden;
+    if (!roots.length || clock() - at < 5000) return state;
     at = clock();
-    const next = new Set(), dirs = new Set();
-    const reuse = (prefix) => { for (const [dir, ids] of byDir) if (dir === prefix || dir.startsWith(prefix + path.sep)) { dirs.add(dir); ids.forEach((id) => next.add(id)); } };
+    const next = new Set(), aliases = new Map(), dirs = new Set();
+    const merge = (found) => { found.hidden.forEach((id) => next.add(id)); for (const [prior, id] of found.aliases) aliases.set(prior, id); };
+    const reuse = (prefix) => { for (const [dir, found] of byDir) if (dir === prefix || dir.startsWith(prefix + path.sep)) { dirs.add(dir); merge(found); } };
     const subdirs = (dir) => { const all = listed(dir); if (!all) reuse(dir); return (all || []).filter((d) => d.isDirectory()).map((d) => path.join(dir, d.name)); };
     for (const root of roots) for (const org of subdirs(root)) for (const dir of subdirs(org)) {
       const entries = listed(dir);
       if (!entries) { reuse(dir); continue; }
-      const ids = new Set();
+      const found = { hidden: new Set(), aliases: new Map() };
       for (const entry of entries) {
-        if (entry.name.startsWith('deleted_')) { ids.add(entry.name.slice(8)); continue; }
+        if (entry.name.startsWith('deleted_')) { found.hidden.add(entry.name.slice(8)); continue; }
         if (!entry.isFile() || !/^local_.+\.json$/.test(entry.name)) continue;
         const file = path.join(dir, entry.name), st = stat(file);
         const sig = st && `${st.size}:${st.mtimeMs}`;
         if (sig && cache.get(file)?.sig !== sig) {
           const value = json(file);
           // 正在写的文件读出来是坏的：沿用上次读到的
-          if (value) cache.set(file, { sig, cli: typeof value.cliSessionId === 'string' ? value.cliSessionId : null, archived: value.isArchived === true });
+          if (value) cache.set(file, { sig, cli: typeof value.cliSessionId === 'string' ? value.cliSessionId : null, archived: value.isArchived === true,
+            prior: Array.isArray(value.priorCliSessionIds) ? value.priorCliSessionIds.filter((id) => typeof id === 'string' && id !== value.cliSessionId) : [] });
         }
         const item = cache.get(file);
-        if (item?.archived && item.cli) ids.add(item.cli);
+        if (!item?.cli) continue;
+        if (item.archived) for (const id of [item.cli, ...item.prior]) found.hidden.add(id);
+        else for (const id of item.prior) found.aliases.set(id, item.cli);
       }
-      byDir.set(dir, ids); dirs.add(dir);
-      ids.forEach((id) => next.add(id));
+      byDir.set(dir, found); dirs.add(dir);
+      merge(found);
       const present = new Set(entries.map((e) => path.join(dir, e.name)));
       for (const file of cache.keys()) if (path.dirname(file) === dir && !present.has(file)) cache.delete(file);
     }
     for (const dir of byDir.keys()) if (!dirs.has(dir)) { byDir.delete(dir); for (const file of cache.keys()) if (path.dirname(file) === dir) cache.delete(file); }
-    hidden = next;
-    return hidden;
+    state = { hidden: next, aliases };
+    return state;
   };
+}
+// 只要隐藏的那部分
+export function desktopHidden(roots, clock = Date.now) {
+  const read = desktopSessions(roots, clock);
+  return () => read().hidden;
 }
 const runKeys = ['id', 'lane', 'kind', 'agent', 'model', 'group', 'plan', 'seat', 'role', 'title', 'status', 'started_at', 'ended_at', 'queued'];
 const pickRun = (run) => Object.fromEntries(runKeys.map((key) => [key, run[key]]));
@@ -295,7 +307,7 @@ export function universeChanges(previous, next) {
 
 export function createUniverse(options) {
   const hours = options.windowH ?? 24, sessions = new Map(), runs = new Map(), folders = new Map();
-  const hiddenNow = desktopHidden(options.desktopRoots ?? []);
+  const desktop = options.desktop ?? desktopSessions(options.desktopRoots ?? []);
   const listings = new Map();
   let dirs = [], listedAt = -Infinity;
   let runNames = new Set(), runsScannedAt = -Infinity;
@@ -394,12 +406,23 @@ export function createUniverse(options) {
       }
     }
     for (const id of sessions.keys()) if (!found.has(id)) sessions.delete(id);
-    const hidden = hiddenNow();
+    const { hidden, aliases } = desktop();
+    // 同一个对话先前的对话记录（桌面版重启、恢复后换了会话 id）并进现在的那一份：不单独列，它派出的任务和 Claude Code 的用量
+    // 算到现在这个对话上（用量按消息 id 去重，新记录开头抄过来的那段不重算）。现在那一份还没有（还没写出来、超出时间窗口）时照常单独列
+    const merged = new Map();
+    for (const [prior, id] of aliases) if (sessions.has(prior) && sessions.get(id)?.last_at != null) merged.set(prior, id);
+    const view = (session) => {
+      const priors = [...merged].filter(([, id]) => id === session.id).map(([prior]) => sessions.get(prior));
+      if (!priors.length) return session;
+      return { ...session, usage: new Map([...priors.flatMap((p) => [...p.usage]), ...session.usage]),
+        started_at: Math.min(session.started_at ?? Infinity, ...priors.map((p) => p.started_at ?? Infinity)) };
+    };
     // 排队目录一时读不了（别的进程正在建、删票据，或者被占用）：这一拍按没有票据算，不让整份星图读不出来
     let waiting = [];
     try { waiting = queuedRuns(null, options.runs); } catch { /* 下一拍再读 */ }
-    const all = readRuns(now), selected = [...sessions.values()].filter((s) => s.last_at != null && s.last_at >= cutoff && !hidden.has(s.id)).sort((a, b) => b.last_at - a.last_at || a.id.localeCompare(b.id)).slice(0, 200);
-    const summaries = selected.map((s) => summaryOf(s, all, now, hours, options.prices, undefined, waiting));
+    const all = readRuns(now).map((r) => merged.has(r.session) ? { ...r, session: merged.get(r.session) } : r);
+    const selected = [...sessions.values()].filter((s) => s.last_at != null && s.last_at >= cutoff && !hidden.has(s.id) && !merged.has(s.id)).sort((a, b) => b.last_at - a.last_at || a.id.localeCompare(b.id)).slice(0, 200);
+    const summaries = selected.map((s) => summaryOf(view(s), all, now, hours, options.prices, undefined, waiting));
     return { v: 3, now, window_h: hours, projects: projectsOf([...selected].sort((a, b) => b.cwdAt - a.cwdAt), older, folders), sessions: summaries,
       // 名额和对话列表同一个口径：桌面版里归档、删掉的对话，它的任务不占"同时运行"的格子（不然点了飞不进去）
       agents: agentSlots(config, hidden.size ? all.filter((r) => !hidden.has(r.session)) : all) };
