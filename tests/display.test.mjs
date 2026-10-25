@@ -446,9 +446,9 @@ function displayBoard(lang = 'zh') {
     worldEl: { dataset: { lod: 0 } }, avatarFor: () => 'claude', rgba: () => '', avatarSrc: () => '', look: () => ({ name: 'test' }),
     hash: () => 1, verdictCounts: () => null });
   const page = buildPage(), shared = page.slice(page.indexOf('const Display ='), page.indexOf('// ---- 00-text.js'));
-  const names = ['00-text', '01-state', '03-timeline', '04-rates', '05-world', '06-states', '06-cards', '07-table', '07-terms'];
+  const names = ['00-text', '01-state', '03-timeline', '04-life', '04-rates', '05-world', '06-states', '06-cards', '07-table', '07-terms'];
   const source = names.map((name) => fs.readFileSync(new URL(`../board/web/${name}.js`, import.meta.url), 'utf8')).join('\n');
-  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, conclusion, painted, outOfScope, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd, onBacklog, SETTLE, settleTerms };', context);
+  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, conclusion, painted, outOfScope, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd, onBacklog, SETTLE, settleTerms, ccAway, CC_AWAY };', context);
   return { ...context.api, el, context };
 }
 
@@ -981,4 +981,25 @@ test('网页终端区的结论和错误按终端的颜色上色：原因红、�
   const parts = b.painted(lines.find((l) => plain(l).includes('hit the 1-minute limit')));
   assert.equal(parts[0].className, 'c-bad'); assert.equal(parts[0].textContent, '✗');
   assert.deepEqual([...b.painted('no colors')], ['no colors']);
+});
+
+test('整个对话闲下来时 Claude Code 卡片离场（进度 0→1），重新活跃时倒着回来；刚打开时直接停在当时的样子，中途反过来从当前进度接着放', () => {
+  const b = displayBoard();
+  let clock = 0;
+  b.context.performance.now = () => clock;
+  b.onRun({ id: 'cc', lane: 'cc', kind: 'host', agent_type: 'host', model: 'opus', status: 'idle', started_at: 0 });
+  b.onEv({ run: 'cc', ts: 1000, k: 'msg', t: 'done' });
+  const cc = b.B.laneById.get('cc'), quiet = 30 * 60000, empty = { groups: [] };
+  // 刚打开：已经闲下来，直接算离开了，不放动画；刻度带里还有组时不离开
+  assert.equal(b.ccAway(empty, quiet), 1);
+  assert.equal(b.ccAway({ groups: [{}] }, quiet), 1); // 刻度带里有了组：状态翻转，从完全离开开始倒着回来
+  clock = 800; assert.ok(Math.abs(b.ccAway({ groups: [{}] }, quiet) - 0.5) < 1e-9);
+  // 中途又闲下来：从当前进度（0.5）接着往离开的方向放
+  assert.ok(Math.abs(b.ccAway(empty, quiet) - 0.5) < 1e-9);
+  clock = 1600; assert.ok(Math.abs(b.ccAway(empty, quiet) - 1) < 1e-9);
+  // Claude Code 重新活跃（状态不是 idle）：倒着回来，放完是 0
+  cc.runs[0].status = 'running';
+  assert.equal(b.ccAway(empty, quiet), 1);
+  clock = 1600 + 1600; assert.equal(b.ccAway(empty, quiet), 0);
+  assert.equal(b.CC_AWAY.away, false);
 });
