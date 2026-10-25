@@ -444,11 +444,11 @@ function displayBoard(lang = 'zh') {
     performance: { now: () => 0 }, innerHeight: 1000, ResizeObserver: class { observe() {} }, addEventListener() {}, wake() {}, document: { getElementById: el,
       createElement: () => new DisplayElement(), documentElement: {}, querySelector: () => null },
     worldEl: { dataset: { lod: 0 } }, avatarFor: () => 'claude', rgba: () => '', avatarSrc: () => '', look: () => ({ name: 'test' }),
-    hash: () => 1, verdictCounts: () => null });
+    hash: () => 1, verdictCounts: () => null, reduceMotion: { matches: false } });
   const page = buildPage(), shared = page.slice(page.indexOf('const Display ='), page.indexOf('// ---- 00-text.js'));
-  const names = ['00-text', '01-state', '03-timeline', '04-life', '04-rates', '05-world', '06-states', '06-cards', '07-table', '07-terms'];
+  const names = ['00-text', '01-state', '03-timeline', '04-life', '04-rates', '05-world', '06-states', '06-cards', '07-table', '07-terms', '08-surge'];
   const source = names.map((name) => fs.readFileSync(new URL(`../board/web/${name}.js`, import.meta.url), 'utf8')).join('\n');
-  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, conclusion, painted, outOfScope, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd, onBacklog, SETTLE, settleTerms, ccAway, CC_AWAY, viewAt, beatsAt };', context);
+  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, conclusion, painted, outOfScope, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd, onBacklog, SETTLE, settleTerms, ccAway, CC_AWAY, viewAt, beatsAt, trackSurges, surgeAge, SURGE };', context);
   return { ...context.api, el, context };
 }
 
@@ -1085,4 +1085,47 @@ test('直播里节拍从页面第一次看到事件起算：连上时开头那�
   Object.assign(b.B, { hello: { v: 3 }, synced: false });
   b.onRun({ id: 'again', model: 'm', kind: 'exec', status: 'running', started_at: t3 - 200, ended_at: null });
   assert.equal(b.beatsAt(t3).env, 0);
+});
+
+test('席位的加速脉冲按报上来的分段用量放：连上时已有的不放，之后每到一份放一次，6 秒内只放一次，整轮总数不算；Claude Code 照旧看速度', () => {
+  const b = displayBoard(), t = 100000, clock = { ms: 0 }, near = (x, y) => Math.abs(x - y) < 1e-9;
+  b.context.performance.now = () => clock.ms;
+  b.B.clock.mode = 'live';
+  b.onRun({ id: 'seat', model: 'm', kind: 'exec', status: 'running', started_at: t - 60000, ended_at: null });
+  b.onEv({ run: 'seat', ts: t - 30000, k: 'usage', u: { out: 300 } });
+  const rates = new Map([['seat', 0]]), step = (at, ms = 16, quiet = false) => { clock.ms += ms; b.trackSurges(rates, quiet, at); };
+  // 开头那一批：已有的用量不放；和 synced 一起到、中间没画过一帧的也不放
+  step(t);
+  b.onEv({ run: 'seat', ts: t - 1000, k: 'usage', u: { out: 300 } });
+  b.B.synced = true;
+  step(t);
+  assert.equal(b.surgeAge('seat'), null);
+  // 新到一份：放，强度按 token 数（600 以上是满的）
+  b.onEv({ run: 'seat', ts: t - 500, k: 'usage', u: { out: 900 } });
+  step(t);
+  assert.equal(b.surgeAge('seat'), 0); assert.equal(b.SURGE.get('seat').k, 1);
+  // 2 秒后又到一份：6 秒内不再放
+  b.onEv({ run: 'seat', ts: t + 1500, k: 'usage', u: { out: 300 } });
+  step(t + 2000, 2000);
+  assert.ok(near(b.surgeAge('seat'), 2));
+  // 整轮总数不是一次请求，不放；切换动画中到的不放，过后也不补
+  b.onEv({ run: 'seat', ts: t + 8000, k: 'usage', tot: 1, u: { out: 5000 } });
+  step(t + 9000, 7000);
+  assert.equal(b.surgeAge('seat'), null);
+  b.onEv({ run: 'seat', ts: t + 9500, k: 'usage', u: { out: 100 } });
+  step(t + 10000, 16, true); step(t + 10000);
+  assert.equal(b.surgeAge('seat'), null);
+  b.onEv({ run: 'seat', ts: t + 11000, k: 'usage', u: { out: 120 } });
+  step(t + 11000);
+  assert.equal(b.surgeAge('seat'), 0); assert.ok(near(b.SURGE.get('seat').k, 0.4 + 0.6 * 0.2));
+  // Claude Code，以及还没有分段用量的席位（旧记录只有整轮总数）：速度一下子高出平均一截才放
+  b.onRun({ id: 'cc', lane: 'cc', kind: 'host', agent_type: 'host', model: 'opus', status: 'running', started_at: 0 });
+  b.onRun({ id: 'old', model: 'm', kind: 'exec', status: 'running', started_at: t, ended_at: null });
+  b.onEv({ run: 'old', ts: t + 1000, k: 'usage', tot: 1, u: { out: 900 } });
+  const rate = (r) => new Map([['cc', r], ['old', r]]);
+  clock.ms += 16; b.trackSurges(rate(5), false, t + 11000);
+  clock.ms += 16; b.trackSurges(rate(12), false, t + 11000);
+  assert.equal(b.surgeAge('cc'), null); assert.equal(b.surgeAge('old'), null);
+  clock.ms += 16; b.trackSurges(rate(60), false, t + 11000);
+  assert.equal(b.surgeAge('cc'), 0); assert.equal(b.surgeAge('old'), 0);
 });
