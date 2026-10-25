@@ -448,7 +448,7 @@ function displayBoard(lang = 'zh') {
   const page = buildPage(), shared = page.slice(page.indexOf('const Display ='), page.indexOf('// ---- 00-text.js'));
   const names = ['00-text', '01-state', '03-timeline', '04-life', '04-rates', '05-world', '06-states', '06-cards', '07-table', '07-terms'];
   const source = names.map((name) => fs.readFileSync(new URL(`../board/web/${name}.js`, import.meta.url), 'utf8')).join('\n');
-  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, conclusion, painted, outOfScope, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd, onBacklog, SETTLE, settleTerms, ccAway, CC_AWAY, viewAt };', context);
+  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, conclusion, painted, outOfScope, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd, onBacklog, SETTLE, settleTerms, ccAway, CC_AWAY, viewAt, beatsAt };', context);
   return { ...context.api, el, context };
 }
 
@@ -1002,6 +1002,10 @@ test('整个对话闲下来时 Claude Code 卡片离场（进度 0→1），重�
   assert.equal(b.ccAway(empty, quiet), 1);
   clock = 1600 + 1600; assert.equal(b.ccAway(empty, quiet), 0);
   assert.equal(b.CC_AWAY.away, false);
+  // 闲了很久、看板上没有 Claude Code 记录的对话：刻度带空着就算离开，打开时直接停在离开的样子
+  const old = displayBoard();
+  assert.equal(old.ccAway({ groups: [] }, quiet), 1);
+  assert.equal(old.ccAway({ groups: [{}] }, quiet), 1); // 有了席位就回来（从离开的样子开始倒放）
 });
 
 test('镜头按对数插值缩放、绕不动点缩放（滚轮下那一点始终不动），缩放不变时直接平移', () => {
@@ -1017,4 +1021,30 @@ test('镜头按对数插值缩放、绕不动点缩放（滚轮下那一点始�
   assert.ok(Math.abs(b.viewAt(a, goal, 1).k - 4) < 1e-9);
   // 缩放一样：直接平移
   assert.deepEqual({ ...b.viewAt({ k: 2, tx: 0, ty: 0 }, { k: 2, tx: 100, ty: -50 }, 0.25) }, { k: 2, tx: 25, ty: -12.5 });
+});
+
+test('节拍取真实事件：派出最强，回一句话最轻；0.8 秒内不比上一下强的并掉（只算整体那一下），各车道照样记；1.2 秒以前的不算', () => {
+  const b = displayBoard(), t = 100000;
+  b.onRun({ id: 'cc', lane: 'cc', kind: 'host', agent_type: 'host', model: 'opus', status: 'running', started_at: 0 });
+  b.onRun({ id: 'seat', model: 'm', kind: 'exec', status: 'running', started_at: t - 500, ended_at: null });
+  b.onEv({ run: 'cc', ts: t - 200, k: 'msg', t: 'started' });
+  b.onEv({ run: 'cc', ts: t - 5000, k: 'msg', t: 'old' });
+  const near = (x, y) => Math.abs(x - y) < 1e-9, at = (s, age) => s * Math.exp(-age * 4.5);
+  let beat = b.beatsAt(t);
+  // 派出那一下（0.5 秒前）算整体；0.3 秒后那句话更轻，并掉，只让 Claude Code 自己的光路变宽；5 秒前那句不算
+  assert.ok(near(beat.env, at(0.9, 0.5)), String(beat.env));
+  assert.ok(near(beat.lanes.get('seat'), at(0.9, 0.5)));
+  assert.ok(near(beat.lanes.get('cc'), at(0.45, 0.2)));
+  // 交回结果离派出不到 0.8 秒、又不比它强：整体也并掉；过了 1.2 秒都不算
+  b.onRun({ id: 'seat', model: 'm', kind: 'exec', status: 'done', started_at: t - 500, ended_at: t - 100 });
+  beat = b.beatsAt(t);
+  assert.ok(near(beat.env, at(0.9, 0.5))); assert.ok(near(beat.lanes.get('seat'), at(0.8, 0.1)));
+  beat = b.beatsAt(t + 2000);
+  assert.equal(beat.env, 0); assert.equal(beat.lanes.size, 0);
+  // 更强的一下离上一下再近也照算：先回一句话，0.2 秒后派出
+  const c = displayBoard();
+  c.onRun({ id: 'cc', lane: 'cc', kind: 'host', agent_type: 'host', model: 'opus', status: 'running', started_at: 0 });
+  c.onEv({ run: 'cc', ts: t - 300, k: 'msg', t: 'on it' });
+  c.onRun({ id: 'seat', model: 'm', kind: 'exec', status: 'running', started_at: t - 100, ended_at: null });
+  assert.ok(near(c.beatsAt(t).env, at(0.9, 0.1)));
 });
