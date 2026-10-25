@@ -25,7 +25,7 @@ test('认出用 cli.mjs 派出任务的命令和命令里写的 FOREMAN_CONFIG',
     `cat <<'EOF'\nnode ${cli} run\nEOF`, `echo "node ${cli} run"`]) assert.equal(dispatchOf(command), null, command);
 });
 
-test('网页看板开着时显示带对话 id 的链接（服务没在跑就启动），3 分钟内同一个对话只显示一次；关着时不显示', async (t) => {
+test('网页看板开着时显示带对话 id 的链接（服务没在跑就启动），用户每发一条消息只显示一次；关着时不显示', async (t) => {
   const h = sandbox(t), config = baseConfig(), lockFile = path.join(h.runs, 'board.lock.json');
   config.dispatch.watch = { terminal: true, web: true };
   h.config(config);
@@ -42,11 +42,19 @@ test('网页看板开着时显示带对话 id 的链接（服务没在跑就启�
     // 一起派出、钩子同时运行时只显示一次
     const together = await Promise.all([run('s6'), run('s6'), run('s6')]);
     assert.equal(together.filter((r) => r.stdout).length, 1);
-    // 3 分钟以后再派出又显示：把 s1 的标记挪成很早以前那一段的
-    const shown = path.join(h.runs, 'board-shown'), [marker] = fs.readdirSync(shown).filter((name) => name.startsWith('s1.'));
-    fs.renameSync(path.join(shown, marker), path.join(shown, `s1.${Number(marker.slice(3)) - 5}`));
+    // 用户发了新消息（UserPromptSubmit）：钩子什么都不输出，只清掉这个对话的标记，下次派出又显示一次；别的对话不受影响
+    const prompt = await h.hook('board-link.mjs', { cwd: h.cwd, session_id: 's1', hook_event_name: 'UserPromptSubmit', prompt: '继续' });
+    assert.equal(prompt.code, 0, prompt.stderr);
+    assert.equal(prompt.stdout, '');
+    assert.equal((await run('s2')).stdout, '');
     assert.match((await run('s1')).stdout, /&s=s1"/);
     assert.equal((await run('s1')).stdout, '');
+    // 标记放在 foreman 目录里，不看命令里写的 FOREMAN_CONFIG：命令换了配置文件，这条消息里也不再显示
+    const other = path.join(h.home, 'other-config.json');
+    fs.copyFileSync(h.userConfig, other);
+    const inline = { cwd: h.cwd, session_id: 's1', tool_input: { command: `FOREMAN_CONFIG="${other}" node "${cli}" run --level simple` } };
+    assert.equal((await h.hook('board-link.mjs', inline)).stdout, '');
+    assert.ok(fs.existsSync(path.join(path.dirname(h.userConfig), 'board-shown', 's1')));
     // 不是派出任务的命令不显示
     assert.equal((await h.hook('board-link.mjs', { cwd: h.cwd, session_id: 's3', tool_input: { command: `node "${cli}" status` } })).stdout, '');
     config.dispatch.watch = { terminal: true, web: false };
