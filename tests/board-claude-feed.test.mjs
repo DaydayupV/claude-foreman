@@ -76,6 +76,8 @@ test('promptOf 按来源识别用户消息，旧记录排除元数据并剥离�
     ['工具结果', [{ type: 'tool_result', tool_use_id: 'unused', content: '完成' }], {}, null],
     ['sidechain', '用户输入', { turnOrigin: 'human', isSidechain: true }, null],
     ['压缩摘要', 'This session is being continued from a previous conversation.', { isCompactSummary: true, isVisibleInTranscriptOnly: true }, null],
+    ['中断标记', [{ type: 'text', text: '[Request interrupted by user]' }], {}, null],
+    ['工具调用时中断', '[Request interrupted by user for tool use]', {}, null],
     ['assistant', '助手输出', { type: 'assistant', turnOrigin: 'human' }, null],
   ];
   for (const [name, content, fields, expected] of cases) {
