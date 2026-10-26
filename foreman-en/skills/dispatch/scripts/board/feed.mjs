@@ -489,7 +489,9 @@ export function createFeed(root, options = {}) {
     return out;
   };
   const addClaude = (data, runs, params, now, transcript) => {
-    const session = data.scope.kind === 'session', recent = data.scope.kind === 'recent' || session && !runs.length;
+    // 选了对话（session）时看板是这个对话的全部历史：Claude Code 的动作从这份记录开头取起，派没派过任务都一样。
+    // 半小时窗口只给没选对话的"最近动静"视图（recent）用
+    const session = data.scope.kind === 'session', recent = data.scope.kind === 'recent';
     const file = transcript?.file ?? findTranscript(runs, recent, session ? data.scope.value : undefined);
     if (!file || !recent && !session && !runs.length) return data;
     const previous = transcript ? null : transcripts.get(file), read = transcript ? { tail: newTail(), lines: transcript.records } : readLines(file, previous || newTail()), tail = read.tail;
@@ -502,10 +504,9 @@ export function createFeed(root, options = {}) {
       const last = Math.min(now, stat(file)?.mtimeMs ?? now);
       window = { from: last - 1800000, to: now, initial: tail.count, version: tail.version }; recentWindows.set(file, window);
     }
-    const replay = session && params.replay != null;
     let firstAt = Infinity, lastAt = -Infinity, openEnd = false;
     for (const run of runs) { const ended = ms(run.meta.ended_at); firstAt = Math.min(firstAt, ms(run.meta.started_at)); lastAt = Math.max(lastAt, ended ?? now); openEnd ||= ended == null; }
-    const from = replay ? -Infinity : recent ? window.from : firstAt - (options.lead ?? 10) * 60000;
+    const from = session ? -Infinity : recent ? window.from : firstAt - (options.lead ?? 10) * 60000;
     const end = session ? Infinity : recent ? window.to : lastAt + (options.tail ?? 5) * 60000;
     const accepts = (r, i) => r.type === 'custom-title' || recent && i >= window.initial || ms(r.timestamp) >= from && ms(r.timestamp) <= end;
     const ctx = { cwd: null, runIds: runs.map((r) => r.id), runsInScope: runs };
@@ -549,15 +550,16 @@ export function createFeed(root, options = {}) {
     }
     const m = parsed.meta;
     if (m.started_at == null) return data;
-    // Claude Code 那一行是这个对话的全部用量，和星图那一行同一个口径：时间线只画窗口里的事件，用量不按窗口截。
-    // 星图读过这份记录时用它的整份用量（没读过时用窗口里解析出来的）；同一个对话先前的对话记录（桌面版重启、恢复前）也算进来，
-    // 几份记录之间抄过来的消息只算一次（keepUsage）
-    let usage = m.usage;
+    // Claude Code 那一行是这个对话的全部用量，和星图那一行同一个口径。星图读过这份记录时用它读出的用量
+    // （和这里解析的是同一份记录，按同样的先后合并，费用分毫不差）；同一个对话先前的对话记录（桌面版重启、恢复前）也算进来，
+    // 几份记录之间抄过来的消息只算一次（keepUsage）。先前记录的动作不解析成事件：页面每条车道只收最近 200 条
+    let usage = m.usage, started = m.started_at;
     const whole = session && params.replay == null ? options.knownUsage?.(data.scope.value) : null;
     if (whole || session && params.replay == null && params.sessions?.size > 1) {
       // 先前的记录在前、现在这份在后，和星图合并的顺序一样（费用逐条相加，顺序不同小数末位会差一点）
       const kept = new Map();
-      if (params.sessions?.size > 1) for (const e of priorUsageOf([...params.sessions].filter((id) => id !== data.scope.value))) keepUsage(kept, e);
+      // 对话的开头算到最早那份先前记录（时长列和时间轴从这里起）
+      if (params.sessions?.size > 1) for (const e of priorUsageOf([...params.sessions].filter((id) => id !== data.scope.value))) { keepUsage(kept, e); if (e.ts < started) started = e.ts; }
       for (const e of whole ?? parsed.events.filter((e) => e.k === 'usage' && e.messageId).map((e) => ({ id: e.messageId, t: e.t, u: e.u }))) keepUsage(kept, e);
       const list = [...kept.values()];
       usage = usageTotals(list);
@@ -567,7 +569,7 @@ export function createFeed(root, options = {}) {
       cost = tail.wholeCost.cost; costPartial = tail.wholeCost.partial;
     }
     data.runs.push({ id: 'cc', lane: 'cc', kind: 'host', agent: 'claude code', agent_type: 'host', model: m.model, session: m.session || path.basename(file, '.jsonl'), title: m.title, cwd: m.cwd,
-      status: params.replay != null || now - Math.max(m.latest_at, tail.appendedAt ?? -Infinity) < 90000 ? 'running' : 'idle', started_at: m.started_at, ended_at: null, usage, ...costFields(cost, cost == null ? 'unknown' : 'api_price'), ...(costPartial && cost != null ? { cost_partial: true } : {}) });
+      status: params.replay != null || now - Math.max(m.latest_at, tail.appendedAt ?? -Infinity) < 90000 ? 'running' : 'idle', started_at: started, ended_at: null, usage, ...costFields(cost, cost == null ? 'unknown' : 'api_price'), ...(costPartial && cost != null ? { cost_partial: true } : {}) });
     append(data.events, parsed.events); data.versions.cc = `${file}:${tail.version}`; data.revisions.cc = '';
     data.hostEnd = session ? m.latest_at : end; return data;
   };
