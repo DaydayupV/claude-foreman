@@ -42,6 +42,14 @@ function temp(t) {
   return { root, options, write, session, run };
 }
 
+test('the star map does not take a <synthetic> reply as the conversation\'s model', (t) => {
+  const f = temp(t);
+  f.session('only', [row('user', now - 3000, 'go'), answer(now - 2000, { model: '<synthetic>' })]);
+  f.session('mixed', [row('user', now - 3000, 'go'), answer(now - 2500), answer(now - 2000, { model: '<synthetic>' })]);
+  const s = new Map(createUniverse(f.options).read().sessions.map((x) => [x.id, x]));
+  assert.equal(s.get('only').model, null); assert.equal(s.get('mixed').model, 'claude-opus-5-5');
+});
+
 test('sample index merges Windows cwd variants, skips deep files, counts older and has no message text', () => {
   const data = createUniverse(sample).read();
   assert.equal(data.sessions.length, 9); assert.equal(data.projects.length, 4);

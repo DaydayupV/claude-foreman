@@ -599,6 +599,14 @@ test('部分完成、问题、续接、超时和排队共用状态词及计数�
   assert.equal(Display.countsText(['running', 'queued', 'ok', 'partial', 'blocked', 'resumed', 'failed'].map((kind) => ({ kind }))), '●1 ⋯1 ✔1 ◐1 ?1 ↪1 ✗1');
 });
 
+test('the top bar says whole conversation on a chosen conversation and recent only on the latest-activity view', () => {
+  const b = displayBoard();
+  b.B.params = { ...b.B.params, session: 's' }; b.renderTop(0);
+  assert.equal(b.el('scope').textContent, 'live · whole conversation');
+  b.B.params = { ...b.B.params, session: null }; b.renderTop(0);
+  assert.equal(b.el('scope').textContent, 'live · recent');
+});
+
 test('回放显示记录时间，18:23 不变成压缩后的 5:15；空闲 Claude Code 停在最后活动', () => {
   const b = displayBoard(), points = [[0, 0], [315000, 1103000]];
   b.B.clock.mode = 'replay'; b.B.hello = { replay: { time_map: points } };

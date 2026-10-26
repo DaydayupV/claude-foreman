@@ -39,6 +39,14 @@ test('synthetic transcript covers every Claude event, deduplicates message usage
   for (const wrapper of ['<command-name>x', '<local-command-stdout>x', '<system-reminder>x', '<task-notification>x']) assert.deepEqual(parseTranscriptLines([row('user', wrapper)], ctx).events, []);
 });
 
+test('a <synthetic> reply (Claude Code\'s zero-usage placeholder) never becomes the conversation\'s model', () => {
+  const at = (s) => new Date(Date.parse('2026-10-26T01:00:00Z') + s * 1000).toISOString();
+  const reply = (s, model) => ({ type: 'assistant', timestamp: at(s), message: { id: `m${s}`, model, content: [{ type: 'text', text: 'x' }], usage: { input_tokens: 0, output_tokens: 0 } } });
+  const ctx = { cwd: null, runIds: [], runsInScope: [] };
+  assert.equal(parseTranscriptLines([reply(1, '<synthetic>')], ctx).meta.model, null);
+  assert.equal(parseTranscriptLines([reply(1, 'claude-opus-5-5'), reply(2, '<synthetic>')], ctx).meta.model, 'claude-opus-5-5');
+});
+
 test('promptOf 按来源识别用户消息，旧记录排除元数据并剥离提醒块', () => {
   const reminder = '<system-reminder>系统\n说明</system-reminder>';
   const command = '<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>完成检查</command-args>';
