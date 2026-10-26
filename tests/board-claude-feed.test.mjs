@@ -212,7 +212,9 @@ test('shared tailing keeps partial UTF-8 and lines; discovery, windows and host 
   fs.appendFileSync(file, `${JSON.stringify(row('user', 'appended', -5000000))}\n`);
   data = recent.read({}, start + 1000); assert.equal(data.events.filter((e) => e.run === 'cc').at(-1).t, 'appended');
   assert.equal(data.runs.find((r) => r.id === 'cc').status, 'running');
-  assert.equal(recent.read({}, start + 91000).runs.find((r) => r.id === 'cc').status, 'idle');
+  // 最后一行是用户消息、还没回复：这一轮没结尾，90 秒以后照样算在干活，最多算 10 分钟
+  assert.equal(recent.read({}, start + 91000).runs.find((r) => r.id === 'cc').status, 'running');
+  assert.equal(recent.read({}, start + 1000 + 600000).runs.find((r) => r.id === 'cc').status, 'idle');
 });
 
 test('live polling sends ev_link for a late run without repeating dispatch, collect or returned', { timeout: 15000 }, async (t) => {

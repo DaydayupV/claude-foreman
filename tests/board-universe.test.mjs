@@ -127,7 +127,7 @@ test('projects follow where a conversation started (not later cd) and fold git w
   assert.equal(projectRoot('\\\\offline-server\\share\\proj'), '\\\\offline-server\\share\\proj');
 });
 
-test('states follow waiting, dispatching, thinking, idle priority and injectable 90 s / 10 min limits', (t) => {
+test('states follow waiting, dispatching, thinking, idle priority; a turn that has not ended stays thinking up to 10 min', (t) => {
   const f = temp(t), file = f.session('s', [row('user', base, 'title'), tool(base + 1)]);
   f.run('work', { status: 'running', started_at: base, ended_at: null });
   const universe = createUniverse(f.options), summary = (at) => universe.read(at).sessions[0];
@@ -137,10 +137,15 @@ test('states follow waiting, dispatching, thinking, idle priority and injectable
   f.run('work', { started_at: base, ended_at: base + 30 });
   fs.appendFileSync(file, JSON.stringify(answer(base + 30)) + '\n'); assert.equal(summary(base + 30).state, 'idle');
   fs.appendFileSync(file, JSON.stringify(row('user', base + 40, 'new')) + '\n');
-  assert.equal(summary(base + 40 + 89999).state, 'thinking'); assert.equal(summary(base + 40 + 90000).state, 'idle');
+  // 这一轮还没结尾（Claude Code 在想，要等整块想完才写记录）：一直算在想，不在 90 秒后就算闲；最多算 10 分钟
+  assert.equal(summary(base + 40 + 90000).state, 'thinking'); assert.equal(summary(base + 40 + 599999).state, 'thinking');
+  assert.equal(summary(base + 40 + 600000).state, 'idle');
   fs.appendFileSync(file, JSON.stringify(tool(base + 100000, 'Read', 'read')) + '\n');
   fs.appendFileSync(file, JSON.stringify(answer(base + 100001)) + '\n');
   assert.equal(summary(base + 699999).state, 'thinking'); assert.equal(summary(base + 700000).state, 'idle');
+  // 用户按了停止：中断标记就是这一轮的结尾，马上算闲
+  fs.appendFileSync(file, JSON.stringify(row('user', base + 705000, 'again')) + '\n'); assert.equal(summary(base + 705001).state, 'thinking');
+  fs.appendFileSync(file, JSON.stringify(row('user', base + 706000, '[Request interrupted by user]')) + '\n'); assert.equal(summary(base + 706001).state, 'idle');
   fs.appendFileSync(file, JSON.stringify(tool(base + 710000, 'ExitPlanMode', 'exit')) + '\n');
   assert.equal(summary(base + 800000).state, 'waiting'); assert.equal(summary(base + 800000).waiting.header, null);
 });

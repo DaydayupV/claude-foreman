@@ -54,7 +54,7 @@ test('replay output matches SHA256 after auditing original-time additions agains
   assert.deepEqual(golden(), {
     hello: 'dd6d6628b6d0fd85c66d16e1f24a2de8a5dfa93ecaebfcf40fcade0540733508',
     initial: '616a456690c5e135fd70a2b9767f92f7d530100cccdb86e75e9693c1f7b0e236',
-    timeline: '44cdbf632a6314bcc0fe93078dbd3a798e64115acdd8a818f9064dd9a68ab80a',
+    timeline: '23c0ca710ec10e4683498f682ad3bd8ea633643d6f932ae2e16552604c579145',
     clock: '09ab08ee5a6cec0f81855ecc0900a233a658523e80cf31681f62870837f2fa49',
     detail: '59f25409291918485abb3af6065893facf4e00af6c5b849ae87510bb2992f119',
     buildReplay: '3be480362a19d718a0560a9c0573da0005d45cce222199207906ae81e26fe799',

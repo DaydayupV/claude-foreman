@@ -338,6 +338,24 @@ test('a conversation board without tasks covers the whole conversation (usage an
   assert.equal(keepUsage(kept, { id: 'y', u: zero }), true);
 });
 
+test('Claude Code is active until its turn ends: idle right after a finished reply, still active minutes into a long think or tool', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'board-turn-')), projects = path.join(root, 'claude', 'demo'), runs = path.join(root, 'runs');
+  fs.mkdirSync(projects, { recursive: true }); fs.mkdirSync(runs);
+  t.after(() => { assert.equal(path.dirname(root), os.tmpdir()); fs.rmSync(root, { recursive: true, force: true }); });
+  const user = (at, content) => ({ type: 'user', timestamp: new Date(at).toISOString(), message: { content } });
+  const reply = (at, stop) => ({ type: 'assistant', timestamp: new Date(at).toISOString(), message: { id: `m${at}`, model: 'claude-opus-5-5', stop_reason: stop, content: [{ type: 'text', text: 'x' }] } });
+  const status = (rows, now) => {
+    fs.writeFileSync(path.join(projects, 'turn.jsonl'), rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    return createFeed(runs, { claudeDir: path.dirname(projects), now: () => now }).read({ session: 'turn' }, now).runs.find((r) => r.id === 'cc').status;
+  };
+  assert.equal(status([user(start - 20000, 'go'), reply(start - 10000, 'end_turn')], start), 'idle');
+  // 想了三分钟还没写出东西（最后一行是用户消息或任务通知）、等一个跑了五分钟的工具：都还在这一轮里
+  assert.equal(status([user(start - 180000, 'go')], start), 'running');
+  assert.equal(status([user(start - 400000, 'go'), reply(start - 300000, 'tool_use')], start), 'running');
+  // 按了停止：中断标记就是结尾
+  assert.equal(status([user(start - 20000, 'go'), user(start - 10000, '[Request interrupted by user]')], start), 'idle');
+});
+
 test('a conversation of 200k lines opens without overflowing the stack (no push(...lines))', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'board-long-')), projects = path.join(root, 'claude', 'demo'), runs = path.join(root, 'runs');
   fs.mkdirSync(projects, { recursive: true }); fs.mkdirSync(runs);
