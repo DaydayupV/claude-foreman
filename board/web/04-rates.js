@@ -287,7 +287,10 @@ function sparkline(lane, t, n = 40) {
   t = recordTime(t);
   const runs = lane.runs.filter((r) => r.kind !== 'answer' && at(r, 'started_at') <= t);
   if (!runs.length) return new Array(n).fill(0);
-  const start = Math.min(...runs.map((r) => at(r, 'started_at')));
+  let start = Math.min(...runs.map((r) => at(r, 'started_at')));
+  // 直播时曲线从有速度数据的地方画起：Claude Code 那一行从对话开头算起，但桌面版重启前的先前记录只算了用量、
+  // 没有速度明细，那几天整段画成 0 会让人以为什么都没做
+  if (!replay) { let first = Infinity; for (const s of segments(lane)) if (s.a < first) first = s.a; if (first > start && first < t) start = first; }
   const open = runs.some((r) => at(r, 'ended_at') == null || at(r, 'ended_at') > t);
   const end = open ? t : Math.max(...runs.map((r) => at(r, 'ended_at'))), step = Math.max(1, end - start) / n;
   const segs = open ? null : segments(lane), key = open ? null : `${n}|${start}|${end}|${runs.length}|${replay}`, hit = SPARKS.get(lane);

@@ -250,6 +250,8 @@ const taskLine = (m, { mode = null, title = m?.title, round = m?.round } = {}) =
   ...(moduleOf(m) === 'image' ? [m?.cell, m?.route && `route ${'①②③④'[m.route - 1]}`] : [m?.level]), round > 1 && D.watchRound(round)]);
 const clock = (ms) => {
   const s = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  // 一天以上写成"5d 12h"：132:09:27 夹在 3:30 这种分:秒中间，分不清是小时还是分钟
+  if (s >= 86400) return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
   return `${h ? `${h}:${String(m).padStart(2, '0')}` : m}:${String(s % 60).padStart(2, '0')}`;
 };
 const took = (sec) => (Number.isFinite(sec) ? D.took(D.duration(sec)) : ''); // 旧记录可能没有用时，就不写
