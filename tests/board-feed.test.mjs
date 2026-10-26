@@ -319,6 +319,15 @@ test('the board counts a conversation\'s whole Claude Code usage from the star m
   // 星图读过整份：用量是这个对话的全部，和星图那一行一致
   const whole = [{ id: 'a0', t: 'claude-opus-5-5', u: { in: 10, cached: null, cache_write: null, out: 700 } }, { id: 'a1', t: 'claude-opus-5-5', u: { in: 10, cached: null, cache_write: null, out: 30 } }];
   assert.equal(read({ knownUsage: (id) => (id === 'solo' ? whole : null) }).usage.output, 730);
+  // 闲了很久的对话（最后一次写入在两小时以前）：窗口从最后一次写入往前算半小时，飞进去不是空的，用量仍是全部
+  const idle = path.join(projects, 'idle.jsonl');
+  fs.writeFileSync(idle, [{ type: 'user', timestamp: new Date(start - 3 * 3600000).toISOString(), message: { content: 'go' } },
+    answer('b0', start - 3 * 3600000 + 1000, 500), answer('b1', start - 2 * 3600000 - 60000, 20)].map((r) => JSON.stringify(r)).join('\n') + '\n');
+  fs.utimesSync(idle, new Date(start - 2 * 3600000), new Date(start - 2 * 3600000));
+  const idleRead = (options) => createFeed(runs, { claudeDir: path.dirname(projects), now: () => start, ...options }).read({ session: 'idle' }).runs.find((r) => r.id === 'cc');
+  assert.equal(idleRead({}).usage.output, 20);
+  const idleWhole = [{ id: 'b0', t: 'claude-opus-5-5', u: { in: 10, cached: null, cache_write: null, out: 500 } }, { id: 'b1', t: 'claude-opus-5-5', u: { in: 10, cached: null, cache_write: null, out: 20 } }];
+  assert.equal(idleRead({ knownUsage: (id) => (id === 'idle' ? idleWhole : null) }).usage.output, 520);
   const kept = new Map(), zero = { in: 0, cached: 0, cache_write: 0, out: 0 };
   keepUsage(kept, { id: 'x', u: { in: 1, cached: 2, cache_write: 3, out: 4 } });
   assert.equal(keepUsage(kept, { id: 'x', u: zero }), false); assert.equal(kept.get('x').u.out, 4);
