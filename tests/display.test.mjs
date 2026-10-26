@@ -448,7 +448,7 @@ function displayBoard(lang = 'zh') {
   const page = buildPage(), shared = page.slice(page.indexOf('const Display ='), page.indexOf('// ---- 00-text.js'));
   const names = ['00-text', '01-state', '03-timeline', '04-life', '04-rates', '05-world', '06-states', '06-cards', '07-table', '07-terms', '08-surge', '08-labels'];
   const source = names.map((name) => fs.readFileSync(new URL(`../board/web/${name}.js`, import.meta.url), 'utf8')).join('\n');
-  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, conclusion, painted, outOfScope, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd, onBacklog, SETTLE, settleTerms, ccAway, CC_AWAY, viewAt, beatsAt, trackSurges, surgeAge, SURGE, recentPulses, recentLabels, fmtCost };', context);
+  vm.runInContext(shared + source + '\nglobalThis.api = { Display, B, PANEL, conclusion, painted, outOfScope, onRun, onEv, groupColumn, fillGroup, fillSeat, fillHostSeat, laneStatus, seatStatus, laneElapsed, roundOf, fillCard, renderTable, renderTop, timeline, liveState, termUnits, renderDone, unitFinished, unitEnd, onBacklog, SETTLE, settleTerms, ccAway, CC_AWAY, viewAt, beatsAt, trackSurges, surgeAge, SURGE, recentPulses, recentLabels, fmtCost, outLook, OUT_HANDOFF };', context);
   return { ...context.api, el, context };
 }
 
@@ -600,6 +600,14 @@ test('部分完成、问题、续接、超时和排队共用状态词及计数�
   const queued = Display.seatState({ started_at: 0 }, { status: 'running' }, { queued: true, req: 0 }, 65000);
   assert.equal(queued.style.mark, '⋯'); assert.deepEqual(queued.right, ['queued', '1:05']);
   assert.equal(Display.countsText(['running', 'queued', 'ok', 'partial', 'blocked', 'resumed', 'failed'].map((kind) => ({ kind }))), '●1 ⋯1 ✔1 ◐1 ?1 ↪1 ✗1');
+});
+
+test('an output box grows out of the gathering dot: it starts small and transparent and is full size once the handoff ends', () => {
+  const b = displayBoard(), at = (age) => b.outLook({ phase: 'show', age });
+  b.context.ease = (u) => u * u * (3 - 2 * u); // 和 08-fx.js 的一样（这个测试没载入画布那几份脚本）
+  assert.equal(at(0).a, 0); assert.equal(at(0).s, 0.2);
+  const mid = at(b.OUT_HANDOFF / 2); assert.ok(mid.a > 0.4 && mid.a < 0.6 && mid.s > 0.2 && mid.s < 1);
+  assert.equal(at(b.OUT_HANDOFF).a, 1); assert.equal(at(b.OUT_HANDOFF).s, 1);
 });
 
 test('the top bar says whole conversation on a chosen conversation and recent only on the latest-activity view', () => {
