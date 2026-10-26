@@ -6,6 +6,14 @@ const strings = (v) => typeof v === 'string' ? [v] : v && typeof v === 'object' 
 const flag = (cmd, key) => new RegExp(`--${key}(?:=|\\s+)(?:"([^"]*)"|'([^']*)'|([^\\s;]+))`).exec(cmd)?.slice(1).find((v) => v !== undefined);
 const slash = (v) => String(v).replace(/\\/g, '/');
 
+// 这一行是不是 Claude Code 这一轮的结尾：回复写完（end_turn），或者用户按了停止（中断标记）。
+// 没结尾时 Claude Code 还在这一轮里（在想、在等工具、被任务通知叫醒），哪怕好一阵没写新记录——它要等整块想完才落盘
+export const BUSY_MAX = 10 * 60000; // 没结尾的一轮最多算这么久（中途关掉应用、记录停在半截时，过了这么久算闲下来）
+export function turnEnded(row) {
+  if (row.type === 'assistant') return row.message?.stop_reason === 'end_turn';
+  return row.type === 'user' && /^\[Request interrupted by user[^\]]*\]$/.test(text(row.message?.content).trim());
+}
+
 export function promptOf(row) {
   // 上下文压缩后的摘要也记成用户消息，不算
   if (row.isSidechain || row.isCompactSummary || row.type !== 'user') return null;
@@ -78,7 +86,7 @@ export function createTranscriptParser(ctx) {
   const byId = new Map(runs.map((r) => [r.id, r])), runIds = new Set(ctx.runIds || byId.keys());
   const lane = (id) => { const seen = new Set(); let r = byId.get(id); while (r?.meta.parent && byId.has(r.meta.parent) && !seen.has(r.id) && r.meta.participant !== 'host') { seen.add(r.id); r = byId.get(r.meta.parent); } return r ? r.meta.participant === 'host' ? 'cc' : r.lane || r.id : null; };
   const targets = (ids) => [...new Set(ids.filter((id) => runIds.has(id)).map(lane).filter(Boolean))];
-  const meta = { title: null, model: null, session: null, cwd: ctx.cwd, started_at: null, latest_at: null, usage: { input: null, cached: null, cache_write: null, output: null } };
+  const meta = { title: null, model: null, session: null, cwd: ctx.cwd, started_at: null, latest_at: null, ended: false, usage: { input: null, cached: null, cache_write: null, output: null } };
   const filePath = (file) => {
     const p = /^[A-Za-z]:[\\/]/.test(meta.cwd || file) ? path.win32 : path.posix;
     const absolute = meta.cwd ? p.resolve(meta.cwd, file) : file;
@@ -92,7 +100,7 @@ export function createTranscriptParser(ctx) {
     if (row.isSidechain) return;
     if (row.type === 'custom-title') { meta.title = row.customTitle; return; }
     if (!['assistant', 'user'].includes(row.type) || !Number.isFinite(Date.parse(row.timestamp))) return;
-    meta.started_at ??= Date.parse(row.timestamp); meta.latest_at = Date.parse(row.timestamp);
+    meta.started_at ??= Date.parse(row.timestamp); meta.latest_at = Date.parse(row.timestamp); meta.ended = turnEnded(row);
     cwdChanged ||= row.cwd != null && row.cwd !== meta.cwd;
     meta.cwd = row.cwd ?? meta.cwd; meta.session = row.sessionId ?? meta.session;
     if (row.type === 'assistant') {

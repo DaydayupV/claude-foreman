@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseTranscriptLines, createTranscriptParser, plainCommand } from './claude-feed.mjs';
+import { parseTranscriptLines, createTranscriptParser, plainCommand, BUSY_MAX } from './claude-feed.mjs';
 import { priceFor, costOf } from '../prices.mjs';
 import { roundOf, resultOutcome, realErrors, reviewFinding, reviewCounts, current, queuedStarted } from '../display.mjs';
 import { queuedRuns, CLAUDE_SESSION } from '../records.mjs';
@@ -569,7 +569,8 @@ export function createFeed(root, options = {}) {
       cost = tail.wholeCost.cost; costPartial = tail.wholeCost.partial;
     }
     data.runs.push({ id: 'cc', lane: 'cc', kind: 'host', agent: 'claude code', agent_type: 'host', model: m.model, session: m.session || path.basename(file, '.jsonl'), title: m.title, cwd: m.cwd,
-      status: params.replay != null || now - Math.max(m.latest_at, tail.appendedAt ?? -Infinity) < 90000 ? 'running' : 'idle', started_at: started, ended_at: null, usage, ...costFields(cost, cost == null ? 'unknown' : 'api_price'), ...(costPartial && cost != null ? { cost_partial: true } : {}) });
+      // 这一轮还没结尾就算在干活（在想、在等工具、被任务通知叫醒），不看多久没写记录；结尾了马上算闲，和星图一样
+      status: params.replay != null || !m.ended && now - Math.max(m.latest_at, tail.appendedAt ?? -Infinity) < BUSY_MAX ? 'running' : 'idle', started_at: started, ended_at: null, usage, ...costFields(cost, cost == null ? 'unknown' : 'api_price'), ...(costPartial && cost != null ? { cost_partial: true } : {}) });
     append(data.events, parsed.events); data.versions.cc = `${file}:${tail.version}`; data.revisions.cc = '';
     data.hostEnd = session ? m.latest_at : end; return data;
   };

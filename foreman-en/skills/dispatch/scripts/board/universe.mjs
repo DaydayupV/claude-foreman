@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { promptOf, toolsOf } from './claude-feed.mjs';
+import { promptOf, toolsOf, turnEnded, BUSY_MAX } from './claude-feed.mjs';
 import { queuedRuns } from '../records.mjs';
 import { resultOutcome } from '../display.mjs';
 import { ms, transient, stat, json, newTail, readLines, append, runMessage, laneOf, settleRun,
@@ -120,7 +120,7 @@ function entryOf(row) {
   const at = ms(row.timestamp);
   if (!Number.isFinite(at)) return null;
   const message = row.message || {}, u = message.usage, tools = toolsOf(row), prompt = promptOf(row);
-  return { type: row.type, at, cwd: row.cwd, model: message.model, stop: message.stop_reason,
+  return { type: row.type, at, cwd: row.cwd, model: message.model, stop: message.stop_reason, ended: turnEnded(row),
     prompt: !!prompt, firstPrompt: prompt?.slice(0, 60), ...tools,
     messageId: row.type === 'assistant' ? message.id : null,
     usage: row.type === 'assistant' && message.id && u ? { id: message.id, ts: at, t: message.model,
@@ -135,7 +135,7 @@ function addEntry(session, entry) {
   const at = entry.at;
   if (!Number.isFinite(at)) return;
   session.started_at = Math.min(session.started_at ?? at, at);
-  if (session.last_at == null || at >= session.last_at) { session.last_at = at; session.last = { type: entry.type, stop: entry.stop }; }
+  if (session.last_at == null || at >= session.last_at) { session.last_at = at; session.last = { type: entry.type, stop: entry.stop, ended: entry.ended }; }
   if (entry.cwd && at >= session.cwdAt) { session.cwd = entry.cwd; session.cwdAt = at; }
   if (entry.cwd && at < session.rootAt) { session.root = entry.cwd; session.rootAt = at; }
   // <synthetic> 是 Claude Code 自己补的零用量回复的占位名，不当成对话用的模型
@@ -163,8 +163,8 @@ export function stateOf(session, runs, now, queued = []) {
   const tools = [...session.tools.values()], waiting = tools.find((t) => ['AskUserQuestion', 'ExitPlanMode'].includes(t.tool)) || null;
   // 等待用户优先于派发；end_turn 只关闭最近消息带来的思考状态。
   const state = waiting ? 'waiting' : queued.length || runs.some((r) => r.status === 'running') ? 'dispatching'
-    : now - session.last_at < 90000 && !(session.last?.type === 'assistant' && session.last.stop === 'end_turn')
-      || tools.some((t) => now - t.since < 600000) ? 'thinking' : 'idle';
+    // 这一轮没结尾（最后一行不是写完的回复、也不是中断标记）就算在想，不看多久没写记录：Claude Code 要等整块想完才落盘
+    : !session.last?.ended && now - session.last_at < BUSY_MAX || tools.some((t) => now - t.since < 600000) ? 'thinking' : 'idle';
   return { state, waiting };
 }
 // 输入和输出都明确是 0（一次请求都没完成）；没报用量的不算（和 board/web/04-rates.js 同一条规则）
