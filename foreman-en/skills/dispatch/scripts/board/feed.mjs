@@ -496,8 +496,12 @@ export function createFeed(root, options = {}) {
     if (previous && read.lines.some((r) => !r.isSidechain && ['user', 'assistant'].includes(r.type))) tail.appendedAt = now;
     const initial = tail.count ?? 0; tail.count = initial + read.lines.length;
     let window = recentWindows.get(file);
-    // 首次取最近半小时，此后保留追加记录，不让窗口滑动丢掉会话用量。
-    if (recent && (!window || window.version !== tail.version)) { window = { from: now - 1800000, to: now, initial: tail.count, version: tail.version }; recentWindows.set(file, window); }
+    // 首次取最后半小时的动静，此后保留追加记录，不让窗口滑动丢掉会话用量。半小时从这份记录最后一次写入往前算，
+    // 不从现在：闲了很久的对话飞进去也能看到它最后那段，不是一片空（用量照样是整个对话的，见下面的 whole）
+    if (recent && (!window || window.version !== tail.version)) {
+      const last = Math.min(now, stat(file)?.mtimeMs ?? now);
+      window = { from: last - 1800000, to: now, initial: tail.count, version: tail.version }; recentWindows.set(file, window);
+    }
     const replay = session && params.replay != null;
     let firstAt = Infinity, lastAt = -Infinity, openEnd = false;
     for (const run of runs) { const ended = ms(run.meta.ended_at); firstAt = Math.min(firstAt, ms(run.meta.started_at)); lastAt = Math.max(lastAt, ended ?? now); openEnd ||= ended == null; }
