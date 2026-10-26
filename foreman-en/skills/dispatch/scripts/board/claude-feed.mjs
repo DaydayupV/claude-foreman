@@ -96,7 +96,8 @@ export function createTranscriptParser(ctx) {
     cwdChanged ||= row.cwd != null && row.cwd !== meta.cwd;
     meta.cwd = row.cwd ?? meta.cwd; meta.session = row.sessionId ?? meta.session;
     if (row.type === 'assistant') {
-      meta.model = row.message.model ?? meta.model;
+      // <synthetic> 是 Claude Code 自己补的零用量回复（API 出错、被打断时）的占位名，不是模型
+      if (row.message.model !== '<synthetic>') meta.model = row.message.model ?? meta.model;
       if (row.message.id) { const old = last.get(row.message.id); if (old) removed.add(old); last.delete(row.message.id); }
     }
     const emit = (k, fields = {}) => { const ev = { run: 'cc', lane: 'cc', ts: Date.parse(row.timestamp), k, ...fields }; if (!ev.target?.length) delete ev.target; if (ev.t != null) ev.t = label(ev.t); events.push(ev); return ev; };

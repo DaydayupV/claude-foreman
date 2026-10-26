@@ -138,7 +138,8 @@ function addEntry(session, entry) {
   if (session.last_at == null || at >= session.last_at) { session.last_at = at; session.last = { type: entry.type, stop: entry.stop }; }
   if (entry.cwd && at >= session.cwdAt) { session.cwd = entry.cwd; session.cwdAt = at; }
   if (entry.cwd && at < session.rootAt) { session.root = entry.cwd; session.rootAt = at; }
-  if (entry.type === 'assistant' && entry.model && at >= session.modelAt) { session.model = entry.model; session.modelAt = at; }
+  // <synthetic> 是 Claude Code 自己补的零用量回复的占位名，不当成对话用的模型
+  if (entry.type === 'assistant' && entry.model && entry.model !== '<synthetic>' && at >= session.modelAt) { session.model = entry.model; session.modelAt = at; }
   if (entry.prompt) { session.firstPrompt ??= entry.firstPrompt; session.promptAt = Math.max(session.promptAt, at); }
   for (const tool of entry.uses || []) session.tools.set(tool.id, { tool: tool.tool, since: at, header: tool.header });
   for (const id of entry.results || []) session.tools.delete(id);

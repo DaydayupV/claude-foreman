@@ -90,7 +90,7 @@ function renderTable(t) {
   if (total.dataset.sig !== sig) {
     total.dataset.sig = sig;
     total.innerHTML = '';
-    const cells = ['', 'total', `${lanes.length} lanes`, `≈ ${Math.round(tot.rate)}`, '', '', !tot.usage_unattributed && tot.input ? `${fmtTok(tot.input)} · ${Math.round((100 * tot.cached) / tot.input)}%` : '—', tot.usage_unattributed ? '—' : fmtTok(tot.output), fmtCost(tot.cost, tot.partial), ''];
+    const cells = ['', 'total', `${lanes.length} lanes`, `≈ ${Math.round(tot.rate)}`, '', '', !tot.usage_unattributed && tot.input ? `${fmtTok(tot.input)} · ${Math.round((100 * tot.cached) / tot.input)}%` : '—', tot.usage_unattributed || !tot.output ? '—' : fmtTok(tot.output), fmtCost(tot.cost, tot.partial), ''];
     for (const x of cells) { const s = document.createElement('span'); s.textContent = x; total.append(s); }
     total.children[8].title = TEXT.costTitle;
     total.children[7].title = tot.usage_unattributed ? TEXT.usageUnattributed : '';
@@ -155,7 +155,7 @@ function sparkSvg(cell, pts) {
 
 function renderTop(t) {
   const c = B.clock, p = B.params;
-  setText($('scope'), c.mode === 'replay' ? `replay · ${p.replay} · ×${c.speed}` : p.group ? `group · ${p.group}` : p.run ? `run · ${p.run}` : 'live · recent');
+  setText($('scope'), c.mode === 'replay' ? `replay · ${p.replay} · ×${c.speed}` : p.group ? `group · ${p.group}` : p.run ? `run · ${p.run}` : p.session ? 'live · whole conversation' : 'live · recent');
   const pct = c.mode === 'replay' ? Math.round(((t - c.start) / Math.max(1, c.end - c.start)) * 100) : null;
   setText($('clock'), `${new Date(Display.recordedTime(t, displayPoints())).toTimeString().slice(0, 8)}${pct != null ? ` · ${pct}% · ${TEXT.replayEstimate}` : ''}`);
   $('progress').style.width = pct != null ? `${pct}%` : '0';
