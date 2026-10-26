@@ -134,14 +134,16 @@ test('a window rebuild leaves concurrent appends for the next tail read without 
   assert.deepEqual(messages(), ['one', 'two']);
 });
 
-test('window cache keys distinguish invalid starts from an unbounded session window', (t) => {
+test('a conversation board reads its whole transcript even when a task start is invalid, live and in replay', (t) => {
   const f = temp(t), dir = path.join(f.runs, 'work'); fs.mkdirSync(dir);
   fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ status: 'done', started_at: 'invalid', ended_at: base, claude_session: 's' }));
   write(f.file, [row('one', 0, [{ type: 'text', text: 'one' }])]);
   const feed = createFeed(f.runs, { transcript: f.file });
-  assert.equal(feed.read({ session: 's' }, base).runs.some((r) => r.id === 'cc'), false);
-  assert.deepEqual(feed.read({ session: 's', replay: 's' }, base).events.filter((e) => e.run === 'cc').map((e) => e.t), ['one']);
-  assert.equal(feed.read({ session: 's' }, base).runs.some((r) => r.id === 'cc'), false);
+  // 选了对话的看板是整个对话：任务的开始时间写坏了也不影响 Claude Code 那一行
+  const cc = (params) => feed.read(params, base).events.filter((e) => e.run === 'cc').map((e) => e.t);
+  assert.deepEqual(cc({ session: 's' }), ['one']);
+  assert.deepEqual(cc({ session: 's', replay: 's' }), ['one']);
+  assert.deepEqual(cc({ session: 's' }), ['one']);
 });
 
 test('an open group rebuilds when an invalid end becomes a valid cutoff', (t) => {

@@ -600,8 +600,9 @@ test('review 3: live session keeps current and appended activity beyond the run 
   fs.appendFileSync(file, JSON.stringify(row('user', now + 600000, 'appended')) + '\n');
   assert.deepEqual(prompts({ session: 's' }), ['before', 'current', 'appended']);
   assert.deepEqual(prompts({ group: 'g' }), ['before']); assert.deepEqual(prompts({ run: 'work' }), ['before']);
-  f.session('no-runs', [row('user', now - 1800001, 'too early'), row('user', now + 1, 'open end')]);
-  assert.deepEqual(prompts({ session: 'no-runs' }), ['open end']);
+  // 没有任务的对话也是整个对话（半小时窗口只给没选对话的"最近动静"视图）
+  f.session('no-runs', [row('user', now - 1800001, 'early'), row('user', now + 1, 'open end')]);
+  assert.deepEqual(prompts({ session: 'no-runs' }), ['early', 'open end']);
 });
 
 test('review 4: session replay includes the entire transcript with a finite idle time, with or without runs', (t) => {

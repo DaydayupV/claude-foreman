@@ -270,7 +270,7 @@ test('replay can name a Claude Code session: every run that conversation dispatc
   assert.equal(selectScope(runs, { replay: 'g2' }, 0).scope.kind, 'group');
 });
 
-test('explicit session isolates runs and selects its transcript without runs, retaining live appends', (t) => {
+test('explicit session isolates runs and selects its whole transcript without runs, retaining live appends', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'board-session-')), projects = path.join(root, 'claude', 'demo'), runs = path.join(root, 'runs');
   fs.mkdirSync(projects, { recursive: true }); fs.mkdirSync(runs);
   t.after(() => { assert.equal(path.dirname(root), os.tmpdir()); fs.rmSync(root, { recursive: true, force: true }); });
@@ -279,7 +279,8 @@ test('explicit session isolates runs and selects its transcript without runs, re
   fs.writeFileSync(file, [make(start - 1800001, 'old'), make(start - 1800000, 'boundary'), make(start, 'now')].map(JSON.stringify).join('\n') + '\n');
   fs.writeFileSync(path.join(projects, 'other.jsonl'), JSON.stringify(make(start, 'other')) + '\n');
   const feed = createFeed(runs, { claudeDir: path.dirname(projects), now: () => start });
-  assert.deepEqual(feed.read({ session: 's' }).events.map((e) => e.t), ['boundary', 'now']);
+  // 选了对话就是整个对话，没有任务也不按半小时截
+  assert.deepEqual(feed.read({ session: 's' }).events.map((e) => e.t), ['old', 'boundary', 'now']);
   fs.appendFileSync(file, JSON.stringify(make(start - 2000000, 'appended')) + '\n');
   assert.equal(feed.read({ session: 's' }, start + 1000).events.at(-1).t, 'appended');
   assert.deepEqual(feed.read({ session: 's', replay: 's' }).scope, { kind: 'session', value: 's' });
@@ -301,12 +302,14 @@ test('a resumed conversation counts the Claude Code usage of its earlier transcr
   // 再早一份：m0 也抄进了 old，只有 m00 是新增的；先前几份之间重复的也只算一次
   fs.writeFileSync(path.join(projects, 'older.jsonl'), [answer('m00', start - 190000, 500), answer('m0', start - 90000, 300)].map((r) => JSON.stringify(r)).join('\n') + '\n');
   assert.equal(read({ conversation: () => new Set(['new', 'old', 'older']) }).usage.output, 940);
+  // 时长列和时间轴从最早那份先前记录开始
+  assert.equal(read({ conversation: () => new Set(['new', 'old', 'older']) }).started_at, start - 190000);
   // 星图已经读过的记录借星图的（这里故意给不同的数，证明没再读 old.jsonl），没读过的照旧读文件
   const borrowed = [{ id: 'm9', ts: start - 50000, t: 'claude-opus-5-5', u: { in: 1, cached: null, cache_write: null, out: 1000 } }];
   assert.equal(read({ conversation: () => new Set(['new', 'old', 'older']), knownUsage: (id) => (id === 'old' ? borrowed : null) }).usage.output, 1940);
 });
 
-test('the board counts a conversation\'s whole Claude Code usage from the star map\'s reading, even without tasks; a zero-usage copy never replaces the real one', (t) => {
+test('a conversation board without tasks covers the whole conversation (usage and start), also from the star map\'s reading; a zero-usage copy never replaces the real one', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'board-whole-')), projects = path.join(root, 'claude', 'demo'), runs = path.join(root, 'runs');
   fs.mkdirSync(projects, { recursive: true }); fs.mkdirSync(runs);
   t.after(() => { assert.equal(path.dirname(root), os.tmpdir()); fs.rmSync(root, { recursive: true, force: true }); });
@@ -314,18 +317,18 @@ test('the board counts a conversation\'s whole Claude Code usage from the star m
   fs.writeFileSync(path.join(projects, 'solo.jsonl'), [{ type: 'user', timestamp: new Date(start - 3600000).toISOString(), message: { content: 'go' } },
     answer('a0', start - 3500000, 700), answer('a1', start - 60000, 30)].map((r) => JSON.stringify(r)).join('\n') + '\n');
   const read = (options) => createFeed(runs, { claudeDir: path.dirname(projects), now: () => start, ...options }).read({ session: 'solo' }).runs.find((r) => r.id === 'cc');
-  // 没有任务的对话，时间线只取最近半小时；星图没读过这份记录时用量也只有这半小时
-  assert.equal(read({}).usage.output, 30);
-  // 星图读过整份：用量是这个对话的全部，和星图那一行一致
+  // 没有任务的对话也读整份记录：用量是全部，开始时间是对话开头（时长列从这里算）
+  assert.equal(read({}).usage.output, 730); assert.equal(read({}).started_at, start - 3600000);
+  // 星图读过整份时用星图的读数，结果一样
   const whole = [{ id: 'a0', t: 'claude-opus-5-5', u: { in: 10, cached: null, cache_write: null, out: 700 } }, { id: 'a1', t: 'claude-opus-5-5', u: { in: 10, cached: null, cache_write: null, out: 30 } }];
   assert.equal(read({ knownUsage: (id) => (id === 'solo' ? whole : null) }).usage.output, 730);
-  // 闲了很久的对话（最后一次写入在两小时以前）：窗口从最后一次写入往前算半小时，飞进去不是空的，用量仍是全部
+  // 闲了很久的对话（最后一次写入在两小时以前）：飞进去不是空的，用量是全部
   const idle = path.join(projects, 'idle.jsonl');
   fs.writeFileSync(idle, [{ type: 'user', timestamp: new Date(start - 3 * 3600000).toISOString(), message: { content: 'go' } },
     answer('b0', start - 3 * 3600000 + 1000, 500), answer('b1', start - 2 * 3600000 - 60000, 20)].map((r) => JSON.stringify(r)).join('\n') + '\n');
   fs.utimesSync(idle, new Date(start - 2 * 3600000), new Date(start - 2 * 3600000));
   const idleRead = (options) => createFeed(runs, { claudeDir: path.dirname(projects), now: () => start, ...options }).read({ session: 'idle' }).runs.find((r) => r.id === 'cc');
-  assert.equal(idleRead({}).usage.output, 20);
+  assert.equal(idleRead({}).usage.output, 520);
   const idleWhole = [{ id: 'b0', t: 'claude-opus-5-5', u: { in: 10, cached: null, cache_write: null, out: 500 } }, { id: 'b1', t: 'claude-opus-5-5', u: { in: 10, cached: null, cache_write: null, out: 20 } }];
   assert.equal(idleRead({ knownUsage: (id) => (id === 'idle' ? idleWhole : null) }).usage.output, 520);
   const kept = new Map(), zero = { in: 0, cached: 0, cache_write: 0, out: 0 };
