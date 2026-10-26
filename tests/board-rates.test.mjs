@@ -384,6 +384,13 @@ test('速度曲线画这条车道的全部时长，结束以后停住不再往�
   assert.deepEqual(Array.from(idle.sparkline(later, 30000, 3)), [0, 0, 0]);
 });
 
+test('the curve starts where rate data starts, not at a lane start long before it (earlier transcripts have no rate data)', () => {
+  const b = board(), l = lane(b, 'cc', [[100000, 'turn'], [140000, 'usage', { u: { out: 400 } }]], { started_at: 0, status: 'done', ended_at: 140000 });
+  const points = Array.from(b.sparkline(l, 150000, 4));
+  // 从 0 画起的话前两个点（35、70 秒）是 0；现在四个点都落在有数据的 100–140 秒里
+  assert.ok(points.every((v) => v > 0), points.join(','));
+});
+
 test('命令时段的重叠判断用二分查找，和逐个比较的结果一致', () => {
   const b = board();
   let seed = 7;

@@ -461,6 +461,9 @@ test('the cost column shows ? on a finished row whose cost is unknown (where the
 test('构建内联可调用的纯显示函数，老格式 run 消息仍能渲染', () => {
   const b = displayBoard();
   assert.equal(b.Display.clock(65000), '1:05');
+  // 一天以上写成天和小时：132:09:27 夹在分:秒中间分不清
+  assert.equal(b.Display.clock(86399000), '23:59:59'); assert.equal(b.Display.clock(86400000), '1d 0h');
+  assert.equal(b.Display.clock((132 * 3600 + 9 * 60 + 27) * 1000), '5d 12h');
   assert.equal(b.Display.D.conversation('test'), 'this conversation · test');
   assert.equal(b.Display.usageLine({}, { participant: 'host' }), D.watchHostNoUsage);
   const r = { id: 'legacy', model: 'old', kind: 'exec', started_at: 0, ended_at: 65000, status: 'done', report_head: 'old summary', usage: { input: 100, cached: 20, output: 3 } };
