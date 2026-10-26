@@ -78,12 +78,15 @@ function verdictCounts(laneId, t) {
 // 各阶段的 age 是屏幕秒，grow 是汇聚了多久（0–1，按记录时间，一分钟左右接近满）。
 const OUT_MIN_SHOW = 1.6; // 框至少完整显示这么多屏幕秒才收起（结果一交回马上被读走时也看得到）
 const OUT_COLLAPSE = 1.4;
+const OUT_HANDOFF = 0.55; // 屏幕秒：光团交接给产出框（光团淡掉、框从光团的位置长出来）
 
 function lifeState(E, O, read, t) {
   if (O === Infinity) return { phase: 'gather', from: E, grow: 1 - Math.exp(-(t - E) / 60000) };
-  if (read === Infinity) return { phase: 'show', from: E, age: secSince(O, t) };
+  // show 带上框出现那一刻光团长到多大（08-outlife.js 的交接：光团一边淡掉、一边收进框里）
+  const grow = 1 - Math.exp(-(O - E) / 60000);
+  if (read === Infinity) return { phase: 'show', from: E, age: secSince(O, t), grow };
   const c = secSince(read, t) - Math.max(0, OUT_MIN_SHOW - secSince(O, read));
-  if (c < 0) return { phase: 'show', from: E, age: secSince(O, t) };
+  if (c < 0) return { phase: 'show', from: E, age: secSince(O, t), grow };
   return c < OUT_COLLAPSE ? { phase: 'collapse', from: E, to: read, age: c } : { phase: 'gone', from: E };
 }
 
@@ -203,9 +206,9 @@ function ccLife(t) {
   if (gap) {
     const after = firstOut(gap.since, t);
     if (after === Infinity) return laneActive(cc, t) ? { phase: 'gather', from: gap.since, grow: 1 - Math.exp(-(t - gap.until) / 60000) } : { phase: 'none', from: last.ts };
-    return { phase: 'show', from: gap.since, age: secSince(after, t) };
+    return { phase: 'show', from: gap.since, age: secSince(after, t), grow: 1 - Math.exp(-(after - gap.until) / 60000) };
   }
-  return { phase: 'show', from: last.ts, age: secSince(O, t) };
+  return { phase: 'show', from: last.ts, age: secSince(O, t), grow: 1 - Math.exp(-(O - last.ts) / 60000) };
 }
 // 这一段（from 之后）里最近一次安静满 CC_QUIET、后来又有了动静的空档：since 是空档前最后一次动静，until 是空档后的第一次；没有为 null
 function ccQuietGap(cc, from, t) {
@@ -221,7 +224,8 @@ function ccQuietGap(cc, from, t) {
 
 // 框的透明度和缩放：展开时从光团里长出来，收起时缩回一颗光点
 function outLook(life) {
-  if (life.phase === 'show') { const m = clamp01(life.age / 0.45); return { a: m, s: 0.35 + 0.65 * ease(m) }; }
+  // 框从光团的位置长出来（board.css 里 .outbox 的 transform-origin 对着光团），和光团淡掉同时进行
+  if (life.phase === 'show') { const m = clamp01(life.age / OUT_HANDOFF); return { a: m, s: 0.2 + 0.8 * ease(m) }; }
   if (life.phase === 'collapse') { const m = clamp01(life.age / 0.35); return { a: 1 - m, s: 1 - 0.8 * m }; }
   return { a: 0, s: 0.35 };
 }

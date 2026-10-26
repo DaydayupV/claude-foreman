@@ -11,14 +11,24 @@ const clusterR = (grow) => 3 + 10 * grow;
 // 一团正在汇聚的光：柔光、亮核、绕圈的小光点
 function drawCluster(x, y, grow, color, seed) {
   const r = clusterR(grow) * FX.lw, sec = performance.now() / 1000, rand = rng(seed);
-  const g = ctx.createRadialGradient(x, y, 0, x, y, r * 3.2);
-  g.addColorStop(0, color(0.5 + 0.3 * grow)); g.addColorStop(0.3, color(0.18 + 0.12 * grow)); g.addColorStop(1, color(0));
-  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r * 3.2, 0, 6.283); ctx.fill();
-  ctx.fillStyle = HI(0.85); ctx.beginPath(); ctx.arc(x, y, r * 0.35, 0, 6.283); ctx.fill();
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r * 2.8);
+  g.addColorStop(0, color(0.3 + 0.2 * grow)); g.addColorStop(0.3, color(0.1 + 0.08 * grow)); g.addColorStop(1, color(0));
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r * 2.8, 0, 6.283); ctx.fill();
+  ctx.fillStyle = HI(0.7); ctx.beginPath(); ctx.arc(x, y, r * 0.35, 0, 6.283); ctx.fill();
   for (let i = 0, n = 5 + Math.round(9 * grow); i < n; i++) {
     const ang = rand() * 6.283 + sec * (0.6 + rand() * 0.9) * (i % 2 ? 1 : -1), d = r * (0.9 + rand() * 1.6);
-    glowDot(x + Math.cos(ang) * d, y + Math.sin(ang) * d * 0.7, 0.9 + rand() * 0.7, color, 0.5 + 0.5 * rand());
+    glowDot(x + Math.cos(ang) * d, y + Math.sin(ang) * d * 0.7, 0.9 + rand() * 0.7, color, 0.3 + 0.35 * rand());
   }
+}
+
+// 交接：框出现时光团不一下子消失，一边淡掉一边缩进框的左边（框同时从这里长出来，04-life.js 的 outLook）
+function drawHandoff(box, life, color, seed) {
+  const u = clamp01(life.age / OUT_HANDOFF);
+  if (u >= 1) return;
+  const e = ease(u), ga = ctx.globalAlpha;
+  ctx.globalAlpha = ga * (1 - e);
+  drawCluster(...anchorOf(box), (life.grow ?? 0.5) * (1 - 0.7 * e), color, seed);
+  ctx.globalAlpha = ga;
 }
 
 // 亮框从光团撑开到框的大小
@@ -57,7 +67,7 @@ function drawOutLife(L, P, t) {
     const life = outLife(lane, t), color = tintOf(lane.id), box = row.out;
     ctx.globalAlpha = row.vis;
     if (life.phase === 'gather') drawCluster(...anchorOf(box), life.grow, color, lane.seed);
-    else if (life.phase === 'show') drawUnfold(box, life.age, color);
+    else if (life.phase === 'show') { drawHandoff(box, life, color, lane.seed); drawUnfold(box, life.age, color); }
     else if (life.phase === 'collapse') {
       // 飞回 Claude Code 卡片：先往左上绕过刻度带，再落到卡片右边
       const c = [box.x + box.w / 2, box.y + box.h / 2];
@@ -67,7 +77,7 @@ function drawOutLife(L, P, t) {
   ctx.globalAlpha = L.ccDim; // 席位的产出框滚过来时，Claude Code 的产出框连同光效一起变暗
   const life = ccLife(t), box = L.ccOut, color = tintOf('cc');
   if (life.phase === 'gather') drawCluster(...anchorOf(box), life.grow, color, 77);
-  else if (life.phase === 'show') drawUnfold(box, life.age, color);
+  else if (life.phase === 'show') { drawHandoff(box, life, color, 77); drawUnfold(box, life.age, color); }
   else if (life.phase === 'collapse') {
     const c = [box.x + box.w / 2, box.y + box.h / 2], top = (L.vis ? L.vis.top : 0) - 80;
     // 建计划时化成拉起席位的光、安静收起时就地散开；用户发下一条消息时往上飞走
@@ -78,7 +88,7 @@ function drawOutLife(L, P, t) {
 
 // 粒子通道收在哪里：框在时收进框的左边（整个高度），框不在时收进那团光
 function outTarget(box, life) {
-  if (life.phase === 'show') return { x: box.x - 1, y: box.y + box.h / 2, half: box.h / 2 - 2, box: true };
+  if (life.phase === 'show') return { x: box.x + 2, y: box.y + box.h / 2, half: box.h / 2 - 2, box: true };
   const [x, y] = anchorOf(box);
   return { x, y, half: clusterR(life.grow || 0.3) * 0.8, box: false };
 }

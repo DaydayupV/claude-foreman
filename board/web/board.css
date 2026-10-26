@@ -153,7 +153,8 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 #world.lod2 .card .think { font-size: 3.8px; }
 
 /* 产出框：和对应卡片同一行、同样高 */
-.outbox { width: 184px; height: 44px; overflow: hidden; padding: 3px 6px; color: var(--mid); --cs: 6px; --cc: color-mix(in srgb, var(--tint, #96a5e1) 55%, transparent); z-index: 1; }
+/* 出现时从光团的位置长出来：光团在框左边往里 18px 的中线上（08-outlife.js 的 anchorOf） */
+.outbox { transform-origin: 18px 50%; width: 184px; height: 44px; overflow: hidden; padding: 3px 6px; color: var(--mid); --cs: 6px; --cc: color-mix(in srgb, var(--tint, #96a5e1) 55%, transparent); z-index: 1; }
 .outbox.cc { z-index: 0; }
 .outbox h4 { margin: 0 0 2px; letter-spacing: .1em; color: var(--dim); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .outbox .f { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
