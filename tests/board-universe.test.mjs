@@ -873,8 +873,11 @@ test('conversations archived or deleted in the desktop app are left out of the u
   f.write(path.join(account, 'local_3.json'), '{"cliSessionId": "keep", "isArch');
   const ids = (options) => createUniverse(options).read().sessions.map((s) => s.id).sort();
   assert.deepEqual(ids({ ...f.options, desktopRoots: roots }), ['keep']);
+  // 桌面版列表里没有、但派过任务的对话照列（终端里的 claude 和桌面版混用时，不然它的看板链接飞不进去）
+  f.session('terminal', [row('user', now - 40000, 'terminal')]); f.run('term-run', { claude_session: 'terminal' });
+  assert.deepEqual(ids({ ...f.options, desktopRoots: roots }), ['keep', 'terminal']);
   // 找不到桌面版的数据目录时全部照列
-  assert.deepEqual(ids(f.options), ['archived', 'cli-only', 'deleted', 'keep']);
+  assert.deepEqual(ids(f.options), ['archived', 'cli-only', 'deleted', 'keep', 'terminal']);
   // 在桌面版里取消归档：下一次重列时回来；元数据没变的文件不重读，5 秒内不重列
   let clock = 0;
   const hidden = desktopHidden(roots, () => clock);
@@ -1047,6 +1050,22 @@ test('desktop grandchildren use the root metadata directory even when neither an
     assert.deepEqual(data.sessions.map((s) => [s.id, s.parent, s.project]), [['grandchild', 'child', repo.replace(/\\/g, '/').toLowerCase()]]);
     assert.deepEqual(data.projects.map((p) => p.cwd), [repo]);
   }
+});
+
+test('parent links follow the shown record when a conversation switched session ids before its new record was written', (t) => {
+  const f = temp(t), parentRepo = path.join(f.root, 'parent-repo'), childRepo = path.join(f.root, 'child-repo');
+  for (const repo of [parentRepo, childRepo]) f.write(path.join(repo, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  const roots = [path.join(f.root, 'desktop', 'claude-code-sessions')], account = path.join(roots[0], 'org', 'account');
+  const key = (cwd) => cwd.replace(/\\/g, '/').toLowerCase();
+  // 只有先前的记录：child-old、parent-old；元数据里都已经换成新 id
+  f.session('parent-old', [{ ...row('user', now - 40000, 'parent'), cwd: parentRepo }], 'parent');
+  f.session('child-old', [{ ...row('user', now - 30000, 'child'), cwd: childRepo }], 'child');
+  f.write(path.join(account, 'local_parent.json'), { sessionId: 'local_parent', cliSessionId: 'parent-new', priorCliSessionIds: ['parent-old'], originCwd: parentRepo });
+  f.write(path.join(account, 'local_child.json'), { sessionId: 'local_child', cliSessionId: 'child-new', priorCliSessionIds: ['child-old'], spawnedFrom: { sessionId: 'local_parent' }, originCwd: childRepo });
+  const data = createUniverse({ ...f.options, desktopRoots: roots }).read(), child = data.sessions.find((s) => s.id === 'child-old');
+  assert.deepEqual(data.sessions.map((s) => s.id).sort(), ['child-old', 'parent-old']);
+  assert.equal(child.parent, 'parent-old');
+  assert.equal(child.project, key(parentRepo));
 });
 
 test('lineageDetached makes a desktop child top-level and its descendants follow that new root', (t) => {

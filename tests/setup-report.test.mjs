@@ -170,6 +170,14 @@ test('环境故障逐项输出 fix，API 变量只显示名字，未使用 Codex
   has(r.stdout, ['❌ Node.js：node fix', '⚠ Git：git fix', '⚠ 实时查看：watch fix', '| Codex | 已安装，没登录 |', '| opencode | 没装 |', '检测到 KIMI_API_KEY、MIMO_API_KEY']); assert.equal(r.stdout.includes('unused sandbox'), false);
 });
 
+test('没有在用的 Codex 协作方时，环境一节不说沙箱正常', async (t) => {
+  const h = sandbox(t), c = baseConfig();
+  for (const module of ['discuss', 'run', 'review']) for (const cell of ['simple', 'normal', 'complex']) c.modules[module][cell] = 'claude code';
+  c.modules.image = { generate: null, draw: null }; h.config(c);
+  const r = await h.bridge(['check', '--format', 'md'], { env: { FOREMAN_LANG: 'en', FOREMAN_TEST_MEMORY: '16,4' } }); assert.equal(r.code, 0, r.stderr);
+  assert.ok(r.stdout.startsWith('## Environment\n\n' + MESSAGES.en.reportEnvironmentOkNoSandbox), r.stdout.slice(0, 200));
+});
+
 test('英文完整环境输出和非法 format；check 成功仍退出 0', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.modules.discuss.simple = 'claude code'; h.config(c);
   const r = await h.bridge(['check', '--format', 'md'], { env: { FOREMAN_LANG: 'en', FOREMAN_TEST_MEMORY: '16,4' } }); assert.equal(r.code, 0, r.stderr);
