@@ -140,7 +140,10 @@ function cmdPlan(o, load, adapters) {
   }
   const commands = startCommands(plan);
   if (plan.host) commands.unshift(`node "${ENTRY}" submit --plan ${plan.plan_id} --report "${M.planPlaceholders.answer}" --model "${M.planPlaceholders.model}"`);
-  process.stdout.write(JSON.stringify({ ...plan, file, commands, guidance: M.planGuidance(plan.module) }, null, 2) + '\n');
+  // 讨论和审查的席位带了角色（补漏席不算）：启动前一定要弹窗让用户确认分配（硬规则 R4），写在下一步的最前面
+  const roles = ['discuss', 'review'].includes(plan.module)
+    && (!!plan.host?.role || plan.seats.some((seat) => seat.role && !['补漏', 'gap'].includes(seat.role.trim().toLowerCase())));
+  process.stdout.write(JSON.stringify({ ...plan, file, commands, guidance: (roles ? M.planRolesFirst : '') + M.planGuidance(plan.module) }, null, 2) + '\n');
 }
 
 function startCommands(plan) {
