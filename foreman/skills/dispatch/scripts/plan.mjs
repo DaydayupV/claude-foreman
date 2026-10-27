@@ -139,7 +139,7 @@ function cmdPlan(o, load, adapters) {
     catch (e) { if (e.code !== 'EEXIST') throw e; }
   }
   const commands = startCommands(plan);
-  if (plan.host) commands.unshift(`node "${ENTRY}" submit --plan ${plan.plan_id} --report "${M.planPlaceholders.answer}"`);
+  if (plan.host) commands.unshift(`node "${ENTRY}" submit --plan ${plan.plan_id} --report "${M.planPlaceholders.answer}" --model "${M.planPlaceholders.model}"`);
   process.stdout.write(JSON.stringify({ ...plan, file, commands, guidance: M.planGuidance(plan.module) }, null, 2) + '\n');
 }
 

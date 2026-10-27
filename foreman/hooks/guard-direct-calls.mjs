@@ -12,11 +12,11 @@ const SCRIPT = path.join(HERE, '..', 'skills', 'dispatch', 'scripts', 'cli.mjs')
 
 const MESSAGES = {
   zh: `已拦截：不要直接调用 codex exec / codex review / opencode run / pi。协作方的调用都必须通过 foreman 插件的脚本：
-  node "${SCRIPT}" <run|discuss|resume|review> ...
+  node "${SCRIPT}" <run|discuss|review|resume|plan|submit|image> ...
 用法见 foreman:dispatch skill。测试、验收和一次性问答也一样，只读问答用 discuss。
 如果是脚本本身满足不了的需求（比如沙箱导致协作方无法运行），停下来把情况告诉用户，由用户决定，不要设法绕过。`,
   en: `Blocked: don't call codex exec / codex review / opencode run / pi directly. Every call to an agent must go through the foreman-en plugin's script:
-  node "${SCRIPT}" <run|discuss|resume|review> ...
+  node "${SCRIPT}" <run|discuss|review|resume|plan|submit|image> ...
 See the foreman-en:dispatch skill. This applies to tests, checks and one-off questions too; use discuss for read-only questions.
 If the script can't do what's needed (for example a sandbox stops an agent from running), stop and tell the user so they can decide. Don't look for a way around it.`,
 };

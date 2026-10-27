@@ -1,6 +1,6 @@
 # Script reference: commands, check, models and result fields
 
-SKILL.md keeps only the decision process and the common commands. Read the matching section here, not the whole file, when you need a command's full options, are troubleshooting the environment, helping the user pick models, or looking up what a field in the result JSON means. Every subcommand prints its own usage with `--help` (or `-h`; `assets <action> --help` prints that action's options), and either one with no subcommand prints the overall usage. The exit code is 0 and no file is written. A `--help` or `-h` given as an option's value (`--title -h`, for example) doesn't count.
+SKILL.md keeps only the decision process and the common commands. Read the matching section here, not the whole file, when you need a command's full options, are troubleshooting the environment, helping the user pick models, or looking up what a field in the result JSON means. The fields of the live view, `status` and the start line (status words, times, counts, model labels, usage, tags and hints) are in English in both plugins; what models and Claude write is shown as written. Every subcommand prints its own usage with `--help` (or `-h`; `assets <action> --help` prints that action's options), and either one with no subcommand prints the overall usage. The exit code is 0 and no file is written. A `--help` or `-h` given as an option's value (`--title -h`, for example) doesn't count.
 
 ## Commands
 The only entry point is `scripts/cli.mjs` in the dispatch skill's folder (written `<script path>` below).
@@ -35,7 +35,7 @@ node "<script path>" assets <template|cut|check|diff|layers|patch|trace|capture|
 - The checks and output of `plan`, `submit` and `status --plan` are in their own section below; `judge` and `stats` are in the last section.
 
 ## check
-Tests whether the environment works: Node.js, Git, and every agent in the config, with results under `agents.<ID>`.
+Tests whether the environment works: Node.js, Git, and every agent in the config, with results under `agents.<ID>`. opencode, pi and API agents each get one tiny real request (a few dozen tokens), which costs a little on pay-as-you-go keys; use `--agent` to check just one.
 - **Codex CLI**: whether it starts and is signed in; then the efforts the cells configure are checked against Codex's own model list (no requests sent), with results under `efforts`; and for each sandbox mode the task types actually use, `codex sandbox` runs an echo inside the sandbox (no model call), with results under `sandbox`; `danger-full-access` doesn't use a sandbox and isn't tested. When the sandbox won't start on Windows, it also tries the unelevated sandbox and says so in `fix` when that works.
 - **API**: whether the key is set, plus a tiny request to confirm it connects.
 - **opencode**: whether it starts, whether `opencode models` lists the model, plus a tiny request to confirm it works; each reasoning effort (variant) the cells configure for it is first checked against opencode's model list, failing at once if it isn't there, and every other one gets one more tiny request; results are under `variants`.
@@ -47,7 +47,7 @@ The overall `ok` only counts Node.js and the agents the cells use (image cells i
 
 `config`, `check` and `models` all take `--format md`: instead of JSON they print laid-out Markdown tables, which `/foreman-en:setup` pastes for the user as they are. `check` prints two parts, "Environment" and "Configuration"; `config` prints only "Configuration", without the check column; `models` prints tables of every model. The default is `--format json`. To show the user the configuration, use the output of `check --format md` (or `config --format md`) instead of building tables yourself.
 
-## plan, image and status --plan
+## plan, submit, image and status --plan
 To hand hands-on work to several seats, create a dispatch plan first; discussions, reviews and image tasks always need a plan, however many seats:
 
 ```bash

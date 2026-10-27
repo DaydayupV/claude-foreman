@@ -22,6 +22,8 @@ export const environmentReport = (checks, environment, agents) => {
     if (agent.type !== 'codex cli' || !checks.summary.agents[name].used_at.length) continue;
     if (agent.sandbox?.checked.some((item) => item.ok === false)) issues.push(`⚠ ${M.reportIssue(M.reportCodexSandbox(name), agent.fix)}`);
   }
+  // 没有在用的 Codex 协作方、或者没查到沙箱（没装、没登录）时，不能说沙箱正常
+  const sandboxChecked = Object.entries(checks.agents).some(([name, agent]) => agent.type === 'codex cli' && checks.summary.agents[name].used_at.length && agent.sandbox?.checked.length);
   const { codex, opencode, pi, api_keys } = environment;
   const keys = Object.values(agents).filter((agent) => agent.type === 'api' && agent.api_key).length;
   return report([

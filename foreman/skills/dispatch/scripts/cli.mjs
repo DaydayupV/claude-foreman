@@ -467,7 +467,7 @@ async function cmdModels(o) {
   for (const type of ['codex cli', 'opencode cli', 'pi cli']) {
     out.tools[type] = readCatalog(Object.values(cfg.agents).find((a) => a.type === type) || { type });
   }
-  for (const [name, agent] of Object.entries(cfg.agents)) if (agent.type === 'api') out.api[name] = await adapters.api.catalog(agent);
+  for (const [name, agent] of Object.entries(cfg.agents)) if (agent.type === 'api') out.api[name] = await adapters.api.catalog(agent, name);
   // 配置里每个协作方的模型在不在它自己那个可执行文件的清单里，在的话支持哪些推理强度；不在的给出最接近的写法。
   for (const [name, agent] of Object.entries(cfg.agents)) {
     const cat = agent.type === 'api' ? out.api[name] : readCatalog(agent);

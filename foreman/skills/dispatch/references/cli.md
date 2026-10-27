@@ -35,7 +35,7 @@ node "<脚本路径>" assets <template|cut|check|diff|layers|patch|trace|capture
 - `plan`、`submit`、`status --plan` 的检查和输出见下面一节；`judge` 和 `stats` 见最后一节。
 
 ## check
-检查环境能不能用：Node.js、Git，以及配置里的每个协作方，结果在 `agents.<代号>` 里。
+检查环境能不能用：Node.js、Git，以及配置里的每个协作方，结果在 `agents.<代号>` 里。opencode、pi 和 API 协作方各会发一个很小的真实请求（几十个 token），按量付费的会产生一点费用；只想查某一个时用 `--agent`。
 - **Codex CLI**：能否启动、是否已登录；再按 Codex 自带的模型清单核对各格子配置的推理强度（不发请求），结果列在 `efforts` 里；按各类任务实际用的沙箱模式，用 `codex sandbox` 在沙箱里跑一条 echo（不调模型），结果列在 `sandbox` 里，`danger-full-access` 不进沙箱、不测。Windows 上沙箱起不来时，会顺带试 unelevated 沙箱，能用时写在 `fix` 里。
 - **API**：key 是否设置，并发一个很小的请求确认能连通。
 - **opencode**：能否启动、`opencode models` 里有没有这个模型，并发一个很小的请求确认能用；各格子给它配置了推理强度（variant）的，先按 opencode 的模型清单核对，清单里没有的直接判不通过，其余每个档位再各发一个小请求，结果列在 `variants` 里。

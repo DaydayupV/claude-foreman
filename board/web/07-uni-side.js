@@ -19,6 +19,33 @@ function markOf(id, a = 1) {
 const roundAt = (s) => s.prompt_at ?? s.started_at ?? 0; // 旧服务没有 prompt_at 时退回对话开始的时间
 const byState = (a, b) => (a.state === 'idle') - (b.state === 'idle')
   || (a.state === 'idle' ? b.last_at - a.last_at : roundAt(b) - roundAt(a)) || (a.id < b.id ? -1 : 1);
+// 和桌面版侧栏一样按父子归类：从别的对话里启动的子对话（服务端给的 parent）排在父对话下面、缩进一级。
+// 一家的位置按其中排得最前的那个（子对话在干活时整家往上排），同一层的兄弟也这样排；
+// 父对话不在列表里（超出时间窗口）的子对话按顶层排。返回 [{ s, depth }]
+function familyOrder(list) {
+  const ids = new Set(list.map((s) => s.id)), kids = new Map(), lead = new Map();
+  const up = (s) => (s.parent && s.parent !== s.id && ids.has(s.parent) ? s.parent : null);
+  for (const s of list) { const p = up(s); if (p) { if (!kids.has(p)) kids.set(p, []); kids.get(p).push(s); } }
+  const leadOf = (s, seen = new Set()) => {
+    if (lead.has(s.id)) return lead.get(s.id);
+    seen.add(s.id);
+    let best = s;
+    for (const k of kids.get(s.id) || []) if (!seen.has(k.id)) { const b = leadOf(k, seen); if (byState(b, best) < 0) best = b; }
+    lead.set(s.id, best);
+    return best;
+  };
+  const byLead = (a, b) => byState(leadOf(a), leadOf(b)) || byState(a, b);
+  const out = [], done = new Set();
+  const visit = (s, depth) => {
+    if (done.has(s.id)) return;
+    done.add(s.id); out.push({ s, depth });
+    for (const k of (kids.get(s.id) || []).sort(byLead)) visit(k, depth + 1);
+  };
+  for (const s of list.filter((x) => !up(x)).sort(byLead)) visit(s, 0);
+  // 父子关系成环（不该有，防一手）时剩下的按顶层补上
+  for (const s of list.filter((x) => !done.has(x.id)).sort(byState)) visit(s, 0);
+  return out;
+}
 // 在跑的席位数用不截断的计数（runs 摘要最多 16 条，会漏）
 const runningOf = (s) => s.counts?.running ?? s.runs.filter((r) => r.status === 'running').length;
 // 协作方代号去掉末尾表示接入方式的几段（-codex-cli、-opencode-cli-ocgo、-pi-cli-api 这类），名额带上更短；

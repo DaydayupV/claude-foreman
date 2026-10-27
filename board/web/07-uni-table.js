@@ -26,9 +26,10 @@ function renderUniTable() {
     for (const h of UNI_HEAD) { const c = document.createElement('span'); c.textContent = h; table.firstChild.append(c); }
     costHeadTitle(table.firstChild);
   }
-  const list = [...U.sessions.values()].sort(byState), body = table.querySelector('.tbody'), t = uNow();
+  // 子对话排在父对话下面、缩进（和桌面版侧栏一样，见 07-uni-side.js 的 familyOrder）
+  const list = familyOrder([...U.sessions.values()]), body = table.querySelector('.tbody'), t = uNow();
   const tot = { running: 0, done: 0, failed: 0, input: 0, cached: 0, output: 0, cost: null, priced: true };
-  list.forEach((s, i) => {
+  list.forEach(({ s, depth }, i) => {
     let tr = UNI_ROWS.get(s.id);
     if (!tr) {
       tr = document.createElement('div');
@@ -39,7 +40,8 @@ function renderUniTable() {
     }
     const u = s.usage || {}, inAll = (u.input || 0) + (u.cached || 0) + (u.cache_write || 0), n = runningOf(s), c = tr.children;
     tr.style.setProperty('--tint', markOf(s.id));
-    const cls = `tr s-${s.state}${s.alert ? ' alert' : ''}${UV.hot?.s.id === s.id ? ' hot' : ''}`;
+    const cls = `tr s-${s.state}${depth ? ' kid' : ''}${s.alert ? ' alert' : ''}${UV.hot?.s.id === s.id ? ' hot' : ''}`;
+    tr.style.setProperty('--depth', depth);
     if (tr.className !== cls) tr.className = cls;
     setText(c[1], s.title || s.id.slice(0, 8));
     setText(c[2], U.projects.get(s.project)?.name || s.project);

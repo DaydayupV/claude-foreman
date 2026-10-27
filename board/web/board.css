@@ -63,6 +63,9 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 /* 对话表的状态列要放得下"waiting for you · 弹窗标题"，席位列只有几个点：状态列加宽、席位列收窄，多出来的给"done · failed"的表头 */
 #usage[data-mode="uni"] .tr { grid-template-columns: 22px 1.6fr .8fr 1.3fr .6fr 1.1fr 1.2fr .8fr 1fr .7fr; }
 #usage[data-mode="uni"] .tbody .tr span:nth-child(2) { font-family: "Microsoft YaHei", sans-serif; }
+/* 子对话（从别的对话里启动的）缩在父对话下面，和桌面版侧栏一样 */
+#usage[data-mode="uni"] .tbody .tr.kid span:nth-child(2) { padding-left: calc(var(--depth, 1) * 14px - 14px); }
+#usage[data-mode="uni"] .tbody .tr.kid span:nth-child(2)::before { content: "└ "; color: var(--dim, #666); }
 #usage[data-mode="uni"] .tbody .tr span:nth-child(3) { color: var(--mid); }
 #usage[data-mode="uni"] .tbody .tr span:nth-child(4) { color: var(--text); }
 #usage[data-mode="uni"] .tbody .tr.s-waiting span:nth-child(4) { color: rgb(255,186,90); }

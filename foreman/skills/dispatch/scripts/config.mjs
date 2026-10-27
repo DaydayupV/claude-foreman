@@ -473,7 +473,7 @@ function projectConfig(cfg, project, adapters) {
           check(!seen.has(name), pos, M.invalid.duplicate);
           seen.add(name);
           const agent = cfg.agents[name], adapter = adapters[agent?.type];
-          if (adapter) check(item.effort === undefined || (adapter.efforts ? adapter.efforts.includes(item.effort) : item.effort === null || typeof item.effort === 'string' && !!item.effort.trim()), `${pos}.effort`, adapter.efforts?.join(' / ') || M.invalid.apiEffort);
+          if (adapter) check(item.effort === undefined || (adapter.efforts ? adapter.efforts.includes(item.effort) : item.effort === null || typeof item.effort === 'string' && !!item.effort.trim()), `${pos}.effort`, adapter.efforts ? M.invalid.effortValue(item.effort, adapter.efforts.join(' / ')) : M.invalid.apiEffort);
           if (!prev) { notice(M.projectAgentDropped(item.agent, at)); return []; }
           for (const field of Object.keys(item)) if (!['agent', 'effort', 'required'].includes(field)) notice(M.projectAgentDropped(field, at));
           if (Object.hasOwn(item, 'required') && item.required !== !!prev.required) notice(M.projectRequiredChanged(at, name));
@@ -488,7 +488,9 @@ function projectConfig(cfg, project, adapters) {
         });
         const missing = cellList(original).filter((item) => item.required && !kept.some((p) => p.agent === item.agent));
         if (missing.length && kept.length) die(M.projectRequiredDropped(at, M.list(missing.map((item) => item.agent))));
-        if (!kept.length) die(M.projectLevelEmpty(at));
+        // 项目写的协作方这一格一个都没有（比如克隆来的仓库用的是别人的一套代号）：按项目关掉这一格，只会更严，
+        // 不让这个仓库里的所有命令（连 status、board 都）报错退出
+        if (!kept.length) { notice(M.projectLevelEmpty(at)); cfg.closed_by_project.push(`${module}.${cell}`); return module === 'image' ? null : CLAUDE_CODE; }
         return cellList(original).flatMap((item) => kept.filter((p) => p.agent === item.agent));
       });
     } else ignored.push(key);
@@ -532,7 +534,8 @@ function detectEnvironment(adapters, agents = {}) {
   return { codex: { found, logged_in: !!login && !login.error && login.status === 0 && /logged in/i.test(`${login.stdout}${login.stderr}`) && !/not logged in/i.test(`${login.stdout}${login.stderr}`) },
     opencode: { found: ocFound, models: models?.status === 0 ? new Set(models.stdout.split(/\s+/).filter((s) => s.includes('/'))).size : 0 },
     // pi --list-models 输出一张表：第一行是表头，之后每行一个模型。
-    pi: { found: piFound, models: piModels?.status === 0 ? Math.max(0, piModels.stdout.trim().split(/\r?\n/).filter(Boolean).length - 1) : 0 },
+    // 一个模型都没有（还没登录）时只打印一句提示和几行文档路径，不是表
+    pi: { found: piFound, models: piModels?.status === 0 && !/No models available/i.test(piModels.stdout) ? Math.max(0, piModels.stdout.trim().split(/\r?\n/).filter(Boolean).length - 1) : 0 },
     api_keys: ['DEEPSEEK_API_KEY', 'KIMI_API_KEY', 'MOONSHOT_API_KEY', 'MIMO_API_KEY'].filter((key) => !!process.env[key]) };
 }
 
