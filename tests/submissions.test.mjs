@@ -23,10 +23,12 @@ for (const module of ['discuss', 'review']) test(`${module} 计划把 Claude Cod
   assert.deepEqual(json(p.file).host, p.host); assert.equal(p.seats[0].seat, 1);
   assert.equal(p.commands[0], `node "${BRIDGE}" submit --plan ${p.plan_id} --report "<报告.json>" --model "<当前模型 ID>"`);
   assert.ok(p.commands[1].includes(`${module} --plan ${p.plan_id} --seat 1`));
-  assert.equal(p.guidance, M.planGuidance(module));
+  // 带角色的计划：下一步最前面先提醒弹窗确认分配
+  assert.equal(p.guidance, M.planRolesFirst + M.planGuidance(module));
   // 照抄 --model 的占位符没换掉：拒绝，不把占位符记成模型
   failed(await h.bridge(submitArgs(h, p, ['--model', '<当前模型 ID>'])), M.submitModelPlaceholder('<当前模型 ID>'));
   const plain = output(await h.bridge(planArgs(h, module))); assert.equal(plain.host.role, null);
+  assert.equal(plain.guidance, M.planGuidance(module));
 });
 
 test('run 计划没有 host，旧计划只数外部席，其他模块不能带 host-role', async (t) => {
