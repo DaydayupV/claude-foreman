@@ -104,6 +104,7 @@ const zh = {
   submitNoHost: (plan) => `计划 ${plan} 没有 Claude Code 席（不是讨论或审查计划，或者建于这个功能之前），不能 submit。`,
   hostRoundsExceeded: (plan, done, max) => `计划 ${plan} 的 Claude Code 席已经提交了 ${done} 轮报告，达到 discuss_max_rounds（${max}）。`,
   hostReviewAlreadySubmitted: (plan, id) => `审查计划 ${plan} 的 Claude Code 席已经提交过报告（${id}），审查只提交一次。`,
+  planRolesFirst: '这份计划的席位带了角色：先按 references/roles.md 的"确认弹窗（一定要弹）"请用户确认分配（dispatch.auto 开着也要弹），确认后再往下做。',
   planGuidance: (module) => ({
     discuss: '下一步：按 references/seats.md 的"Claude Code 席"写好自己的报告，用 submit 登记，再把各外部席放在同一条消息里后台启动；流程和决策记录见 references/discuss.md。派出后在正文写出模型、推理强度和看板链接（SKILL.md 的"派出时"）',
     review: '下一步：按 references/seats.md 的"Claude Code 席"写好自己的问题清单，用 submit 登记，再后台启动各外部席（预留的补漏席等其余各席结束、去重后再启动）；结果回来后按 references/review.md 的"审查之后"核实。派出后在正文写出模型、推理强度和看板链接（SKILL.md 的"派出时"）',
@@ -826,6 +827,7 @@ const en = {
   submitNoHost: (plan) => `Plan ${plan} has no Claude Code seat (it isn't a discussion or review plan, or it predates this feature), so submit doesn't apply.`,
   hostRoundsExceeded: (plan, done, max) => `The Claude Code seat of plan ${plan} has already submitted ${done} rounds, the discuss_max_rounds limit (${max}).`,
   hostReviewAlreadySubmitted: (plan, id) => `The Claude Code seat of review plan ${plan} has already submitted (${id}); a review takes one report.`,
+  planRolesFirst: 'This plan\'s seats have roles: first have the user confirm the assignment in the pop-up from "The confirmation pop-up (always)" in references/roles.md (even with dispatch.auto on), then go on. ',
   planGuidance: (module) => ({
     discuss: 'Next: write your own report as "The Claude Code seat" in references/seats.md says and register it with submit, then start the external seats in the background, all in one message; the process and the decision record are in references/discuss.md. After starting, write the model, effort and board link in the reply text ("When you hand off" in SKILL.md)',
     review: 'Next: write your own list of issues as "The Claude Code seat" in references/seats.md says and register it with submit, then start the external seats in the background (a reserved gap seat starts only after the others finish and their findings are merged); when the results are back, check them as "After the review" in references/review.md says. After starting, write the model, effort and board link in the reply text ("When you hand off" in SKILL.md)',
