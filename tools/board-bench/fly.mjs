@@ -38,9 +38,11 @@ function findBrowser() {
 // 看板服务：直播模式，数据和锁文件都在 <root> 里（--url 时用现成的看板）
 const server = live ? null : spawn(process.execPath, [SERVER, '--runs', path.join(root, 'runs'), '--claude-dir', path.join(root, 'claude'), '--config', path.join(root, 'config.json'),
   '--window-h', '48', '--idle-min', '30'], { stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true });
-const url = live ? opt('url') : await new Promise((resolve, reject) => {
+// --query 两种方式都拼上（现成看板的地址自己已经带了 ?）
+const withQuery = (u) => opt('query') ? `${u}${u.includes('?') ? '&' : '?'}${opt('query')}` : u;
+const url = live ? withQuery(opt('url')) : await new Promise((resolve, reject) => {
   let out = '';
-  server.stdout.on('data', (s) => { out += s; const m = /board: (\S+)/.exec(out); if (m) resolve(`${m[1].replace(/\?.*$/, '')}?level=all&lang=zh${opt('query') ? `&${opt('query')}` : ''}`); });
+  server.stdout.on('data', (s) => { out += s; const m = /board: (\S+)/.exec(out); if (m) resolve(withQuery(`${m[1].replace(/\?.*$/, '')}?level=all&lang=zh`)); });
   server.once('exit', (code) => reject(new Error(`board server exited (${code})`)));
 });
 

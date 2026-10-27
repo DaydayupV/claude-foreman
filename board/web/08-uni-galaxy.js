@@ -127,9 +127,12 @@ function drawGalaxyOf(g, alpha, hover) {
   ctx.globalCompositeOperation = 'source-over';
   const stars = starsOf(g), ringA = new Map();
   // 光效：一个星系的光有总量，同时跑的模型越多，每颗星的光斑、柔光和送往核里的光点越淡越小（总量上限），叠加时不会烧成一团白。
-  // 每颗按星数的 -0.6 次方，两颗以上再乘 2/3（4 颗时各约 0.29），从一颗变成两颗时总亮度基本不变；横向长光只给第一颗在跑的星
-  const damp = ULOOK.on ? Math.pow(Math.max(1, stars.length), -0.6) * (stars.length > 1 ? 2 / 3 : 1) : 1;
-  let streaked = false;
+  // 每颗按星数的 -0.6 次方，两颗以上再乘 2/3（4 颗时各约 0.29），从一颗变成两颗时总亮度基本不变；只有一颗时也压到 0.55，白色的星（Codex）不会亮成一团白斑
+  const damp = ULOOK.on ? Math.min(0.55, Math.pow(Math.max(1, stars.length), -0.6) * (stars.length > 1 ? 2 / 3 : 1)) : 1;
+  // 光效下星和往核里送的光点另有星芒，它们的柔光再进辉光层逐级扩散，按原来的亮度画会在星和核之间糊成一团白
+  const dotK = ULOOK.on ? 0.6 : 1;
+  // 一个星系只拖一道横向长光：派发中亮核自己已经拖了一道（08-uni-glow.js 的 coreFlare），星就不再拖
+  let streaked = s.state === 'dispatching';
   // 光效：干活的星系里最亮的几颗星闪着小星芒；同时跑三个以上模型时只留一颗。
   // 星座连线：从亮核出发，按远近把这几颗连成一串
   if (ULOOK.on && s.state !== 'idle') {
@@ -162,11 +165,11 @@ function drawGalaxyOf(g, alpha, hover) {
       ctx.strokeStyle = lg; ctx.lineWidth = upx(0.9); ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(g.x, g.y); ctx.stroke();
       for (let j = 0; j < 3; j++) {
         const u = (sec * 0.55 + j / 3 + st.slot) % 1;
-        glowDot(x + (g.x - x) * u, y + (g.y - y) * u, 2, st.color, 0.9 * (1 - u * 0.8) * damp);
+        glowDot(x + (g.x - x) * u, y + (g.y - y) * u, 2, st.color, 0.9 * (1 - u * 0.8) * damp * dotK);
       }
     }
     const blink = st.r.queued ? 0.35 + 0.3 * Math.sin(sec * 5) : 1;
-    glowDot(x, y, 2.2 + 0.8 * st.born * (1 - st.home), st.color, alpha * blink * (0.3 + 0.7 * st.born) * damp);
+    glowDot(x, y, 2.2 + 0.8 * st.born * (1 - st.home), st.color, alpha * blink * (0.3 + 0.7 * st.born) * damp * dotK);
     if (ULOOK.on) {
       const streak = live && !streaked ? 45 : 0;
       streaked ||= !!streak;
