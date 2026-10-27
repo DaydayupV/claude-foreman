@@ -191,10 +191,10 @@ async function executeApi(ctx) {
 }
 
 // 厂商接口列出的模型 ID。兼容 OpenAI 的接口一般都有 /models，但不给推理强度，那部分要查厂商文档。
-async function apiCatalog(agent) {
+async function apiCatalog(agent, name = '') {
   const { key } = apiKeyOf(agent);
   const source = `GET ${agent.base_url.replace(/\/+$/, '')}/models`;
-  if (!key) return { ok: false, source, models: [], error: M.apiKeyMissing('', agent.api_key_env) };
+  if (!key) return { ok: false, source, models: [], error: M.apiKeyMissing(name, agent.api_key_env) };
   try {
     const response = await fetch(`${agent.base_url.replace(/\/+$/, '')}/models`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(30000) });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);

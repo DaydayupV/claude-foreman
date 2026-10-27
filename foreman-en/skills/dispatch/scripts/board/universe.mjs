@@ -14,9 +14,10 @@ const keyOf = (cwd) => cwd ? cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLower
 function repoTop(cwd) {
   const home = path.resolve(os.homedir()).toLowerCase();
   for (let dir = path.resolve(cwd); ;) {
+    if (dir.toLowerCase() === home) return null;
     if (fs.existsSync(path.join(dir, '.git'))) return dir;
     const up = path.dirname(dir);
-    if (up === dir || up.toLowerCase() === home) return null;
+    if (up === dir) return null;
     dir = up;
   }
 }
@@ -43,12 +44,26 @@ export function projectRoot(cwd) {
   return roots.get(cwd);
 }
 // 对话的项目看它启动时的目录：之后 cd 到子目录或别的地方，记录里的 cwd 会跟着变，但对话还是那个项目的
-const projectOf = (session) => projectRoot(session.root ?? session.cwd);
+function rootOf(id, parents) {
+  const seen = new Set([id]);
+  for (let depth = 0; depth < 20; depth++) {
+    const parent = parents?.get(id);
+    if (!parent || seen.has(parent)) break;
+    seen.add(parent); id = parent;
+  }
+  return id;
+}
+const projectOf = (session, lineage) => {
+  const id = rootOf(session.id, lineage?.parents), root = id === session.id ? session : lineage.sessions.get(id);
+  // 父对话可能不在时间窗口里，仍按桌面版记录的启动目录归项目
+  return projectRoot(root?.root ?? root?.cwd ?? (id !== session.id ? lineage.cwds.get(id) : null));
+};
 const list = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { if (!transient(e)) throw e; return []; } };
 
 // Claude 桌面版的对话列表：桌面版给每个对话存一份元数据（<数据目录>/claude-code-sessions/<组织>/<账号>/local_*.json，
 // 里面有 cliSessionId 和 isArchived；删掉的对话留一个 deleted_<id> 文件）。在桌面版里归档或删掉的对话，宇宙里也不列，
-// 和桌面版的对话列表一致。只读这两个字段；找不到这些文件（只用命令行、格式变了）就全部照列。
+// 桌面版列表里没有的对话（命令行里 claude -p 的一次性调用等）也不列，和桌面版的对话列表一致；
+// 找不到这些文件（只用命令行、格式变了）就全部照列。
 // 数据目录：插件装在桌面版里时就在插件路径的上面几层（…/Claude-Data/claude_xxx/rpm/…），
 // 另外看各系统的默认位置（Windows 的 %APPDATA%\Claude 和商店版的 %LOCALAPPDATA%\Claude-Data\*，macOS、Linux 的 Claude 目录）
 export function desktopRoots() {
@@ -62,26 +77,34 @@ export function desktopRoots() {
   return out;
 }
 // 桌面版对话的元数据：归档或删掉的对话（hidden，Claude Code 会话 id 的集合），以及先前的对话记录归到哪个对话（aliases：旧 id → 现在的 id）。
+// sessionId（缺省用文件名）和 spawnedFrom.sessionId 对应桌面版父子关系（parents：现在的子 id → 父 id），lineageDetached 为 true 时按顶层；
+// originCwd（缺省用 cwd）保留启动目录（cwds），根对话没有已读记录时仍能确定项目。父对话只在同一组织、账号目录里找。
 // 桌面版重启或恢复对话时，Claude Code 会换一个会话 id、另起一份对话记录，旧 id 记在 priorCliSessionIds 里；
 // 不合起来的话，同一个对话会在星图上出现两次，旧记录里派出的任务也看不到了。归档的对话连同先前的记录一起隐藏。
 // 每 5 秒（真实时钟）重列一次目录，元数据文件没变就不重读
 export function desktopSessions(roots, clock = Date.now) {
-  // cache：元数据文件 → 上次读到的结果；byDir：目录 → 上次从它得出的隐藏 id。
+  // cache：元数据文件 → 上次读到的结果；byDir：目录 → 上次从它得出的元数据。
   // 一时读不了（被占用、没权限）的目录和文件沿用上次的结果，不让已归档的对话闪回来
   const cache = new Map(), byDir = new Map();
   const listed = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { if (!transient(e)) throw e; return null; } };
-  let at = -Infinity, state = { hidden: new Set(), aliases: new Map() };
+  let at = -Infinity, state = { hidden: new Set(), aliases: new Map(), parents: new Map(), cwds: new Map(), known: new Set() };
   return () => {
     if (!roots.length || clock() - at < 5000) return state;
     at = clock();
-    const next = new Set(), aliases = new Map(), dirs = new Set();
-    const merge = (found) => { found.hidden.forEach((id) => next.add(id)); for (const [prior, id] of found.aliases) aliases.set(prior, id); };
+    const next = new Set(), aliases = new Map(), parents = new Map(), cwds = new Map(), known = new Set(), dirs = new Set();
+    const merge = (found) => {
+      found.hidden.forEach((id) => next.add(id));
+      for (const [prior, id] of found.aliases) aliases.set(prior, id);
+      for (const [id, parent] of found.parents) parents.set(id, parent);
+      for (const [id, cwd] of found.cwds) cwds.set(id, cwd);
+      found.known.forEach((id) => known.add(id));
+    };
     const reuse = (prefix) => { for (const [dir, found] of byDir) if (dir === prefix || dir.startsWith(prefix + path.sep)) { dirs.add(dir); merge(found); } };
     const subdirs = (dir) => { const all = listed(dir); if (!all) reuse(dir); return (all || []).filter((d) => d.isDirectory()).map((d) => path.join(dir, d.name)); };
     for (const root of roots) for (const org of subdirs(root)) for (const dir of subdirs(org)) {
       const entries = listed(dir);
       if (!entries) { reuse(dir); continue; }
-      const found = { hidden: new Set(), aliases: new Map() };
+      const found = { hidden: new Set(), aliases: new Map(), parents: new Map(), cwds: new Map(), known: new Set() }, local = new Map();
       for (const entry of entries) {
         if (entry.name.startsWith('deleted_')) { found.hidden.add(entry.name.slice(8)); continue; }
         if (!entry.isFile() || !/^local_.+\.json$/.test(entry.name)) continue;
@@ -91,12 +114,19 @@ export function desktopSessions(roots, clock = Date.now) {
           const value = json(file);
           // 正在写的文件读出来是坏的：沿用上次读到的
           if (value) cache.set(file, { sig, cli: typeof value.cliSessionId === 'string' ? value.cliSessionId : null, archived: value.isArchived === true,
+            id: value.sessionId ?? entry.name.slice(0, -5), parent: value.lineageDetached === true ? null : value.spawnedFrom?.sessionId, cwd: value.originCwd ?? value.cwd,
             prior: Array.isArray(value.priorCliSessionIds) ? value.priorCliSessionIds.filter((id) => typeof id === 'string' && id !== value.cliSessionId) : [] });
         }
         const item = cache.get(file);
         if (!item?.cli) continue;
+        local.set(item.id, item); found.cwds.set(item.cli, item.cwd);
+        for (const id of [item.cli, ...item.prior]) found.known.add(id);
         if (item.archived) for (const id of [item.cli, ...item.prior]) found.hidden.add(id);
         else for (const id of item.prior) found.aliases.set(id, item.cli);
+      }
+      for (const item of local.values()) {
+        const parent = local.get(item.parent);
+        if (parent && !found.hidden.has(item.cli) && !found.hidden.has(parent.cli)) found.parents.set(item.cli, parent.cli);
       }
       byDir.set(dir, found); dirs.add(dir);
       merge(found);
@@ -104,7 +134,7 @@ export function desktopSessions(roots, clock = Date.now) {
       for (const file of cache.keys()) if (path.dirname(file) === dir && !present.has(file)) cache.delete(file);
     }
     for (const dir of byDir.keys()) if (!dirs.has(dir)) { byDir.delete(dir); for (const file of cache.keys()) if (path.dirname(file) === dir) cache.delete(file); }
-    state = { hidden: next, aliases };
+    state = { hidden: next, aliases, parents, cwds, known };
     return state;
   };
 }
@@ -187,7 +217,7 @@ const BATCH_GAP = 10 * 60000;
 const zeroUsage = (u) => !!u && u.input === 0 && u.output === 0 && Object.values(u).every((v) => v === 0 || v == null);
 // 星图里一行是这个对话的全部（和飞进去的看板同一个口径）：派过的任务、Claude Code 的用量和费用都不按时间窗口截；
 // 时间窗口只决定哪些对话列出来
-function summaryOf(session, all, now, prices, meter, waiting = []) {
+function summaryOf(session, all, now, prices, meter, waiting = [], lineage) {
   const own = all.filter((r) => r.session === session.id && !r.host);
   const queued = waiting.filter((q) => q.claude_session === session.id);
   // 同一席后来又有了新一轮（同一条车道上续接的，或同一份计划同一席重新启动的；重启的任务不一定带 parent，车道会换）
@@ -236,7 +266,8 @@ function summaryOf(session, all, now, prices, meter, waiting = []) {
     && !superseded(r))
     .sort((a, b) => b.ended_at - a.ended_at).slice(0, 12).reverse().map((r) => ({ status: r.no_result ? 'no_result' : r.status, run: r.id, model: r.model }));
   const state = stateOf(session, runs, now, queued);
-  return { id: session.id, project: keyOf(projectOf(session)), cwd: session.cwd, title: session.title ?? session.firstPrompt, model: session.model,
+  // parent：桌面版里启动它的父对话（顶层为 null）；回放没有桌面版数据，不带这一项
+  return { id: session.id, ...(lineage ? { parent: lineage.parents.get(session.id) ?? null } : {}), project: keyOf(projectOf(session, lineage)), cwd: session.cwd, title: session.title ?? session.firstPrompt, model: session.model,
     // prompt_at：最近一条用户消息的时间，宇宙列表里进行中的对话按它排（新的在上），不随动静跳来跳去
     state: state.state, waiting: state.waiting, started_at: session.started_at, last_at: session.last_at, prompt_at: Number.isFinite(session.promptAt) ? session.promptAt : null, runs, counts,
     // 还在跑的运行没有费用、有的模型不在价格表里：能算的照样加起来，另外标出不完整，不让整份变成未知；
@@ -290,15 +321,15 @@ export function agentSlots(config, runs) {
   }
   return [...config.map((a) => agents.get(a.id)), ...[...agents.values()].filter((a) => !config.some((c) => c.id === a.id)).sort((a, b) => a.id.localeCompare(b.id))];
 }
-function projectsOf(sessions, older, folders) {
+function projectsOf(sessions, older, folders, lineage) {
   const projects = new Map();
   const put = (cwd) => {
     const key = keyOf(cwd);
     if (!projects.has(key)) projects.set(key, { key, cwd, name: cwd ? cwd.replace(/\\/g, '/').replace(/\/+$/, '').split('/').at(-1) : '(unknown)', older: 0 });
     return projects.get(key);
   };
-  for (const session of sessions) put(projectOf(session));
-  for (const [folder, count] of older) put(projectRoot(folders.get(folder)?.cwd ?? null)).older += count;
+  for (const session of sessions) put(projectOf(session, lineage));
+  for (const [source, count] of older) put(lineage?.parents.has(source) ? projectOf({ id: source }, lineage) : projectRoot(folders.get(source)?.cwd ?? null)).older += count;
   return [...projects.values()];
 }
 function readCwd(file) {
@@ -390,6 +421,7 @@ export function createUniverse(options) {
   };
   const read = (now = options.now?.() ?? Date.now()) => {
     const cutoff = now - hours * 3600000, found = new Set(), older = new Map(), oldFiles = new Map();
+    const lineage = { ...desktop(), sessions }, { hidden, aliases } = lineage;
     if (now - listedAt >= 2000) {
       dirs = list(options.claudeDir).filter((d) => d.isDirectory()).map((d) => path.join(options.claudeDir, d.name)); listedAt = now;
       for (const dir of listings.keys()) if (!dirs.includes(dir)) { listings.delete(dir); folders.delete(dir); }
@@ -413,19 +445,21 @@ export function createUniverse(options) {
       // 旧文件的 mtime 留到目录重列时再查，直播只尾读窗口内的已知文件。
       for (const item of project.files.values()) {
         const { id, file } = item;
+        // 旧子对话单独计数，避免同一启动目录里的顶层对话也被改归属
+        const source = lineage.parents.has(id) ? id : dir;
         if (item.mtime >= cutoff && !refreshed) {
           const info = stat(file);
           if (!info) { if (sessions.has(id)) found.add(id); continue; }
           item.mtime = info.mtimeMs;
         }
-        if (item.mtime < cutoff) { older.set(dir, (older.get(dir) || 0) + 1); oldFiles.set(id, file); continue; }
+        if (item.mtime < cutoff) { older.set(source, (older.get(source) || 0) + 1); oldFiles.set(id, file); continue; }
         active = true;
         let session = sessions.get(id) || newSession(id, file, dir);
         session = readSession(session); sessions.set(id, session); found.add(id);
         const known = folders.get(dir);
         // 文件夹按对话启动时的目录命名，旧对话的计数跟着启动目录走
         if (session.root && (!known || session.cwdAt >= known.at)) folders.set(dir, { cwd: session.root, at: session.cwdAt });
-        if (session.last_at != null && session.last_at < cutoff) older.set(dir, (older.get(dir) || 0) + 1);
+        if (session.last_at != null && session.last_at < cutoff) older.set(source, (older.get(source) || 0) + 1);
       }
       if (!active && project.files.size) {
         const latest = [...project.files.values()].sort((a, b) => b.mtime - a.mtime || a.file.localeCompare(b.file))[0];
@@ -438,7 +472,6 @@ export function createUniverse(options) {
       }
     }
     for (const id of sessions.keys()) if (!found.has(id)) sessions.delete(id);
-    const { hidden, aliases } = desktop();
     // 同一个对话先前的对话记录（桌面版重启、恢复后换了会话 id）并进现在的那一份：不单独列，它派出的任务和 Claude Code 的用量
     // 算到现在这个对话上（用量按消息 id 去重，几份记录之间抄过来的消息不重算，抄过来时用量写成 0 的那份不算，见 keepUsage）。先前的记录超出时间窗口的也算（星图一行是对话的全部）。
     // 现在那一份还没有（还没写出来、超出时间窗口）时照常单独列
@@ -462,10 +495,13 @@ export function createUniverse(options) {
     let waiting = [];
     try { waiting = queuedRuns(null, options.runs); } catch { /* 下一拍再读 */ }
     const all = readRuns(now).map((r) => merged.has(r.session) ? { ...r, session: merged.get(r.session) } : r);
-    const selected = [...sessions.values()].filter((s) => s.last_at != null && s.last_at >= cutoff && !hidden.has(s.id) && !merged.has(s.id)).sort((a, b) => b.last_at - a.last_at || a.id.localeCompare(b.id)).slice(0, 200);
-    const summaries = selected.map((s) => { const v = view(s); return summaryOf(v, all, now, options.prices, meterOf(v), waiting); });
+    // 用桌面版时只列桌面版对话列表里有的（和侧栏一致）：命令行里 claude -p 之类的一次性调用、别的工具起的会话不列。
+    // 一份桌面版元数据都没有（只用命令行）时全部照列
+    const desktopOnly = lineage.known?.size > 0;
+    const selected = [...sessions.values()].filter((s) => s.last_at != null && s.last_at >= cutoff && !hidden.has(s.id) && !merged.has(s.id) && (!desktopOnly || lineage.known.has(s.id))).sort((a, b) => b.last_at - a.last_at || a.id.localeCompare(b.id)).slice(0, 200);
+    const summaries = selected.map((s) => { const v = view(s); return summaryOf(v, all, now, options.prices, meterOf(v), waiting, lineage); });
     for (const id of sums.keys()) if (!sessions.has(id)) sums.delete(id);
-    return { v: 3, now, window_h: hours, projects: projectsOf([...selected].sort((a, b) => b.cwdAt - a.cwdAt), older, folders), sessions: summaries,
+    return { v: 3, now, window_h: hours, projects: projectsOf([...selected].sort((a, b) => b.cwdAt - a.cwdAt), older, folders, lineage), sessions: summaries,
       // 名额和对话列表同一个口径：桌面版里归档、删掉的对话，它的任务不占"同时运行"的格子（不然点了飞不进去）
       agents: agentSlots(config, hidden.size ? all.filter((r) => !hidden.has(r.session)) : all) };
   };

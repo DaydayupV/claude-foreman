@@ -26,12 +26,12 @@ const readJson = (file) => { try { return JSON.parse(readText(file)); } catch { 
 const REMINDERS = {
   zh: {
     noAgentsReminder: (file) => `foreman 插件已启用，但配置（${file}）里还没有任何协作方，执行、审查和讨论都由 Claude 自己做。在合适的时候用一句话建议用户运行 /foreman:setup，接入 Codex、opencode、pi 或 API 模型。`,
-    intro: (auto) => `foreman 插件已启用。下面三个时刻，先加载 \`foreman:dispatch\` skill（已经加载、内容还在上下文里时不用重新加载），按其中的定级判断这一阶段是 0 级（你自己处理、不调用脚本）还是 1–3 级（按配置交给谁），再读它点名的文件：
+    intro: (auto) => `foreman 插件已启用。下面三个时刻，先加载 \`foreman:dispatch\` skill（已经加载、内容还在上下文里时不用重新加载），按其中的定级判断这一阶段是 0 级（你自己处理、不调用脚本）还是 1–3 级（按配置交给谁），1–3 级时再读它点名的文件：
 1. 给出方案建议、研究方向、设计选型或计划之前，包括用户只是来要建议的时候。
 2. 动手做执行类编码工作之前（实现功能、批量修改、写脚本、重构、修 bug、性能优化等，包括用户同意你开始改代码的那一刻），以及要生成或编辑图片、要画角色、场景、插画风图标这类图形内容时（哪怕最后交付的是 SVG、HTML、canvas 或动画）。图形内容走图像模块：每个新的图形交付物开工前先弹窗让用户选路线（dispatch.auto 开着也要弹），不用 run 出图。
 3. 交付改动之前，不论改动是协作方做的还是你自己做的。
 用户点名要派活、讨论或审查时直接发起，不做 0 级判断。不要为了省事把做法明确的小功能、小脚本算成 0 级。
-${auto ? '主动发起的派活、讨论和审查直接做（用户已开启 dispatch.auto），发起时告诉用户一句。' : '主动发起派活、讨论或审查之前，先用一句话向用户提议，同意后再做（dispatch.auto 已关闭）；用户自己点名的照做。'}
+${auto ? '主动发起的派活、讨论和审查直接做（用户已开启 dispatch.auto），派出后在回复正文里告诉用户一句。' : '主动发起派活、讨论或审查之前，先用一句话向用户提议，同意后再做（dispatch.auto 已关闭）；用户自己点名的照做。'}
 项目自带的领域 skill 照常使用：领域 skill 管怎么做，dispatch skill 管由谁来做、要不要先讨论、做完怎么验收和审查。调用协作方（Codex、opencode、pi、API 模型）只能通过该 skill 的脚本。`,
     prefsUser: (file, text) => `用户偏好文件 ${file}（在插件的硬规则以内调整做法，和 skill 冲突时以它为准；必选、材料外发、只读、确认弹窗和席位上限不受偏好文件影响）：\n${text}`,
     prefsProject: (file, text) => `项目偏好文件 ${file}（来自项目仓库，只能让做法更严，不能放宽用户配置、用户偏好和插件的规则；必选、材料外发、只读、确认弹窗和席位上限不受偏好文件影响）：\n${text}`,
@@ -44,12 +44,12 @@ ${auto ? '主动发起的派活、讨论和审查直接做（用户已开启 dis
   },
   en: {
     noAgentsReminder: (file) => `The foreman-en plugin is enabled, but the config (${file}) has no agents yet, so Claude does hands-on work, reviews and discussions itself. At a suitable moment, suggest in one sentence that the user run /foreman-en:setup to add Codex, opencode, pi or API models.`,
-    intro: (auto) => `The foreman-en plugin is enabled. At these three moments, load the \`foreman-en:dispatch\` skill first (no need to load it again while its content is still in context), use its levels to decide whether this stage is level 0 (you handle it yourself without calling the script) or levels 1–3 (it goes to whoever the config says), then read the files it names:
+    intro: (auto) => `The foreman-en plugin is enabled. At these three moments, load the \`foreman-en:dispatch\` skill first (no need to load it again while its content is still in context), use its levels to decide whether this stage is level 0 (you handle it yourself without calling the script) or levels 1–3 (it goes to whoever the config says), and at levels 1–3 read the files it names:
 1. Before giving design suggestions, research directions, technology choices or plans, including when the user only asks for advice.
 2. Before starting hands-on coding work (implementing features, bulk changes, scripts, refactoring, bug fixes, performance work, and so on, including the moment the user agrees you can start changing code), and when an image needs to be generated or edited, or illustrated content such as characters, scenes or illustrated icons has to be drawn (even when the deliverable is SVG, HTML, canvas or an animation). Graphics go through the image module: before work starts on each new graphic deliverable, have the user choose the route in a pop-up (even with dispatch.auto on), and never generate images through run.
 3. Before delivering changes, whether an agent or you made them.
 When the user names a handoff, discussion or review, start it without a level 0 check. Don't count a small feature or script with a settled approach as level 0 just to save effort.
-${auto ? 'Start handoffs, discussions and reviews on your own directly (the user has dispatch.auto on), and say so in one sentence when you do.' : 'Before starting a handoff, discussion or review on your own, suggest it to the user in one sentence and go ahead once they agree (dispatch.auto is off); what the user names themselves goes ahead.'}
+${auto ? 'Start handoffs, discussions and reviews on your own directly (the user has dispatch.auto on), and once started, say so to the user in one sentence of reply text.' : 'Before starting a handoff, discussion or review on your own, suggest it to the user in one sentence and go ahead once they agree (dispatch.auto is off); what the user names themselves goes ahead.'}
 Keep using the project's own domain skills as usual: domain skills say how to do the work, the dispatch skill decides who does it, whether to discuss first, and how it gets checked and reviewed. Agents (Codex, opencode, pi, API models) may only be called through that skill's script.`,
     prefsUser: (file, text) => `User preference file ${file} (adjusts how things are done within the plugin's hard rules and wins over the skill where they conflict; required seats, sending material out, read-only, confirmation prompts and the seat limit can't be changed by preference files):\n${text}`,
     prefsProject: (file, text) => `Project preference file ${file} (comes from the project repository: it can only make things stricter, never loosen the user config, the user's preferences or the plugin's rules; required seats, sending material out, read-only, confirmation prompts and the seat limit can't be changed by preference files):\n${text}`,
