@@ -77,6 +77,9 @@ function cmdPlan(o, load, adapters) {
     if (!match || match[2] !== undefined && !match[2].trim()) die(M.badSeat(value));
     return { seat: i + 1, agent: resolveAgentAlias(match[1], cfg, true), role: match[2]?.trim() || null };
   });
+  // 讨论和审查的 1 级不带角色（角色是 2、3 级的检查视角，见 references/seats.md）；补漏席不是角色
+  if (['discuss', 'review'].includes(o.module) && o.cell === 'simple'
+    && (o['host-role'] != null || seats.some((seat) => seat.role && !['补漏', 'gap'].includes(seat.role.toLowerCase())))) die(M.planRolesLevel1);
   const plan = { module: o.module, cell: o.cell, seats, seat_target: null, count_why: o['count-why'] ?? null,
     ...(o.module === 'image' ? { route: Number(o.route) } : {}) };
   if (['discuss', 'review'].includes(o.module)) plan.host = { seat: 0, role: o['host-role'] ?? null };
