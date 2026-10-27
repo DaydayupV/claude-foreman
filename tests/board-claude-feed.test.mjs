@@ -257,6 +257,37 @@ test('a question popup becomes ask, and its answer becomes ask_done with the sam
   assert.deepEqual(parseTranscriptLines([ask], ctx).events.map((e) => e.k), ['ask']);
 });
 
+test('live stream does not send a Claude Code edit again when the conversation changes directory and its path label is redone', { timeout: 15000 }, async (t) => {
+  const temp = fs.mkdtempSync(path.join(here, 'fixtures/board/cc-cwd-')), runRoot = path.join(temp, 'runs'), file = path.join(temp, 'synthetic.jsonl');
+  const seed = '20261018-214001-seed', dir = path.join(runRoot, seed); fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ mode: 'exec', agent: 'demo', group: 'demo', status: 'done', started_at: iso(2000), ended_at: iso(3000) }));
+  const at = (r, cwd) => JSON.stringify({ ...r, cwd });
+  fs.writeFileSync(file, [at(row('user', 'go', 0), 'C:/demo'), at(tool('Write', { file_path: 'C:/demo/a.md', content: 'x' }, 1000), 'C:/demo')].join('\n') + '\n');
+  const child = spawn(process.execPath, [path.join(here, '../foreman/skills/dispatch/scripts/board/server.mjs'), '--runs', runRoot, '--claude-dir', temp, '--config', path.join(temp, 'config.json'), '--transcript', file, '--prices', path.join(here, 'fixtures/board/prices-test.json')], { cwd: here, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(async () => { if (child.exitCode == null) { child.kill(); await once(child, 'exit'); } assert.equal(path.dirname(temp), path.join(here, 'fixtures/board')); fs.rmSync(temp, { recursive: true, force: true }); });
+  const [ready] = await once(child.stdout, 'data'), address = String(ready).match(/board: (http:\/\/\S+?)\?/)[1];
+  const res = await fetch(`${address}stream?group=demo`, { signal: AbortSignal.timeout(10000) }), reader = res.body.getReader(), decoder = new TextDecoder();
+  // 换到别的目录、再换回来，各发一条消息；最后那条消息到了，前面换目录引起的重算也都发生过了
+  const moves = [at(row('user', 'away', 2000), 'C:/other'), at(row('user', 'back', 3000), 'C:/demo'), at(row('user', 'last', 4000), 'C:/demo')];
+  let buffer = '', step = 0; const edits = [];
+  try {
+    for (let seen = false; !seen;) {
+      const { value, done } = await reader.read(); if (done) break; buffer += decoder.decode(value, { stream: true });
+      let end;
+      while ((end = buffer.indexOf('\n\n')) >= 0) {
+        const frame = buffer.slice(0, end); buffer = buffer.slice(end + 2);
+        const event = /^event: (.+)$/m.exec(frame)?.[1], json = /^data: (.+)$/m.exec(frame)?.[1]; if (!json) continue; const data = JSON.parse(json);
+        if (event === 'backlog' && data.run === 'cc') { edits.push(...data.events.filter((e) => e.k === 'edit')); fs.appendFileSync(file, `${moves[step++]}\n`); }
+        if (event === 'ev' && data.run === 'cc' && data.k === 'edit') edits.push(data);
+        if (event === 'ev' && data.run === 'cc' && data.k === 'prompt') {
+          if (data.t === 'last') seen = true; else if (step < moves.length) fs.appendFileSync(file, `${moves[step++]}\n`);
+        }
+      }
+    }
+  } finally { await reader.cancel(); }
+  assert.equal(edits.length, 1);
+});
+
 test('live stream sends the Claude Code lane before the seats and keeps returned events older than the last 200', { timeout: 15000 }, async (t) => {
   const temp = fs.mkdtempSync(path.join(here, 'fixtures/board/cc-order-')), runRoot = path.join(temp, 'runs'), file = path.join(temp, 'synthetic.jsonl');
   const id = '20261018-214001-seat', dir = path.join(runRoot, id); fs.mkdirSync(dir, { recursive: true });
