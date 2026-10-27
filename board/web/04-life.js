@@ -79,6 +79,9 @@ function verdictCounts(laneId, t) {
 const OUT_MIN_SHOW = 1.6; // 框至少完整显示这么多屏幕秒才收起（结果一交回马上被读走时也看得到）
 const OUT_COLLAPSE = 1.4;
 const OUT_HANDOFF = 0.55; // 屏幕秒：光团交接给产出框（光团淡掉、框从光团的位置长出来）
+// 直播里一次产出要经过写记录 → 服务读到 → 推到页面，页面拿到时离记录时刻已经过了零点几秒，交接在路上就过完了，
+// 看起来是一帧切换：从页面拿到的时刻算起（01-state.js 记的 seen / ended_seen）。晚到太久的（后台标签页）照记录时刻
+const shownAt = (ts, seen) => (seen != null && seen > ts && seen - ts < 10000 ? seen : ts);
 
 function lifeState(E, O, read, t) {
   if (O === Infinity) return { phase: 'gather', from: E, grow: 1 - Math.exp(-(t - E) / 60000) };
@@ -94,8 +97,8 @@ function lifeState(E, O, read, t) {
 // 某次任务到 t 为止：第一次有实际输出的时刻 O，被 Claude Code 读走的时刻 read（都没有就是 Infinity）
 function outTimes(lane, r, t) {
   const ended = r.ended_at != null && r.ended_at <= t;
-  let O = ended ? r.ended_at : Infinity, read = Infinity;
-  for (const e of lane.events) if (e.run === r.id && e.k === 'edit' && e.ts <= t) { O = Math.min(O, e.ts); break; }
+  let O = ended ? shownAt(r.ended_at, r.ended_seen) : Infinity, read = Infinity;
+  for (const e of lane.events) if (e.run === r.id && e.k === 'edit' && e.ts <= t) { O = Math.min(O, shownAt(e.ts, e.seen)); break; }
   if (ended) {
     const cc = B.laneById.get('cc');
     if (cc) for (const e of cc.events) if (e.k === 'collect' && e.ts >= r.ended_at && e.ts <= t && (e.target || []).includes(lane.id)) { read = e.ts; break; }
@@ -179,7 +182,7 @@ function ccLife(t) {
   bounds.sort((a, b) => a.ts - b.ts);
   const firstOut = (from, to) => {
     let O = Infinity;
-    for (const e of cc.events) if (e.ts > from && e.ts <= to && CC_OUT_KINDS.has(e.k)) { O = e.ts; break; }
+    for (const e of cc.events) if (e.ts > from && e.ts <= to && CC_OUT_KINDS.has(e.k)) { O = shownAt(e.ts, e.seen); break; }
     // Claude Code 席报告：等封好的印记飞进来（约 0.9 屏幕秒）才算有了输出
     const sealMs = 900 * (B.clock.mode === 'replay' ? B.clock.speed : 1);
     for (const r of cc.runs) if (r.kind === 'answer' && r.started_at > from && r.started_at + sealMs <= to) O = Math.min(O, r.started_at + sealMs);
@@ -190,7 +193,7 @@ function ccLife(t) {
   if (prev && last.kind) {
     const O = firstOut(prev.ts, last.ts), age = secSince(last.ts, t) - Math.max(0, OUT_MIN_SHOW - secSince(O, last.ts));
     const quietBefore = ccLastAct(cc, last.ts) + CC_QUIET < last.ts;
-    if (O < last.ts && !quietBefore && age < OUT_COLLAPSE) return { phase: age < 0 ? 'show' : 'collapse', from: prev.ts, to: last.ts, age: age < 0 ? 9 : age, kind: last.kind };
+    if (O !== Infinity && !quietBefore && age < OUT_COLLAPSE) return { phase: age < 0 ? 'show' : 'collapse', from: prev.ts, to: last.ts, age: age < 0 ? 9 : age, kind: last.kind };
   }
   const O = firstOut(last.ts, t);
   if (O === Infinity) return laneActive(cc, t) ? { phase: 'gather', from: last.ts, grow: 1 - Math.exp(-(t - last.ts) / 60000) } : { phase: 'none', from: last.ts };

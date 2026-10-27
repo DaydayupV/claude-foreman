@@ -40,6 +40,8 @@ export function hostCost(events, prices, out = {}) {
   return priced.length ? priced.reduce((a, b) => a + b, 0) : null;
 }
 export const costFields = (cost, source) => ({ cost_usd: cost, cost_source: source });
+// 每个任务发给页面做速度统计的事件条数上限（server.mjs 的 rateHistory，页面 01-state.js 同数）
+export const RATE_EVENTS_MAX = 20000;
 
 function flush(state, at, final = false) {
   const out = [];
@@ -568,9 +570,16 @@ export function createFeed(root, options = {}) {
       if (tail.wholeCost?.sig !== sig) { const priced = {}; tail.wholeCost = { sig, cost: hostCost(list, options.prices, priced), partial: !!priced.partial }; }
       cost = tail.wholeCost.cost; costPartial = tail.wholeCost.partial;
     }
+    // 页面的速度分段只来自这份记录最近 RATE_EVENTS_MAX 条事件：这些事件里的输出另记一份，平均速度拿它除以分段时长
+    // （总用量合并了先前的记录，那些没有分段；同一条消息的用量后来改大了，页面上那条旧事件不会重发，这里用的是最终的）
+    if (tail.rateOutput?.parsed !== parsed) {
+      let n = 0;
+      for (const e of parsed.events.slice(-RATE_EVENTS_MAX)) if (e.k === 'usage') n += e.u.out ?? 0;
+      tail.rateOutput = { parsed, n };
+    }
     data.runs.push({ id: 'cc', lane: 'cc', kind: 'host', agent: 'claude code', agent_type: 'host', model: m.model, session: m.session || path.basename(file, '.jsonl'), title: m.title, cwd: m.cwd,
       // 这一轮还没结尾就算在干活（在想、在等工具、被任务通知叫醒），不看多久没写记录；结尾了马上算闲，和星图一样
-      status: params.replay != null || !m.ended && now - Math.max(m.latest_at, tail.appendedAt ?? -Infinity) < BUSY_MAX ? 'running' : 'idle', started_at: started, ended_at: null, usage, ...costFields(cost, cost == null ? 'unknown' : 'api_price'), ...(costPartial && cost != null ? { cost_partial: true } : {}) });
+      status: params.replay != null || !m.ended && now - Math.max(m.latest_at, tail.appendedAt ?? -Infinity) < BUSY_MAX ? 'running' : 'idle', started_at: started, ended_at: null, usage, ...(params.replay == null ? { rate_output: tail.rateOutput.n } : {}), ...costFields(cost, cost == null ? 'unknown' : 'api_price'), ...(costPartial && cost != null ? { cost_partial: true } : {}) });
     append(data.events, parsed.events); data.versions.cc = `${file}:${tail.version}`; data.revisions.cc = '';
     data.hostEnd = session ? m.latest_at : end; return data;
   };
@@ -623,10 +632,24 @@ export function createFeed(root, options = {}) {
     }
     return [...at].map(([ts, v]) => ({ run: run.id, lane: run.lane, ts, k: 'verdict', plan: clip(run.meta.plan), round: run.meta.round ?? 1, ...v }));
   };
-  const recentNames = (now, hours) => names.filter((id) => {
+  // 任务和计划的 id 以建立的本地时刻开头
+  const idTime = (id) => {
     const p = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/.exec(id);
-    return p && new Date(+p[1], +p[2] - 1, +p[3], +p[4], +p[5], +p[6]).getTime() >= now - hours * 3600000;
-  });
+    return p ? new Date(+p[1], +p[2] - 1, +p[3], +p[4], +p[5], +p[6]).getTime() : -Infinity;
+  };
+  const recentNames = (now, hours) => names.filter((id) => idTime(id) >= now - hours * 3600000);
+  // 直播里刚建好、还没有任务引用的计划：页面靠它先拉出虚影席、让 Claude Code 的产出框收起汇聚，不能等第一个任务出现。
+  // 只看建好不到 30 分钟的（和页面上虚影席等多久一致，见 03-timeline.js 的 PLAN_IDLE）；目录有变化才重新列
+  let planDir = null;
+  const freshPlans = (now) => {
+    const dir = path.join(root, 'plans'), st = stat(dir);
+    if (!st) return [];
+    if (planDir?.mtime !== st.mtimeMs) {
+      try { planDir = { mtime: st.mtimeMs, ids: fs.readdirSync(dir).filter((f) => /^\d{8}-\d{6}-[^.]+\.json$/.test(f)).map((f) => f.slice(0, -5)) }; }
+      catch { return []; }
+    }
+    return planDir.ids.filter((id) => idTime(id) >= now - 30 * 60000);
+  };
   const dataOf = (selected, now, onEvent) => {
     const runs = [], events = [], versions = {}, revisions = {};
     for (const run of selected.runs) {
@@ -742,6 +765,15 @@ export function createFeed(root, options = {}) {
       const queuedTotal = selected.queued.length;
       selected.queued = selected.queued.slice(0, 30);
       const data = addClaude(dataOf(selected, now), selected.runs, params, now);
+      if (params.replay == null && (selected.scope.kind === 'session' || selected.scope.kind === 'group')) {
+        const have = new Set(data.events.filter((e) => e.k === 'fplan').map((e) => e.plan));
+        const ids = selected.scope.kind === 'session' ? params.sessions ?? new Set([selected.scope.value]) : null;
+        for (const id of freshPlans(now)) {
+          if (have.has(clip(id))) continue;
+          const ev = planEvent(id), p = plans.get(id)?.value;
+          if (ev && (ids ? ids.has(p.claude_session) : p.group === selected.scope.value && (p.claude_session ?? null) === (session ?? null))) data.events.push(ev);
+        }
+      }
       const active = new Set(current(selected.runs).map((r) => r.id));
       for (const run of data.runs) if (active.has(run.id) && run.group != null) run.dispatch_queue = selected.queued.filter((q) => q.group === run.group && (q.session ?? null) === (run.session ?? null));
       // 无席位启动时也有组面板；快照走现有 ev 通道，网页不必伪造一条 run。

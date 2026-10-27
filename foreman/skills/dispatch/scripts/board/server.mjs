@@ -5,7 +5,7 @@ import http from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { createFeed, buildReplay, snapshotAt, imagesOf, usageReader } from './feed.mjs';
+import { createFeed, buildReplay, snapshotAt, imagesOf, usageReader, RATE_EVENTS_MAX } from './feed.mjs';
 import { loadPrices } from '../prices.mjs';
 import { createUniverse, universeChanges, universeAt, desktopRoots, desktopSessions } from './universe.mjs';
 import { buildId, buildStamp } from './build-id.mjs';
@@ -128,7 +128,6 @@ const backlog = (events) => {
   // start 在最前（和原来一样），其余保持原来的先后
   return [...(start ? [start] : []), ...events.filter((ev) => ev !== start && (kept.has(ev) || tail.has(ev)))];
 };
-const RATE_EVENTS_MAX = 20000;
 // 同一次读到的数据（同一范围的几个页面共用一份）先整理一次：按任务分好的事件、每个任务和每份计划的 JSON、排队快照、
 // Claude Code 事件的比对键。不然每个页面每秒都要把全部事件按任务过滤一遍（任务数 × 事件数）、把 Claude Code 的每条事件序列化一遍，
 // 长对话开着几个看板标签页时，没有新数据也能占满一个核

@@ -365,9 +365,13 @@ function laneStats(lane, t) {
     return u ? Math.abs(u.output - tokens) <= 1e-6 * Math.max(1, u.output) : tokens === 0;
   });
   if (liveRate(lane, t) > 0) est = true;
+  // 直播里 Claude Code 的用量合并了桌面版重启前的先前记录，那些记录没有速度分段：平均速度用服务端算好的、
+  // 有分段的那些事件的输出（rate_output），不然几天的总输出除以当前这份记录的生成时长，速度大出十几倍
+  const host = lane.id === 'cc' && B.clock.mode === 'live' ? lane.runs.find((r) => r.kind === 'host') : null;
+  const genOut = host?.rate_output ?? out;
   return {
     ...sum, output: usage_unattributed ? null : out, usage_unattributed, cost: costKnown ? cost : null, costPartial, est, running,
-    rate: recordRate(lane, t), avg: gen > 0 && complete && !usage_unattributed ? out / (gen / 1000) : null,
+    rate: recordRate(lane, t), avg: gen > 0 && complete && !usage_unattributed ? genOut / (gen / 1000) : null,
     elapsed: first != null ? (last - first) / 1000 : 0,
   };
 }
