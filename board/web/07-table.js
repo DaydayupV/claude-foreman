@@ -118,7 +118,12 @@ function tableRows(t) {
   const live = (u) => unitLanes(u).some((l) => laneStatus(l, t).running) || !!u.group && dispatchQueue(t).some((q) => q.group === u.group);
   const done = units.filter((u) => !live(u)).sort((a, b) => unitEnd(b, t) - unitEnd(a, t));
   for (const u of [...units.filter(live), ...done]) {
-    if (!u.group) { out.push({ lane: u.lane }); continue; }
+    if (!u.group) {
+      // 没有组的单席任务也写一行组头（刻度带上也有），不然它紧跟在上一组的行后面，看起来像那一组的
+      const r = currentRun(u.lane, t);
+      out.push({ head: true, id: `head:${u.id}`, text: Display.groupTask([Display.displayRun(r)]).short, counts: Display.countParts([seatStatus(u.lane, r, t)]) });
+      out.push({ lane: u.lane }); continue;
+    }
     const { blocks, all, plans, queue, states } = groupSeats(u, t), order = blocks.filter((b) => b.lane).map((b) => b.lane);
     const lanes = [...order, ...u.lanes.filter((l) => !order.includes(l))].filter(started);
     if (!lanes.length) continue;

@@ -157,12 +157,15 @@ function laneFor(id) {
   return lane;
 }
 
+// 直播里页面拿到一次产出的时刻（产出框的交接从这一刻算起，见 04-life.js 的 shownAt）。页面在后台时不记：
+// 看不到交接，回来时框照记录时刻已经在了
+const seenNow = () => (B.clock.mode === 'live' && !(typeof document !== 'undefined' && document.hidden) ? Date.now() : null);
+
 function onRun(r) {
-  // 直播里记下页面什么时候知道任务结束了（产出框的交接从这一刻算起，见 04-life.js 的 shownAt）；
-  // 连上时就已经结束的不记，结束后再发来的沿用第一次的
+  // 记下页面什么时候知道任务结束了；连上时就已经结束的不记，结束后再发来的沿用第一次的
   const prev = B.runs.get(r.id);
-  if (B.clock.mode === 'live' && r.ended_at != null) {
-    const seen = prev?.ended_seen ?? (prev ? (prev.ended_at == null ? Date.now() : null) : B.synced ? Date.now() : null);
+  if (r.ended_at != null) {
+    const seen = prev?.ended_seen ?? (prev ? (prev.ended_at == null ? seenNow() : null) : B.synced ? seenNow() : null);
     if (seen != null) r.ended_seen = seen;
   }
   B.runs.set(r.id, r);
@@ -190,8 +193,9 @@ function noteEvent(ev, lane) {
 
 // 实时的一条事件
 function onEv(ev, stats = true) {
-  // 直播里逐条推来的事件记下到达页面的时刻（产出框的交接用，见 04-life.js 的 shownAt）
-  if (B.clock.mode === 'live') ev.seen = Date.now();
+  // 直播里逐条推来的事件记下到达页面的时刻（产出框的交接用）
+  const seen = seenNow();
+  if (seen != null) ev.seen = seen;
   const lane = laneOf(ev);
   noteEvent(ev, lane);
   insertByTs(lane.events, ev, LANE_EVENTS_MAX);

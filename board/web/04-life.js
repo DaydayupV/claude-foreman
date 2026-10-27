@@ -80,8 +80,10 @@ const OUT_MIN_SHOW = 1.6; // 框至少完整显示这么多屏幕秒才收起（
 const OUT_COLLAPSE = 1.4;
 const OUT_HANDOFF = 0.55; // 屏幕秒：光团交接给产出框（光团淡掉、框从光团的位置长出来）
 // 直播里一次产出要经过写记录 → 服务读到 → 推到页面，页面拿到时离记录时刻已经过了零点几秒，交接在路上就过完了，
-// 看起来是一帧切换：从页面拿到的时刻算起（01-state.js 记的 seen / ended_seen）。晚到太久的（后台标签页）照记录时刻
-const shownAt = (ts, seen) => (seen != null && seen > ts && seen - ts < 10000 ? seen : ts);
+// 看起来是一帧切换：从页面拿到的时刻算起（01-state.js 记的 seen / ended_seen，页面在后台时不记）。
+// Claude Code 一条消息的几行要等整条消息生成完才一起写进记录，每行的时间戳却是那一块生成完的时刻，
+// 长消息里靠前的工具调用会晚到十几秒，所以不设上限
+const shownAt = (ts, seen) => (seen != null && seen > ts ? seen : ts);
 
 function lifeState(E, O, read, t) {
   if (O === Infinity) return { phase: 'gather', from: E, grow: 1 - Math.exp(-(t - E) / 60000) };
