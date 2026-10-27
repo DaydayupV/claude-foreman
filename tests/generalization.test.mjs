@@ -140,7 +140,9 @@ test('项目只能保留同格候选，整格关闭并忽略模型覆盖', async
   c.modules.discuss.normal = [{ agent: 'codex', effort: 'high' }, { agent: 'api', effort: null }];
   h.config(c);
   h.write('.claude/foreman.json', { modules: { run: { complex: { agent: 'second' } } } });
-  failed(await h.bridge(['config', '--cwd', h.cwd]), M.projectLevelEmpty('modules.run.complex'));
+  let closed = await h.bridge(['config', '--cwd', h.cwd]);
+  assert.equal(output(closed).effective.modules.run.complex, 'claude code');
+  assert.ok(closed.stderr.includes(M.projectLevelEmpty('modules.run.complex')));
   h.write('.claude/foreman.json', { agents: { codex: { model: 'unsafe' } }, dispatch: { timeout_min: 2, stall_min: 3, busy_ask_min: 4, auto: false }, modules: {
     run: { simple: { agent: 'codex' } }, review: { simple: 'claude code', normal: { agent: 'codex', effort: 'low', model: 'unsafe' }, complex: { agent: 'codex' } },
     discuss: { simple: 'claude code', normal: [{ agent: 'api', effort: 'low', model: 'unsafe' }, { agent: 'second' }] },
@@ -157,7 +159,9 @@ test('项目只能保留同格候选，整格关闭并忽略模型覆盖', async
   assert.ok(r.stderr.includes(M.projectCellOpened('modules.run.simple')));
   assert.ok(r.stderr.includes(M.projectAgentDropped('model', 'modules.review.normal')));
   h.write('.claude/foreman.json', { modules: { discuss: { normal: [{ agent: 'second' }] } } });
-  failed(await h.bridge(['config', '--cwd', h.cwd]), M.projectLevelEmpty('modules.discuss.normal'));
+  closed = await h.bridge(['config', '--cwd', h.cwd]);
+  assert.equal(output(closed).effective.modules.discuss.normal, 'claude code');
+  assert.ok(closed.stderr.includes(M.projectLevelEmpty('modules.discuss.normal')));
 });
 
 for (const scenario of ['nothing', 'codex', 'opencode', 'pi', 'api', 'all', 'logged-out', 'empty-models']) test(`环境检测和初始配置：${scenario}`, async (t) => {

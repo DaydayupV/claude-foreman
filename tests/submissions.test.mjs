@@ -21,7 +21,7 @@ for (const module of ['discuss', 'review']) test(`${module} 计划把 Claude Cod
   const p = output(await h.bridge(planArgs(h, module, ['codex=质疑'], ['--host-role', '方案'])));
   assert.deepEqual(p.host, { seat: 0, role: '方案' });
   assert.deepEqual(json(p.file).host, p.host); assert.equal(p.seats[0].seat, 1);
-  assert.equal(p.commands[0], `node "${BRIDGE}" submit --plan ${p.plan_id} --report "<报告.json>"`);
+  assert.equal(p.commands[0], `node "${BRIDGE}" submit --plan ${p.plan_id} --report "<报告.json>" --model "<当前模型 ID>"`);
   assert.ok(p.commands[1].includes(`${module} --plan ${p.plan_id} --seat 1`));
   assert.equal(p.guidance, M.planGuidance(module));
   const plain = output(await h.bridge(planArgs(h, module))); assert.equal(plain.host.role, null);

@@ -72,10 +72,13 @@ for (const type of ['opencode cli', 'api']) test(`项目不能改 ${type} 强度
   assert.ok(r.stderr.includes(M.projectEffortUnordered('modules.discuss.normal', 'remote', type)));
 });
 
-for (const [module, cell] of [['discuss', 'normal'], ['run', 'complex'], ['review', 'normal'], ['image', 'generate'], ['image', 'draw']]) test(`项目过滤空格子报错 ${module}.${cell}`, async (t) => {
+for (const [module, cell] of [['discuss', 'normal'], ['run', 'complex'], ['review', 'normal'], ['image', 'generate'], ['image', 'draw']]) test(`项目过滤空格子按项目关掉 ${module}.${cell}`, async (t) => {
   const h = sandbox(t), c = baseConfig(); c.modules[module][cell] = [{ agent: 'codex' }]; h.config(c);
   h.write('.claude/foreman.json', { modules: { [module]: { [cell]: { agent: 'missing' } } } });
-  failed(await h.bridge(configArgs(h)), M.projectLevelEmpty(`modules.${module}.${cell}`));
+  const r = await h.bridge(configArgs(h)), out = output(r);
+  assert.equal(out.effective.modules[module][cell], module === 'image' ? null : 'claude code');
+  assert.ok(out.closed_by_project.includes(`${module}.${cell}`));
+  assert.ok(r.stderr.includes(M.projectLevelEmpty(`modules.${module}.${cell}`)));
 });
 
 test('用户关闭的格子项目不能打开，image 也只能收紧并可整格关闭', async (t) => {

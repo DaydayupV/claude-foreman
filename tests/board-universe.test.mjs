@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { boardEnv } from './helpers.mjs';
 import path from 'node:path';
 import os from 'node:os';
 import http from 'node:http';
@@ -8,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
-import { createUniverse, universeAt, universeChanges, projectRoot, desktopHidden } from '../foreman/skills/dispatch/scripts/board/universe.mjs';
+import { createUniverse, universeAt, universeChanges, projectRoot, desktopHidden, desktopSessions } from '../foreman/skills/dispatch/scripts/board/universe.mjs';
 import { createFeed, selectScope, buildReplay } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
 import { loadPrices } from '../foreman/skills/dispatch/scripts/prices.mjs';
 
@@ -326,7 +327,7 @@ async function collect(url, stop, onFrame = () => {}) {
 
 async function startServer(t, f, args = [], env = {}) {
   const child = spawn(process.execPath, [path.join(here, '../foreman/skills/dispatch/scripts/board/server.mjs'), '--runs', f.options.runs, '--claude-dir', f.options.claudeDir, '--config', f.options.config,
-    '--prices', path.join(here, 'fixtures/board/prices-test.json'), ...args], { cwd: here, env: { ...process.env, FOREMAN_LANG: 'zh', ...env }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    '--prices', path.join(here, 'fixtures/board/prices-test.json'), ...args], { cwd: here, env: boardEnv({ FOREMAN_LANG: 'zh', ...env }), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   const exited = once(child, 'exit'), closed = once(child, 'close');
   t.after(async () => { if (child.exitCode == null && child.signalCode == null) child.kill(); await closed; });
   let stderr = '';
@@ -364,7 +365,7 @@ test('live routes preserve guards and updates, reject replay/from; debug replay 
   f.session('other', [row('user', liveNow - 15000, 'other'), answer(liveNow - 5000)], 'demo', liveNow);
   f.run('work', { started_at: liveNow - 18000, ended_at: liveNow - 8000 });
   const child = spawn(process.execPath, [path.join(here, '../foreman/skills/dispatch/scripts/board/server.mjs'), '--runs', f.options.runs, '--claude-dir', f.options.claudeDir, '--config', f.options.config,
-    '--window-h', '1', '--prices', path.join(here, 'fixtures/board/prices-test.json')], { cwd: here, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    '--window-h', '1', '--prices', path.join(here, 'fixtures/board/prices-test.json')], { cwd: here, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: boardEnv() });
   t.after(async () => { if (child.exitCode == null) { child.kill(); await once(child, 'exit'); } });
   const [ready] = await once(child.stdout, 'data'), address = String(ready).match(/board: (http:\/\/\S+?)\?/)[1];
   const response = await fetch(`${address}sessions`); assert.equal(response.headers.get('cache-control'), 'no-store');
@@ -862,7 +863,7 @@ test('排队票按对话保持组的问题点和派发状态，每次扫描只�
   assert.equal(sessions.get('queue-only').state, 'idle'); assert.equal(sessions.get('waiting').state, 'waiting');
 });
 
-test('conversations archived or deleted in the desktop app are left out of the universe, other ones stay', (t) => {
+test('conversations archived or deleted in the desktop app are left out of the universe, and with desktop data only its own conversations are listed', (t) => {
   const f = temp(t);
   for (const id of ['keep', 'archived', 'deleted', 'cli-only']) f.session(id, [row('user', now - 40000, id)]);
   const roots = [path.join(f.root, 'desktop', 'claude-code-sessions')], account = path.join(roots[0], 'org', 'account');
@@ -871,7 +872,7 @@ test('conversations archived or deleted in the desktop app are left out of the u
   f.write(path.join(account, 'deleted_deleted'), '1792231326911');
   f.write(path.join(account, 'local_3.json'), '{"cliSessionId": "keep", "isArch');
   const ids = (options) => createUniverse(options).read().sessions.map((s) => s.id).sort();
-  assert.deepEqual(ids({ ...f.options, desktopRoots: roots }), ['cli-only', 'keep']);
+  assert.deepEqual(ids({ ...f.options, desktopRoots: roots }), ['keep']);
   // 找不到桌面版的数据目录时全部照列
   assert.deepEqual(ids(f.options), ['archived', 'cli-only', 'deleted', 'keep']);
   // 在桌面版里取消归档：下一次重列时回来；元数据没变的文件不重读，5 秒内不重列
@@ -895,7 +896,7 @@ test('a seat restarted in the same plan without a parent replaces its failed rou
   f.run('x1', { claude_session: 'gone', agent: 'configured', status: 'running', started_at: now - 3000, ended_at: null });
   f.write(f.options.config, { agents: { configured: { type: 'opencode cli', max_parallel: 2 } } });
   const account = path.join(f.root, 'desktop', 'claude-code-sessions', 'org', 'account');
-  f.write(path.join(account, 'local_1.json'), { cliSessionId: 'gone', isArchived: true });
+  f.write(path.join(account, 'local_1.json'), { cliSessionId: 'gone', isArchived: true }); f.write(path.join(account, 'local_2.json'), { cliSessionId: 's' });
   const data = createUniverse({ ...f.options, desktopRoots: [path.join(f.root, 'desktop', 'claude-code-sessions')] }).read();
   assert.deepEqual(data.sessions.map((s) => s.id), ['s']);
   assert.deepEqual(data.sessions[0].issues.map((x) => x.run), ['r3']);
@@ -1000,4 +1001,132 @@ test('a conversation resumed under a new session id shows once, with the runs an
   // 归档：先前的记录一起不列
   f.write(meta, { cliSessionId: 'new', priorCliSessionIds: ['old'], isArchived: true });
   assert.deepEqual(read().sessions, []);
+});
+
+test('desktop children inherit their parent repository, including older counts and updates when parent metadata arrives', (t) => {
+  const f = temp(t), parentRepo = path.join(f.root, 'parent-repo'), childRepo = path.join(f.root, 'child-repo');
+  for (const repo of [parentRepo, childRepo]) f.write(path.join(repo, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  const parentCwd = path.join(parentRepo, 'src'), childCwd = path.join(childRepo, 'release', 'b'), old = now - 2 * 86400000;
+  f.session('parent', [{ ...row('user', now - 40000, 'parent'), cwd: parentCwd }], 'parent');
+  f.session('child', [{ ...row('user', now - 30000, 'child'), cwd: childCwd }], 'child');
+  for (const [id, mtime] of [['old-file', old], ['old-turn', now], ['old-top', old]]) {
+    f.session(id, [{ ...row('user', old, id), cwd: childCwd }], 'child', mtime);
+  }
+  const roots = [path.join(f.root, 'desktop', 'claude-code-sessions')], account = path.join(roots[0], 'org', 'account');
+  for (const id of ['child', 'old-file', 'old-turn']) f.write(path.join(account, `local_${id}.json`), {
+    sessionId: `local_${id}`, cliSessionId: id, spawnedFrom: { sessionId: 'local_parent' }, originCwd: childCwd,
+  });
+  let clock = 0;
+  const universe = createUniverse({ ...f.options, desktop: desktopSessions(roots, () => clock) }), before = universe.read();
+  const key = (cwd) => cwd.replace(/\\/g, '/').toLowerCase();
+  assert.equal(before.sessions.find((s) => s.id === 'child').parent, null);
+  assert.equal(before.sessions.find((s) => s.id === 'child').project, key(childRepo));
+  // 已读记录的启动目录优先于元数据，迟到的父元数据也要更新已有子对话
+  f.write(path.join(account, 'local_parent.json'), { sessionId: 'local_parent', cliSessionId: 'parent', originCwd: childCwd });
+  clock = 5000;
+  const after = universe.read(), child = after.sessions.find((s) => s.id === 'child');
+  assert.equal(child.parent, 'parent'); assert.equal(child.project, key(parentRepo));
+  assert.equal(after.sessions.find((s) => s.id === 'parent').parent, null);
+  assert.deepEqual(after.sessions.map((s) => s.id).sort(), ['child', 'parent']);
+  assert.deepEqual(after.projects.map((p) => [p.key, p.older]).sort(), [[key(childRepo), 1], [key(parentRepo), 2]].sort());
+  const changes = universeChanges(before, after);
+  assert.deepEqual(changes.find((m) => m.event === 'session' && m.data.id === 'child').data, child);
+  assert.ok(changes.some((m) => m.event === 'project' && m.data.key === key(parentRepo) && m.data.older === 2));
+});
+
+test('desktop grandchildren use the root metadata directory even when neither ancestor is listed', (t) => {
+  const f = temp(t), repo = path.join(f.root, 'root-repo'), other = path.join(f.root, 'other-repo');
+  for (const cwd of [repo, other]) f.write(path.join(cwd, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  f.session('grandchild', [{ ...row('user', now - 30000, 'grandchild'), cwd: other }]);
+  const roots = [path.join(f.root, 'desktop', 'claude-code-sessions')], account = path.join(roots[0], 'org', 'account');
+  f.write(path.join(account, 'local_child.json'), { cliSessionId: 'child', spawnedFrom: { sessionId: 'local_root' }, cwd: other });
+  f.write(path.join(account, 'local_grandchild.json'), { cliSessionId: 'grandchild', spawnedFrom: { sessionId: 'local_child' }, cwd: other });
+  for (const fields of [{ originCwd: path.join(repo, 'src'), cwd: other }, { cwd: path.join(repo, 'src') }]) {
+    f.write(path.join(account, 'local_root.json'), { cliSessionId: 'root', ...fields });
+    const data = createUniverse({ ...f.options, desktopRoots: roots }).read();
+    assert.deepEqual(data.sessions.map((s) => [s.id, s.parent, s.project]), [['grandchild', 'child', repo.replace(/\\/g, '/').toLowerCase()]]);
+    assert.deepEqual(data.projects.map((p) => p.cwd), [repo]);
+  }
+});
+
+test('lineageDetached makes a desktop child top-level and its descendants follow that new root', (t) => {
+  const f = temp(t), rootRepo = path.join(f.root, 'root-repo'), detachedRepo = path.join(f.root, 'detached-repo');
+  for (const repo of [rootRepo, detachedRepo]) f.write(path.join(repo, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  const roots = [path.join(f.root, 'desktop', 'claude-code-sessions')], account = path.join(roots[0], 'org', 'account');
+  for (const [id, cwd, fields] of [
+    ['root', rootRepo, {}],
+    ['detached', detachedRepo, { spawnedFrom: { sessionId: 'local_root' }, lineageDetached: true }],
+    ['grandchild', rootRepo, { spawnedFrom: { sessionId: 'local_detached' } }],
+  ]) {
+    f.session(id, [{ ...row('user', now - 30000, id), cwd }], id);
+    f.write(path.join(account, `local_${id}.json`), { cliSessionId: id, originCwd: rootRepo, ...fields });
+  }
+  const sessions = new Map(createUniverse({ ...f.options, desktopRoots: roots }).read().sessions.map((s) => [s.id, s]));
+  assert.equal(sessions.get('root').parent, null);
+  assert.equal(sessions.get('detached').parent, null);
+  assert.equal(sessions.get('detached').project, detachedRepo.replace(/\\/g, '/').toLowerCase());
+  assert.equal(sessions.get('grandchild').parent, 'detached');
+  assert.equal(sessions.get('grandchild').project, sessions.get('detached').project);
+});
+
+test('archived, deleted, missing and other-account or other-org desktop parents leave children top-level', (t) => {
+  const f = temp(t), parentRepo = path.join(f.root, 'parent-repo'), childRepo = path.join(f.root, 'child-repo');
+  for (const repo of [parentRepo, childRepo]) f.write(path.join(repo, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  const roots = [path.join(f.root, 'desktop', 'claude-code-sessions')], account = path.join(roots[0], 'org', 'account');
+  f.write(path.join(account, 'local_archived.json'), { cliSessionId: 'archived', isArchived: true, originCwd: parentRepo });
+  f.write(path.join(account, 'local_deleted.json'), { cliSessionId: 'deleted', originCwd: parentRepo });
+  f.write(path.join(account, 'deleted_deleted'), '1792231326911');
+  f.write(path.join(roots[0], 'org', 'other-account', 'local_foreign-account.json'), { cliSessionId: 'foreign-account', originCwd: parentRepo });
+  f.write(path.join(roots[0], 'other-org', 'account', 'local_foreign-org.json'), { cliSessionId: 'foreign-org', originCwd: parentRepo });
+  for (const id of ['archived', 'deleted']) f.session(id, [{ ...row('user', now - 40000, id), cwd: parentRepo }], 'parent');
+  const ids = ['archived', 'deleted', 'missing', 'foreign-account', 'foreign-org'].map((id) => {
+    const child = `${id}-child`;
+    f.session(child, [{ ...row('user', now - 30000, child), cwd: childRepo }]);
+    f.write(path.join(account, `local_${child}.json`), { cliSessionId: child, spawnedFrom: { sessionId: `local_${id}` } });
+    return child;
+  });
+  const data = createUniverse({ ...f.options, desktopRoots: roots }).read();
+  assert.deepEqual(data.sessions.map((s) => s.id).sort(), ids.sort());
+  assert.ok(data.sessions.every((s) => s.parent === null && s.project === childRepo.replace(/\\/g, '/').toLowerCase()));
+});
+
+test('desktop parents use the current CLI id after resume and preserve lineage through cached or unreadable metadata', (t) => {
+  const f = temp(t), parentRepo = path.join(f.root, 'parent-repo'), childRepo = path.join(f.root, 'child-repo');
+  for (const repo of [parentRepo, childRepo]) f.write(path.join(repo, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  for (const [id, cwd] of [['parent-old', parentRepo], ['parent-new', parentRepo], ['child-old', childRepo], ['child', childRepo]]) {
+    f.session(id, [{ ...row('user', now - 30000, id), cwd }], id);
+  }
+  const roots = [path.join(f.root, 'desktop', 'claude-code-sessions')], account = path.join(roots[0], 'org', 'account');
+  const parentFile = path.join(account, 'local_parent.json'), childFile = path.join(account, 'local_child.json');
+  f.write(parentFile, { cliSessionId: 'parent-old', originCwd: parentRepo });
+  f.write(childFile, { cliSessionId: 'child', priorCliSessionIds: ['child-old'], spawnedFrom: { sessionId: 'local_parent' }, originCwd: childRepo });
+  const read = fs.readFileSync, reads = new Map();
+  t.mock.method(fs, 'readFileSync', function (file, ...args) {
+    if ([parentFile, childFile].includes(file)) reads.set(file, (reads.get(file) || 0) + 1);
+    return read.call(this, file, ...args);
+  });
+  let clock = 0;
+  const desktop = desktopSessions(roots, () => clock), universe = createUniverse({ ...f.options, desktop }), before = universe.read();
+  assert.equal(before.sessions.find((s) => s.id === 'child').parent, 'parent-old');
+  clock = 5000; desktop();
+  assert.deepEqual([reads.get(parentFile), reads.get(childFile)], [1, 1]);
+  f.write(parentFile, { cliSessionId: 'parent-new', priorCliSessionIds: ['parent-old'], originCwd: parentRepo });
+  clock = 9999; assert.equal(desktop().parents.get('child'), 'parent-old');
+  clock = 10000;
+  const after = universe.read(), state = desktop(), child = after.sessions.find((s) => s.id === 'child');
+  assert.equal(child.parent, 'parent-new');
+  assert.equal(child.project, before.sessions.find((s) => s.id === 'child').project);
+  assert.deepEqual([...state.parents], [['child', 'parent-new']]);
+  assert.deepEqual([...state.aliases].sort(), [['child-old', 'child'], ['parent-old', 'parent-new']]);
+  assert.equal(state.cwds.get('parent-new'), parentRepo);
+  assert.deepEqual(after.sessions.map((s) => s.id).sort(), ['child', 'parent-new']);
+  assert.ok(universeChanges(before, after).some((m) => m.event === 'session' && m.data.id === 'child' && m.data.parent === 'parent-new'));
+  f.write(parentFile, '{"cliSessionId":');
+  clock = 15000; assert.deepEqual(desktop(), state);
+  const readdir = fs.readdirSync;
+  t.mock.method(fs, 'readdirSync', function (dir, ...args) {
+    if (dir === account) throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+    return readdir.call(this, dir, ...args);
+  });
+  clock = 20000; assert.deepEqual(desktop(), state);
 });

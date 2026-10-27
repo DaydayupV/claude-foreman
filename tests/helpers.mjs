@@ -10,6 +10,11 @@ export { MESSAGES } from '../foreman/skills/dispatch/scripts/messages.mjs';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const BRIDGE = path.join(ROOT, 'foreman/skills/dispatch/scripts/cli.mjs');
+// 起看板服务的测试不读这台机器上真实的桌面版对话列表（APPDATA、LOCALAPPDATA 下的 claude-code-sessions）：
+// 有桌面版数据时星图只列桌面版里的对话，测试造的对话就都不见了
+const NO_DESKTOP = fs.mkdtempSync(path.join(os.tmpdir(), 'foreman-no-desktop-'));
+process.on('exit', () => fs.rmSync(NO_DESKTOP, { recursive: true, force: true }));
+export const boardEnv = (extra = {}) => ({ ...process.env, APPDATA: NO_DESKTOP, LOCALAPPDATA: NO_DESKTOP, XDG_CONFIG_HOME: NO_DESKTOP, ...extra });
 export const CODEX = path.join(ROOT, 'tests/fake/codex.mjs');
 export const OPENCODE = path.join(ROOT, 'tests/fake/opencode.mjs');
 export const PI = path.join(ROOT, 'tests/fake/pi.mjs');

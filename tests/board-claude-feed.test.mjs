@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { boardEnv } from './helpers.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -224,7 +225,7 @@ test('live polling sends ev_link for a late run without repeating dispatch, coll
   write(seed, 'exec');
   const partial = row('assistant', [{ type: 'thinking', thinking: 'demo' }], 10); partial.message = { ...partial.message, model: 'claude-opus-5', usage: { input_tokens: 10, output_tokens: 3 } };
   fs.writeFileSync(file, [...Array.from({ length: 205 }, (_, i) => row('user', `history ${i}`, i - 1000)), tool('Bash', { command: 'node "C:/demo/cli.mjs" discuss --agent demo' }), row('user', [{ type: 'tool_result', tool_use_id: 'tool_0', content: 'Command running in background with ID: taskdemo' }], 1), tool('Read', { file_path: 'C:/demo/tasks/taskdemo.output' }, 2), row('user', '<task-notification><task-id>taskdemo</task-id><status>completed</status></task-notification>', 3), partial].map((r) => JSON.stringify(r)).join('\n') + '\n');
-  const child = spawn(process.execPath, [path.join(here, '../foreman/skills/dispatch/scripts/board/server.mjs'), '--runs', runRoot, '--claude-dir', temp, '--config', path.join(temp, 'config.json'), '--transcript', file, '--prices', path.join(here, 'fixtures/board/prices-test.json')], { cwd: here, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [path.join(here, '../foreman/skills/dispatch/scripts/board/server.mjs'), '--runs', runRoot, '--claude-dir', temp, '--config', path.join(temp, 'config.json'), '--transcript', file, '--prices', path.join(here, 'fixtures/board/prices-test.json')], { cwd: here, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: boardEnv() });
   t.after(async () => { if (child.exitCode == null) { child.kill(); await once(child, 'exit'); } assert.equal(path.dirname(temp), path.join(here, 'fixtures/board')); fs.rmSync(temp, { recursive: true, force: true }); });
   const [ready] = await once(child.stdout, 'data'), address = String(ready).match(/board: (http:\/\/\S+?)\?/)[1];
   const res = await fetch(`${address}stream?group=demo`, { signal: AbortSignal.timeout(10000) }), reader = res.body.getReader(), decoder = new TextDecoder();
@@ -263,7 +264,7 @@ test('live stream does not send a Claude Code edit again when the conversation c
   fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ mode: 'exec', agent: 'demo', group: 'demo', status: 'done', started_at: iso(2000), ended_at: iso(3000) }));
   const at = (r, cwd) => JSON.stringify({ ...r, cwd });
   fs.writeFileSync(file, [at(row('user', 'go', 0), 'C:/demo'), at(tool('Write', { file_path: 'C:/demo/a.md', content: 'x' }, 1000), 'C:/demo')].join('\n') + '\n');
-  const child = spawn(process.execPath, [path.join(here, '../foreman/skills/dispatch/scripts/board/server.mjs'), '--runs', runRoot, '--claude-dir', temp, '--config', path.join(temp, 'config.json'), '--transcript', file, '--prices', path.join(here, 'fixtures/board/prices-test.json')], { cwd: here, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [path.join(here, '../foreman/skills/dispatch/scripts/board/server.mjs'), '--runs', runRoot, '--claude-dir', temp, '--config', path.join(temp, 'config.json'), '--transcript', file, '--prices', path.join(here, 'fixtures/board/prices-test.json')], { cwd: here, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: boardEnv() });
   t.after(async () => { if (child.exitCode == null) { child.kill(); await once(child, 'exit'); } assert.equal(path.dirname(temp), path.join(here, 'fixtures/board')); fs.rmSync(temp, { recursive: true, force: true }); });
   const [ready] = await once(child.stdout, 'data'), address = String(ready).match(/board: (http:\/\/\S+?)\?/)[1];
   const res = await fetch(`${address}stream?group=demo`, { signal: AbortSignal.timeout(10000) }), reader = res.body.getReader(), decoder = new TextDecoder();
@@ -295,7 +296,7 @@ test('live stream sends the Claude Code lane before the seats and keeps returned
   // 交回在最前面，后面还有 250 条用户消息：只留最后 200 条的话交回会被裁掉
   fs.writeFileSync(file, [tool('Bash', { command: 'node "C:/demo/cli.mjs" run --agent demo' }), row('user', [{ type: 'tool_result', tool_use_id: 'tool_0', content: 'Command running in background with ID: taskdemo' }], 1),
     row('user', '<task-notification><task-id>taskdemo</task-id><status>completed</status></task-notification>', 3), ...Array.from({ length: 250 }, (_, i) => row('user', `later ${i}`, 10 + i))].map((r) => JSON.stringify(r)).join('\n') + '\n');
-  const child = spawn(process.execPath, [path.join(here, '../foreman/skills/dispatch/scripts/board/server.mjs'), '--runs', runRoot, '--claude-dir', temp, '--config', path.join(temp, 'config.json'), '--transcript', file, '--prices', path.join(here, 'fixtures/board/prices-test.json')], { cwd: here, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [path.join(here, '../foreman/skills/dispatch/scripts/board/server.mjs'), '--runs', runRoot, '--claude-dir', temp, '--config', path.join(temp, 'config.json'), '--transcript', file, '--prices', path.join(here, 'fixtures/board/prices-test.json')], { cwd: here, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: boardEnv() });
   t.after(async () => { if (child.exitCode == null) { child.kill(); await once(child, 'exit'); } assert.equal(path.dirname(temp), path.join(here, 'fixtures/board')); fs.rmSync(temp, { recursive: true, force: true }); });
   const [ready] = await once(child.stdout, 'data'), address = String(ready).match(/board: (http:\/\/\S+?)\?/)[1];
   const res = await fetch(`${address}stream?group=demo`, { signal: AbortSignal.timeout(10000) }), reader = res.body.getReader(), decoder = new TextDecoder();
