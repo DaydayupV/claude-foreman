@@ -5,6 +5,8 @@
 //  状态：思考中亮核脉动，派发中轨道亮、星往核里送光点，等你确认外面一圈琥珀色呼吸光环，出错留红点。
 
 const UNI_STATE_A = { idle: 0.32, thinking: 0.85, dispatching: 0.95, waiting: 0.9 };
+// 光效（08-uni-glow.js）拉开对比：闲着的星系更暗，干活的照旧
+const uniStateA = (st) => (ULOOK.on && st === 'idle' ? 0.2 : UNI_STATE_A[st]);
 const uniSec = (ms) => (uNow() - ms) / 1000 / (U.clock.speed || 1);   // 记录时间 → 屏幕上过去了几秒
 const runKey = (r) => avatarFor(r.model, r.agent);
 const AMBER = (a) => `rgba(255,186,90,${a})`, ALERT = (a) => `rgba(255,92,80,${a})`;
@@ -41,7 +43,7 @@ function drawNebulaOf(p) {
   const busy = p.sessions.reduce((n, s) => n + (s.state === 'idle' ? 0 : 1), 0);
   // 项目的星云是整片淡淡的底色，铺满项目所在的区域：一个项目常有好几个对话，中心不一定有星系，不能在那里聚成一团亮光。
   // 聚拢的彩色光晕画在每个星系周围（08-uni-galaxy.js）
-  drawMixNebula(p.x, p.y, p.r * 1.1, 0.75, projectMix(p), 0.3 + 0.15 * Math.min(3, busy), hash(p.key));
+  drawMixNebula(p.x, p.y, p.r * 1.1, 0.75, projectMix(p), (0.3 + 0.15 * Math.min(3, busy)) * (ULOOK.on ? 0.6 : 1), hash(p.key));
   // 窗口外的旧对话：星云边上的星尘
   const dust = rng(hash(p.key) ^ 77);
   for (let i = 0, n = Math.min(80, p.older * 10); i < n; i++) {
@@ -64,6 +66,11 @@ function drawCoreOf(g, alpha, charge = 0) {
   const grd = ctx.createRadialGradient(g.x, g.y, 0, g.x, g.y, r * 2.8);
   grd.addColorStop(0, HI(0.95 * alpha)); grd.addColorStop(0.22, c(0.7 * alpha)); grd.addColorStop(1, c(0));
   ctx.fillStyle = grd; ctx.beginPath(); ctx.arc(g.x, g.y, r * 2.8, 0, 6.283); ctx.fill();
+  if (!ULOOK.on) return;
+  // 光效：亮核外面一大团辉光，上面一颗十字星芒（08-uni-glow.js 的 coreFlare，飞入时看板中心接着画同一颗）
+  const busy = s.state === 'idle' ? 0 : 1, f = coreFlare(s.state, charge, sec, g.seed);
+  bloomBlob(g.x, g.y, r * (5 + 3 * busy) * (1 + charge), c, (0.04 + 0.07 * busy + 0.3 * charge) * alpha);
+  flare(g.x, g.y, c, f.size, f.a * alpha, f.streak);
 }
 
 function drawUniLabels(L, hover) {
@@ -108,9 +115,13 @@ function drawUniverseOn(L) {
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
+  // 光效：在页面的灰黑底色上压一层黑，背景更接近纯黑，亮的东西更跳；飞入飞出时跟着这层画布一起淡出
+  if (ULOOK.on) { ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, 0, w, h); }
   drawUniStars(w, h);
   ctx.setTransform(dpr * UV.k, 0, 0, dpr * UV.k, dpr * UV.tx, dpr * UV.ty);
   FX.lw = 1 / UV.k * uniFitGoal().k;
+  // 光效（08-uni-glow.js）：亮星和亮核的柔光画进辉光层，标签之前叠回来
+  if (ULOOK.on) glowBegin(ctx);
   // 屏幕外的星云和星系不画（放大以后大部分都在外面）；亮度照常平滑，飞回来时不会从 0 闪出
   const seen = (x, y, r) => x * UV.k + UV.tx > -r * UV.k && x * UV.k + UV.tx < w + r * UV.k && y * UV.k + UV.ty > -r * UV.k && y * UV.k + UV.ty < h + r * UV.k;
   for (const p of L.projects) if (seen(p.x, p.y, p.r * 1.3)) drawNebulaOf(p);
@@ -120,7 +131,7 @@ function drawUniverseOn(L) {
   for (const g of L.galaxies) {
     // 新出现的对话：1.5 秒里从暗到亮
     const m = U.marks.get(g.s.id), born = m ? ease(clamp01(uniSec(m.born) / 1.5)) : 1;
-    const a = smooth(`ua|${g.s.id}`, UNI_STATE_A[g.s.state] + (g === hover ? 0.25 : 0), UNI_STATE_A[g.s.state]) * born;
+    const a = smooth(`ua|${g.s.id}`, uniStateA(g.s.state) + (g === hover ? 0.25 : 0), uniStateA(g.s.state)) * born;
     if (!seen(g.x, g.y, GAL_R * 1.4) || a < 0.01) continue;
     // 正在飞入/飞出的星系：盘面在炸开前淡掉，亮核先蓄能（变亮变大），炸开后交给看板的弧线区（见 08-uni-fly.js 的分镜）
     const focus = FLYFX && g.s.id === FLY.id;
@@ -132,5 +143,6 @@ function drawUniverseOn(L) {
     ctx.lineWidth = upx(1.2); ctx.strokeStyle = markOf(hover.s.id, 0.75);
     ctx.beginPath(); ctx.ellipse(hover.x, hover.y, GAL_R * 1.2, GAL_R * (hover.flat + 0.2), hover.tilt, 0, 6.283); ctx.stroke();
   }
+  if (ULOOK.on) uniBloomFlush(ctx);
   drawUniLabels(L, hover);
 }

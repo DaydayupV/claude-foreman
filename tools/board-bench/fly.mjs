@@ -1,4 +1,5 @@
 // 量网页看板从宇宙飞进一个对话时的帧：node fly.mjs <root> | --url <看板地址> [--session long] [--runs 3] [--no-shared] [--headed] [--profile] [--browser <路径>] [--check]
+//   [--size 1920,1080]（窗口大小，默认 1440,900） [--query look=old]（附加到看板地址的参数）
 // <root> 是 long.mjs 生成的目录（只认系统临时目录里的）。起一个直播看板服务（锁文件写在 <root>/runs 里，不碰真实记录），
 // 每一次都新开浏览器（临时用户目录，冷启动），等宇宙载入后飞进 --session，记飞入 1.6 秒和落地后 2 秒的帧间隔，
 // 以及长动画帧（>50 ms）里排前面的脚本。--no-shared 去掉 SharedWorker，走页面直连流（Claude 桌面版内置浏览器就是这样）；
@@ -39,7 +40,7 @@ const server = live ? null : spawn(process.execPath, [SERVER, '--runs', path.joi
   '--window-h', '48', '--idle-min', '30'], { stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true });
 const url = live ? opt('url') : await new Promise((resolve, reject) => {
   let out = '';
-  server.stdout.on('data', (s) => { out += s; const m = /board: (\S+)/.exec(out); if (m) resolve(`${m[1].replace(/\?.*$/, '')}?level=all&lang=zh`); });
+  server.stdout.on('data', (s) => { out += s; const m = /board: (\S+)/.exec(out); if (m) resolve(`${m[1].replace(/\?.*$/, '')}?level=all&lang=zh${opt('query') ? `&${opt('query')}` : ''}`); });
   server.once('exit', (code) => reject(new Error(`board server exited (${code})`)));
 });
 
@@ -50,7 +51,7 @@ async function once() {
   fs.rmSync(path.join(dir, 'DevToolsActivePort'), { force: true }); // 共用目录时上一次留下的端口文件
   // 无头默认是软件 GL（SwiftShader），绘制和合成会被放大很多；--gpu 让无头也用显卡
   const browser = spawn(findBrowser(), [...(has('headed') ? [] : ['--headless=new']), ...(has('gpu') ? ['--enable-gpu', '--use-angle=default', '--ignore-gpu-blocklist'] : []), '--remote-debugging-port=0', `--user-data-dir=${dir}`,
-    '--no-first-run', '--no-default-browser-check', '--window-size=1440,900', 'about:blank'], { stdio: 'ignore' });
+    '--no-first-run', '--no-default-browser-check', `--window-size=${opt('size', '1440,900')}`, 'about:blank'], { stdio: 'ignore' });
   try {
     let port;
     for (let i = 0; i < 100 && !port; i++) { await sleep(100); try { port = fs.readFileSync(path.join(dir, 'DevToolsActivePort'), 'utf8').split('\n')[0]; } catch { /* 还没写 */ } }

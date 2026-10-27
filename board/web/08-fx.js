@@ -278,6 +278,8 @@ function drawFx(t, L) {
     } finally { ctx.restore(); FX.burst = null; FX.lw = lw; glowFlush(ctx); }
   }
   if (burst) drawFlash(burst, L.core.R);
+  // 中心亮核的星芒：飞入时从星系亮核的星芒接过来（08-uni-glow.js）
+  if (ULOOK.on) boardCoreFlare(L.core, total, T, burst);
   // 其余的画在上面那层画布上，切换时整层淡入淡出（applyShare）
   const base = ctx;
   ctx = FX.ov.ctx;

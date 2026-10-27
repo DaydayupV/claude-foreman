@@ -59,7 +59,9 @@ function morphOf(seed) {
   }
   // 倾斜后的扁度：椭圆星系更圆，旋涡和环状可以很扁
   const flat = kind === 'elliptical' ? 0.62 + rand() * 0.25 : kind === 'lenticular' ? 0.3 + rand() * 0.25 : 0.38 + rand() * 0.42;
-  m = { kind, pts, flat, size, dir: rand() < 0.5 ? -1 : 1, speed: 0.7 + rand() * 0.6 };
+  // 盘面上最亮的几颗（光效里画成带星芒的亮星）
+  const hot = pts.map((p, i) => [p.s * p.b, i]).sort((a, b) => b[0] - a[0]).slice(0, 3).map(([, i]) => i);
+  m = { kind, pts, hot, flat, size, dir: rand() < 0.5 ? -1 : 1, speed: 0.7 + rand() * 0.6 };
   GAL_MORPH.set(seed, m);
   return m;
 }
@@ -99,7 +101,7 @@ function drawGalaxyOf(g, alpha, hover) {
   const seats = (s.models || s.runs.filter((r) => r.status === 'running').map((r) => ({ ...r, out: 0, running: true })))
     .map((m) => ({ key: avatarFor(m.model, m.agent), out: m.out, running: m.running }));
   // 每个对话一团聚拢的彩色光晕：几团往星系中心收拢、叠在一起，比星系盘大一圈；正在干活的亮一些，几个模型同时跑也不会亮成一团（cap）
-  drawMixNebula(g.x, g.y, GAL_R * 2.6 * M.size, 0.8, nebulaMix(seats, s.usage?.output ?? 0, s.state !== 'idle'), alpha * (s.state === 'idle' ? 1 : 1.15) + (hover ? 0.25 : 0), g.seed, { spread: 0.35, size: 1.15, cap: 1 });
+  drawMixNebula(g.x, g.y, GAL_R * 2.6 * M.size, 0.8, nebulaMix(seats, s.usage?.output ?? 0, s.state !== 'idle'), alpha * (s.state === 'idle' ? (ULOOK.on ? 0.55 : 1) : 1.15) + (hover ? 0.25 : 0), g.seed, { spread: 0.35, size: 1.15, cap: 1 });
   // 旋臂：大部分是白色星点，带活的模型颜色点缀。按颜色和三档亮度分桶，每桶一次填充（逐点设颜色太慢）
   // 点的大小按屏幕像素算：远看 1 像素上下，放大时只慢慢变大（开平方），近看画成圆点，不显得方块化
   const grow = 1.2 * Math.sqrt(1 / FX.lw), round = grow * 1.4 >= 1.8, buckets = new Map();
@@ -110,6 +112,8 @@ function drawGalaxyOf(g, alpha, hover) {
     list.push(p);
   }
   const k = alpha * (hover ? 1 : 0.85);
+  // 光效：星点叠加混色，密的地方发白
+  if (ULOOK.on) ctx.globalCompositeOperation = 'lighter';
   for (const [key, list] of buckets) {
     const ci = Math.floor(key / 3) - 1, col = ci < 0 ? HI : pal[ci];
     ctx.fillStyle = col((0.45 + 0.22 * (key % 3)) * k);
@@ -120,7 +124,23 @@ function drawGalaxyOf(g, alpha, hover) {
     }
     ctx.fill();
   }
+  ctx.globalCompositeOperation = 'source-over';
   const stars = starsOf(g), ringA = new Map();
+  // 光效：一个星系的光有总量，同时跑的模型越多，每颗星的光斑、柔光和送往核里的光点越淡越小（总量上限），叠加时不会烧成一团白。
+  // 每颗按星数的 -0.6 次方，两颗以上再乘 2/3（4 颗时各约 0.29），从一颗变成两颗时总亮度基本不变；横向长光只给第一颗在跑的星
+  const damp = ULOOK.on ? Math.pow(Math.max(1, stars.length), -0.6) * (stars.length > 1 ? 2 / 3 : 1) : 1;
+  let streaked = false;
+  // 光效：干活的星系里最亮的几颗星闪着小星芒；同时跑三个以上模型时只留一颗。
+  // 星座连线：从亮核出发，按远近把这几颗连成一串
+  if (ULOOK.on && s.state !== 'idle') {
+    const hot = M.hot.slice(0, stars.length >= 3 ? 1 : 3).map((i, j) => {
+      const p = M.pts[i], [x, y] = galPoint(g, p.r, p.a + spin), tw = 0.5 + 0.5 * Math.sin(sec * (0.9 + j * 0.37) + j * 2.1 + g.seed % 7);
+      flare(x, y, p.tint < 0.6 ? HI : pal[Math.floor(p.tint * 10) % pal.length], 10 + 6 * tw, alpha * damp * (0.25 + 0.4 * tw), j === 0 && !stars.length ? 40 : 0);
+      return { x, y, r: p.r };
+    }).sort((a, b) => a.r - b.r);
+    constellation([{ x: g.x, y: g.y }, ...hot], 0.3 * alpha);
+  }
+  const links = new Map();   // 派发组 → 这一组在跑的星的位置（按轨道上的顺序），画星座连线
   for (const st of stars) ringA.set(st.ring, Math.max(ringA.get(st.ring) || 0, st.born * (1 - st.home)));
   // 派发组的轨道
   for (const [ring, a] of ringA) {
@@ -133,6 +153,7 @@ function drawGalaxyOf(g, alpha, hover) {
     const ang = st.slot * 6.283 + sec * (0.32 - 0.07 * st.ring) + (g.seed % 628) / 100 + st.home * 5;
     const [x, y] = galPoint(g, orbit, ang);
     const live = st.r.status === 'running' && !st.r.queued;
+    if (ULOOK.on && live) { if (!links.has(st.ring)) links.set(st.ring, []); links.get(st.ring).push({ x, y, a: st.born * (1 - st.home) }); }
     // 往核里送的光点
     if (live && st.born >= 1) {
       // 一根淡淡的光丝，上面有光点往核里流
@@ -141,12 +162,33 @@ function drawGalaxyOf(g, alpha, hover) {
       ctx.strokeStyle = lg; ctx.lineWidth = upx(0.9); ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(g.x, g.y); ctx.stroke();
       for (let j = 0; j < 3; j++) {
         const u = (sec * 0.55 + j / 3 + st.slot) % 1;
-        glowDot(x + (g.x - x) * u, y + (g.y - y) * u, 2, st.color, 0.9 * (1 - u * 0.8));
+        glowDot(x + (g.x - x) * u, y + (g.y - y) * u, 2, st.color, 0.9 * (1 - u * 0.8) * damp);
       }
     }
     const blink = st.r.queued ? 0.35 + 0.3 * Math.sin(sec * 5) : 1;
-    glowDot(x, y, 2.2 + 0.8 * st.born * (1 - st.home), st.color, alpha * blink * (0.3 + 0.7 * st.born));
+    glowDot(x, y, 2.2 + 0.8 * st.born * (1 - st.home), st.color, alpha * blink * (0.3 + 0.7 * st.born) * damp);
+    if (ULOOK.on) {
+      const streak = live && !streaked ? 45 : 0;
+      streaked ||= !!streak;
+      flare(x, y, st.color, 15 * (0.55 + 0.45 * damp) * (0.4 + 0.6 * st.born) * (1 - st.home), alpha * blink * damp * st.born * (1 - st.home), streak);
+    }
   }
+  // 星座连线：同一个派发组里在跑的星按轨道顺序连成一串（不闭合，看起来像星座而不是正多边形）
+  for (const pts of links.values()) if (pts.length > 1) constellation(pts, 0.5 * alpha * Math.min(...pts.map((p) => p.a)));
+}
+
+// 一串细白线，依次连起这些点；顶点处留一点空，线不压在星上
+function constellation(pts, a) {
+  if (a < 0.01 || pts.length < 2) return;
+  const gap = upx(3.5);
+  ctx.lineWidth = upx(0.8); ctx.strokeStyle = HI(a); ctx.beginPath();
+  for (let i = 1; i < pts.length; i++) {
+    const p = pts[i - 1], q = pts[i], d = Math.hypot(q.x - p.x, q.y - p.y);
+    if (d < gap * 3) continue;
+    const ux = (q.x - p.x) / d, uy = (q.y - p.y) / d;
+    ctx.moveTo(p.x + ux * gap, p.y + uy * gap); ctx.lineTo(q.x - ux * gap, q.y - uy * gap);
+  }
+  ctx.stroke();
 }
 
 // 等你确认：一圈琥珀色的呼吸光环；出错：红色闪一下，之后在右上角留一个红点

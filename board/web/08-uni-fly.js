@@ -61,7 +61,7 @@ function flyFx(share) {
   if (FLY.mode !== 'in' && FLY.mode !== 'out') return null;
   const g = uniLayout().galaxies.find((x) => x.s.id === FLY.id);
   if (!g) return null;
-  return { v: share.v, p: clamp01((share.v - 0.34) / 0.5), rest: share.rest, cx: g.x * UV.k + UV.tx, cy: g.y * UV.k + UV.ty };
+  return { v: share.v, p: clamp01((share.v - 0.34) / 0.5), rest: share.rest, cx: g.x * UV.k + UV.tx, cy: g.y * UV.k + UV.ty, g };
 }
 function applyShare(share) {
   const set = (el, a) => { const v = a >= 0.999 ? '' : a.toFixed(3); if (el.style.opacity !== v) el.style.opacity = v; };
