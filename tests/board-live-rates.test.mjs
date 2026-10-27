@@ -48,6 +48,19 @@ function board(lang = 'zh', clock = () => 0) {
 const run = (fields = {}) => ({ id: 'seat', model: 'model', kind: 'exec', status: 'running', started_at: 0, ended_at: null, ...fields });
 const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-8, `${a} != ${b}`);
 
+test('Claude Code average speed divides the output of the messages that have speed segments, not the usage merged in from earlier transcripts', () => {
+  const b = board();
+  // 用量合并了桌面版重启前的先前记录（输出十万），这份记录里只有两条消息有速度分段；服务端算好它们的输出（第二条后来改成了 160）
+  const host = { id: 'cc', kind: 'host', model: 'model', status: 'running', started_at: 0, ended_at: null, usage: { input: 1, cached: 0, cache_write: 0, output: 100000 } };
+  b.onRun({ ...host, rate_output: 360 });
+  b.onEv({ run: 'cc', ts: 30000, k: 'usage', u: { out: 200 } });
+  b.onEv({ run: 'cc', ts: 60000, k: 'usage', u: { out: 100 } });
+  const lane = b.B.laneById.get('cc'), gen = b.segments(lane).reduce((n, x) => n + x.b - x.a, 0) / 1000, s = b.laneStats(lane, 60000);
+  assert.equal(s.output, 100000); near(s.avg, 360 / gen);
+  // 老服务没发这个数：照旧用总输出
+  b.onRun(host); near(b.laneStats(lane, 60000).avg, 100000 / gen);
+});
+
 test('missing final step covers the last generation interval and average stays stable across completion', () => {
   const b = board(); b.onRun(run());
   b.onEv({ run: 'seat', ts: 10000, k: 'usage', u: { out: 100 } });

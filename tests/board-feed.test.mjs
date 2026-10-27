@@ -288,6 +288,32 @@ test('explicit session isolates runs and selects its whole transcript without ru
   assert.deepEqual(selectScope(list, { session: 's' }, start).runs.map((r) => r.id), ['a']);
 });
 
+test('live: a plan the conversation just made reaches the page before any of its seats starts; old plans, other conversations and replays do not', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'board-fresh-plan-')), projects = path.join(root, 'claude', 'demo'), runs = path.join(root, 'runs');
+  fs.mkdirSync(projects, { recursive: true }); fs.mkdirSync(path.join(runs, 'plans'), { recursive: true });
+  t.after(() => { assert.equal(path.dirname(root), os.tmpdir()); fs.rmSync(root, { recursive: true, force: true }); });
+  fs.writeFileSync(path.join(projects, 's.jsonl'), JSON.stringify({ type: 'user', timestamp: new Date(start).toISOString(), message: { content: 'go' } }) + '\n');
+  // 计划 id 以建立的本地时刻开头
+  const idAt = (at, tag) => { const d = new Date(at), p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}-${tag}`; };
+  const plan = (at, tag, session) => {
+    const id = idAt(at, tag);
+    fs.writeFileSync(path.join(runs, 'plans', `${id}.json`), JSON.stringify({ id, module: 'discuss', cell: 'normal', group: 'g', why: 'w', created_at: new Date(at).toISOString(),
+      claude_session: session, seats: [{ seat: 1, agent: 'a', model: 'm' }, { seat: 2, agent: 'b', model: 'n' }] }));
+    return id;
+  };
+  const fresh = plan(start - 60000, 'aaaa', 's'), old = plan(start - 31 * 60000, 'bbbb', 's'), other = plan(start - 60000, 'cccc', 'x');
+  fs.writeFileSync(path.join(runs, 'plans', `${fresh}.decision.md`), 'notes');
+  const feed = createFeed(runs, { claudeDir: path.dirname(projects), now: () => start });
+  const planIds = (data) => data.events.filter((e) => e.k === 'fplan').map((e) => e.plan);
+  assert.deepEqual(planIds(feed.read({ session: 's' }, start)), [fresh]);
+  // 目录有变化（又建了一份计划）就重新列，新计划下一次读就在
+  const later = plan(start, 'dddd', 's');
+  assert.deepEqual(planIds(feed.read({ session: 's' }, start + 1000)).sort(), [fresh, later].sort());
+  assert.deepEqual(planIds(feed.read({ session: 's', replay: 's' }, start + 1000)), []);
+  assert.ok(!planIds(feed.read({ session: 'x' }, start + 1000)).includes(fresh));
+  assert.ok(planIds(feed.read({ session: 'x' }, start + 1000)).includes(other)); assert.ok(!planIds(feed.read({ session: 's' }, start)).includes(old));
+});
+
 test('a resumed conversation counts the Claude Code usage of its earlier transcripts once (messages copied into the new one are not counted twice)', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'board-prior-')), projects = path.join(root, 'claude', 'demo'), runs = path.join(root, 'runs');
   fs.mkdirSync(projects, { recursive: true }); fs.mkdirSync(runs);
@@ -299,6 +325,8 @@ test('a resumed conversation counts the Claude Code usage of its earlier transcr
   const read = (options) => createFeed(runs, { claudeDir: path.dirname(projects), now: () => start, ...options }).read({ session: 'new' }).runs.find((r) => r.id === 'cc');
   assert.equal(read({}).usage.output, 140);
   assert.equal(read({ conversation: () => new Set(['new', 'old']) }).usage.output, 440);
+  // 平均速度的分子只算这份记录里的（先前记录没有速度分段）
+  assert.equal(read({ conversation: () => new Set(['new', 'old']) }).rate_output, 140);
   // 再早一份：m0 也抄进了 old，只有 m00 是新增的；先前几份之间重复的也只算一次
   fs.writeFileSync(path.join(projects, 'older.jsonl'), [answer('m00', start - 190000, 500), answer('m0', start - 90000, 300)].map((r) => JSON.stringify(r)).join('\n') + '\n');
   assert.equal(read({ conversation: () => new Set(['new', 'old', 'older']) }).usage.output, 940);

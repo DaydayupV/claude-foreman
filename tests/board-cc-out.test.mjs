@@ -15,6 +15,7 @@ function life(events) {
   return context.ccLife;
 }
 const minute = 60000;
+const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`);
 
 test('Claude Code 的产出框在这一轮安静 3 分钟后就地收起，下一轮有输出时再出现', () => {
   const ccLife = life([{ ts: 1000, k: 'prompt' }, { ts: 2000, k: 'msg', t: 'done' }]);
@@ -37,6 +38,25 @@ test('安静收起以后，后台任务交回、跑命令都不让框回来；�
   assert.equal(ccLife(back + 3000).phase, 'none');
   const shown = ccLife(back + 6000);
   assert.equal(shown.phase, 'show'); assert.equal(shown.from, 2000);
+});
+
+test('直播里产出的交接从页面拿到它的时刻算起：传过来花了零点几秒，交接不会被跳过', () => {
+  const seat = (fields, events = []) => {
+    const lane = { id: 'w', events, runs: [{ id: 'w', kind: 'exec', started_at: 0, ...fields }] };
+    const context = vm.createContext({ B: { clock: { mode: 'live', speed: 1 }, life: [], runs: new Map(), laneById: new Map([['w', lane]]) },
+      latest: (l) => l.runs[0], laneActive: () => false, seatLanes: () => [], performance: { now: () => 0 } });
+    vm.runInContext(`${source}\nglobalThis.outLife = outLife;`, context);
+    return (t) => context.outLife(lane, t);
+  };
+  // 任务 10000 结束，页面 10470 才知道：10500 时交接才过了 0.03 秒
+  near(seat({ ended_at: 10000, ended_seen: 10470 })(10500).age, 0.03);
+  near(seat({ ended_at: 10000 })(10500).age, 0.5);
+  // 第一次改文件也一样；晚到 10 秒以上的（后台标签页）照记录时刻
+  near(seat({}, [{ run: 'w', k: 'edit', ts: 5000, seen: 5400 }])(5500).age, 0.1);
+  near(seat({ ended_at: 10000, ended_seen: 25000 })(25000).age, 15);
+  // Claude Code 的产出框同理
+  const ccLife = life([{ ts: 1000, k: 'prompt' }, { ts: 2000, k: 'msg', t: 'done', seen: 2450 }]);
+  near(ccLife(2500).age, 0.05);
 });
 
 test('还在说话的一轮不收起；没到 3 分钟就来了下一条消息时照旧往上飞走', () => {

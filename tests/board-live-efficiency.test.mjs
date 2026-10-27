@@ -11,7 +11,11 @@ import { createUniverse } from '../foreman/skills/dispatch/scripts/board/univers
 import { loadPrices } from '../foreman/skills/dispatch/scripts/prices.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url)), base = Date.parse('2026-10-18T13:40:00Z');
-const hash = (data) => createHash('sha256').update(JSON.stringify({ cc: data.runs.find((r) => r.id === 'cc'), events: data.events })).digest('hex');
+// 和原解析器的输出比：rate_output（平均速度的分子，board-feed、board-rate-backlog 里另测）是后加的字段，不算在内
+const hash = (data) => {
+  const { rate_output: _rate, ...cc } = data.runs.find((r) => r.id === 'cc');
+  return createHash('sha256').update(JSON.stringify({ cc, events: data.events })).digest('hex');
+};
 function temp(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'board-live-efficiency-test-')), runs = path.join(root, 'runs'), file = path.join(root, 's.jsonl');
   fs.mkdirSync(runs);

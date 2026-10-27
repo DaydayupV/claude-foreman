@@ -610,6 +610,20 @@ test('an output box grows out of the gathering dot: it starts small and transpar
   assert.equal(at(b.OUT_HANDOFF).a, 1); assert.equal(at(b.OUT_HANDOFF).s, 1);
 });
 
+test('live: the page notes when it learned that a run ended or an event arrived (the output handoff starts there)', () => {
+  const b = displayBoard(); b.B.clock.mode = 'live'; b.B.synced = false;
+  const before = Date.now(), run = (id, ended_at, extra = {}) => b.onRun({ id, kind: 'exec', model: 'm', status: ended_at == null ? 'running' : 'done', started_at: 0, ended_at, ...extra });
+  // 连上时就已经结束的不记
+  run('old', 1000); assert.equal(b.B.runs.get('old').ended_seen, undefined);
+  run('w', null); run('w', 1000);
+  const seen = b.B.runs.get('w').ended_seen; assert.ok(seen >= before && seen <= Date.now());
+  // 结束后再发来的沿用第一次的
+  run('w', 1000, { title: 'again' }); assert.equal(b.B.runs.get('w').ended_seen, seen);
+  // 连上以后才第一次出现、已经结束的（两次读之间跑完了）也记
+  b.B.synced = true; run('quick', 1000); assert.ok(b.B.runs.get('quick').ended_seen >= before);
+  const ev = { run: 'w', ts: 500, k: 'edit', t: 'a' }; b.onEv(ev); assert.ok(ev.seen >= before);
+});
+
 test('the top bar says whole conversation on a chosen conversation and recent only on the latest-activity view', () => {
   const b = displayBoard();
   b.B.params = { ...b.B.params, session: 's' }; b.renderTop(0);
