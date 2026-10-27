@@ -8,7 +8,7 @@ import { HERE, M, die, need, resolveDir, readBrief, isGitRepo, isAscii, agentTyp
 
 // 只输出结果的子命令接到 head 这类提前关掉管道的命令上时，写 stdout 会抛 EPIPE：读的一方已经够了，安静退出，
 // 不打 Node 的堆栈。会派活、会改记录的子命令不这样处理（中途退出会丢掉收尾）
-if (['status', 'stats', 'config'].includes(process.argv[2])) {
+if (['status', 'stats', 'config', 'tiers'].includes(process.argv[2])) {
   process.on('uncaughtException', (e) => {
     if (e?.code === 'EPIPE') process.exit(0);
     console.error(e);
@@ -18,7 +18,7 @@ if (['status', 'stats', 'config'].includes(process.argv[2])) {
 }
 
 // 不带值的选项；其余选项都把下一个参数当作它的值。
-const FLAGS = new Set(['uncommitted', 'no-snapshot', 'verbose', 'no-intro', 'snap', 'vector', 'allow-edge', 'author', 'stop']);
+const FLAGS = new Set(['uncommitted', 'no-snapshot', 'verbose', 'no-intro', 'snap', 'vector', 'allow-edge', 'author', 'stop', 'all']);
 
 // --help（或 -h）只打印这一条子命令的用法（assets 可以带动作），退出码 0。和 parseArgs 一样走一遍参数，
 // 写在某个选项的值里的（比如 --title --help、--title -h）不算。
@@ -51,6 +51,7 @@ const { cmdStatus, cmdCancel, cmdAwaitBusy } = await import('./status.mjs');
 const { cmdAssets } = await import('./assets.mjs');
 const { cmdJudge, cmdStats } = await import('./stats.mjs');
 const { cmdSubmit } = await import('./submissions.mjs');
+const { loadTiers, tierOf } = await import('./tiers.mjs');
 
 // 先加载配置，再迁移记录和重写启动器；这些步骤仍在解析参数之前完成。
 // assets 例外：它只在本机处理图片，用不到配置和记录目录，所以两步都跳过，配置缺失或写坏了也照样能用。
@@ -78,6 +79,7 @@ function parseArgs(argv) {
     const val = rest[++i];
     if (val === undefined) die(M.missingValue(a));
     if (key === 'add-dir' || key === 'track' || key === 'scope' || key === 'file' || key === 'seat' && cmd === 'plan') opts[key].push(val);
+    else if (cmd === 'tiers' && key === 'model') (opts.model ??= []).push(val);
     else if (cmd === 'judge' && JUDGE_LISTS.includes(key)) (opts[key] ??= []).push(val); // 没写的选项保持没写
     else opts[key] = val;
   }
@@ -220,7 +222,10 @@ function cmdConfig(o) {
     type: agent.type, capabilities: capabilitiesOf(agent), model: agent.model || null, max_parallel: agent.max_parallel ?? DEFAULT_AGENT_PARALLEL,
     ...adapters[agent.type].status(agent),
   }]));
-  const resolved = (entry) => ({ agent: entry.agent, model: entry.model || agents_status[entry.agent].model, effort: entry.effort ?? null, required: !!entry.required });
+  const resolved = (entry) => {
+    const model = entry.model || agents_status[entry.agent].model || null;
+    return { agent: entry.agent, model, effort: entry.effort ?? null, required: !!entry.required, tier: tierOf(model).tier };
+  };
   const resolved_modules = mapCells(effective.modules, (value) => value === CLAUDE_CODE || value === null ? value : cellList(value).map(resolved));
   // 配置里写的 key 不打印出来。
   const shown = structuredClone(effective);
@@ -474,13 +479,36 @@ async function cmdModels(o) {
   process.stdout.write(o.format === 'md' ? modelsReport(out) : JSON.stringify(out, null, 2) + '\n');
 }
 
+function cmdTiers(o) {
+  const tiers = loadTiers();
+  const cfg = load(o.cwd ? resolveDir(o.cwd) : null);
+  // 没写模型的协作方用它自己配置里的模型（比如 Codex 的 config.toml），和 config 输出一致
+  const agentModel = (name) => cfg.agents[name].model || adapters[cfg.agents[name].type].status(cfg.agents[name]).model;
+  const configured = () => eachEntry(cfg.modules).map(({ item }) => item.model || agentModel(item.agent)).filter(Boolean);
+  const names = [...new Set([...(o.model ?? []), ...(o.all ? Object.keys(tiers?.models ?? {}) : o.model?.length ? [] : configured())])];
+  const models = names.map((name) => ({ ...tierOf(name, { tiers }), name }));
+  if (o.all) {
+    const order = { strong: 0, mid: 1, weak: 2 };
+    models.sort((a, b) => (order[a.tier] ?? 3) - (order[b.tier] ?? 3) || (b.overall ?? -Infinity) - (a.overall ?? -Infinity));
+  }
+  const result = { as_of: tiers?.as_of ?? null, thresholds: tiers?.thresholds ?? null, models };
+  if (o.format !== 'md') { process.stdout.write(JSON.stringify(result, null, 2) + '\n'); return; }
+  const rows = models.map((model) => [model.display, M.tierNames[model.tier ?? 'unrated'], model.overall ?? '—',
+    M.list(model.strengths.map((dim) => M.dimNames[dim])) || '—',
+    M.list(model.weaknesses.map(({ dim, level }) => M.tierWeakness(M.dimNames[dim], level))) || '—',
+    // 评过档却没有综合分的是旧档位表沿用下来的条目
+    !model.source ? '—' : model.overall == null ? M.tierLegacySource(model.source, model.checked) : `${model.source} ${model.checked}`]);
+  const escape = (value) => String(value).replaceAll('|', '\\|').replace(/\r?\n/g, '<br>');
+  process.stdout.write([M.tierHeaders, M.tierHeaders.map(() => '---'), ...rows].map((row) => `| ${row.map(escape).join(' | ')} |`).join('\n') + '\n');
+}
+
 const { cmd, opts } = parseArgs(process.argv.slice(2));
 // 上限一天：再大的数会让到期时刻超出 Date 的范围
 if (opts['queue-timeout'] !== undefined && (!Number.isFinite(Number(opts['queue-timeout'])) || Number(opts['queue-timeout']) < 0 || Number(opts['queue-timeout']) > 1440)) die(M.queueTimeoutInvalid);
-if (['config', 'check', 'models'].includes(cmd) && opts.format !== undefined && !['json', 'md'].includes(opts.format)) die(M.reportFormatInvalid);
+if (['config', 'check', 'models', 'tiers'].includes(cmd) && opts.format !== undefined && !['json', 'md'].includes(opts.format)) die(M.reportFormatInvalid);
 // 新建任务组时组名只用 ASCII：实时查看要把它写进终端命令，桌面版的终端面板只接受 ASCII 命令。
 if (['run', 'discuss', 'resume', 'review', 'image', 'plan'].includes(cmd) && opts.group != null && !/^[A-Za-z0-9._-]{1,64}$/.test(opts.group)) die(M.badGroupName(opts.group));
 const statsOf = (meta) => adapters[agentTypeOf(meta)]?.stats?.(meta.session_id, meta.started_at);
-const commands = { run: cmdRun, discuss: cmdDiscuss, resume: cmdResume, review: cmdReview, image: cmdImage, plan: (o) => cmdPlan(o, load, adapters), submit: (o) => cmdSubmit(o, load), judge: cmdJudge, stats: (o) => cmdStats(o, statsOf), status: (o) => cmdStatus(o, statsOf), watch: (o) => cmdWatch(o, load), board: cmdBoard, config: cmdConfig, check: cmdCheck, models: cmdModels, cancel: (o) => cmdCancel(o, statsOf), 'await-busy': (o) => cmdAwaitBusy(o, CONFIG, load), assets: cmdAssets };
+const commands = { run: cmdRun, discuss: cmdDiscuss, resume: cmdResume, review: cmdReview, image: cmdImage, plan: (o) => cmdPlan(o, load, adapters), submit: (o) => cmdSubmit(o, load), judge: cmdJudge, stats: (o) => cmdStats(o, statsOf), tiers: cmdTiers, status: (o) => cmdStatus(o, statsOf), watch: (o) => cmdWatch(o, load), board: cmdBoard, config: cmdConfig, check: cmdCheck, models: cmdModels, cancel: (o) => cmdCancel(o, statsOf), 'await-busy': (o) => cmdAwaitBusy(o, CONFIG, load), assets: cmdAssets };
 if (!commands[cmd]) die(M.usage);
 await commands[cmd](opts);

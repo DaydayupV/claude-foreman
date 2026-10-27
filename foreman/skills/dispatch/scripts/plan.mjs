@@ -7,7 +7,7 @@ import { validateReviewMaterial, reviewPatchText, MAX_REVIEW_CHARS } from './rev
 import { M, die, need, resolveDir, readAttachments, MAX_MATERIAL_CHARS } from './util.mjs';
 import { apiReviewPrompt, API_BRIEF_RESERVE } from './adapters/api.mjs';
 import { D, outcomeStyle } from './format.mjs';
-import { modelIdentity } from './prices.mjs';
+import { modelIdentity } from './models.mjs';
 
 // 读不到时返回 null，不退出进程：实时查看里计划文件被删了也要接着显示。
 function loadPlan(id) {

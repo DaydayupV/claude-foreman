@@ -44,7 +44,7 @@ Keep a role card under 10 lines, in this format:
 - When the topic needs a role that isn't listed, Claude writes one in the same format and sets its suggested tier and tool needs. Roles the user defines in the preference files are picked from along with the presets.
 
 ## What each kind of participant can do in a discussion
-- **The Claude Code seat**: reads code and runs read-only commands, and also sees the whole conversation and the user's preferences. Its tier comes from the model the user picked in Claude Code, looked up in `references/model-tiers.md`.
+- **The Claude Code seat**: reads code and runs read-only commands, and also sees the whole conversation and the user's preferences. Look up its tier with `tiers --model <the model ID from the system prompt>` (rules in `references/model-tiers.md`).
 - **Codex**: reads code and runs read-only commands.
 - **opencode and pi agents**: only read, search and list files inside the project directory; can't run commands.
 - **API agents**: see only the brief and the files attached with `--file`.
@@ -54,7 +54,7 @@ External participants can only come from this cell's candidates (`resolved_modul
 
 1. **Tool access is a hard gate**: if the participant's tools can't do what the role needs, it can't take the role.
 2. **Required candidates first**: a candidate marked required (`required`) always takes a seat; `plan` refuses a plan that leaves one out.
-3. **Tiers are a guide**: the suggested tier in the table isn't a condition for taking part. Core roles go first to participants that meet the suggested tier; among participants of the same tier, pick by the strengths the role looks for. Model tiers are in `references/model-tiers.md`; the preference files can change a model's tier based on local results (`stats`), and then they win.
+3. **Tiers are a guide**: the suggested tier in the table isn't a condition for taking part. Core roles go first to participants that meet the suggested tier; among participants of the same tier, pick by the strengths the role looks for. Model tiers are the candidates' `tier` in the `config` output, with strengths from the `tiers` command (rules in `references/model-tiers.md`); the preference files can change a model's tier based on local results (`stats`), and then they win.
 4. **Different models first**: one model per role.
 5. **Below the tier means a breadth seat**: a participant below a role's suggested tier can still take the role, but the seat is a **breadth seat**: it hands in its round 1 proposal or review report on its own, Claude checks every point, and it doesn't join round 2. While there are free seats, mid and weak participants can all take part this way; a low tier alone is no reason to leave a model out.
 6. **Two seats for a core role at level 3**: on a level 3 topic, one core role can be played by two different base models, each in its own seat with the same role card. One model reached through api, pi and opencode counts as one base model (compared after dropping the `provider/` prefix).

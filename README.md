@@ -537,7 +537,7 @@ node tools/sync-shared.mjs
 - 提交前可以用 `node tools/sync-shared.mjs --check` 检查两份脚本、两份 schema 的结构和两个插件的版本号是否一致。
 - 测试：`npm test`（只用 Node 内置模块，不用装依赖），说明见 [tests/README.md](tests/README.md)。
 - 终端提示、发给协作方的约束和提示词都在 `messages.mjs` 里，中英文各一份；各个 skill 的 `SKILL.md`（斜杠命令也是 skill，在 `skills/<命令名>/SKILL.md`）、`references/` 和 schema 两个插件各写各的。
-- `references/model-tiers.md` 的模型档位按第三方评测整理，评测几个月就变，每次发版前对照最新结果更新一次。
+- 模型档位的数据在 `scripts/model-tiers.json`，来自 LiveBench，几个月就变：每次发版前复制最新榜单，用 `tools/import-livebench.mjs` 导入（做法见 `references/model-tiers.md` 的"维护"）。模型身份和别名在 `scripts/models.json`，价格在 `scripts/prices.json`，三份都只改中文插件那份，再用 `tools/sync-shared.mjs` 同步。
 - 启动动画的头像数据由 `node tools/make-avatars.mjs` 从 `tools/avatars/source.webp` 生成。
 - 网页看板的服务在 `skills/dispatch/scripts/board/`，两个插件共用；页面的源码在仓库根目录的 `board/`，改完运行 `node board/build.mjs` 生成 `index.html`（中英文共用一份，按插件语言显示），再运行同步工具。协议和设计记录在 `docs/board/`。
 

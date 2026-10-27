@@ -20,6 +20,7 @@ node "<脚本路径>" board --stop（关掉直播看板服务）
 node "<脚本路径>" config [--cwd "<项目目录>"] [--format json|md]
 node "<脚本路径>" check  [--agent <协作方>] [--format json|md]
 node "<脚本路径>" models [--format json|md]
+node "<脚本路径>" tiers  [--model <名字>]... [--all] [--cwd "<项目目录>"] [--format json|md]（模型档位、综合分和长短处，规则见 references/model-tiers.md）
 node "<脚本路径>" await-busy (--group <组名> | --run <run_id>) [--after 分钟]
 node "<脚本路径>" cancel --run <run_id>
 node "<脚本路径>" judge  --run <run_id> [--accept "<编号,…>"] [--partial "<编号,…>"] [--reject "<编号,…>"] [--same "<编号>=<run_id>:<编号>,…"] [--clear "<编号,…>"]

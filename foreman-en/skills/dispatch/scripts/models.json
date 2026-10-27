@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "as_of": "2026-10-27",
+  "note": "模型身份表：键是规范 id（modelKey 归一化后的写法），aliases 是官方说明或确认过的同一个模型的其他名字（包括同一模型的加速版、免费版、contributor 端点；加速版按同一模型算，宁可把同一模型并成一个，也不把它当成独立证据）。比较不同的基础模型、stats 分行都按这里归并。同价不等于同一个模型（Fable 和 Mythos 各是一条）。family 只用于档位兜底和展示，不当身份。board_names 是评测榜上和 display 不同的名字。",
+  "models": {
+    "claude-fable-5-1": { "display": "Claude Fable 5.1", "family": "claude", "vendor": "anthropic", "aliases": [] },
+    "claude-mythos-5-1": { "display": "Claude Mythos 5.1", "family": "claude", "vendor": "anthropic", "aliases": [] },
+    "claude-fable-5": { "display": "Claude Fable 5", "family": "claude", "vendor": "anthropic", "aliases": [] },
+    "claude-mythos-5": { "display": "Claude Mythos 5", "family": "claude", "vendor": "anthropic", "aliases": [] },
+    "claude-opus-5-5": { "display": "Claude Opus 5.5", "family": "claude", "vendor": "anthropic", "aliases": [] },
+    "claude-opus-5": { "display": "Claude Opus 5", "family": "claude", "vendor": "anthropic", "aliases": [] },
+    "claude-opus-4-8": { "display": "Claude Opus 4.8", "family": "claude", "vendor": "anthropic", "aliases": [] },
+    "claude-opus-4-7": { "display": "Claude Opus 4.7", "family": "claude", "vendor": "anthropic", "aliases": [] },
+    "claude-opus-4-6": { "display": "Claude Opus 4.6", "family": "claude", "vendor": "anthropic", "aliases": [] },
+    "claude-opus-4-5": { "display": "Claude Opus 4.5", "family": "claude", "vendor": "anthropic", "aliases": [] },
+    "claude-sonnet-5-5": { "display": "Claude Sonnet 5.5", "family": "claude", "vendor": "anthropic", "aliases": [] },
+    "claude-sonnet-5": { "display": "Claude Sonnet 5", "family": "claude", "vendor": "anthropic", "aliases": [] },
+    "claude-sonnet-4-6": { "display": "Claude Sonnet 4.6", "family": "claude", "vendor": "anthropic", "aliases": [] },
+    "claude-sonnet-4-5": { "display": "Claude Sonnet 4.5", "family": "claude", "vendor": "anthropic", "aliases": [] },
+    "claude-haiku-5-5": { "display": "Claude Haiku 5.5", "family": "claude", "vendor": "anthropic", "aliases": [] },
+    "claude-haiku-4-5": { "display": "Claude Haiku 4.5", "family": "claude", "vendor": "anthropic", "aliases": [] },
+
+    "gpt-6.1-sol": { "display": "GPT-6.1 Sol", "family": "gpt", "vendor": "openai", "aliases": [] },
+    "gpt-6.1-terra": { "display": "GPT-6.1 Terra", "family": "gpt", "vendor": "openai", "aliases": [] },
+    "gpt-6-sol": { "display": "GPT-6 Sol", "family": "gpt", "vendor": "openai", "aliases": [] },
+    "gpt-6-astra": { "display": "GPT-6 Astra", "family": "gpt", "vendor": "openai", "aliases": [] },
+    "gpt-6-luna": { "display": "GPT-6 Luna", "family": "gpt", "vendor": "openai", "aliases": [] },
+    "gpt-5.6-sol": { "display": "GPT-5.6 Sol", "family": "gpt", "vendor": "openai", "aliases": [] },
+    "gpt-5.6-terra": { "display": "GPT-5.6 Terra", "family": "gpt", "vendor": "openai", "aliases": [] },
+    "gpt-5.6-luna": { "display": "GPT-5.6 Luna", "family": "gpt", "vendor": "openai", "aliases": [] },
+    "gpt-5.5": { "display": "GPT-5.5", "family": "gpt", "vendor": "openai", "aliases": [] },
+    "gpt-5.5-pro": { "display": "GPT-5.5 Pro", "family": "gpt", "vendor": "openai", "aliases": [] },
+    "gpt-5.4-mini": { "display": "GPT-5.4 mini", "family": "gpt", "vendor": "openai", "aliases": [] },
+    "gpt-5.4-nano": { "display": "GPT-5.4 nano", "family": "gpt", "vendor": "openai", "aliases": [] },
+    "gpt-5.3-codex": { "display": "GPT-5.3 Codex", "family": "gpt", "vendor": "openai", "aliases": [] },
+
+    "deepseek-flash": { "display": "DeepSeek V4.1 Flash", "family": "deepseek", "vendor": "deepseek",
+      "aliases": ["deepseek-v4.1-flash", "deepseek-v4.1-flash-1017", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"],
+      "board_names": ["DeepSeek V4.1 Flash 1017"],
+      "alias_source": "https://api-docs.deepseek.com/quick_start/pricing/（查看 2026-10-27：deepseek-flash 即 DeepSeek-V4.1-Flash-1017；旧名 deepseek-v4-flash、deepseek-v4-flash-vision-exp 仍可调用，路由到这个模型并按它计费）" },
+    "deepseek-v4-pro": { "display": "DeepSeek V4 Pro", "family": "deepseek", "vendor": "deepseek", "aliases": [] },
+
+    "glm-5.3": { "display": "GLM-5.3", "family": "glm", "vendor": "zhipu", "aliases": [] },
+    "glm-5.3-flash": { "display": "GLM-5.3 Flash", "family": "glm", "vendor": "zhipu", "aliases": ["glm-5.3-flash-free"] },
+    "glm-5.3-flashx": { "display": "GLM-5.3 FlashX", "family": "glm", "vendor": "zhipu", "aliases": [] },
+    "glm-5.2": { "display": "GLM-5.2", "family": "glm", "vendor": "zhipu", "aliases": [] },
+
+    "gemini-4-argon": { "display": "Gemini 4 Argon", "family": "gemini", "vendor": "google", "aliases": ["gemini-4-argon-contributor"] },
+    "gemini-3.8-flash": { "display": "Gemini 3.8 Flash", "family": "gemini", "vendor": "google", "aliases": [] },
+    "gemini-3.5-flash-lite": { "display": "Gemini 3.5 Flash-Lite", "family": "gemini", "vendor": "google", "aliases": [] },
+    "gemini-3.1-pro": { "display": "Gemini 3.1 Pro", "family": "gemini", "vendor": "google", "aliases": ["gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools"] },
+
+    "grok-4.7": { "display": "Grok 4.7", "family": "grok", "vendor": "xai", "aliases": [] },
+    "grok-4.6": { "display": "Grok 4.6", "family": "grok", "vendor": "xai", "aliases": [] },
+    "grok-4.5": { "display": "Grok 4.5", "family": "grok", "vendor": "xai", "aliases": [] },
+    "grok-build-0.1": { "display": "Grok Build 0.1", "family": "grok", "vendor": "xai", "aliases": [] },
+
+    "qwen3.8-max": { "display": "Qwen3.8 Max", "family": "qwen", "vendor": "alibaba", "aliases": [] },
+    "qwen3.8-flash": { "display": "Qwen3.8 Flash", "family": "qwen", "vendor": "alibaba", "aliases": [] },
+    "qwen3.8-27b": { "display": "Qwen3.8 27B", "family": "qwen", "vendor": "alibaba", "aliases": [] },
+    "qwen3.7-plus": { "display": "Qwen3.7 Plus", "family": "qwen", "vendor": "alibaba", "aliases": [] },
+    "qwen3.6-plus": { "display": "Qwen3.6 Plus", "family": "qwen", "vendor": "alibaba", "aliases": [] },
+
+    "minimax-m3": { "display": "MiniMax M3", "family": "minimax", "vendor": "minimax", "aliases": [] },
+    "minimax-m3.1-flash": { "display": "MiniMax M3.1 Flash", "family": "minimax", "vendor": "minimax", "aliases": ["minimax-m3.1-flash-free"] },
+
+    "kimi-k3.1-pro": { "display": "Kimi K3.1 Pro", "family": "kimi", "vendor": "moonshot", "aliases": ["kimi-k3.1-pro-highspeed"] },
+    "kimi-k3": { "display": "Kimi K3", "family": "kimi", "vendor": "moonshot", "aliases": [] },
+    "kimi-k2.7-code": { "display": "Kimi K2.7 Code", "family": "kimi", "vendor": "moonshot", "aliases": ["kimi-k2.7-code-highspeed"] },
+    "kimi-k2.6": { "display": "Kimi K2.6", "family": "kimi", "vendor": "moonshot", "aliases": [] },
+
+    "mimo-v2.6-pro": { "display": "MiMo V2.6 Pro", "family": "mimo", "vendor": "xiaomi", "aliases": ["mimo-v2.6-pro-ultraspeed"] },
+    "mimo-v2.6-flash": { "display": "MiMo V2.6 Flash", "family": "mimo", "vendor": "xiaomi", "aliases": [] },
+
+    "mistral-large-4": { "display": "Mistral Large 4", "family": "mistral", "vendor": "mistral", "aliases": [] },
+    "step-5-preview": { "display": "Step 5 Preview", "family": "step", "vendor": "stepfun", "aliases": [], "board_names": ["Step 5 (Preview)"] },
+    "longcat-2.0": { "display": "LongCat 2.0", "family": "longcat", "vendor": "meituan", "aliases": [] },
+
+    "muse-wonder-1.0": { "display": "Muse Wonder 1.0", "family": "muse", "vendor": "meta", "aliases": [] },
+    "muse-spark-1.3": { "display": "Muse Spark 1.3", "family": "muse", "vendor": "meta", "aliases": ["muse-spark-1.3-contributor"] },
+    "muse-spark-1.2": { "display": "Muse Spark 1.2", "family": "muse", "vendor": "meta", "aliases": ["muse-spark-1.2-contributor"] }
+  }
+}

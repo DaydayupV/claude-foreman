@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import { modelKey } from './models.mjs';
+export { modelKey, modelIdentity } from './models.mjs';
 
 // 插件自带的价格表只读一次：终端实时查看每次重画用量行都要用到
 let bundled;
@@ -9,22 +11,6 @@ export function loadPrices(file) {
 function readPrices(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
   catch (e) { if (e.code === 'ENOENT') return null; throw e; }
-}
-
-// 各家对同一个模型的写法：去掉提供方前缀（opencode-go/、openrouter 的 anthropic/、Bedrock 的 global.anthropic.），
-// 版本后缀的 @、: 当成连字符（Vertex 的 claude-opus-5-5@20261001、Bedrock 的 …-v1:0），
-// Claude 模型名里的小数版本号写成连字符（OpenRouter 的 claude-fable-5.1）。其他模型名里的点是名字的一部分，不动
-export function modelKey(model) {
-  let name = String(model ?? '').split('/').at(-1).toLowerCase().replace(/^(?:[a-z0-9-]+\.)*anthropic\./, '').replace(/[@:]/g, '-');
-  if (name.startsWith('claude-')) name = name.replace(/(\d)\.(\d)/g, '$1-$2');
-  return name;
-}
-
-// 同一个模型的不同写法归成一个身份（"不同的基础模型"按它比较，stats 按它分行）：modelKey 处理提供方前缀和版本写法，
-// 价格表的 aliases 只记官方说明是同一个模型的别名（同价不等于同一个模型，比如 Fable 和 Mythos 共用一条价格）
-export function modelIdentity(model, prices = loadPrices()) {
-  const key = modelKey(model);
-  return prices?.aliases?.[key] ?? key;
 }
 
 // 每张价格表只编译一次，模型名查到的价格也记住：看板每秒要给每条用量查价，每次重建匹配表会占掉大半 CPU

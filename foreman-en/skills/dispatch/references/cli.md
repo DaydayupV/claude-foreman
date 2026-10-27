@@ -20,6 +20,7 @@ node "<script path>" board --stop (shuts down the live board server)
 node "<script path>" config [--cwd "<project dir>"] [--format json|md]
 node "<script path>" check  [--agent <agent>] [--format json|md]
 node "<script path>" models [--format json|md]
+node "<script path>" tiers  [--model <name>]... [--all] [--cwd "<project dir>"] [--format json|md] (model tiers, overall scores, strengths and weaknesses; rules in references/model-tiers.md)
 node "<script path>" await-busy (--group <name> | --run <run_id>) [--after minutes]
 node "<script path>" cancel --run <run_id>
 node "<script path>" judge  --run <run_id> [--accept "<ids>"] [--partial "<ids>"] [--reject "<ids>"] [--same "<id>=<run_id>:<id>,…"] [--clear "<ids>"]

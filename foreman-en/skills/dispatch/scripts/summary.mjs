@@ -2,10 +2,12 @@
 import path from 'node:path';
 import { USER_CONFIG, CLAUDE_CODE, cellList, mapCells, staleAliases, readRawConfig, readOldBackups } from './config.mjs';
 import { M } from './util.mjs';
+import { loadPrices, priceFor } from './prices.mjs';
+import { tierOf } from './tiers.mjs';
 
 // checks 是 check 输出里的 agents；没有时（config）各项的 ok 为 null。
 export function buildSummary(cfg, adapters, checks = null) {
-  const agents = {}, warnings = [];
+  const agents = {}, warnings = [], models = new Map();
   for (const [name, agent] of Object.entries(cfg.agents)) {
     agents[name] = { type: agent.type, model: agent.model ?? adapters[agent.type].status(agent).model ?? null, used_at: [],
       ...(agent.run_access ? { run_access: agent.run_access } : {}), ok: checks?.[name] ? checks[name].ok : null };
@@ -21,6 +23,10 @@ export function buildSummary(cfg, adapters, checks = null) {
       const at = `${key}[${i}]`;
       const info = agents[item.agent], model = item.model || info.model, effort = item.effort ?? null;
       info.used_at.push(at);
+      if (model) {
+        if (!models.has(model)) models.set(model, { model, used_at: [] });
+        models.get(model).used_at.push(at);
+      }
       const problem = effort == null ? null : effortProblem(item.agent, model, effort);
       const ok = !checks?.[item.agent] ? null : usable(item.agent) && !problem;
       return { agent: item.agent, type: info.type, model, effort, required: !!item.required, ok, ...(problem ? { problem } : {}) };
@@ -38,6 +44,11 @@ export function buildSummary(cfg, adapters, checks = null) {
   for (const { old, target, closest } of staleAliases(cfg)) {
     warnings.push({ kind: 'stale_alias', agent: old, message: M.warnStaleAlias(old, target, closest.length ? M.list(closest) : '') });
   }
+  const prices = loadPrices();
+  const unpriced = [...models.values()].filter(({ model }) => priceFor(model, { input: 0 }, prices) == null);
+  const unrated = [...models.values()].filter(({ model }) => !tierOf(model).rated);
+  if (unpriced.length) warnings.push({ kind: 'unpriced_models', models: unpriced, message: M.warnUnpricedModels(M.list(unpriced.map(({ model }) => model))) });
+  if (unrated.length) warnings.push({ kind: 'unrated_models', models: unrated, message: M.warnUnratedModels(M.list(unrated.map(({ model }) => model))) });
   const raw = readRawConfig();
   if (raw?.dispatch && Object.hasOwn(raw.dispatch, 'max_seats')) warnings.push({ kind: 'obsolete_max_seats', value: raw.dispatch.max_seats, message: M.reportObsoleteMaxSeats });
   for (const [agent, info] of Object.entries(cfg.agents)) if (info.type === 'api' && info.api_key && info.api_key_env) {
