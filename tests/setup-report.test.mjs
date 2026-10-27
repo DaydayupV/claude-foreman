@@ -172,9 +172,9 @@ test('环境故障逐项输出 fix，API 变量只显示名字，未使用 Codex
 
 test('models 里没装的工具写没装，不贴原始的启动报错', async () => {
   const { modelsReport } = await import(pathToFileURL(path.join(ROOT, 'foreman/skills/dispatch/scripts/report.mjs')).href);
-  const missing = { ok: false, models: [], error: 'spawnSync codex.exe ENOENT' }, other = { ok: false, models: [], error: 'boom' };
+  const missing = { ok: false, models: [], error: 'spawnSync codex.exe ENOENT' }, other = { ok: false, models: [], error: 'ENOENT: no such file or directory, open /tmp/catalog.json' };
   const md = modelsReport({ tools: { 'codex cli': missing, 'opencode cli': other, 'pi cli': missing }, api: {}, agents: {} });
-  assert.ok(md.includes(MESSAGES.zh.reportCatalogMissing('Codex')) && md.includes(MESSAGES.zh.reportCatalogError('opencode', 'boom')) && !md.includes('ENOENT'), md);
+  assert.ok(md.includes(MESSAGES.zh.reportCatalogMissing('Codex')) && md.includes(MESSAGES.zh.reportCatalogError('opencode', other.error)) && !md.includes('spawnSync'), md);
 });
 
 test('Codex 沙箱探测不了（ok 为 null）时，环境一节不说沙箱正常', async () => {
