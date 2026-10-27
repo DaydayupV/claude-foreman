@@ -13,6 +13,8 @@ const source = ['00-text', '01-state', '03-timeline', '04-rates', '06-cards', '0
 class Element {
   children = []; dataset = {}; style = { setProperty() {} }; classList = { toggle() {} }; nodes = new Map();
   get firstChild() { return this.children[0]; }
+  get lastChild() { return this.children.at(-1); }
+  replaceChildren(...items) { this.children = items; }
   get textContent() { return this.text || this.children.map((c) => c.textContent).join(''); }
   set textContent(value) { this.text = value; this.children = []; }
   set innerHTML(value) {
@@ -47,6 +49,8 @@ function board(lang = 'zh', clock = () => 0) {
 }
 const run = (fields = {}) => ({ id: 'seat', model: 'model', kind: 'exec', status: 'running', started_at: 0, ended_at: null, ...fields });
 const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-8, `${a} != ${b}`);
+// 用量表里第一条车道的行（没有组的任务前面也有一行组头）
+const laneRow = (b) => b.table.children[1].children.find((tr) => tr.dataset.lane);
 
 test('Claude Code average speed divides the output of the messages that have speed segments, not the usage merged in from earlier transcripts', () => {
   const b = board();
@@ -165,7 +169,10 @@ for (const lang of ['zh', 'en']) test(`${lang} cards, headers and tooltips show 
   b.onEv({ run: 'seat', ts: 10000, k: 'usage', u: { out: 100 } });
   b.fillCard(b.card, b.B.lanes[0], 10000); b.renderTable(10000);
   assert.equal(b.card.querySelector('.rate').textContent, 'now ≈ 10 tok/s · gen avg ≈ 10 · out 100');
-  assert.equal(b.table.children[1].children[0].children[6].textContent, '100 · 20%');
+  assert.equal(laneRow(b).children[6].textContent, '100 · 20%');
+  // 没有组的单席任务也有自己的组头，不会看起来像上一组的成员
+  const head = b.table.children[1].children[0];
+  assert.equal(head.className, 'tr gh'); assert.ok(head.firstChild.textContent.length > 0); assert.equal(b.table.children[1].children[1], laneRow(b));
   assert.deepEqual(b.table.firstChild.children.slice(3, 6).map((c) => c.textContent), ['now ≈tok/s', 'tok/s over time', 'gen avg ≈tok/s']);
   const titles = lang === 'zh' ? ['近 10 秒的估算，可能借用同一模型之前的样本',
     '这条车道全部时长的速度曲线（估算）：从第一轮开始画到最后一轮结束，结束后停住；40 个点，每个点是它之前约两格时长内的输出 token 除以这段时间；运行中可能借用实时估速',
@@ -178,11 +185,11 @@ for (const lang of ['zh', 'en']) test(`${lang} cards, headers and tooltips show 
   b.fillCard(b.card, b.B.lanes[0], 10000); b.renderTable(10000);
   assert.match(b.card.querySelector('.rate').textContent, /gen avg ≈ — · out —$/);
   assert.equal(b.card.querySelector('.rate').title, b.TEXT.usageUnattributed);
-  assert.equal(b.table.children[1].children[0].children[7].textContent, '—');
-  assert.equal(b.table.children[1].children[0].children[7].title, b.TEXT.usageUnattributed);
+  assert.equal(laneRow(b).children[7].textContent, '—');
+  assert.equal(laneRow(b).children[7].title, b.TEXT.usageUnattributed);
   assert.equal(b.table.children[2].children[7].textContent, '—');
-  assert.equal(b.table.children[1].children[0].children[6].textContent, '—');
-  assert.equal(b.table.children[1].children[0].children[6].title, b.TEXT.usageUnattributed);
+  assert.equal(laneRow(b).children[6].textContent, '—');
+  assert.equal(laneRow(b).children[6].title, b.TEXT.usageUnattributed);
   assert.equal(b.table.children[2].children[6].textContent, '—');
   assert.equal(b.table.children[2].children[6].title, b.TEXT.usageUnattributed);
 });
@@ -191,7 +198,7 @@ test('用量表一帧新建不完的行下一帧接着建：预算一开始就�
   let ms = 0;
   const b = board('zh', () => (ms += 100));
   for (let i = 0; i < 25; i++) b.onRun(run({ id: `seat${i}`, status: 'done', started_at: i, ended_at: 10000 + i }));
-  const rows = () => b.table.children[1].children.length;
+  const rows = () => b.table.children[1].children.filter((tr) => tr.dataset.lane).length;
   assert.equal(b.renderTable(20000), false); assert.equal(rows(), 10);
   assert.equal(b.renderTable(20000), false); assert.equal(rows(), 20);
   assert.equal(b.renderTable(20000), true); assert.equal(rows(), 25);

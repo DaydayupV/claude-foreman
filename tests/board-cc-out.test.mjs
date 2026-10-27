@@ -51,12 +51,13 @@ test('直播里产出的交接从页面拿到它的时刻算起：传过来花�
   // 任务 10000 结束，页面 10470 才知道：10500 时交接才过了 0.03 秒
   near(seat({ ended_at: 10000, ended_seen: 10470 })(10500).age, 0.03);
   near(seat({ ended_at: 10000 })(10500).age, 0.5);
-  // 第一次改文件也一样；晚到 10 秒以上的（后台标签页）照记录时刻
+  // 第一次改文件也一样
   near(seat({}, [{ run: 'w', k: 'edit', ts: 5000, seen: 5400 }])(5500).age, 0.1);
-  near(seat({ ended_at: 10000, ended_seen: 25000 })(25000).age, 15);
-  // Claude Code 的产出框同理
+  // Claude Code 的产出框同理；它一条长消息里靠前的工具调用会晚到十几秒，交接照样从拿到时算起
   const ccLife = life([{ ts: 1000, k: 'prompt' }, { ts: 2000, k: 'msg', t: 'done', seen: 2450 }]);
   near(ccLife(2500).age, 0.05);
+  const late = life([{ ts: 1000, k: 'prompt' }, { ts: 2000, k: 'edit', t: 'write a.md', seen: 15700 }]);
+  near(late(15700).age, 0);
 });
 
 test('还在说话的一轮不收起；没到 3 分钟就来了下一条消息时照旧往上飞走', () => {

@@ -594,7 +594,7 @@ test('部分完成、问题、续接、超时和排队共用状态词及计数�
   const card = new DisplayElement(); b.fillCard(card, lane, 1040000); b.renderTable(1040000);
   assert.equal(card.querySelector('.st').textContent, '? questions returned 0:35');
   assert.equal(card.querySelector('.model').title, 'model · Codex CLI');
-  assert.equal(b.el('usage').querySelector('.tbody').children[0].children[9].textContent, '1:40');
+  assert.equal(b.el('usage').querySelector('.tbody').children.find((tr) => tr.dataset.lane).children[9].textContent, '1:40');
   assert.equal(Display.outcomeStyle(Display.resultOutcome({ status: 'timeout' })).word, 'timed out');
   assert.equal(Display.outcomeStyle(Display.resultOutcome({ status: 'cancelled' })).word, 'stopped');
   const queued = Display.seatState({ started_at: 0 }, { status: 'running' }, { queued: true, req: 0 }, 65000);
@@ -622,6 +622,11 @@ test('live: the page notes when it learned that a run ended or an event arrived 
   // 连上以后才第一次出现、已经结束的（两次读之间跑完了）也记
   b.B.synced = true; run('quick', 1000); assert.ok(b.B.runs.get('quick').ended_seen >= before);
   const ev = { run: 'w', ts: 500, k: 'edit', t: 'a' }; b.onEv(ev); assert.ok(ev.seen >= before);
+  // 页面在后台时不记：看不到交接，回来时框照记录时刻已经在了
+  b.context.document.hidden = true;
+  const hidden = { run: 'w', ts: 600, k: 'edit', t: 'b' }; b.onEv(hidden); assert.equal(hidden.seen, undefined);
+  run('away', null); run('away', 2000); assert.equal(b.B.runs.get('away').ended_seen, undefined);
+  b.context.document.hidden = false;
 });
 
 test('the top bar says whole conversation on a chosen conversation and recent only on the latest-activity view', () => {
@@ -640,7 +645,7 @@ test('回放显示记录时间，18:23 不变成压缩后的 5:15；空闲 Claud
   const lane = b.B.lanes[0], card = new DisplayElement();
   b.fillCard(card, lane, 315000); b.renderTable(315000); b.renderTop(315000);
   assert.equal(card.querySelector('.st').textContent, '✗ stopped 18:23');
-  assert.equal(b.el('usage').querySelector('.tbody').children[0].children[9].textContent, '18:23');
+  assert.equal(b.el('usage').querySelector('.tbody').children.find((tr) => tr.dataset.lane).children[9].textContent, '18:23');
   assert.equal(b.el('clock').textContent.split(' · ')[0], new Date(1103000).toTimeString().slice(0, 8));
   b.context.U = { clock: { mode: 'replay', start: 0, end: 315000, speed: 1 }, hello: { replay: { time_map: points } } };
   b.context.uNow = () => 315000;
