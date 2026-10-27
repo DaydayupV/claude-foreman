@@ -170,6 +170,13 @@ test('环境故障逐项输出 fix，API 变量只显示名字，未使用 Codex
   has(r.stdout, ['❌ Node.js：node fix', '⚠ Git：git fix', '⚠ 实时查看：watch fix', '| Codex | 已安装，没登录 |', '| opencode | 没装 |', '检测到 KIMI_API_KEY、MIMO_API_KEY']); assert.equal(r.stdout.includes('unused sandbox'), false);
 });
 
+test('models 里没装的工具写没装，不贴原始的启动报错', async () => {
+  const { modelsReport } = await import(pathToFileURL(path.join(ROOT, 'foreman/skills/dispatch/scripts/report.mjs')).href);
+  const missing = { ok: false, models: [], error: 'spawnSync codex.exe ENOENT' }, other = { ok: false, models: [], error: 'boom' };
+  const md = modelsReport({ tools: { 'codex cli': missing, 'opencode cli': other, 'pi cli': missing }, api: {}, agents: {} });
+  assert.ok(md.includes(MESSAGES.zh.reportCatalogMissing('Codex')) && md.includes(MESSAGES.zh.reportCatalogError('opencode', 'boom')) && !md.includes('ENOENT'), md);
+});
+
 test('Codex 沙箱探测不了（ok 为 null）时，环境一节不说沙箱正常', async () => {
   const { environmentReport } = await import(pathToFileURL(path.join(ROOT, 'foreman/skills/dispatch/scripts/report.mjs')).href);
   const ok = { ok: true }, checks = { node: ok, git: ok, watch: ok, memory: { total_gb: 16, available_gb: 4, enough: true, web: false },
