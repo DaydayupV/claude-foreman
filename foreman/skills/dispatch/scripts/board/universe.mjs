@@ -496,12 +496,19 @@ export function createUniverse(options) {
     try { waiting = queuedRuns(null, options.runs); } catch { /* 下一拍再读 */ }
     const all = readRuns(now).map((r) => merged.has(r.session) ? { ...r, session: merged.get(r.session) } : r);
     // 用桌面版时只列桌面版对话列表里有的（和侧栏一致）：命令行里 claude -p 之类的一次性调用、别的工具起的会话不列。
+    // 例外是派过任务的对话（同一台机器上桌面版和终端里的 claude 混用时）：不列的话它的看板链接飞不进去。
     // 一份桌面版元数据都没有（只用命令行）时全部照列
-    const desktopOnly = lineage.known?.size > 0;
-    const selected = [...sessions.values()].filter((s) => s.last_at != null && s.last_at >= cutoff && !hidden.has(s.id) && !merged.has(s.id) && (!desktopOnly || lineage.known.has(s.id))).sort((a, b) => b.last_at - a.last_at || a.id.localeCompare(b.id)).slice(0, 200);
-    const summaries = selected.map((s) => { const v = view(s); return summaryOf(v, all, now, options.prices, meterOf(v), waiting, lineage); });
+    const desktopOnly = lineage.known?.size > 0, dispatched = desktopOnly ? new Set(all.map((r) => r.session)) : null;
+    const selected = [...sessions.values()].filter((s) => s.last_at != null && s.last_at >= cutoff && !hidden.has(s.id) && !merged.has(s.id) && (!desktopOnly || lineage.known.has(s.id) || dispatched.has(s.id))).sort((a, b) => b.last_at - a.last_at || a.id.localeCompare(b.id)).slice(0, 200);
+    // 父子关系按桌面版现在的 id 记。对话换了 id、新的那份记录还没写出来时，星图上显示的还是先前那份（没并进去）：
+    // 先前的 id 也接上它的父对话，指向的父对话没显示、显示的是它先前那份时，改指向显示的那份
+    const parents = new Map(lineage.parents), shown = new Set(selected.map((s) => s.id));
+    for (const [prior, id] of aliases) if (!merged.has(prior) && parents.has(id) && !parents.has(prior)) parents.set(prior, parents.get(id));
+    for (const [child, parent] of parents) if (!shown.has(parent)) { const old = [...aliases].find(([prior, id]) => id === parent && shown.has(prior)); if (old) parents.set(child, old[0]); }
+    const shownLineage = { ...lineage, parents };
+    const summaries = selected.map((s) => { const v = view(s); return summaryOf(v, all, now, options.prices, meterOf(v), waiting, shownLineage); });
     for (const id of sums.keys()) if (!sessions.has(id)) sums.delete(id);
-    return { v: 3, now, window_h: hours, projects: projectsOf([...selected].sort((a, b) => b.cwdAt - a.cwdAt), older, folders, lineage), sessions: summaries,
+    return { v: 3, now, window_h: hours, projects: projectsOf([...selected].sort((a, b) => b.cwdAt - a.cwdAt), older, folders, shownLineage), sessions: summaries,
       // 名额和对话列表同一个口径：桌面版里归档、删掉的对话，它的任务不占"同时运行"的格子（不然点了飞不进去）
       agents: agentSlots(config, hidden.size ? all.filter((r) => !hidden.has(r.session)) : all) };
   };
