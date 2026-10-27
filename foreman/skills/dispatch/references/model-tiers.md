@@ -3,7 +3,7 @@
 角色讨论（见 `references/roles.md`）给参与方分配角色时用这张表：先看档位，决定能不能扮需要复杂思考的角色；再看长处和短处，在同一档里挑更合适的。
 
 - **更新日期**：2026-10-18
-- **依据**：一份第三方综合评测榜，含综合分和八个单项（Agentic、推理、编程、浏览器操作、数据分析、研究、设计）。表里只记档位和突出的长处、短处，不记原始分数。
+- **依据**：LiveBench（https://livebench.ai），含综合分和七个单项（Agentic、推理、编程、浏览器操作、数据分析、研究、设计）。表里只记档位和突出的长处、短处，不记原始分数。
 - **维护**：评测几个月就会变。每次发版前对照最新评测更新这张表，并改上面的日期。
 
 ## 怎么用
@@ -30,9 +30,8 @@
 | Claude Sonnet 5.5 | 推理、设计、Agentic | 数据分析弱 |
 | Claude Opus 5 | 研究、推理 | Agentic、数据分析偏弱 |
 | GPT-6 Sol | 编程、浏览器操作 | 研究、Agentic 偏弱 |
-| DeepSeek V4.1 Flash 1017 | 编程、推理 | Agentic 弱 |
+| DeepSeek V4.1 Flash 1017（API 名 `deepseek-flash`，也写作 `deepseek-v4.1-flash`） | 编程、推理 | Agentic 弱 |
 | Muse Wonder 1.0 | 研究、推理 | Agentic 弱 |
-| DeepSeek V4.1 Flash | 研究、编程 | Agentic 很弱 |
 | Claude Opus 4.8 | 浏览器操作、推理 | Agentic、数据分析弱 |
 | GPT-5.6 Sol | 推理、编程 | 研究、Agentic 弱 |
 | GPT-5.6 Terra | 推理 | 研究、Agentic 弱 |

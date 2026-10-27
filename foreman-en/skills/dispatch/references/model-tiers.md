@@ -3,7 +3,7 @@
 Role discussions (see `references/roles.md`) use this table when assigning roles to participants: the tier decides whether a model may take a role that needs hard thinking; strengths and weaknesses decide which model fits better within the same tier.
 
 - **Updated**: 2026-10-18
-- **Source**: a third-party leaderboard with an overall score and seven category scores (Agentic, Reasoning, Coding, Browser use, Data analysis, Research, Design). This table keeps only the tier and the standout strengths and weaknesses, not the raw scores.
+- **Source**: LiveBench (https://livebench.ai), with an overall score and seven category scores (Agentic, Reasoning, Coding, Browser use, Data analysis, Research, Design). This table keeps only the tier and the standout strengths and weaknesses, not the raw scores.
 - **Upkeep**: leaderboards change within months. Update this table against the latest results before each release, and change the date above.
 
 ## How to use it
@@ -30,9 +30,8 @@ Role discussions (see `references/roles.md`) use this table when assigning roles
 | Claude Sonnet 5.5 | Reasoning, design, agentic | Data analysis weak |
 | Claude Opus 5 | Research, reasoning | Agentic, data analysis on the weak side |
 | GPT-6 Sol | Coding, browser use | Research, agentic on the weak side |
-| DeepSeek V4.1 Flash 1017 | Coding, reasoning | Agentic weak |
+| DeepSeek V4.1 Flash 1017 (API name `deepseek-flash`, also written `deepseek-v4.1-flash`) | Coding, reasoning | Agentic weak |
 | Muse Wonder 1.0 | Research, reasoning | Agentic weak |
-| DeepSeek V4.1 Flash | Research, coding | Agentic very weak |
 | Claude Opus 4.8 | Browser use, reasoning | Agentic, data analysis weak |
 | GPT-5.6 Sol | Reasoning, coding | Research, agentic weak |
 | GPT-5.6 Terra | Reasoning | Research, agentic weak |
