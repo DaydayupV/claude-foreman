@@ -66,6 +66,13 @@ for (const [name, change, key, reason] of [
   });
 }
 
+test('格子条目里拼错的字段照常加载，但提醒一句', async (t) => {
+  const h = sandbox(t), c = baseConfig(); c.modules.run.complex = [{ agent: 'codex', effort: 'high', requird: true }]; h.config(c);
+  const r = await h.bridge(['config']);
+  assert.equal(r.code, 0, r.stderr);
+  assert.ok(r.stderr.includes(MESSAGES.zh.unknownEntryField('modules.run.complex[0].requird')), r.stderr);
+});
+
 test('项目配置忽略不允许的字段并保留允许的覆盖', async (t) => {
   const h = sandbox(t);
   const file = h.write('.claude/foreman.json', {
