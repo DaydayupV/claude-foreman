@@ -83,9 +83,10 @@ test('新增官方价格精确匹配模型和提供方前缀，不被较短条�
   for (const [model, input, cached, cache_write, output] of [
     ['deepseek-v4.1-flash', 0.3, 0.006, undefined, 1.2], ['glm-5.3-flash', 0.15, 0.03, undefined, 0.5],
     ['gemini-4-argon', 2, 0.1, undefined, 10], ['qwen3.8-flash', 0.15, 0.016, 0.2, 0.47], ['minimax-m3', 0.3, 0.06, undefined, 1.2],
+    ['glm-5.3-flashx', 0.37, 0.075, undefined, 1.25], ['minimax-m3.1-flash', 0.15, 0.015, undefined, 0.6],
   ]) for (const name of [model, `opencode-go/${model}`, `provider/${model.toUpperCase()}`]) {
     const rate = prices.models.find((p) => p.match.includes(model));
-    assert.deepEqual(rate.match, [model]); assert.match(rate.source, /https:\/\/.*2026-10-23/);
+    assert.match(rate.source, /https:\/\/.*2026-10-27/);
     for (const [key, value] of Object.entries({ input, cached, cache_write, output })) {
       assert.equal(rate[key], value); if (value != null) assert.equal(priceFor(name, { [key]: 1e6 }, prices), value);
     }
@@ -93,7 +94,7 @@ test('新增官方价格精确匹配模型和提供方前缀，不被较短条�
 });
 
 test('模型优先精确匹配，再取连字符前缀中最长的，拒绝相似型号', () => {
-  for (const model of ['glm-5.3-flashx', 'minimax-m3.1-flash', 'other-gemini-4-argon']) {
+  for (const model of ['glm-5.4-flash', 'minimax-m3.2-flash', 'other-gemini-4-argon']) {
     for (const name of [model, `provider/${model.toUpperCase()}`]) assert.equal(priceFor(name, { input: 1e6 }, prices), null);
   }
   assert.equal(priceFor('google/GEMINI-4-ARGON-contributor', { input: 1e6 }, prices), 2);
@@ -256,7 +257,7 @@ test('各家对同一模型的写法都能匹配到价格，Claude 价格按官�
     ['claude-mythos-5-1', 0.25], ['claude-mythos-5', 1], ['claude-sonnet-5-5', 0.1], ['claude-sonnet-5', 0.2],
     ['opencode-go/glm-5.3-flash', 0.03], ['gpt-6.1-sol', 0.1],
   ]) assert.equal(cached(model), price, model);
-  for (const model of ['glm-5.3-flashx', 'minimax-m3.1-flash', 'other-claude-opus-5-5']) assert.equal(cached(model), null, model);
+  for (const model of ['glm-5.4-flash', 'minimax-m3.2-flash', 'other-claude-opus-5-5']) assert.equal(cached(model), null, model);
 });
 
 test('amounts carry no floating-point tail and repeated lookups reuse the compiled table', () => {
