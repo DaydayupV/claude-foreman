@@ -151,7 +151,7 @@ flowchart TD
 - **扁平素材转 SVG 不用另装东西**：用插件自带的描图，直边是直线、曲线是贝塞尔曲线，对照拼图里能看到 SVG 画回来的样子。
 - 做不到的：像素风、指定精确像素尺寸、超过约 157 万像素的高清图、让模型画单独的关节部件，以及需要定稿图里没有的那一面的大幅转身、换视角。
 
-提示词模板、命令选项和各项检查见 [references/image-assets.md](foreman/skills/dispatch/references/image-assets.md)。
+图像模块的流程见 [references/image.md](foreman/skills/dispatch/references/image.md)，提示词模板见 [references/image-assets.md](foreman/skills/dispatch/references/image-assets.md)，`assets` 命令的选项和各项检查见 [references/assets-cli.md](foreman/skills/dispatch/references/assets-cli.md)。
 
 ### 实时查看
 

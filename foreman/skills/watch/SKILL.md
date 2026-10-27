@@ -7,7 +7,7 @@ disable-model-invocation: true
 
 打开实时进度。参数是 `$ARGUMENTS`。
 
-按 `foreman:dispatch` skill 里"实时查看"一节的做法运行 watch 启动器：有 `run_in_terminal` 工具就用它在终端面板里打开，没有就把命令发给用户，请用户在另一个终端里运行。参数：
+按 `${CLAUDE_PLUGIN_ROOT}/skills/dispatch/references/watch.md` 的"终端实时查看"运行 watch 启动器（不用加载 dispatch skill）：有 `run_in_terminal` 工具就用它在终端面板里打开，没有就把命令发给用户，请用户在另一个终端里运行。参数：
 - 没有参数：这个对话里有正在进行的讨论或任务组时，用 `--group <组名>` 跟踪整组；否则跟踪当前正在运行的任务，没有的话显示最近一次
 - 给了 run_id 或 `last`：在命令后面加 `--run <参数>`
 - 给了任务组名：在命令后面加 `--group <参数>`，一次跟踪整组：一个窗口里每席一块，同时显示各自最新的进度；席位多时用滚轮翻看，按席位号打开那一席的完整时间线，Esc 返回

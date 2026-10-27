@@ -66,7 +66,7 @@
 |---|---|---|
 | `model` | 模型 | 不写就沿用 `~/.codex/config.toml` |
 | `bin` | codex 可执行文件或 `codex.js` 路径（也可以用环境变量 `CODEX_BIN`） | 自动查找 |
-| `max_parallel` | 这个协作方同时最多运行几个任务，所有任务组和会话加起来算（见 skill 的"并发拆分"一节） | `4` |
+| `max_parallel` | 这个协作方同时最多运行几个任务，所有任务组和会话加起来算（见 `references/run.md` 的"并发拆分"） | `4` |
 | `sandbox` | `run` / `review` / `discuss` 各自的沙箱：`read-only` / `workspace-write` / `danger-full-access`。讨论和审查设成 `read-only` 时由系统沙箱拦下写入（结果的 `readonly` 为 `sandbox`），否则只靠规则约束和事后对比快照（`audited`）。Windows 上默认的 elevated 只读沙箱可能连读文件的命令都启动不了，见下文 | 全部 `null`，沿用 Codex 配置 |
 | `approval` | 审批策略：`never` 或 `on-request` | 不写时用 `never`：无人值守，没人能审批。命令被沙箱挡住时直接把失败交回给模型；沙箱坏了要修沙箱，见下文"Codex 的沙箱起不来时" |
 
@@ -162,7 +162,7 @@
 图像任务的派法：每个新的图形交付物开工前，Claude 先弹窗让用户选路线（① 位图、② 位图 + 矢量混合、③ 纯矢量先出参考图、④ 纯矢量 / 代码），再用 `plan --module image --cell <generate|draw> --route <路线号>` 建计划、`image --plan … --seat …` 启动；路线决定用到哪几格，只建用到的格子的计划，所以没用到的格子里的必选不会触发（比如选了路线 ④，generate 的必选不用到场）。脚本会核对这个会话里最近一次路线弹窗的回答，见 `references/cli.md` 的"plan、image 和 status --plan"。
 
 ### 候选和必选
-- 一格有几个候选时，由 Claude 按 skill 的规则挑（排除做不了的、必选全部加入、讨论和审查按不同的基础模型补到配置的席位数、执行每个工作包派一个执行方），每次派出时说一句选了谁、为什么。脚本只检查能机械判断的硬约束。
+- 一格有几个候选时，由 Claude 按 `references/seats.md` 的规则挑（排除做不了的、必选全部加入、讨论和审查按不同的基础模型补到配置的席位数、执行每个工作包派一个执行方），每次派出时说一句选了谁、为什么。脚本只检查能机械判断的硬约束。
 - `seats`（只限 `discuss` 和 `review`）：每一级的外部席位数，不含 Claude Code 席和 3 级审查的补漏席。默认值如下（插件里写明默认数字的只有这一处，其他文档都引用这里）：
 
   | | simple | normal | complex |
@@ -249,3 +249,10 @@
   - `image_configured` 说明用户配置里写没写图像块：为 `false` 时图像两格显示的 `null` 是默认值，不是用户关掉的；
   - `agents_status` 列出每个协作方的类型、能力、key 是否已设置、实际用的可执行文件；
   - `summary` 是总配置情况：每一格交给谁，每个协作方用在哪几格，以及提醒（没用到的协作方、明文 key、shell 权限用于执行或手画、`agent-aliases.json` 里指向已不存在代号的旧代号）。`check` 的输出里也有，并带上检查结果。
+
+## 脚本输出配置提示时怎么转告
+- 脚本输出"首次使用，已生成配置文件"时，转告用户检测到了什么（Codex、opencode、pi、API key）、现在各类任务交给谁，并建议运行 `/foreman:setup` 选择要用的模型。
+- 脚本输出"已把配置文件 … 改成新写法"时，告诉用户：配置换成了新写法（`type` 改为 `codex cli` / `opencode cli` / `api`，`"claude"` 改为 `"claude code"`），协作方代号改成了模型名（转告脚本列出的对照），实际用的模型和推理强度都没变，原文件备份在哪里。
+- 脚本输出"已把配置文件 … 里的 levels 改写成 modules"时，告诉用户：配置换成了 `modules` 写法，每一格的协作方、推理强度和顺序都没变；有一处行为变化，以前讨论一级里的协作方全员参加，现在是候选、由 Claude 挑，想保留全员参加就给它们标 `"required": true`；配置里还没有图像两格；文件里的 `levels` 留成了一行说明，旧版插件读到会报错，不会悄悄改成全由 Claude 做；原文件备份在哪里。建议运行 `/foreman:setup` 标必选、加图像两格。改配置时保留 `levels` 那行说明。
+- **Windows 上 Codex 的只读沙箱**：默认的 elevated 沙箱在 `read-only` 模式下可能连读文件的命令都启动不了。给讨论和审查设 `read-only` 之前先运行 `check`：起不来时按它的 `fix` 在 `~/.codex/config.toml` 的 `[windows]` 里改用 `sandbox = "unelevated"`。没设只读沙箱时（`readonly` 为 `audited`），只读靠规则约束和事后对比快照，发现写入就记为失败，见 `references/review.md` 的"只读"。
+- 用户要改配置时，直接编辑对应的 JSON 文件，改完运行 `config` 确认生效。

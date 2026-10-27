@@ -151,7 +151,7 @@ Bitmaps are drawn by Codex's built-in image tool, then Claude Code turns them in
 - **Turning flat assets into SVG needs nothing extra**: the plugin's own tracer draws straight edges as lines and curves as Bézier curves, and the contact sheet shows the SVG rendered back.
 - Not supported: pixel art, exact pixel sizes, high-resolution images above about 1.57 megapixels, having the model draw separate jointed parts, and big turns or changes of viewpoint that need a side the final image doesn't show.
 
-Prompt templates, command options and the checks are in [references/image-assets.md](foreman-en/skills/dispatch/references/image-assets.md).
+The image module's workflow is in [references/image.md](foreman-en/skills/dispatch/references/image.md), the prompt templates in [references/image-assets.md](foreman-en/skills/dispatch/references/image-assets.md), and the `assets` command options and checks in [references/assets-cli.md](foreman-en/skills/dispatch/references/assets-cli.md).
 
 ### The live view
 

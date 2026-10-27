@@ -1,6 +1,37 @@
-# 脚本参考：check、models 和结果字段
+# 脚本参考：命令、check、models 和结果字段
 
-SKILL.md 里只留了决策流程和常用命令。排查环境、帮用户选模型、看结果 JSON 里某个字段的意思时，读这里。实时查看、`status` 和开工那一行的字段（状态词、用时、计数、模型标签、用量、标签和提示）中英两个插件都写英文，模型和 Claude 写的内容照原文显示。每个子命令加 `--help`（或 `-h`）打印这一条的用法（`assets <动作> --help` 打印这个动作的参数），不带子命令时打印总用法，退出码都是 0，不写任何文件；写在选项值里的（比如 `--title -h`）不算。
+SKILL.md 里只留了决策流程和常用命令。查某个命令的完整参数、排查环境、帮用户选模型、看结果 JSON 里某个字段的意思时，读这里对应的一节，不用整篇读完。实时查看、`status` 和开工那一行的字段（状态词、用时、计数、模型标签、用量、标签和提示）中英两个插件都写英文，模型和 Claude 写的内容照原文显示。每个子命令加 `--help`（或 `-h`）打印这一条的用法（`assets <动作> --help` 打印这个动作的参数），不带子命令时打印总用法，退出码都是 0，不写任何文件；写在选项值里的（比如 `--title -h`）不算。
+
+## 命令一览
+唯一入口是 dispatch skill 目录下的 `scripts/cli.mjs`（下面写成 `<脚本路径>`）。
+
+```bash
+node "<脚本路径>" run    --cwd "<项目目录>" --brief "<任务说明.md>" --title "<短标题>" --level <simple|normal|complex> [--agent <协作方>] [--add-dir "<目录>"] [--track "<路径>"] [--group <组名> --scope "<路径>"] [--timeout 分钟]
+node "<脚本路径>" resume --run <run_id|last> --brief "<返工说明.md>" --level <simple|normal|complex> --reason <rework|answer|recover> [--track "<路径>"] [--file "<路径>[:起始行-结束行]"]（续接图像任务时不写 --level；讨论的续接不写 --reason）
+node "<脚本路径>" plan   --cwd "<项目目录>" --module <discuss|run|review> --cell <simple|normal|complex> --group <组名> --seat "<代号>[=<角色名>]" [--seat …] [--why "<选择理由>"] [--host-role "<角色名>"] [--count-why "<理由>"]（这两项只用于讨论和审查计划） [--target diff|files|claims|visual --file "<路径>[:起始行-结束行]" --uncommitted | --base <分支> | --commit <sha>（只用于审查计划）]
+node "<脚本路径>" submit --plan <plan_id> --report "<报告.json>" [--model <Claude Code 当前的模型>] [--author]
+node "<脚本路径>" run|discuss|review --plan <plan_id> --seat <序号> --brief "<说明.md>" --title "<短标题>" [--effort <强度>] [--file "<路径>[:起始行-结束行]"] [--scope "<路径>"]（协作方、等级、目录和组取自计划；审查的对象和材料也取自计划）
+node "<脚本路径>" plan   --cwd "<项目目录>" --module image --cell <generate|draw> --route <1|2|3|4> --group <组名> --seat "<代号>" [--seat …] [--why "<选择理由>"]
+node "<脚本路径>" image  --plan <plan_id> --seat <序号> --brief "<任务说明.md>" --title "<短标题>" --scope "<输出目录>" [--scope …] [--track "<路径>"] [--effort <强度>]
+node "<脚本路径>" status [--run <run_id|last> | --group <组名> | --plan <plan_id>] [--limit n]
+node "<脚本路径>" watch  [--run <run_id|last> | --group <组名>]
+node "<脚本路径>" board  [--replay <对话 id|run_id|组名|all> [--speed <倍数>] [--maxgap <秒>]]（不带 --replay 是直播看板）
+node "<脚本路径>" board --stop（关掉直播看板服务）
+node "<脚本路径>" config [--cwd "<项目目录>"] [--format json|md]
+node "<脚本路径>" check  [--agent <协作方>] [--format json|md]
+node "<脚本路径>" models [--format json|md]
+node "<脚本路径>" await-busy (--group <组名> | --run <run_id>) [--after 分钟]
+node "<脚本路径>" cancel --run <run_id>
+node "<脚本路径>" judge  --run <run_id> [--accept "<编号,…>"] [--partial "<编号,…>"] [--reject "<编号,…>"] [--same "<编号>=<run_id>:<编号>,…"] [--clear "<编号,…>"]
+node "<脚本路径>" stats  [--module discuss|run|review|image] [--since <天数>]
+node "<脚本路径>" assets <template|cut|check|diff|layers|patch|trace|capture|playback> …（各命令的参数见 references/assets-cli.md）
+```
+
+- 执行单席直派时，`--agent <协作方>` 只能从这一格的候选里选。不写时：这一格只有一个候选就用它，有一个必选就用它，否则必须写。这一格还有别的必选时，单席派发会被拒绝，要先建计划。格子是 `"claude code"` 时，只有用户配置里这一格本来就是 `"claude code"` 才能用 `--agent` 点名派出（结果标 `outside_cell`），项目配置关掉的不行；讨论和审查遇到这种格子时，用户点名的协作方照样写进计划的 `--seat`，计划标 `outside_cell`，推理强度用内置默认值。每个协作方能做哪些任务看 `capabilities.modes`：`api` 协作方能参加 `discuss` 和 `review`（只审文本，不能审 `visual`）；`opencode cli` 和 `pi cli` 能做 `review` 和 `discuss`，配置里写了 `run_access` 的还能做 `run`。升级前的旧代号（比如 `codex`）照样认，脚本会提示新代号。
+- 用户点名要某个推理强度（比如"用 ultra 跑"）时，照常写 `--level`，再加 `--effort <强度>`：它只换推理强度，协作方还是按格子选。
+- 用户点名要某个模型时，加 `--model <模型>`。只能换同一个提供方的模型：`codex cli` 和 `api` 协作方可以换成任意模型，`opencode cli` 和 `pi cli` 的新模型要和原来的有同一个 `提供方/` 前缀；换了模型的结果标 `model_overridden`。
+- 交给谁、模型、推理强度、沙箱、审批、超时由配置文件决定；Codex 没有配置的项沿用它自己的 `~/.codex/config.toml`。拿不准当前设置时先运行 `config --cwd "<项目目录>"`。
+- `plan`、`submit`、`status --plan` 的检查和输出见下面一节；`judge` 和 `stats` 见最后一节。
 
 ## check
 检查环境能不能用：Node.js、Git，以及配置里的每个协作方，结果在 `agents.<代号>` 里。
@@ -60,7 +91,7 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
 - `notes`：提示信息，比如归属未知的改动、协作方报告了但没追踪到的文件、Codex 的沙箱启动不了命令、opencode 中途报错后自动重试并正常结束（见下）。
 - opencode 中途报错（比如流超时 "Timed out waiting for response data"）、自己重试后最后一步正常结束（`step_finish` 的 reason 是 `stop`），或者事件流以一段写完的回复结尾（opencode 有时写完回复就退出、不发 `step_finish`）时，不算失败：错误原文写进 `notes`，不进 `errors`，opencode 的退出码不是 0 也一样。这时回复可能被拆成了几段，最后一段不是合格的报告，就照常发一次修复请求，让它把完整报告重发一遍；不拼接几段消息。错误之后没有正常结束的，照旧记成 `failed`；恢复之后修复请求又失败、或者任务被取消、超时的，恢复过的错误也照实写进 `errors`，不写这条提示。
 - `warnings`：要注意的问题，比如审查期间材料又变了；普通执行任务出了图（"出图没有走图像模块"）；路线 ③、④ 的手画任务出了位图（路线 ③ 的位图只该在出图那一步出参考图）；路线 ③、④ 的手画任务新写或改过的 SVG 里嵌了位图（`<image>`，带命名空间前缀的 `<svg:image>` 也算；只查这一席自己的改动；没有快照、或者 `--scope` 在工作目录外时，追踪不到的地方只查执行事件和报告里列出的 SVG，`notes` 里会说明）；收尾时 `meta.json` 一直写不进（多半是备份或同步软件占着它，约 15 秒后放弃），这时它停在上一次写好的内容，结果照常在 `result.json` 里（这条提示只在打印出来的结果里，`result.json` 里没有）。
-- `questions` 和 `needs_decision`：协作方要人回答的事，见 SKILL.md 的"协作方要人回答时"。
+- `questions` 和 `needs_decision`：协作方要人回答的事，见 `references/recovery.md` 的"协作方要人回答时"。
 - `session_id`、`run_dir`：`run_dir/diff.patch` 是这个任务的补丁（`by` 为 `agent`、`reported`、`unknown` 的文件），`run_dir/diff.all.patch` 是两次快照之间观测到的全部改动（另含标了 `group_run` 的文件）；`changes` 里的 `shortstat`、`patch_bytes` 对应前者，`all_shortstat`、`all_patch_bytes` 对应后者。审查的补丁在 `run_dir/review.patch`。`changes.unstable_files` 列出拍快照时一直在被改写、没能放进开工或结束快照的文件（`path`、`phase`）：它们的改动没法比较，不在两份补丁里；超过 20 个时只列前 20 个，`changes.unstable_total` 是总数，完整列表在 `changes.unstable_list` 指向的文件（记录目录里的 `unstable-files.json`）。拍快照总共最多用 60 秒，到时还没确认完的文件也列进 `unstable_files`，并且 `changes.incomplete` 为 true；只读审计的任务要求快照完整（有拍不稳的文件、或者用完了 60 秒，都算不完整），开工快照不完整时不启动，结束快照不完整时记为失败。
 - token 消耗：`usage` 是本次调用的输入、缓存、输出 token（`usage_scope` 为 `session_total` 时是整个会话的累计量）；`last_request` 是最近一次请求的用量和模型上下文窗口；`rate_limit` 是 Codex 额度的已用比例；`quota_resets_at` 是额度预计恢复的时间。Codex 的用量读自它自己的会话记录，每次请求一完成就有累计值，所以命令执行期间取消也记得到。被取消或超时的任务只记得到终止前已经完成的请求的用量（正在进行的那次，厂商不报用量），一次都没完成时 `usage` 为 `null`，`notes` 里有说明；超时的任务 `errors` 第一条写明超过了几分钟的总时限；`errors` 写明是 `cancel` 命令、用户在实时查看里按 x，还是调度进程收到了终止信号。`cancel` 怎么处理各种任务见下面的"cancel 和 status"。API 协作方的厂商一次都没返回用量时，`usage` 和 `usage_scope` 都是 `null`，`notes` 里有说明，`stats` 把这一轮计入 `missing_runs`。`output_tokens_per_s` 是这一轮的平均输出速度：这一轮的输出 token（含推理）除以这一轮的用时 `duration_s`，含拍快照、跑命令、等厂商响应和报告修复请求的时间，不含本地排队等名额的时间。它和网页看板上的生成估速（只估算生成时间）口径不同，两者不能直接比。终端用量行写成 `run avg N tok/s`；取消、超时、卡死的轮次只记到最后一次完成的请求，速度偏低，后面标 `(partial usage)`。只在 `usage_scope` 为 `this_run`、有输出、时长不为 0 时给出，否则为 `null`。
 - `agent`、`model_shown`、`effort`：这次交给了哪个协作方、实际用的模型和推理强度。`model_overridden` 为 `true` 表示这次用 `--model` 换了模型；`outside_cell` 为 `true` 表示格子是 `"claude code"`、这次是用 `--agent` 点名派出的。

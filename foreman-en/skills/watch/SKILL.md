@@ -7,7 +7,7 @@ disable-model-invocation: true
 
 Open the live progress view. The argument is `$ARGUMENTS`.
 
-Run the watch launcher as described in the "Live view" section of the `foreman-en:dispatch` skill: if the `run_in_terminal` tool is available, use it to open the view in the terminal panel; otherwise send the user the command and ask them to run it in another terminal. Arguments:
+Run the watch launcher as described in "The terminal live view" in `${CLAUDE_PLUGIN_ROOT}/skills/dispatch/references/watch.md` (no need to load the dispatch skill): if the `run_in_terminal` tool is available, use it to open the view in the terminal panel; otherwise send the user the command and ask them to run it in another terminal. Arguments:
 - No argument: if this conversation has a discussion or task group in progress, follow the whole group with `--group <name>`; otherwise follow the run in progress, or show the most recent one if none is running
 - A run_id or `last`: add `--run <argument>` to the command
 - A group name: add `--group <argument>` to follow the whole group at once: one window with a block per seat, each showing its latest progress; scroll with the mouse wheel when there are many seats, press a seat's number to open its full timeline, and Esc to go back
