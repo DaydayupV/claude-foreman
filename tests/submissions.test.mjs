@@ -23,6 +23,7 @@ for (const module of ['discuss', 'review']) test(`${module} 计划把 Claude Cod
   assert.deepEqual(json(p.file).host, p.host); assert.equal(p.seats[0].seat, 1);
   assert.equal(p.commands[0], `node "${BRIDGE}" submit --plan ${p.plan_id} --report "<报告.json>"`);
   assert.ok(p.commands[1].includes(`${module} --plan ${p.plan_id} --seat 1`));
+  assert.equal(p.guidance, M.planGuidance(module));
   const plain = output(await h.bridge(planArgs(h, module))); assert.equal(plain.host.role, null);
 });
 
@@ -98,6 +99,7 @@ test('submit 保存原样快照和规定字段，不造用量、进程或事件�
   assert.deepEqual(r.report, discussion); assert.equal(fs.existsSync(path.join(out.run_dir, 'events.jsonl')), false);
   assert.deepEqual(output(await h.bridge(['status', '--run', out.run_id])), r);
   assert.deepEqual(out.commands, p.commands.slice(1));
+  assert.equal(out.guidance, M.submitGuidance('discuss', 1));
   write(file, '{}'); assert.deepEqual(h.result(out.run_id).report, discussion);
 });
 
@@ -151,6 +153,7 @@ test('讨论失败首轮可重启，第二轮须先交第二份报告，submit �
   failed(await h.bridge(resume, { env: s.env }), M.hostAnswerRequired(p.plan_id, 2));
   const answer = output(await h.bridge(submitArgs(h, p)));
   assert.deepEqual(answer.commands, [a, b].map((r) => `node "${BRIDGE}" resume --run ${r.run_id} --level complex --brief "<续接说明.md>"`));
+  assert.equal(answer.guidance, M.submitGuidance('discuss', 2)); assert.ok(answer.guidance.includes('广度席不续接'));
   // 后面几轮另列能续接的席位和模型，并写明广度席不续接（脚本不知道档位，由 Claude 挑）
   assert.deepEqual(answer.resumable.map((s) => [s.seat, s.agent, s.run_id]), [[1, 'codex', a.run_id], [2, 'codex', b.run_id]]);
   assert.equal(answer.note, M.submitResumeNote);

@@ -119,7 +119,8 @@ test('计划保存同方多席、角色、理由、默认模型和启动命令�
   assert.match(p.plan_id, /^\d{8}-\d{6}-[a-z0-9]{4}$/);
   assert.equal(p.cwd, h.cwd); assert.equal(p.level, 'complex'); assert.equal(p.claude_session, 'test-session'); assert.equal(p.why, '合成理由');
   assert.deepEqual(p.seats, ['实现', '复核'].map((role, i) => ({ seat: i + 1, agent: 'codex', role, model: 'fake-codex', effort: 'max', required: false })));
-  const { file, commands, ...saved } = p; assert.deepEqual(json(file), saved);
+  const { file, commands, guidance, ...saved } = p; assert.deepEqual(json(file), saved);
+  assert.equal(guidance, M.planGuidance('run'));
   assert.ok(commands.every((cmd) => cmd.includes(`"${BRIDGE}" run --plan ${p.plan_id}`) && cmd.includes(`--scope "${M.planPlaceholders.scope}"`)));
   assert.equal(h.records().length, 1); assert.equal(fs.existsSync(path.join(h.runs, '.start.lock')), false);
   const status = await h.bridge(['status']); assert.ok(!status.stdout.includes(p.plan_id));
