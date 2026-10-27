@@ -127,6 +127,19 @@ test('projects follow where a conversation started (not later cd) and fold git w
   assert.equal(projectRoot('\\\\offline-server\\share\\proj'), '\\\\offline-server\\share\\proj');
 });
 
+test('a conversation started in a subfolder of a repository belongs to the repository, and a nested repository to itself', (t) => {
+  const f = temp(t), repo = path.join(f.root, 'repo'), wt = path.join(f.root, 'elsewhere', 'wt'), nested = path.join(repo, 'regress', 'own');
+  f.write(path.join(repo, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  f.write(path.join(nested, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  f.write(path.join(wt, '.git'), `gitdir: ${path.join(repo, '.git', 'worktrees', 'wt')}\n`);
+  f.session('sub', [{ ...row('user', now - 3, 'sub'), cwd: path.join(repo, 'regress', 's0') }], 'sub');
+  f.session('wtsub', [{ ...row('user', now - 2, 'wtsub'), cwd: path.join(wt, 'src') }], 'wtsub');
+  f.session('nested', [{ ...row('user', now - 1, 'nested'), cwd: path.join(nested, 'src') }], 'nested');
+  const data = createUniverse(f.options).read(), key = (p) => p.replace(/\\/g, '/').toLowerCase();
+  assert.deepEqual(Object.fromEntries(data.sessions.map((s) => [s.id, s.project])), { sub: key(repo), wtsub: key(repo), nested: key(nested) });
+  assert.deepEqual(data.projects.map((p) => p.name).sort(), ['own', 'repo']);
+});
+
 test('states follow waiting, dispatching, thinking, idle priority; a turn that has not ended stays thinking up to 10 min', (t) => {
   const f = temp(t), file = f.session('s', [row('user', base, 'title'), tool(base + 1)]);
   f.run('work', { status: 'running', started_at: base, ended_at: null });
