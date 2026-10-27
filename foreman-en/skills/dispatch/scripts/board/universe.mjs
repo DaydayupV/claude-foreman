@@ -12,6 +12,8 @@ const keyOf = (cwd) => cwd ? cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLower
 // 在仓库的子目录里开的对话归到仓库：往上找最近一个有 .git 的目录。不越过用户主目录（主目录本身是个仓库时，
 // 下面所有不在别的仓库里的目录都会被并进去）；找不到就是 null
 function repoTop(cwd) {
+  // 不是这个系统的绝对路径（比如 Linux 上读到 C:\ 开头的记录）时不找：resolve 会把它接到当前目录后面，找到的是不相干的仓库
+  if (!path.isAbsolute(cwd)) return null;
   const home = path.resolve(os.homedir()).toLowerCase();
   for (let dir = path.resolve(cwd); ;) {
     if (dir.toLowerCase() === home) return null;
