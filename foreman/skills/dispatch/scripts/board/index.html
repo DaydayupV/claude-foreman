@@ -1362,6 +1362,13 @@ function laneFor(id) {
 }
 
 function onRun(r) {
+  // 直播里记下页面什么时候知道任务结束了（产出框的交接从这一刻算起，见 04-life.js 的 shownAt）；
+  // 连上时就已经结束的不记，结束后再发来的沿用第一次的
+  const prev = B.runs.get(r.id);
+  if (B.clock.mode === 'live' && r.ended_at != null) {
+    const seen = prev?.ended_seen ?? (prev ? (prev.ended_at == null ? Date.now() : null) : B.synced ? Date.now() : null);
+    if (seen != null) r.ended_seen = seen;
+  }
   B.runs.set(r.id, r);
   const lane = laneFor(r.lane || r.id);
   const at = lane.runs.findIndex((x) => x.id === r.id);
@@ -1387,6 +1394,8 @@ function noteEvent(ev, lane) {
 
 // 实时的一条事件
 function onEv(ev, stats = true) {
+  // 直播里逐条推来的事件记下到达页面的时刻（产出框的交接用，见 04-life.js 的 shownAt）
+  if (B.clock.mode === 'live') ev.seen = Date.now();
   const lane = laneOf(ev);
   noteEvent(ev, lane);
   insertByTs(lane.events, ev, LANE_EVENTS_MAX);
@@ -2142,6 +2151,9 @@ function verdictCounts(laneId, t) {
 const OUT_MIN_SHOW = 1.6; // 框至少完整显示这么多屏幕秒才收起（结果一交回马上被读走时也看得到）
 const OUT_COLLAPSE = 1.4;
 const OUT_HANDOFF = 0.55; // 屏幕秒：光团交接给产出框（光团淡掉、框从光团的位置长出来）
+// 直播里一次产出要经过写记录 → 服务读到 → 推到页面，页面拿到时离记录时刻已经过了零点几秒，交接在路上就过完了，
+// 看起来是一帧切换：从页面拿到的时刻算起（01-state.js 记的 seen / ended_seen）。晚到太久的（后台标签页）照记录时刻
+const shownAt = (ts, seen) => (seen != null && seen > ts && seen - ts < 10000 ? seen : ts);
 
 function lifeState(E, O, read, t) {
   if (O === Infinity) return { phase: 'gather', from: E, grow: 1 - Math.exp(-(t - E) / 60000) };
@@ -2157,8 +2169,8 @@ function lifeState(E, O, read, t) {
 // 某次任务到 t 为止：第一次有实际输出的时刻 O，被 Claude Code 读走的时刻 read（都没有就是 Infinity）
 function outTimes(lane, r, t) {
   const ended = r.ended_at != null && r.ended_at <= t;
-  let O = ended ? r.ended_at : Infinity, read = Infinity;
-  for (const e of lane.events) if (e.run === r.id && e.k === 'edit' && e.ts <= t) { O = Math.min(O, e.ts); break; }
+  let O = ended ? shownAt(r.ended_at, r.ended_seen) : Infinity, read = Infinity;
+  for (const e of lane.events) if (e.run === r.id && e.k === 'edit' && e.ts <= t) { O = Math.min(O, shownAt(e.ts, e.seen)); break; }
   if (ended) {
     const cc = B.laneById.get('cc');
     if (cc) for (const e of cc.events) if (e.k === 'collect' && e.ts >= r.ended_at && e.ts <= t && (e.target || []).includes(lane.id)) { read = e.ts; break; }
@@ -2242,7 +2254,7 @@ function ccLife(t) {
   bounds.sort((a, b) => a.ts - b.ts);
   const firstOut = (from, to) => {
     let O = Infinity;
-    for (const e of cc.events) if (e.ts > from && e.ts <= to && CC_OUT_KINDS.has(e.k)) { O = e.ts; break; }
+    for (const e of cc.events) if (e.ts > from && e.ts <= to && CC_OUT_KINDS.has(e.k)) { O = shownAt(e.ts, e.seen); break; }
     // Claude Code 席报告：等封好的印记飞进来（约 0.9 屏幕秒）才算有了输出
     const sealMs = 900 * (B.clock.mode === 'replay' ? B.clock.speed : 1);
     for (const r of cc.runs) if (r.kind === 'answer' && r.started_at > from && r.started_at + sealMs <= to) O = Math.min(O, r.started_at + sealMs);
@@ -2253,7 +2265,7 @@ function ccLife(t) {
   if (prev && last.kind) {
     const O = firstOut(prev.ts, last.ts), age = secSince(last.ts, t) - Math.max(0, OUT_MIN_SHOW - secSince(O, last.ts));
     const quietBefore = ccLastAct(cc, last.ts) + CC_QUIET < last.ts;
-    if (O < last.ts && !quietBefore && age < OUT_COLLAPSE) return { phase: age < 0 ? 'show' : 'collapse', from: prev.ts, to: last.ts, age: age < 0 ? 9 : age, kind: last.kind };
+    if (O !== Infinity && !quietBefore && age < OUT_COLLAPSE) return { phase: age < 0 ? 'show' : 'collapse', from: prev.ts, to: last.ts, age: age < 0 ? 9 : age, kind: last.kind };
   }
   const O = firstOut(last.ts, t);
   if (O === Infinity) return laneActive(cc, t) ? { phase: 'gather', from: last.ts, grow: 1 - Math.exp(-(t - last.ts) / 60000) } : { phase: 'none', from: last.ts };
@@ -2733,9 +2745,13 @@ function laneStats(lane, t) {
     return u ? Math.abs(u.output - tokens) <= 1e-6 * Math.max(1, u.output) : tokens === 0;
   });
   if (liveRate(lane, t) > 0) est = true;
+  // 直播里 Claude Code 的用量合并了桌面版重启前的先前记录，那些记录没有速度分段：平均速度用服务端算好的、
+  // 有分段的那些事件的输出（rate_output），不然几天的总输出除以当前这份记录的生成时长，速度大出十几倍
+  const host = lane.id === 'cc' && B.clock.mode === 'live' ? lane.runs.find((r) => r.kind === 'host') : null;
+  const genOut = host?.rate_output ?? out;
   return {
     ...sum, output: usage_unattributed ? null : out, usage_unattributed, cost: costKnown ? cost : null, costPartial, est, running,
-    rate: recordRate(lane, t), avg: gen > 0 && complete && !usage_unattributed ? out / (gen / 1000) : null,
+    rate: recordRate(lane, t), avg: gen > 0 && complete && !usage_unattributed ? genOut / (gen / 1000) : null,
     elapsed: first != null ? (last - first) / 1000 : 0,
   };
 }
