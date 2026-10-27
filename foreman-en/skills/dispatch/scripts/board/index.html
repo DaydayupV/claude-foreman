@@ -1361,12 +1361,15 @@ function laneFor(id) {
   return lane;
 }
 
+// 直播里页面拿到一次产出的时刻（产出框的交接从这一刻算起，见 04-life.js 的 shownAt）。页面在后台时不记：
+// 看不到交接，回来时框照记录时刻已经在了
+const seenNow = () => (B.clock.mode === 'live' && !(typeof document !== 'undefined' && document.hidden) ? Date.now() : null);
+
 function onRun(r) {
-  // 直播里记下页面什么时候知道任务结束了（产出框的交接从这一刻算起，见 04-life.js 的 shownAt）；
-  // 连上时就已经结束的不记，结束后再发来的沿用第一次的
+  // 记下页面什么时候知道任务结束了；连上时就已经结束的不记，结束后再发来的沿用第一次的
   const prev = B.runs.get(r.id);
-  if (B.clock.mode === 'live' && r.ended_at != null) {
-    const seen = prev?.ended_seen ?? (prev ? (prev.ended_at == null ? Date.now() : null) : B.synced ? Date.now() : null);
+  if (r.ended_at != null) {
+    const seen = prev?.ended_seen ?? (prev ? (prev.ended_at == null ? seenNow() : null) : B.synced ? seenNow() : null);
     if (seen != null) r.ended_seen = seen;
   }
   B.runs.set(r.id, r);
@@ -1394,8 +1397,9 @@ function noteEvent(ev, lane) {
 
 // 实时的一条事件
 function onEv(ev, stats = true) {
-  // 直播里逐条推来的事件记下到达页面的时刻（产出框的交接用，见 04-life.js 的 shownAt）
-  if (B.clock.mode === 'live') ev.seen = Date.now();
+  // 直播里逐条推来的事件记下到达页面的时刻（产出框的交接用）
+  const seen = seenNow();
+  if (seen != null) ev.seen = seen;
   const lane = laneOf(ev);
   noteEvent(ev, lane);
   insertByTs(lane.events, ev, LANE_EVENTS_MAX);
@@ -2152,8 +2156,10 @@ const OUT_MIN_SHOW = 1.6; // 框至少完整显示这么多屏幕秒才收起（
 const OUT_COLLAPSE = 1.4;
 const OUT_HANDOFF = 0.55; // 屏幕秒：光团交接给产出框（光团淡掉、框从光团的位置长出来）
 // 直播里一次产出要经过写记录 → 服务读到 → 推到页面，页面拿到时离记录时刻已经过了零点几秒，交接在路上就过完了，
-// 看起来是一帧切换：从页面拿到的时刻算起（01-state.js 记的 seen / ended_seen）。晚到太久的（后台标签页）照记录时刻
-const shownAt = (ts, seen) => (seen != null && seen > ts && seen - ts < 10000 ? seen : ts);
+// 看起来是一帧切换：从页面拿到的时刻算起（01-state.js 记的 seen / ended_seen，页面在后台时不记）。
+// Claude Code 一条消息的几行要等整条消息生成完才一起写进记录，每行的时间戳却是那一块生成完的时刻，
+// 长消息里靠前的工具调用会晚到十几秒，所以不设上限
+const shownAt = (ts, seen) => (seen != null && seen > ts ? seen : ts);
 
 function lifeState(E, O, read, t) {
   if (O === Infinity) return { phase: 'gather', from: E, grow: 1 - Math.exp(-(t - E) / 60000) };
@@ -3579,7 +3585,12 @@ function tableRows(t) {
   const live = (u) => unitLanes(u).some((l) => laneStatus(l, t).running) || !!u.group && dispatchQueue(t).some((q) => q.group === u.group);
   const done = units.filter((u) => !live(u)).sort((a, b) => unitEnd(b, t) - unitEnd(a, t));
   for (const u of [...units.filter(live), ...done]) {
-    if (!u.group) { out.push({ lane: u.lane }); continue; }
+    if (!u.group) {
+      // 没有组的单席任务也写一行组头（刻度带上也有），不然它紧跟在上一组的行后面，看起来像那一组的
+      const r = currentRun(u.lane, t);
+      out.push({ head: true, id: `head:${u.id}`, text: Display.groupTask([Display.displayRun(r)]).short, counts: Display.countParts([seatStatus(u.lane, r, t)]) });
+      out.push({ lane: u.lane }); continue;
+    }
     const { blocks, all, plans, queue, states } = groupSeats(u, t), order = blocks.filter((b) => b.lane).map((b) => b.lane);
     const lanes = [...order, ...u.lanes.filter((l) => !order.includes(l))].filter(started);
     if (!lanes.length) continue;
