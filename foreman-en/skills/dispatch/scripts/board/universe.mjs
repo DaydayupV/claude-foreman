@@ -9,8 +9,19 @@ import { ms, transient, stat, json, newTail, readLines, append, runMessage, lane
   usageTotals, hostCost, costFields, createFeed, buildReplay, replayClock, usageReader, keepUsage } from './feed.mjs';
 
 const keyOf = (cwd) => cwd ? cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() : '?';
+// 在仓库的子目录里开的对话归到仓库：往上找最近一个有 .git 的目录。不越过用户主目录（主目录本身是个仓库时，
+// 下面所有不在别的仓库里的目录都会被并进去）；找不到就是 null
+function repoTop(cwd) {
+  const home = path.resolve(os.homedir()).toLowerCase();
+  for (let dir = path.resolve(cwd); ;) {
+    if (fs.existsSync(path.join(dir, '.git'))) return dir;
+    const up = path.dirname(dir);
+    if (up === dir || up.toLowerCase() === home) return null;
+    dir = up;
+  }
+}
 // git worktree 归到主仓库：Claude Code 自己开的 .claude/worktrees/<名字> 看路径就知道（删掉以后也认得）；
-// 别处的 worktree 看目录里的 .git 文件指向哪个仓库。每个目录只查一次
+// 别处的 worktree 看仓库根目录里的 .git 文件指向哪个仓库。每个目录只查一次
 const roots = new Map();
 export function projectRoot(cwd) {
   if (!cwd) return null;
@@ -19,10 +30,13 @@ export function projectRoot(cwd) {
     let root = cwd.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]+(?:[\\/].*)?$/i)?.[1] ?? null;
     // 网络路径（\\server\share）不去读：连不上时同步读会卡住整个看板服务
     if (!root && !/^[\\/]{2}/.test(cwd)) {
+      const top = repoTop(cwd);
+      // 对话就开在仓库根目录、或者不在任何仓库里时，保留原来的写法
+      if (top && top !== path.resolve(cwd)) root = top;
       try {
-        const gitdir = fs.readFileSync(path.join(cwd, '.git'), 'utf8').match(/^gitdir:\s*(.+?)\s*$/m)?.[1];
-        root = gitdir ? path.resolve(cwd, gitdir).match(/^(.*?)[\\/]\.git[\\/]worktrees[\\/][^\\/]+[\\/]?$/i)?.[1] ?? null : null;
-      } catch { /* .git 是目录（普通仓库）、不存在或读不了：就是这个目录本身 */ }
+        const gitdir = fs.readFileSync(path.join(top ?? cwd, '.git'), 'utf8').match(/^gitdir:\s*(.+?)\s*$/m)?.[1];
+        root = (gitdir ? path.resolve(top ?? cwd, gitdir).match(/^(.*?)[\\/]\.git[\\/]worktrees[\\/][^\\/]+[\\/]?$/i)?.[1] : null) ?? root;
+      } catch { /* .git 是目录（普通仓库）、不存在或读不了：就是仓库根目录本身 */ }
     }
     roots.set(cwd, root || cwd);
   }
