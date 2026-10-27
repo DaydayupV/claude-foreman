@@ -148,8 +148,8 @@ export const modelsReport = (catalog) => {
   const configured = (type, id) => M.list(Object.entries(catalog.agents).filter(([, agent]) => agent.type === type && agent.model === id).map(([name]) => name));
   for (const type of tools) {
     const cat = catalog.tools[type], tool = type === 'codex cli' ? 'Codex' : type.split(' ')[0];
-    // 工具根本没装（启动报 ENOENT）时直接说没装，不贴原始的启动报错
-    if (!cat.ok) { blocks.push(/ENOENT/.test(cat.error ?? '') ? M.reportCatalogMissing(tool) : M.reportCatalogError(tool, cat.error)); continue; }
+    // 工具根本没装（Node 启动它时报 spawn … ENOENT）时直接说没装；启动以后读文件出的 ENOENT 等其他错误照写原因
+    if (!cat.ok) { blocks.push(/\bspawn(?:Sync)? \S+ ENOENT\b/.test(cat.error ?? '') ? M.reportCatalogMissing(tool) : M.reportCatalogError(tool, cat.error)); continue; }
     if (type === 'codex cli') {
       blocks.push(M.reportCodexTitle, table(M.reportModelHeaders, visible[type].map((model) => [model.id, efforts(model), context(model.context), configured(type, model.id)])));
       continue;
