@@ -172,9 +172,11 @@ export function createTranscriptParser(ctx) {
   }, finish() {
     if (removed.size) { events = events.filter((ev) => !removed.has(ev)); removed.clear(); }
     // 旧解析器用全窗最后的 cwd 显示路径；改目录时只重算路径标签，并保留之前快照。
+    // 新对象记住最早那一份（origin，不进协议数据）：直播按它认出是同一件事，不当成新事件再推一次
     if (cwdChanged) events = events.map((ev) => {
       const p = paths.get(ev); if (!p) return ev;
-      const next = { ...ev, t: label(`${p.prefix}${filePath(p.file)}`) }; paths.delete(ev); paths.set(next, p); return next;
+      const next = Object.defineProperty({ ...ev, t: label(`${p.prefix}${filePath(p.file)}`) }, 'origin', { value: ev.origin ?? ev });
+      paths.delete(ev); paths.set(next, p); return next;
     });
     cwdChanged = false; meta.usage = { input: null, cached: null, cache_write: null, output: null };
     for (const ev of events) if (ev.k === 'usage') for (const [key, value] of Object.entries(ev.u)) if (value != null) {

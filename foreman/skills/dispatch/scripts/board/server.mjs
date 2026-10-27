@@ -136,7 +136,8 @@ const PREPARED = new WeakMap();
 const EVENT_KEYS = new WeakMap();
 const keyOf = (ev) => {
   let key = EVENT_KEYS.get(ev);
-  if (key == null) { key = ev.messageId || JSON.stringify({ ...ev, target: undefined }); EVENT_KEYS.set(ev, key); }
+  // 对话换了目录、路径标签重算过的事件按最早那一份认（claude-feed.mjs 的 origin）
+  if (key == null) { key = ev.origin ? keyOf(ev.origin) : ev.messageId || JSON.stringify({ ...ev, target: undefined }); EVENT_KEYS.set(ev, key); }
   return key;
 };
 function prepared(data) {
