@@ -400,6 +400,8 @@ function validateConfig(cfg, adapters, fail = die) {
       const at = `${key}[${i}]`;
       check(isObject(item), at, M.levelEntryChoices);
       check(text(item.agent), `${at}.agent`, why.agentRef);
+      // 条目只认这四项：拼错的键（比如 "requird"）不报错但会悄悄失效，提醒一句
+      for (const field of Object.keys(item)) if (!['agent', 'effort', 'required', 'model'].includes(field)) notice(M.unknownEntryField(`${at}.${field}`));
       if (!Object.hasOwn(cfg.agents, item.agent)) fail(unknownAgentError(at, item.agent, cfg));
       const agent = cfg.agents[item.agent], adapter = adapters[agent.type];
       check(!seen.has(item.agent), at, why.duplicate);

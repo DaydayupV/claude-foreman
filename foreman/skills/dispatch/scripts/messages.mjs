@@ -281,6 +281,7 @@ ${brief}`,
   projectLegacyName: (old, name) => `项目里的 ${old} 是改名前的文件名，已照常读取；建议改名为 ${name}`,
   projectOldFormat: (file) => `项目配置 ${file} 是旧写法，已按新结构读取；建议改成新写法（见 README 的"配置"一节）`,
   configInvalid: (key, reason) => `配置 ${key} 无效：${reason}`,
+  unknownEntryField: (key) => `配置 ${key} 不是条目认得的字段，已忽略（只认 agent、effort、required、model，是不是拼错了？）`,
   watchShape: 'dispatch.watch 要写成 { "terminal": true 或 false, "web": true 或 false }',
   // 配置校验的报错原因，接在 configInvalid 后面
   invalid: {
@@ -1006,6 +1007,7 @@ ${brief}`,
   projectLegacyName: (old, name) => `${old} in this project uses the file name from before the rename; it was read as usual. Consider renaming it to ${name}`,
   projectOldFormat: (file) => `Project config ${file} uses the old layout; it was converted when read. Consider updating it (see "Configuration" in the README)`,
   configInvalid: (key, reason) => `Invalid config ${key}: ${reason}`,
+  unknownEntryField: (key) => `Config ${key} isn't a field entries know, so it is ignored (only agent, effort, required and model; a typo?)`,
   watchShape: 'dispatch.watch must be { "terminal": true or false, "web": true or false }',
   // Reasons for config validation errors, appended to configInvalid
   invalid: {
