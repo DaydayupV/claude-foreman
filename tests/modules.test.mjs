@@ -16,7 +16,7 @@ test('模块遍历顺序一致，单对象只在内存规范为列表', async (t
   assert.equal(out.image_configured, true);
   assert.deepEqual(out.effective.modules.run.complex, [c.modules.run.complex]);
   assert.deepEqual(out.effective.modules.discuss.simple, [c.modules.discuss.simple]);
-  assert.deepEqual(out.resolved_modules.image.generate, [{ agent: 'codex', model: 'fake-codex', effort: null, required: false }]);
+  assert.deepEqual(out.resolved_modules.image.generate, [{ agent: 'codex', model: 'fake-codex', effort: null, required: false, tier: null }]);
   assert.equal(read(h.userConfig), before);
   const url = pathToFileURL(path.join(ROOT, 'foreman/skills/dispatch/scripts/config.mjs')).href;
   const script = h.write('cells.mjs', `import { MODULE_CELLS, cellList, eachCell, eachEntry, mapCells } from ${JSON.stringify(url)};
@@ -64,7 +64,7 @@ for (const note of [MESSAGES.zh.levelsNote, MESSAGES.en.levelsNote, '手写的�
   assert.equal(r.stderr, '');
   assert.equal(read(h.userConfig), before);
   assert.equal(out.effective.levels, undefined);
-  assert.deepEqual(out.resolved_modules.run.complex, [{ agent: 'codex', model: 'fake-codex', effort: 'max', required: false }]);
+  assert.deepEqual(out.resolved_modules.run.complex, [{ agent: 'codex', model: 'fake-codex', effort: 'max', required: false, tier: null }]);
   assert.equal(fs.existsSync(`${h.userConfig}.bak`), false);
 });
 

@@ -38,8 +38,8 @@ test('零点十以前的配置自动改写并保留原文备份', async (t) => {
   assert.deepEqual(c.effective.dispatch.watch, { terminal: false, web: false });
   assert.deepEqual(migrated.dispatch.watch, c.effective.dispatch.watch);
   assert.equal(Object.hasOwn(migrated.dispatch, 'web'), false);
-  assert.deepEqual(c.resolved_modules.run.normal, [{ agent: 'legacy-model', model: 'legacy-model', effort: 'high', required: false }]);
-  assert.deepEqual(c.resolved_modules.discuss.simple, [{ agent: 'legacy-model', model: 'legacy-model', effort: 'low', required: false }]);
+  assert.deepEqual(c.resolved_modules.run.normal, [{ agent: 'legacy-model', model: 'legacy-model', effort: 'high', required: false, tier: null }]);
+  assert.deepEqual(c.resolved_modules.discuss.simple, [{ agent: 'legacy-model', model: 'legacy-model', effort: 'low', required: false, tier: null }]);
   assert.ok(r.stderr.includes(M.configStructureMigrated(h.userConfig, `${h.userConfig}.bak`, 'codex → legacy-model')));
   await h.bridge(['config']);
   assert.equal(read(`${h.userConfig}.bak`), original);
@@ -95,7 +95,7 @@ test('项目配置不能把额外的 API 或 opencode 加入讨论等级', async
     { agent: 'codex', effort: 'high' }, { agent: 'api', effort: null }, { agent: 'oc', effort: null },
   ] } } });
   const r = await h.bridge(['config', '--cwd', h.cwd]);
-  assert.deepEqual(output(r).resolved_modules.discuss.normal, [{ agent: 'codex', model: 'fake-codex', effort: 'high', required: false }]);
+  assert.deepEqual(output(r).resolved_modules.discuss.normal, [{ agent: 'codex', model: 'fake-codex', effort: 'high', required: false, tier: null }]);
   for (const name of ['api', 'oc']) assert.ok(r.stderr.includes(M.projectAgentDropped(name, 'modules.discuss.normal')));
 });
 
@@ -107,7 +107,7 @@ test('config 输出解析后的等级、协作方状态、偏好及记录目录'
   const preference = write(path.join(h.home, '.claude/foreman/preferences.md'), '偏好合成测试');
   const r = output(await h.bridge(['config', '--cwd', h.cwd]));
   assert.deepEqual(r.loaded_from, [h.userConfig]);
-  assert.deepEqual(r.resolved_modules.discuss.complex, [{ agent: 'codex', model: 'fake-codex', effort: 'max', required: false }]);
+  assert.deepEqual(r.resolved_modules.discuss.complex, [{ agent: 'codex', model: 'fake-codex', effort: 'max', required: false, tier: null }]);
   assert.deepEqual(r.agents_status.api, { type: 'api', capabilities: { modes: ['discuss', 'review'], isolation: 'none', reads_code: false, reads_images: false, native_schema: false, native_review: false, images: false, resume: true, command_start_events: false }, model: 'fake-api', max_parallel: 4, api_key_env: null, key_set: true, key_source: 'config' });
   assert.equal(r.agents_status.oc.bin, opencodeAgent().bin);
   assert.equal(r.effective.agents.api.api_key, M.keyHidden);

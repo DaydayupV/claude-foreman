@@ -26,7 +26,12 @@ test('真实结构迁移按模型改名并逐格保留模型和强度，备份�
   }
   for (const [mode, levels] of Object.entries(old.levels)) for (const [lv, entry] of Object.entries(levels)) {
     const expected = (item) => ({ agent: map[item.agent], model: old.agents[item.agent].model, effort: item.effort, required: false });
-    assert.deepEqual(c.resolved_modules[mode][lv], entry === 'claude' ? 'claude code' : Array.isArray(entry) ? entry.map(expected) : [expected(entry)]);
+    const actual = c.resolved_modules[mode][lv];
+    const candidates = Array.isArray(actual) ? actual.map(({ tier, ...item }) => {
+      assert.ok(['strong', 'mid', 'weak', null].includes(tier));
+      return item;
+    }) : actual;
+    assert.deepEqual(candidates, entry === 'claude' ? 'claude code' : Array.isArray(entry) ? entry.map(expected) : [expected(entry)]);
   }
   assert.ok(r.stderr.includes(M.configStructureMigrated(h.userConfig, `${h.userConfig}.bak`, M.list(Object.entries(map).map(([a, b]) => `${a} → ${b}`)))));
   const next = await h.bridge(['config'], { env: { CODEX_BIN: CODEX } });
@@ -42,11 +47,11 @@ test('旧部分等级先继承，模型覆盖拆分且清除覆盖字段', async
   } });
   const c = output(await h.bridge(['config']));
   for (const [mode, lv, model, effort] of [['run', 'normal', 'run-model', 'high'], ['run', 'complex', 'explicit-model', 'max'], ['review', 'complex', 'review-model', 'max'], ['discuss', 'normal', 'discussion-model', 'high']]) {
-    assert.deepEqual(c.resolved_modules[mode][lv][0], { agent: model, model, effort, required: false });
+    assert.deepEqual(c.resolved_modules[mode][lv][0], { agent: model, model, effort, required: false, tier: null });
     assert.equal(c.effective.agents[model].bin, CODEX);
     assert.equal(c.effective.modules[mode][lv][0].model, undefined);
   }
-  assert.deepEqual(c.resolved_modules.review.simple, [{ agent: 'base-model', model: 'base-model', effort: 'medium', required: false }]);
+  assert.deepEqual(c.resolved_modules.review.simple, [{ agent: 'base-model', model: 'base-model', effort: 'medium', required: false, tier: null }]);
   seedRun(h, '20000101-split', { agent: 'codex', agent_type: 'codex', model: 'run-model', status: 'timeout' });
   const response = await h.bridge(['resume', '--run', '20000101-split', '--level', 'normal', '--agent', 'codex', '--brief', '-', '--reason', 'recover', '--no-snapshot']);
   const resumed = output(response);

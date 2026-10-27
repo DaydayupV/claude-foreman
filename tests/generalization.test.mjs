@@ -25,7 +25,7 @@ test('多个 Codex、无 Codex 和三类能力表及省略强度的配置', asyn
       native_review: native, images: native, resume: true, command_start_events: native });
   }
   assert.equal(out.codex, undefined);
-  assert.deepEqual(out.resolved_modules.run.complex, [{ agent: 'second.1', model: null, effort: null, required: false }]);
+  assert.deepEqual(out.resolved_modules.run.complex, [{ agent: 'second.1', model: null, effort: null, required: false, tier: null }]);
   assert.equal(out.resolved_modules.review.normal, 'claude code');
   h.config({ agents: { api: c.agents.api }, modules: self() });
   assert.deepEqual(Object.keys(output(await h.bridge(['config'])).effective.agents), ['api']);

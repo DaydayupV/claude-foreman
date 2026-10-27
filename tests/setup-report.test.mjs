@@ -77,7 +77,7 @@ test('项目关掉的格子、显式 seats 展示、补漏轮和未配置图像'
   h.write('.claude/foreman.json', { modules: { discuss: { seats: { normal: 4 } }, run: { normal: 'claude code' }, image: { generate: null } } });
   const md = await markdown(h, ['config', '--cwd', h.cwd]);
   has(md, ['| 讨论 simple | 2 |', '| 讨论 normal | 4 |', '| 讨论 complex | 8 |', '自己做（项目关掉）', '关掉（项目关掉）',
-    '候选不够 2 个，1 个全上；补漏轮没有剩余模型，不做', '没有要处理的提醒。']);
+    '候选不够 2 个，1 个全上；补漏轮没有剩余模型，不做', '这些在用的模型不在价格表里，费用会显示为算不出：fake-codex']);
   delete c.modules.image; h.config(c);
   const noImage = await markdown(h, ['config']); has(noImage, ['图像\n\n图像两格还没配置。']); assert.equal(noImage.includes('出图 generate |'), false);
   c.modules.review.complex = [entry('codex'), entry('other')]; c.agents.other = { ...c.agents.codex }; h.config(c);
