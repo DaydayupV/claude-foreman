@@ -170,6 +170,15 @@ test('环境故障逐项输出 fix，API 变量只显示名字，未使用 Codex
   has(r.stdout, ['❌ Node.js：node fix', '⚠ Git：git fix', '⚠ 实时查看：watch fix', '| Codex | 已安装，没登录 |', '| opencode | 没装 |', '检测到 KIMI_API_KEY、MIMO_API_KEY']); assert.equal(r.stdout.includes('unused sandbox'), false);
 });
 
+test('Codex 沙箱探测不了（ok 为 null）时，环境一节不说沙箱正常', async () => {
+  const { environmentReport } = await import(pathToFileURL(path.join(ROOT, 'foreman/skills/dispatch/scripts/report.mjs')).href);
+  const ok = { ok: true }, checks = { node: ok, git: ok, watch: ok, memory: { total_gb: 16, available_gb: 4, enough: true, web: false },
+    agents: { codex: { type: 'codex cli', sandbox: { checked: [{ ok: null }] } } }, summary: { agents: { codex: { used_at: ['modules.run.complex[0]'] } } } };
+  const env = { codex: { found: true, logged_in: true }, opencode: { found: false }, pi: { found: false }, api_keys: [] };
+  const md = environmentReport(checks, env, {});
+  assert.ok(!md.includes(MESSAGES.zh.reportEnvironmentOk) && md.includes(MESSAGES.zh.reportEnvironmentOkNoSandbox), md);
+});
+
 test('没有在用的 Codex 协作方时，环境一节不说沙箱正常', async (t) => {
   const h = sandbox(t), c = baseConfig();
   for (const module of ['discuss', 'run', 'review']) for (const cell of ['simple', 'normal', 'complex']) c.modules[module][cell] = 'claude code';
