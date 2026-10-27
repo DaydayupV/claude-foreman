@@ -66,7 +66,7 @@ test('配置：pi cli 的模型写法、run_access、推理强度和执行授权
   c.agents.pi = piAgent(); c.modules.run.complex = { agent: 'pi' }; h.config(c);
   failed(await h.bridge(['config']), M.runAccessRequired('pi', 'pi cli'));
   c.modules.run.complex = { agent: 'pi', effort: 'turbo' }; c.agents.pi.run_access = 'edit'; h.config(c);
-  failed(await h.bridge(['config']), M.configInvalid('modules.run.complex[0].effort', 'off / minimal / low / medium / high / xhigh / max'));
+  failed(await h.bridge(['config']), M.configInvalid('modules.run.complex[0].effort', M.invalid.effortValue('turbo', 'off / minimal / low / medium / high / xhigh / max')));
   c.modules.run.complex = { agent: 'pi', effort: 'high' }; h.config(c);
   const r = output(await h.bridge(['config']));
   assert.deepEqual(r.agents_status.pi.capabilities.modes, ['run', 'review', 'discuss']);

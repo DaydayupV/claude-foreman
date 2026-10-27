@@ -207,7 +207,8 @@ for (const [lang, web, memory, total, available, enough, state] of [
     assert.ok(md.stdout.includes(`| ${messages.reportWebLabel} | ${messages[state]} |`));
     const issue = `⚠ ${messages.reportIssue(messages.reportEnvironmentItems.web, messages.fixWebLowMemory)}`;
     assert.equal(md.stdout.includes(issue), web && !enough);
-    assert.equal(md.stdout.includes(messages.reportEnvironmentOk), !web || enough);
+    // 这份配置没有在用的 Codex 协作方，环境正常时写的是不提沙箱的那句
+    assert.equal(md.stdout.includes(messages.reportEnvironmentOkNoSandbox), !web || enough);
     assert.equal(fs.existsSync(path.join(h.runs, 'board.lock.json')), false);
   });
 }

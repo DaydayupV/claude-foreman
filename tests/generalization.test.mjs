@@ -107,7 +107,7 @@ test('讨论多参与方需要选择，未知代号和非法 Codex 强度被拒�
   for (const effort of [null, 'invalid']) {
     c.modules.run.complex[0].effort = effort;
     h.config(c);
-    failed(await h.bridge(['config']), M.configInvalid('modules.run.complex[0].effort', 'low / medium / high / xhigh / max / ultra'));
+    failed(await h.bridge(['config']), M.configInvalid('modules.run.complex[0].effort', M.invalid.effortValue(effort, 'low / medium / high / xhigh / max / ultra')));
   }
 });
 
