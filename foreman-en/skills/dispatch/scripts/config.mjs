@@ -411,7 +411,7 @@ function validateConfig(cfg, adapters, fail = die) {
         if (mode === 'run' && adapter.capabilities.isolation === 'tools') check(!!agent.run_access, `${at}.agent`, M.runAccessRequired(item.agent, agent.type));
       }
       check(item.model == null || (text(item.model) && item.model !== CLAUDE_CODE), `${at}.model`, why.modelName);
-      check(item.effort === undefined || (adapter.efforts ? adapter.efforts.includes(item.effort) : item.effort === null || text(item.effort)), `${at}.effort`, adapter.efforts?.join(' / ') || why.apiEffort);
+      check(item.effort === undefined || (adapter.efforts ? adapter.efforts.includes(item.effort) : item.effort === null || text(item.effort)), `${at}.effort`, adapter.efforts ? why.effortValue(item.effort, adapter.efforts.join(' / ')) : why.apiEffort);
       check(item.required === undefined || typeof item.required === 'boolean', `${at}.required`, why.boolean);
     }
     const required = requiredCount(value);

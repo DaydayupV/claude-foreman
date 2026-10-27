@@ -12,6 +12,8 @@ import { M, die, need, readJson } from './util.mjs';
 export async function cmdSubmit(o, load) {
   const plan = readPlan(need(o, 'plan'));
   if (!['discuss', 'review'].includes(plan.module) || !plan.host) die(M.submitNoHost(plan.plan_id));
+  // plan 打印的命令里 --model 是占位符（<当前模型 ID>）：照抄没换掉时拒绝，不把占位符记成模型
+  if (typeof o.model === 'string' && /^<.*>$/.test(o.model.trim())) die(M.submitModelPlaceholder(o.model));
   const file = path.resolve(need(o, 'report')), kind = plan.module;
   if (!fs.existsSync(file)) die(M.fileNotFound(file));
   const bytes = fs.readFileSync(file);

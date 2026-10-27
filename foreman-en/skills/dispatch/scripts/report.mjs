@@ -27,7 +27,7 @@ export const environmentReport = (checks, environment, agents) => {
   const { codex, opencode, pi, api_keys } = environment;
   const keys = Object.values(agents).filter((agent) => agent.type === 'api' && agent.api_key).length;
   return report([
-    M.reportEnvironmentTitle, issues.length ? issues.join('\n\n') : M.reportEnvironmentOk,
+    M.reportEnvironmentTitle, issues.length ? issues.join('\n\n') : sandboxChecked ? M.reportEnvironmentOk : M.reportEnvironmentOkNoSandbox,
     table(M.reportEnvironmentHeaders, [
       ['Codex', codex.found ? M.reportCodexInstalled(codex.logged_in) : M.reportNotInstalled],
       ['opencode', opencode.found ? M.reportModelsInstalled(opencode.models) : M.reportNotInstalled],
