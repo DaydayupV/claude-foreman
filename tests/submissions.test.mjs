@@ -27,6 +27,10 @@ for (const module of ['discuss', 'review']) test(`${module} 计划把 Claude Cod
   assert.equal(p.guidance, M.planRolesFirst + M.planGuidance(module));
   // 照抄 --model 的占位符没换掉：拒绝，不把占位符记成模型
   failed(await h.bridge(submitArgs(h, p, ['--model', '<当前模型 ID>'])), M.submitModelPlaceholder('<当前模型 ID>'));
+  // 1 级不带角色：席位或 Claude Code 席带角色都拒绝
+  const simple = (seats, extra = []) => planArgs(h, module, seats, extra).map((v) => (v === 'complex' ? 'simple' : v));
+  failed(await h.bridge(simple(['codex=质疑'])), M.planRolesLevel1);
+  failed(await h.bridge(simple(['codex'], ['--host-role', '方案'])), M.planRolesLevel1);
   const plain = output(await h.bridge(planArgs(h, module))); assert.equal(plain.host.role, null);
   assert.equal(plain.guidance, M.planGuidance(module));
 });
