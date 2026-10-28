@@ -3,15 +3,17 @@
 The config is JSON. These layers are applied in order, later ones overriding earlier ones:
 1. the script's built-in defaults;
 2. the user config `~/.claude/foreman/config.json` (the environment variable `FOREMAN_CONFIG` changes the path);
-3. the project config `<project dir>/.claude/foreman.json` (it can only tighten; see the end).
+3. per-project overrides under `projects` in the user config (they can loosen; see "Per-project overrides");
+4. the project config `<project dir>/.claude/foreman.json` (it can only tighten; see the end).
 
-It has three parts:
+It has three parts, plus an optional `projects`:
 
 | Part | What it answers |
 |---|---|
 | `dispatch` | How the plugin hands off work: whether to do it on its own, discussion rounds, time limits and so on |
 | `agents` | Which agents there are and how to reach them |
 | `modules` | Which candidates each cell of each task type has, who is required, and with what effort |
+| `projects` (optional) | Per-project-directory overrides of `modules` and a few time limits; see "Per-project overrides" |
 
 How to reach an agent goes only in `agents`; who gets what goes only in `modules`.
 
@@ -227,6 +229,26 @@ Choices that cost money or affect safety (which opencode or pi model to use, let
 - The old-to-new ID mapping is kept in `~/.claude/foreman/agent-aliases.json`. Resuming an old run, an old ID passed to `--agent`, and old IDs in a project config are all mapped to the new ID automatically.
 - A file with both `levels` (an object) and `modules` is an error; the script doesn't guess which one counts. The note above doesn't count. `levels` in a project config isn't rewritten on disk; it's read as `modules` in memory, with a notice suggesting the new format. An old version of the plugin ignores `modules` in a project config, so a project that must also constrain people still on the old plugin can keep the `levels` form in its project config.
 
+## Per-project overrides: in the user config
+When one project should use more models than usual, a different set of candidates, or other time limits, add a top-level `projects` to the user config, keyed by project directory:
+
+```json
+"projects": {
+  "O:/work/app": {
+    "dispatch": { "timeout_min": 600 },
+    "modules": { "review": { "normal": [{ "agent": "a" }, { "agent": "b" }], "seats": { "normal": 3 } } }
+  },
+  "~/code/lib": { "modules": { "run": { "normal": "claude code" } } }
+}
+```
+
+- Keys are absolute project directory paths and may start with `~`; on Windows they need a drive letter (`O:/work/app`) or a full UNC path (`//server/share/app`). A working directory matches when it is that directory or inside it (a subfolder, a worktree in the repository); when several keys match, only the most specific (longest) one applies, they don't stack. Case doesn't matter on Windows.
+- An entry can only set `modules` and `discuss_max_rounds`, `timeout_min`, `stall_min`, `busy_ask_min` under `dispatch`. `agents`, `auto`, `watch`, `intro` and `runs_dir` apply to the whole machine or session, belong at the top level only, and are an error inside `projects`. Agents are referenced by the IDs defined in the top-level `agents`.
+- It merges the way the top level overrides the defaults: a cell it writes is replaced as a whole (to add a few models to the global candidates, list the global ones too), cells it doesn't write keep the top-level value, and `seats` override per level. It can loosen as well as tighten.
+- Every config load checks all entries in `projects`, not just the current project's, and an error names the entry.
+- It lives in your own user config and doesn't travel with the repository, which is why it can loosen. A repository's `.claude/foreman.json` still can only tighten, measured against the config after `projects` is applied.
+- `project_override` in the `config --cwd` output is `{ "path": "<the key of the entry used, as written>" }`, or `null` when none applies.
+
 ## Project config: can only tighten
 - A project config only accepts `timeout_min`, `stall_min`, `busy_ask_min` under `dispatch`, plus `modules` (including `seats` under `discuss` and `review`; the old `levels` form is accepted too). Anything else, including the whole `agents` block, is ignored with a notice.
 - Time and seat limits take the stricter value: `timeout_min` and each level's `seats` take the smaller one (lowering `seats` below the cell's required count is an error); for `stall_min` and `busy_ask_min`, 0 means no check, which is the loosest, so a project 0 has no effect when the user set a positive number, and when both are positive the smaller one wins.
@@ -235,7 +257,7 @@ Choices that cost money or affect safety (which opencode or pi model to use, let
   - drop some optional entries the user config already has in that cell (the user config's order is kept);
   - lower the effort, only for tools whose efforts have a clear order: Codex is low < medium < high < xhigh < max < ultra, pi is off < minimal < low < medium < high < xhigh < max. opencode variants and api efforts have no common order, so a project can't change them; nor can it add an effort to an entry that has none in the user config.
 - It can't add entries, swap agents or models, change `required`, or open a cell the user closed; those are ignored with a notice.
-- It can't drop only the required agents while keeping others handing work out: that's an error; keep the required agents or close the whole cell. Dropping every candidate is an error too.
+- It can't drop only the required agents while keeping others handing work out: that's an error; keep the required agents or close the whole cell. When none of the entries it writes match the user config (say, a cloned repository uses someone else's agent IDs), it says so and closes that cell for the project.
 - Once a project writes `"claude code"` (or `null`) for a cell, nothing at that cell can be named with `--agent` in that project, even if the cell is already `"claude code"` in the user config; cells the project doesn't mention that are `"claude code"` in the user config can still be named. If the cell has required agents, that step counts as "not done", and Claude says so plainly instead of reviewing it itself and calling the requirement met. With `--cwd`, `closed_by_project` in the `config` output lists the cells a project closed.
 - This way a cloned repository can't use its project config to swap the agent doing the work (say, from a sandboxed Codex to a tool without a sandbox), send your code to a new provider, skip a required review, or stretch time limits and raise efforts to spend more of your quota. For a sensitive project, drop the api candidates, or set discussions and reviews to `"claude code"` as a whole.
 
@@ -245,6 +267,7 @@ Choices that cost money or affect safety (which opencode or pi model to use, let
 - When the sandbox isn't `read-only` / `workspace-write` (for example `danger-full-access`), Codex can write to any directory: `--cwd` only sets where it starts and **doesn't limit what it can write**. The scope is then held only by the brief and by reviewing the diff afterwards.
 - After the user changes settings, run `config` to confirm:
   - `resolved_modules` shows each cell's final candidates, with each one's model, effort and whether it's required;
+  - `project_override` is `{ "path": "<the key of the projects entry used>" }` (with `--cwd`; `null` when none applies);
   - `closed_by_project` lists the cells closed by the project config (with `--cwd`);
   - `image_configured` says whether the user config has an image block: when it's `false`, the `null` image cells are just defaults, not something the user turned off;
   - `agents_status` shows each agent's type and capabilities, whether its key is set, and the executable it uses;

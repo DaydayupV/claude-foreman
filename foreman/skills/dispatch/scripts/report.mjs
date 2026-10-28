@@ -63,6 +63,7 @@ const cellTable = (cfg, summary, module, checks) => {
 const seatsTable = (cfg, summary) => {
   // 是否默认看原文，不把恰好等于默认值的显式配置误标为默认。
   const raw = cfg.sources.map((file) => readRawConfig(file));
+  if (cfg.project_override) raw.push(raw[0]?.projects?.[cfg.project_override.path]);
   const rows = ['discuss', 'review'].flatMap((module) => LEVELS.map((cell) => {
     const label = `${M.reportModuleNames[module]} ${cell}`, value = summary.modules[module][cell];
     if (value === CLAUDE_CODE) return [label, dash, dash, dash, M.reportNoOutside];

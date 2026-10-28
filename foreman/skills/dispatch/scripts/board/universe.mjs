@@ -383,6 +383,7 @@ export function createUniverse(options) {
   const inModules = new Set();
   const collect = (v) => { if (Array.isArray(v)) v.forEach(collect); else if (v && typeof v === 'object') { if (typeof v.agent === 'string') inModules.add(v.agent); else Object.values(v).forEach(collect); } };
   collect(config?.modules);
+  for (const entry of Object.values(config?.projects || {})) collect(entry?.modules);
   config = Object.entries(config?.agents || {}).filter(([id]) => !inModules.size || inModules.has(id))
     .map(([id, value]) => ({ id, type: value.type ?? null, max_parallel: value.max_parallel ?? 4 }));
   const readRuns = (now) => {

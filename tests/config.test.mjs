@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { sandbox, output, failed, read, json, write, baseConfig, apiAgent, opencodeAgent, CODEX, MESSAGES } from './helpers.mjs';
+import { pathToFileURL } from 'node:url';
+import { sandbox, output, failed, read, json, write, baseConfig, apiAgent, opencodeAgent, CODEX, ROOT, MESSAGES } from './helpers.mjs';
 const M = MESSAGES.zh;
 
 test('没有用户配置时生成初始配置并提示首次使用', async (t) => {
@@ -202,4 +203,151 @@ for (const lang of ['zh', 'en']) test(`watch 严格校验对象、两项布尔�
   }
   const c = baseConfig(); c.dispatch.watch = 'auto'; c.dispatch.web = 'true'; h.config(c);
   failed(await h.bridge(['config'], { env: { FOREMAN_LANG: lang } }), MESSAGES[lang].watchShape);
+});
+
+test('projects 匹配子目录和仓库内 worktree，只用最长路径，空 cwd 和目录前缀不匹配', async (t) => {
+  const h = sandbox(t), c = baseConfig();
+  const worktree = path.join(h.cwd, '.claude/worktrees/topic'), child = path.join(worktree, 'src'), sibling = `${h.cwd}-other`;
+  for (const dir of [child, sibling]) fs.mkdirSync(dir, { recursive: true });
+  const key = `${worktree.replaceAll('\\', '/')}/`;
+  c.projects = { [key]: { dispatch: { timeout_min: 900 } }, [h.cwd]: { dispatch: { timeout_min: 600, stall_min: 5 } } }; h.config(c);
+  for (const dir of [worktree, path.join(child, '..', 'src')]) {
+    const r = output(await h.bridge(['config', '--cwd', dir]));
+    assert.deepEqual(r.project_override, { path: key });
+    assert.equal(r.effective.dispatch.timeout_min, 900); assert.equal(r.effective.dispatch.stall_min, 0);
+    assert.deepEqual(r.loaded_from, [h.userConfig]);
+    assert.equal(Object.hasOwn(r.effective, 'projects'), false); assert.equal(Object.hasOwn(r.effective, 'project_override'), false);
+  }
+  assert.equal(output(await h.bridge(['config', '--cwd', h.cwd])).effective.dispatch.timeout_min, 600);
+  for (const args of [['config'], ['config', '--cwd', sibling]]) {
+    const r = output(await h.bridge(args)); assert.equal(r.project_override, null); assert.equal(r.effective.dispatch.timeout_min, 1);
+  }
+  for (const key of ['~/project', '~\\project']) {
+    c.projects = { [key]: { dispatch: { timeout_min: 600 } } }; h.config(c);
+    assert.deepEqual(output(await h.bridge(['config', '--cwd', child])).project_override, { path: key });
+  }
+});
+
+test('projects 在 win32 忽略大小写、斜杠方向和末尾分隔符，也据此拒绝重复目录', { skip: process.platform !== 'win32' }, async (t) => {
+  const h = sandbox(t), c = baseConfig(), key = `${h.cwd.toUpperCase().replaceAll('\\', '/')}/`;
+  c.projects = { [key]: { dispatch: { timeout_min: 600 } } }; h.config(c);
+  const r = output(await h.bridge(['config', '--cwd', h.cwd.toLowerCase()]));
+  assert.deepEqual(r.project_override, { path: key }); assert.equal(r.effective.dispatch.timeout_min, 600);
+  c.projects[h.cwd.toLowerCase()] = {}; h.config(c);
+  failed(await h.bridge(['config']), M.projectsSameDir(key, h.cwd.toLowerCase()));
+});
+
+test('projects 整格替换并按级合并 seats，解析新增协作方、显式席位报告和星图列表', async (t) => {
+  const h = sandbox(t), c = baseConfig();
+  for (const name of ['a', 'b', 'unused']) c.agents[name] = { ...c.agents.codex, model: name };
+  c.modules.review.normal = [{ agent: 'codex', effort: 'high', required: true }];
+  c.projects = { [h.cwd]: { modules: { review: { normal: [{ agent: 'a' }, { agent: 'b', effort: 'low' }], seats: { normal: 3 } },
+    run: { normal: 'claude code' }, image: { draw: [{ agent: 'b' }] } } } }; h.config(c);
+  const r = output(await h.bridge(['config', '--cwd', h.cwd]));
+  assert.deepEqual(r.resolved_modules.review.normal.map((item) => item.agent), ['a', 'b']);
+  assert.deepEqual(r.resolved_modules.review.normal.map((item) => item.required), [false, false]);
+  assert.equal(r.resolved_modules.review.normal[0].effort, null);
+  assert.deepEqual(r.effective.modules.review.seats, { simple: 1, normal: 3, complex: 2 });
+  assert.deepEqual(r.effective.modules.review.simple, c.modules.review.simple);
+  const md = await h.bridge(['config', '--cwd', h.cwd, '--format', 'md']); assert.equal(md.code, 0, md.stderr);
+  assert.ok(md.stdout.includes('| 审查 normal | 3 | 2 | 0 |'), md.stdout);
+  const universe = pathToFileURL(path.join(ROOT, 'foreman/skills/dispatch/scripts/board/universe.mjs')).href;
+  const script = write(path.join(h.home, 'inspect-universe.mjs'), `import { createUniverse } from ${JSON.stringify(universe)};
+    console.log(JSON.stringify(createUniverse(${JSON.stringify({ config: h.userConfig, runs: h.runs, claudeDir: path.join(h.home, '.claude/projects') })}).read().agents.map((a) => a.id)));`);
+  assert.deepEqual(output(await h.start(script).done), ['codex', 'a', 'b']);
+});
+
+test('projects 拒绝顶层和 dispatch 中不允许的字段，未匹配的条目也校验且中英文带条目', async (t) => {
+  const h = sandbox(t), key = path.join(h.home, 'unmatched');
+  for (const lang of ['zh', 'en']) for (const field of ['agents', 'levels', 'other', 'dispatch.auto', 'dispatch.watch', 'dispatch.intro', 'dispatch.runs_dir', 'dispatch.web', 'dispatch.other']) {
+    const c = baseConfig(), [top, name] = field.split('.'); c.projects = { [key]: name ? { [top]: { [name]: true } } : { [field]: {} } }; h.config(c);
+    failed(await h.bridge(['config', '--cwd', h.cwd], { env: { FOREMAN_LANG: lang } }), MESSAGES[lang].projectsFieldNotAllowed(key, field));
+  }
+});
+
+test('projects 拒绝相对路径、重复目录和非对象，未选择覆盖时也检查', async (t) => {
+  const h = sandbox(t);
+  for (const lang of ['zh', 'en']) {
+    const messages = MESSAGES[lang], c = baseConfig();
+    for (const key of ['relative/project', './project', '~other/project', '~']) {
+      c.projects = { [key]: {} }; h.config(c);
+      failed(await h.bridge(['config'], { env: { FOREMAN_LANG: lang } }), messages.projectsKeyNotAbsolute(key));
+    }
+    const key = '~/project', other = path.join(h.cwd, 'child', '..') + path.sep;
+    c.projects = { [key]: {}, [other]: {} }; h.config(c);
+    failed(await h.bridge(['config'], { env: { FOREMAN_LANG: lang } }), messages.projectsSameDir(key, other));
+    for (const value of [null, []]) {
+      c.projects = value; h.config(c);
+      failed(await h.bridge(['config'], { env: { FOREMAN_LANG: lang } }), messages.configInvalid('projects', messages.invalid.object));
+    }
+  }
+});
+
+test('projects 各条分别校验，拒绝未定义协作方、旧格子写法和非法配置值', async (t) => {
+  const h = sandbox(t), key = path.join(h.home, 'unmatched');
+  for (const lang of ['zh', 'en']) {
+    const messages = MESSAGES[lang];
+    for (const [entry, message] of [
+      [{ modules: { review: { normal: [{ agent: 'missing' }] } } }, messages.unknownAgent('modules.review.normal[0]', 'missing')],
+      [{ modules: { review: { normal: { effort: 'low' } } } }, messages.configInvalid('modules.review.normal[0].agent', messages.invalid.agentRef)],
+      [{ dispatch: { timeout_min: 0 } }, messages.configInvalid('dispatch.timeout_min', messages.invalid.minutes)],
+      [{ modules: { wrong: {} } }, messages.configInvalid('modules.wrong', messages.invalid.module)],
+      [null, messages.invalid.object],
+    ]) {
+      const c = baseConfig(); c.projects = { [h.cwd]: { modules: { review: { normal: 'claude code' } } }, [key]: entry }; h.config(c);
+      failed(await h.bridge(['config', '--cwd', h.cwd], { env: { FOREMAN_LANG: lang } }), messages.projectsEntryInvalid(key, message));
+    }
+  }
+});
+
+test('projects 之后仓库配置仍只能收紧超时、席位和协作方，环境变量最后应用', async (t) => {
+  const h = sandbox(t), c = baseConfig();
+  c.agents.a = { ...c.agents.codex }; c.agents.b = { ...c.agents.codex };
+  c.projects = { [h.cwd]: { dispatch: { discuss_max_rounds: 4, timeout_min: 600, stall_min: 8, busy_ask_min: 3 },
+    modules: { review: { normal: [{ agent: 'a', effort: 'high' }], seats: { normal: 3 } } } } }; h.config(c);
+  const file = h.write('.claude/foreman.json', { dispatch: { timeout_min: 700, stall_min: 5, busy_ask_min: 0 },
+    modules: { review: { normal: [{ agent: 'a', effort: 'low' }, { agent: 'b' }], seats: { normal: 4 } } } }), original = read(file);
+  const runs = path.join(h.home, 'override-runs');
+  const r = output(await h.bridge(['config', '--cwd', h.cwd], { env: { FOREMAN_RUNS_DIR: runs } }));
+  assert.equal(r.effective.dispatch.timeout_min, 600); assert.equal(r.effective.dispatch.discuss_max_rounds, 4);
+  assert.equal(r.effective.dispatch.stall_min, 5); assert.equal(r.effective.dispatch.busy_ask_min, 3);
+  assert.equal(r.effective.dispatch.runs_dir, runs); assert.equal(r.runs_dir, runs);
+  assert.deepEqual(r.resolved_modules.review.normal.map((item) => [item.agent, item.effort]), [['a', 'low']]);
+  assert.equal(r.effective.modules.review.seats.normal, 3); assert.deepEqual(r.loaded_from, [h.userConfig, file]);
+  assert.equal(read(file), original);
+  h.write('.claude/foreman.json', { dispatch: { timeout_min: 500 } });
+  assert.equal(output(await h.bridge(['config', '--cwd', h.cwd])).effective.dispatch.timeout_min, 500);
+});
+
+test('旧结构迁移、补 seats 和补 watch 改写时原样保留 projects，条目不做旧结构迁移', async (t) => {
+  const h = sandbox(t), projects = { [h.cwd]: { dispatch: { timeout_min: 600 }, modules: { review: { normal: [{ agent: 'codex', effort: 'low' }] } } } };
+  for (const kind of ['legacy', 'seats', 'watch']) {
+    const c = kind === 'legacy' ? { auto_dispatch: false, watch: 'off', codex_bin: CODEX, model: 'legacy-model',
+      levels: { run: { normal: { effort: 'high' } } } } : baseConfig();
+    if (kind === 'seats') for (const module of ['discuss', 'review']) delete c.modules[module].seats;
+    if (kind === 'watch') c.dispatch.watch = 'off';
+    c.projects = structuredClone(projects); h.config(c);
+    const original = read(h.userConfig), r = output(await h.bridge(['config', '--cwd', h.cwd]));
+    assert.notEqual(read(h.userConfig), original); assert.deepEqual(json(h.userConfig).projects, projects);
+    assert.deepEqual(r.project_override, { path: h.cwd }); assert.equal(r.effective.dispatch.timeout_min, 600);
+    assert.equal(r.resolved_modules.review.normal[0].agent, kind === 'legacy' ? 'legacy-model' : 'codex');
+    const saved = read(h.userConfig); output(await h.bridge(['config', '--cwd', h.cwd])); assert.equal(read(h.userConfig), saved);
+  }
+});
+
+test('只在 projects 里用到的协作方不报没用到', async (t) => {
+  const h = sandbox(t), c = baseConfig();
+  c.agents.extra = { ...c.agents.codex };
+  c.agents.idle = { ...c.agents.codex };
+  c.projects = { [path.join(h.home, 'elsewhere')]: { modules: { review: { normal: [{ agent: 'codex' }, { agent: 'extra' }] } } } };
+  h.config(c);
+  const unused = output(await h.bridge(['config'])).summary.warnings.filter((w) => w.kind === 'unused_agent').map((w) => w.agent);
+  assert.deepEqual(unused, ['idle']);
+});
+
+test('projects 在 win32 拒绝不带盘符的根路径和不完整的 UNC', { skip: process.platform !== 'win32' }, async (t) => {
+  for (const key of ['/work/app', '\work\app', '//srv']) {
+    const h = sandbox(t), c = baseConfig(); c.projects = { [key]: { dispatch: { timeout_min: 5 } } }; h.config(c);
+    failed(await h.bridge(['config']), M.projectsKeyNotAbsolute(key));
+  }
 });
