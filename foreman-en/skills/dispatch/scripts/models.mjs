@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { splitAgyModel } from './adapters/agy-models.mjs';
 
 let bundled;
 export function loadModels(file) {
@@ -30,7 +31,8 @@ export function modelIdentity(model, catalog = loadModels()) {
     aliases = new Map(Object.entries(catalog.models).flatMap(([id, info]) => (info.aliases ?? []).map((alias) => [alias, id])));
     compiled.set(catalog, aliases);
   }
-  return aliases.get(key) ?? key;
+  const family = splitAgyModel(key).family;
+  return aliases.get(key) ?? (Object.hasOwn(catalog.models, family) ? family : aliases.get(family)) ?? key;
 }
 
 export function modelInfo(model, catalog = loadModels()) {

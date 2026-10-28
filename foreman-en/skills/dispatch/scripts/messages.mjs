@@ -1,8 +1,6 @@
 // 脚本里所有给人看的文字：终端提示、报错，以及附加给 Codex 的固定约束。
 // 中英两个插件共用这份文件，由同目录的 language.json 决定用哪种语言。
 
-const agyFamilyIds = (model) => /^gemini-3\.8-flash-(low|medium|high)$/.test(model)
-  ? ['low', 'medium', 'high'].map((v) => `gemini-3.8-flash-${v}`).join(' / ') : model;
 const zh = {
   agyGuardMissing: (cmd) => `agy 的 foreman 守卫还没装：运行 \`${cmd} agy-guard install\` 后再派 agy。`,
   agyProjectConfig: (file, kind) => `这次不派 agy：${file} 里有 agy 的${({ hooks: '钩子', MCP: 'MCP', plugin: '插件' })[kind]}配置，foreman 的守卫管不住它。`,
@@ -45,7 +43,9 @@ const zh = {
   agyQuotaLow: 'agy 的剩余额度低于 10%。',
   agyQuotaInvalid: '无法读取 agy /quota 返回的额度分组和桶。',
   agyReadOnly: 'agy 第 1 期只支持讨论和审查，不接受 run_access',
-  agyEffort: (model) => `agy 的 effort 只接受 default；请在 model 里写完整 ID，同族可选：${agyFamilyIds(model)}`,
+  agyEffortFullId: (model, effort, family) => `agy 的 model 已经写了带档位的完整 ID（${model}），不能再写 effort（${effort}）：把 model 改成 ${family}，档位写进 effort。`,
+  agyEffortMissing: (model, levels) => `agy 的 ${model} 有几档推理强度（${levels}），要在格子里写 effort。`,
+  agyEffortUnknown: (model, effort, levels) => `agy 没有 ${model} 的 ${effort} 档；能选的：${levels || '没有可选档位，effort 不写'}。`,
   agyProbePrompt: (commands) => `Run each of these exact run_command commands once, in order. Do not change them or use other tools. Then reply OK.\n${commands.join('\n')}`,
   // ---------- setup 固定报告 ----------
   reportFormatInvalid: '--format 只能是 json 或 md',
@@ -120,6 +120,7 @@ const zh = {
   reportModelsTotal: (n, a, b, c, d, e, agy = 0) => `共 ${n} 个：Codex ${a} 个、opencode ${b} 个、pi ${c} 个、${agy ? `Agy CLI ${agy} 个、` : ''}API ${d} 个接口共 ${e} 个。`,
   reportModelsIntro: '推理强度里粗体是默认档，"— 只能不写"表示这个模型没有可选档位；"已配置"是配置里已有的协作方代号。价格是每百万 token 的输入 / 输出美元价。',
   reportCodexTitle: '### Codex（订阅额度，不按 token 计价）',
+  reportAgyTitle: '### Agy CLI（Google 账号的订阅额度）',
   reportModelHeaders: ['模型', '推理强度', '上下文', '已配置'],
   reportPrice: '价格',
   reportFree: '免费',
@@ -812,7 +813,9 @@ const en = {
   agyQuotaLow: "agy's remaining quota is below 10%.",
   agyQuotaInvalid: "Couldn't read the quota groups and buckets returned by agy /quota.",
   agyReadOnly: 'agy phase 1 only supports discussions and reviews; run_access is not accepted',
-  agyEffort: (model) => `agy effort only accepts default; put the full ID in model. Family IDs: ${agyFamilyIds(model)}`,
+  agyEffortFullId: (model, effort, family) => `agy's model is already a full ID with an effort level (${model}), so effort (${effort}) can't be set too: change model to ${family} and put the level in effort.`,
+  agyEffortMissing: (model, levels) => `agy's ${model} has several effort levels (${levels}); set effort in the cell.`,
+  agyEffortUnknown: (model, effort, levels) => `agy has no ${effort} level for ${model}; available: ${levels || 'none, leave effort out'}.`,
   agyProbePrompt: (commands) => `Run each of these exact run_command commands once, in order. Do not change them or use other tools. Then reply OK.\n${commands.join('\n')}`,
   // ---------- setup 固定报告 ----------
   reportFormatInvalid: '--format must be json or md',
@@ -887,6 +890,7 @@ const en = {
   reportModelsTotal: (n, a, b, c, d, e, agy = 0) => `${n} in all: Codex ${a}, opencode ${b}, pi ${c}, ${agy ? `Agy CLI ${agy}, ` : ''}API ${e} across ${d} endpoints.`,
   reportModelsIntro: 'Bold effort is the default; "— leave unset" means the model has no effort levels; "Configured" lists the agents already set up with it. Prices are US dollars per million input / output tokens.',
   reportCodexTitle: '### Codex (subscription quota, not priced per token)',
+  reportAgyTitle: '### Agy CLI (Google account plan quota)',
   reportModelHeaders: ['Model', 'Effort', 'Context', 'Configured'],
   reportPrice: 'Price',
   reportFree: 'free',

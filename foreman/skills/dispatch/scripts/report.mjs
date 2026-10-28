@@ -102,7 +102,7 @@ const notes = (summary, checks) => {
     const key = JSON.stringify([item.agent, item.model, item.effort, item.problem]);
     if (seenProblems.has(key)) continue;
     seenProblems.add(key);
-    rows.push(`- ❌ ${M.reportEffortProblem(item.agent, item.model, item.effort, item.problem)}`);
+    rows.push(`- ❌ ${M.reportEffortProblem(item.agent, item.model, item.effort ?? M.reportDefault, item.problem)}`);
   }
   const merged = new Set();
   for (const warning of summary.warnings) {
@@ -135,7 +135,8 @@ export const configReport = (cfg, summary, checks = null) => {
 const context = (n) => n == null ? dash : n >= 1000000 ? `${Number((n / 1000000).toFixed(2))}M` : `${Math.round(n / 1000)}K`;
 const price = (cost) => !cost || cost.input == null || cost.output == null ? dash : cost.input === 0 && cost.output === 0
   ? M.reportFree : `$${cost.input} / $${cost.output}`;
-const efforts = (model) => model.efforts?.length ? model.efforts.map((effort) => effort === model.default_effort ? `**${effort}**` : effort).join(' / ') : M.reportNoEffort;
+const efforts = (model) => model.efforts?.length ? [...(model.plain ? [dash] : []),
+  ...model.efforts.map((effort) => effort === model.default_effort ? `**${effort}**` : effort)].join(' / ') : M.reportNoEffort;
 
 export const modelsReport = (catalog) => {
   const tools = ['codex cli', 'opencode cli', 'pi cli', 'agy cli'];
@@ -146,18 +147,19 @@ export const modelsReport = (catalog) => {
   const omitted = api.reduce((n, [, cat]) => n + (cat.ok ? cat.models.filter(nonChat).length : 0), 0);
   const counts = tools.map((type) => visible[type].length), apiCount = apiRows.length;
   const blocks = [M.reportModelsTitle, M.reportModelsTotal(counts.reduce((a, b) => a + b, apiCount), ...counts.slice(0, 3), api.length, apiCount, counts[3]) + M.reportModelsJoin + M.reportModelsIntro];
-  const configured = (type, id) => M.list(Object.entries(catalog.agents).filter(([, agent]) => agent.type === type && agent.model === id).map(([name]) => name));
+  const configured = (type, model) => M.list(Object.entries(catalog.agents).filter(([, agent]) => agent.type === type
+    && (agent.model === model.id || type === 'agy cli' && Object.values(model.ids).includes(agent.model))).map(([name]) => name));
   for (const type of tools) {
     const cat = catalog.tools[type], tool = type === 'codex cli' ? 'Codex' : type.split(' ')[0];
     if (!cat) continue;
     // 工具根本没装（Node 启动它时报 spawn … ENOENT）时直接说没装；启动以后读文件出的 ENOENT 等其他错误照写原因
     if (!cat.ok) { blocks.push(/\bspawn(?:Sync)? \S+ ENOENT\b/.test(cat.error ?? '') ? M.reportCatalogMissing(tool) : M.reportCatalogError(tool, cat.error)); continue; }
     if (type === 'agy cli') {
-      blocks.push(M.channel.agy, table(M.reportModelHeaders, visible[type].map((model) => [model.id, efforts(model), context(model.context), configured(type, model.id)])));
+      blocks.push(M.reportAgyTitle, table(M.reportModelHeaders, visible[type].map((model) => [model.id, efforts(model), context(model.context), configured(type, model)])));
       continue;
     }
     if (type === 'codex cli') {
-      blocks.push(M.reportCodexTitle, table(M.reportModelHeaders, visible[type].map((model) => [model.id, efforts(model), context(model.context), configured(type, model.id)])));
+      blocks.push(M.reportCodexTitle, table(M.reportModelHeaders, visible[type].map((model) => [model.id, efforts(model), context(model.context), configured(type, model)])));
       continue;
     }
     const groups = new Map();
@@ -168,7 +170,7 @@ export const modelsReport = (catalog) => {
     }
     for (const [provider, models] of groups) blocks.push(M.reportProviderTitle(tool, provider, models.length),
       table([...M.reportModelHeaders.slice(0, 3), M.reportPrice, M.reportModelHeaders[3]], [...models].sort((a, b) => a.id.localeCompare(b.id)).map((model) => [
-        model.id.slice(provider.length + 1), efforts(model), context(model.context), price(model.cost), configured(type, model.id),
+        model.id.slice(provider.length + 1), efforts(model), context(model.context), price(model.cost), configured(type, model),
       ])));
   }
   if (api.some(([, cat]) => cat.ok)) blocks.push(M.reportApiTitle, table(M.reportApiHeaders, apiRows.map(([name, model]) => [name, model.id, context(model.context), catalog.agents[name]?.model === model.id ? name : ''])));

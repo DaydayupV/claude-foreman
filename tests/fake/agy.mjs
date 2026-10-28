@@ -136,7 +136,8 @@ if (s.eligibility_error) {
 } else if (operation === 'version') console.log(s.version || '1.4.8');
 else if (operation === 'catalog') {
   console.log('Fetching available models...');
-  for (const m of s.agy_catalog || [{ id: 'gemini-3.8-flash-high', name: 'Gemini Flash High' }, { id: 'gemini-3.8-flash-low', name: 'Gemini Flash Low' }]) console.log(`${m.id}\t${m.name}`);
+  for (const m of s.agy_catalog || ['gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low',
+    'claude-sonnet-4-6', 'claude-opus-4-6-thinking', 'gpt-oss-120b-medium'].map((id) => ({ id, name: id }))) console.log(`${m.id}\t${m.name}`);
 } else if (operation === 'hooks') {
   const hooks = listedHooks();
   console.log(s.hooks_output ?? JSON.stringify({ conversation_id: '', status: 'SUCCESS', duration_seconds: 0, num_turns: 0, usage: {},

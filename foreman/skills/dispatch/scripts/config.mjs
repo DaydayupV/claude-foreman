@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
 import { agentMaxParallel, DEFAULT_AGENT_PARALLEL } from './adapters/parallel.mjs';
+import { AGY_EFFORTS, splitAgyModel } from './adapters/agy-models.mjs';
 import { HERE, M, notice, isObject, readJson, die, pidAlive, pidExists, retryBusy, replaceFile, closestMatches } from './util.mjs';
 
 const ENTRY = path.join(HERE, 'cli.mjs');
@@ -414,8 +415,12 @@ function validateConfig(cfg, adapters, fail = die) {
         if (mode === 'run' && adapter.capabilities.isolation === 'tools') check(!!agent.run_access, `${at}.agent`, M.runAccessRequired(item.agent, agent.type));
       }
       check(item.model == null || (text(item.model) && item.model !== CLAUDE_CODE), `${at}.model`, why.modelName);
-      check(item.effort === undefined || (adapter.efforts ? adapter.efforts.includes(item.effort) : item.effort === null || text(item.effort)), `${at}.effort`, agent.type === 'agy cli'
-        ? M.agyEffort(item.model || agent.model) : adapter.efforts ? why.effortValue(item.effort, adapter.efforts.join(' / ')) : why.apiEffort);
+      check(item.effort === undefined || agent.type === 'agy cli' && item.effort === null || (adapter.efforts ? adapter.efforts.includes(item.effort) : item.effort === null || text(item.effort)), `${at}.effort`,
+        adapter.efforts ? why.effortValue(item.effort, adapter.efforts.join(' / ')) : why.apiEffort);
+      if (agent.type === 'agy cli' && AGY_EFFORTS.includes(item.effort)) {
+        const model = item.model || agent.model, split = splitAgyModel(model);
+        check(!split.effort, `${at}.effort`, M.agyEffortFullId(model, item.effort, split.family));
+      }
       check(item.required === undefined || typeof item.required === 'boolean', `${at}.required`, why.boolean);
     }
     const required = requiredCount(value);
@@ -477,14 +482,15 @@ function projectConfig(cfg, project, adapters) {
           check(!seen.has(name), pos, M.invalid.duplicate);
           seen.add(name);
           const agent = cfg.agents[name], adapter = adapters[agent?.type];
-          if (adapter) check(item.effort === undefined || (adapter.efforts ? adapter.efforts.includes(item.effort) : item.effort === null || typeof item.effort === 'string' && !!item.effort.trim()), `${pos}.effort`, adapter.efforts ? M.invalid.effortValue(item.effort, adapter.efforts.join(' / ')) : M.invalid.apiEffort);
+          if (adapter) check(item.effort === undefined || agent.type === 'agy cli' && item.effort === null || (adapter.efforts ? adapter.efforts.includes(item.effort) : item.effort === null || typeof item.effort === 'string' && !!item.effort.trim()), `${pos}.effort`, adapter.efforts ? M.invalid.effortValue(item.effort, adapter.efforts.join(' / ')) : M.invalid.apiEffort);
           if (!prev) { notice(M.projectAgentDropped(item.agent, at)); return []; }
           for (const field of Object.keys(item)) if (!['agent', 'effort', 'required'].includes(field)) notice(M.projectAgentDropped(field, at));
           if (Object.hasOwn(item, 'required') && item.required !== !!prev.required) notice(M.projectRequiredChanged(at, name));
           const next = { ...prev };
           if (Object.hasOwn(item, 'effort') && item.effort !== prev.effort) {
             if (prev.effort === undefined) notice(M.projectEffortNoBase(at, name));
-            else if (!['codex cli', 'pi cli'].includes(agent.type)) notice(M.projectEffortUnordered(at, name, agent.type));
+            else if (!['codex cli', 'pi cli', 'agy cli'].includes(agent.type)
+              || agent.type === 'agy cli' && (!AGY_EFFORTS.includes(prev.effort) || !AGY_EFFORTS.includes(item.effort))) notice(M.projectEffortUnordered(at, name, agent.type));
             else if (adapter.efforts.indexOf(item.effort) > adapter.efforts.indexOf(prev.effort)) notice(M.projectEffortRaised(at, name, item.effort, prev.effort));
             else next.effort = item.effort;
           }
@@ -714,7 +720,8 @@ function resolveProfile(cfg, seat, o, adapters, fallbackModel = null, parentAgen
   const legacyRequested = requested && requested !== o.agent;
   parentAgent = parentAgent && resolveAgentAlias(parentAgent, cfg);
   // 旧等级的模型覆盖已拆成独立协作方，续接要找同一连接配置下的原模型。
-  if (parentAgent && fallbackModel && cfg.agents[parentAgent]?.model !== fallbackModel) {
+  if (parentAgent && fallbackModel && cfg.agents[parentAgent]?.model !== fallbackModel
+    && !(cfg.agents[parentAgent]?.type === 'agy cli' && splitAgyModel(cfg.agents[parentAgent].model).family === splitAgyModel(fallbackModel).family)) {
     const source = cfg.agents[parentAgent];
     const matches = Object.keys(cfg.agents).filter((name) => cfg.agents[name].model === fallbackModel
       && isDeepStrictEqual({ ...cfg.agents[name], model: null }, { ...source, model: null }));
@@ -760,16 +767,24 @@ function resolveProfile(cfg, seat, o, adapters, fallbackModel = null, parentAgen
   }
   if (!Object.hasOwn(cfg.agents, entry.agent)) die(unknownAgentError('--agent', entry.agent, cfg));
   const agent = cfg.agents[entry.agent], adapter = adapters[agent.type];
-  const effort = o.effort ?? (Object.hasOwn(seat, 'effort') ? seat.effort : entry.effort);
+  let effort = o.effort ?? (Object.hasOwn(seat, 'effort') ? seat.effort : entry.effort);
   const mode = image ? 'run' : seat.module;
   if (image && level === 'generate') {
     if (!canGenerate(adapter)) die(M.imagesNotSupported(entry.agent, agent.type));
   } else if (!adapter.capabilities.modes.includes(mode)) die(M.modeNotSupported(entry.agent, agent.type, mode, M.list(adapter.capabilities.modes)));
   if (mode === 'run' && (!image || level === 'draw') && adapter.capabilities.isolation === 'tools' && !agent.run_access) die(M.runAccessRequired(entry.agent, agent.type));
   if (mode === 'run' && adapter.capabilities.isolation !== 'os' && o['no-snapshot']) die(M.snapshotRequired);
-  if (effort !== undefined && effort !== null && adapter.efforts && !adapter.efforts.includes(effort)) die(agent.type === 'agy cli' ? M.agyEffort(o.model || entry.model || agent.model) : M.effortChoices(adapter.efforts.join(' / ')));
+  if (effort !== undefined && effort !== null && adapter.efforts && !adapter.efforts.includes(effort)) die(M.effortChoices(adapter.efforts.join(' / ')));
   const base = entry.model || agent.model || fallbackModel;
   const model = o.model || base;
+  if (agent.type === 'agy cli') {
+    const split = splitAgyModel(model);
+    if (split.effort) {
+      if (AGY_EFFORTS.includes(o.effort)) die(M.agyEffortFullId(model, o.effort, split.family));
+      // 完整 ID 自带档位，格子和上一轮的 effort 不再参与选档。
+      effort = null;
+    }
+  }
   if (o.model && ['opencode cli', 'pi cli'].includes(agent.type) && (!base?.includes('/') || !model.includes('/') || model.split('/')[0] !== base.split('/')[0])) die(M.modelVendorChanged(entry.agent, model, base));
   return { level: image ? null : level, agentName: entry.agent, agent, model, effort: effort ?? null, module: seat.module, cell: level,
     plan: seat.plan ?? null, seat: seat.seat ?? null, role: seat.role ?? null,

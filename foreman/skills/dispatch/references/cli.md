@@ -85,7 +85,7 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
 - 补漏席是角色为 `补漏`（英文插件写 `gap`）的席位。它用的协作方没标必选、计划里又有必选席时，`state` 只看必选席，补漏席还没跑完计划也会显示 `complete`。所以另有 `gap_unfinished`：还没交回有效结果的补漏席（没启动、还在运行、失败或结果无效），每项是 `seat`、`agent`、`status`，没有时为空数组；实时查看和 `status --group` 在计划那一行加一句"gap seat not finished: …"，写明是哪一席、处于什么状态（not started、running、no valid result，或者 failed 这类状态词）。
 
 ## models
-列出本机 Codex、opencode、pi、agy 自带的模型清单（含每个模型支持的推理强度；agy 的档位在模型 ID 里），以及每个 API 协作方的接口列出的模型名（不含推理强度），并核对配置里的模型在不在清单里、不在时给出最接近的写法。只读，不发模型请求。用户问有哪些模型可选、或者要换模型和推理强度时用。
+列出本机 Codex、opencode、pi、agy 自带的模型清单（含每个模型支持的推理强度；agy 的档位从模型 ID 的后缀拆出来），以及每个 API 协作方的接口列出的模型名（不含推理强度），并核对配置里的模型在不在清单里、不在时给出最接近的写法。只读，不发模型请求。用户问有哪些模型可选、或者要换模型和推理强度时用。
 
 ## 结果字段
 `run`、`image`、`resume`、`discuss`、`review` 的结果以 JSON 打印到 stdout，主要字段：

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
-import { loadModels, modelInfo } from './models.mjs';
+import { loadModels, modelKey, modelInfo } from './models.mjs';
+import { splitAgyModel } from './adapters/agy-models.mjs';
 
 let bundled;
 export function loadTiers(file) {
@@ -34,7 +35,13 @@ function comparisonOf(tiers) {
 }
 
 export function tierOf(model, { tiers = loadTiers(), catalog = loadModels() } = {}) {
-  const { id, display, family } = modelInfo(model, catalog), entry = tiers?.models?.[id];
+  let info = modelInfo(model, catalog);
+  if (tiers?.models?.[modelKey(model)]) info = { ...info, id: modelKey(model) };
+  else if (!tiers?.models?.[info.id]) {
+    const base = modelInfo(splitAgyModel(info.id).family, catalog);
+    if (tiers?.models?.[base.id]) info = base;
+  }
+  const { id, display, family } = info, entry = tiers?.models?.[id];
   const result = { id, display, family, rated: !!entry, tier: null, overall: null, strengths: [], weaknesses: [], top: [],
     source: null, checked: null, open: null, cost_per_task: null };
   if (!entry) return result;

@@ -46,11 +46,17 @@ test('模型身份统一前缀、Claude 版本和空白，Fable 与 Mythos 保�
     ['claude-fable-5.1', 'claude-fable-5-1'],
     ['gemini-4-argon-contributor', 'gemini-4-argon'],
     ['provider/Claude\tFable  5.1', 'claude-fable-5-1'],
+    ['gemini-3.8-flash-high', 'gemini-3.8-flash'],
+    ['gemini-3.8-flash-low', 'gemini-3.8-flash'],
+    ['gpt-oss-120b-medium', 'gpt-oss-120b'],
   ]) assert.equal(modelIdentity(name), id);
   assert.notEqual(modelIdentity('claude-fable-5.1'), modelIdentity('claude-mythos-5.1'));
   assert.equal(modelIdentity('kimi-k3.1-pro-highspeed'), modelIdentity('kimi-k3.1-pro'));
   assert.equal(priceFor('kimi-k3.1-pro-highspeed', { input: 1e6 }, prices), 4);
   assert.equal(priceFor('kimi-k3.1-pro', { input: 1e6 }, prices), 2);
+  for (const [family, full] of [['gemini-3.8-flash', 'gemini-3.8-flash-high'], ['gpt-oss-120b', 'gpt-oss-120b-medium']]) {
+    assert.equal(priceFor(family, { input: 1e6, output: 1e6 }, prices), priceFor(full, { input: 1e6, output: 1e6 }, prices));
+  }
 });
 
 test('身份表按需加载，modelInfo 保留未知模型原名', (t) => {

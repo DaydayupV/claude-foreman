@@ -187,7 +187,7 @@ stream-json 输入下，模型名无效时退出码是 1（不是 3），`result
 
 ## 6. 模型、推理强度和检查
 - `catalog`：解析 `agy models` 的两列（ID、显示名）。拿不到时 `ok: false`。
-- 推理强度：agy 的档位是模型 ID 后缀（`-low` / `-medium` / `-high`）。第一期配置里 `model` 写完整 ID，`effort` 只接受 `default`，写别的档位时在校验阶段报错并给出同族的 ID。第三期再考虑把 `--effort` 映射成同族 ID。
+- 推理强度：agy 的档位是模型 ID 后缀（`-low` / `-medium` / `-high`），它的 `--effort` 对这些模型不能调。2026-10-29 改成在插件这边统一写法：清单按后缀（`minimal` 到 `max`）拆成模型族和档位（`-thinking` 这类其他后缀不拆），配置写 `model: "gemini-3.8-flash"`、格子写 `effort: "high"`，派出时拼回 `gemini-3.8-flash-high`。只有一档的族不写就用那一档，有几档的必须写；旧写法（完整 ID、不写 effort）照常能用，完整 ID 再写 effort 报错。档位和价格查不到时去掉后缀再查。
 - `check`：
   1. `agy --version`；
   2. 模型在不在 `agy models` 的清单里，不在时给出最接近的；
@@ -204,12 +204,12 @@ stream-json 输入下，模型名无效时退出码是 1（不是 3），`result
 ## 7. 配置
 
 ```json
-"gemini-flash-agy": { "type": "agy cli", "model": "gemini-3.8-flash-high" }
+"gemini-flash-agy": { "type": "agy cli", "model": "gemini-3.8-flash" }
 ```
 
 | 字段 | 作用 |
 |---|---|
-| `model` | 必填，`agy models` 第一列的 ID |
+| `model` | 必填，模型族（`agy models` 第一列去掉档位后缀），档位写在格子的 `effort` 里；也可以写完整 ID |
 | `bin` | 可选，agy 可执行文件路径。默认在 PATH 里找，Windows 上再找 `%LOCALAPPDATA%\agy\bin\agy.exe` |
 | `max_parallel` | 可选，默认 `2`：订阅额度按 5 小时窗口算，并发高了容易一起撞限额 |
 | `run_access` | 可选（第二期），`"edit"` 或 `"shell"`，只能写在用户配置里，含义和 opencode、pi 相同 |
@@ -295,7 +295,7 @@ stream-json 输入下，模型名无效时退出码是 1（不是 3），`result
 - **第 0b 期**：已完成（第 9 节），只剩桌面版 / IDE 和自动模式两项因为没有条件没能验证。
 - **第 1 期**（2026-10-28 完成，真实 agy 1.4.8 / 1.4.9 上验证过 check、讨论、审查和两席并发）：守卫（启动器、启动标记、决定记录）、自检、`agy-guard` 子命令和锁、读档（讨论和审查）和沙箱探针、`check`、`models`、看板、价格和身份表、默认并发、直接调用守卫、假 agy 和测试。
 - **第 2 期**：执行的 `edit` / `shell` 两档、3.5 的写入保护、异步命令处理、续接、返工。
-- **第 3 期**：`--effort` 映射成同族模型 ID、原生 `--json-schema`、图像（`generate_image`）是否接入。
+- **第 3 期**：原生 `--json-schema`、图像（`generate_image`）是否接入。
 
 ## 11. 用户拍板的取舍
 2026-10-28 用户同意下面六条，全部按推荐做法：

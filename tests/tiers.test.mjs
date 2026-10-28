@@ -45,6 +45,17 @@ test('档位按 84、75 的边界划分，缺文件和未知模型均未评级',
   assert.equal(tierOf('gpt-6-astra', { tiers: null }).tier, null);
 });
 
+test('agy 完整 ID 按词表回查模型族，非档位后缀不拆，完整 ID 的评级优先', () => {
+  for (const effort of ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
+    assert.deepEqual(tierOf(`gemini-3.8-flash-${effort}`), tierOf('gemini-3.8-flash'));
+  }
+  const tiers = { sources: {}, models: { custom: { tier: 'mid' }, 'custom-high': { tier: 'strong' } } };
+  assert.equal(tierOf('custom-low', { tiers, catalog: null }).tier, 'mid');
+  assert.equal(tierOf('custom-high', { tiers, catalog: null }).tier, 'strong');
+  assert.equal(tierOf('custom-high', { tiers, catalog: { models: { custom: { aliases: [] } } } }).tier, 'strong');
+  assert.equal(tierOf('custom-thinking', { tiers, catalog: null }).rated, false);
+});
+
 test('同档中位数产生排序后的最多三项长短处，全表第一维度含并列', (t) => {
   const { tiers } = setup(t), info = tierOf('gpt-6-astra', { tiers });
   assert.deepEqual(info.strengths, ['coding', 'agentic', 'design']);

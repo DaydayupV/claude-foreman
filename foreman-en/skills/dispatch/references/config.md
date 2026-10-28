@@ -118,7 +118,7 @@ Like opencode it has no OS sandbox, and both levels take a change snapshot befor
 
 | Field | What it does |
 |---|---|
-| `model` | Required, an ID from the first column of `agy models`, such as `gemini-3.8-flash-high`. The effort is the suffix of the ID (`-low` / `-medium` / `-high`); to change it, change the ID |
+| `model` | Required, the model family, such as `gemini-3.8-flash`. agy puts the effort in the ID suffix (`gemini-3.8-flash-high`); the plugin splits it off for display and adds it back when dispatching, and the level goes in the cell's `effort`. A full ID with no `effort` still works |
 | `bin` | Optional, the path to the agy executable. By default it's looked up on PATH, and on Windows also at `%LOCALAPPDATA%\agy\bin\agy.exe` |
 | `max_parallel` | Optional, default `2`: the plan quota is counted in 5-hour windows, and many parallel calls tend to hit the limit together |
 
@@ -197,7 +197,7 @@ How image tasks go out: before work starts on each new graphic deliverable, Clau
 - `api`: sent as is as `reasoning_effort` (DeepSeek takes `low` / `high` / `max`), and `null` means don't send it. Use `null` for models with no reasoning effort parameter, such as Xiaomi MiMo (only a thinking on/off switch, on by default).
 - `opencode cli`: the model's variant (for example `high`), passed to opencode as `-m model#variant`; `null` means the model's default. Each model has its own variants (the free DeepSeek model, for example, takes `low`, `high` and `max` but not `medium`), and opencode reports an error for a wrong one. `default` is the same as leaving it out. After a change, run `check`: variants missing from opencode's model list are reported at once, and the rest are tried one by one.
 - `pi cli`: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, passed to pi as `--thinking`. Each model supports its own set (deepseek-flash, for example, takes off / low / high / max), as pi's model list says. **pi doesn't report an unsupported level; it quietly switches to the nearest one** (looking upward first, so it may cost more). Always run `check` after a change; it checks against the list.
-- `agy cli`: only `default` (or nothing). The effort is the suffix of the model ID, so for another level change `model` to a sibling ID; any other value fails validation, and the error lists the sibling IDs.
+- `agy cli`: whichever of `minimal`, `low`, `medium`, `high`, `xhigh`, `max` the model has (`models` lists them; gemini-3.8-flash has low / medium / high), sent to agy as `<model>-<level>`. A model with one level uses it when `effort` is left out, a model with none (such as claude-sonnet-4-6) takes no `effort`, and a model with several needs it, or `check` and dispatch report an error. When `model` is already a full ID with a level, `effort` can't be set too.
 
 When reporting to the user, describe a missing or `null` effort as "effort: default".
 
@@ -250,7 +250,7 @@ Choices that cost money or affect safety (which opencode or pi model to use, let
 - `modules` can contain just the cells to change. Each cell can only:
   - be closed as a whole: `"claude code"` for discuss, run and review, `null` for image;
   - drop some optional entries the user config already has in that cell (the user config's order is kept);
-  - lower the effort, only for tools whose efforts have a clear order: Codex is low < medium < high < xhigh < max < ultra, pi is off < minimal < low < medium < high < xhigh < max. opencode variants and api efforts have no common order, so a project can't change them; nor can it add an effort to an entry that has none in the user config.
+  - lower the effort, only for tools whose efforts have a clear order: Codex is low < medium < high < xhigh < max < ultra, pi is off < minimal < low < medium < high < xhigh < max, agy is minimal < low < medium < high < xhigh < max. opencode variants and api efforts have no common order, so a project can't change them; nor can it add an effort to an entry that has none in the user config.
 - It can't add entries, swap agents or models, change `required`, or open a cell the user closed; those are ignored with a notice.
 - It can't drop only the required agents while keeping others handing work out: that's an error; keep the required agents or close the whole cell. Dropping every candidate is an error too.
 - Once a project writes `"claude code"` (or `null`) for a cell, nothing at that cell can be named with `--agent` in that project, even if the cell is already `"claude code"` in the user config; cells the project doesn't mention that are `"claude code"` in the user config can still be named. If the cell has required agents, that step counts as "not done", and Claude says so plainly instead of reviewing it itself and calling the requirement met. With `--cwd`, `closed_by_project` in the `config` output lists the cells a project closed.

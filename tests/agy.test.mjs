@@ -6,9 +6,10 @@ import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { plannedSandbox as sandbox, baseConfig, taskArgs, output, failed, read, lines, write, poll, ROOT, AGY, MESSAGES, seedRun } from './helpers.mjs';
 import { discussion } from './fixtures/reports.mjs';
+import { AGY_EFFORTS, splitAgyModel, agyFamilies, agyModelId } from '../foreman/skills/dispatch/scripts/adapters/agy-models.mjs';
 
 const SCRIPTS = path.join(ROOT, 'foreman/skills/dispatch/scripts'), GUARD = path.join(SCRIPTS, 'adapters/agy-guard.mjs'), M = MESSAGES.zh;
-const agent = () => ({ type: 'agy cli', model: 'gemini-3.8-flash-high', bin: AGY });
+const agent = () => ({ type: 'agy cli', model: 'gemini-3.8-flash', bin: AGY });
 const configure = (h, change = () => {}) => {
   const tmp = path.join(h.home, 'tmp'); fs.mkdirSync(tmp, { recursive: true });
   Object.assign(h.env, { TMP: tmp, TEMP: tmp, TMPDIR: tmp });
@@ -25,8 +26,8 @@ https.get=(url,options,callback)=>{const req=new EventEmitter();req.destroy=()=>
 `);
   h.env.NODE_OPTIONS = `--import=${pathToFileURL(network).href}`;
   const c = baseConfig(); c.agents.agy = agent();
-  c.modules.discuss.complex = [{ agent: 'agy', effort: 'default' }];
-  c.modules.review.complex = [{ agent: 'agy', effort: 'default' }];
+  c.modules.discuss.complex = [{ agent: 'agy', effort: 'high' }];
+  c.modules.review.complex = [{ agent: 'agy', effort: 'high' }];
   change(c); h.config(c); return c;
 };
 const globalDir = (h) => path.join(h.home, '.gemini/config');
@@ -45,6 +46,160 @@ const guard = (h, p, tool = 'read_file', args = { Path: path.join(h.cwd, 'source
   assert.equal(r.status, 0, r.stderr); return JSON.parse(r.stdout);
 };
 const run = (h, extra = [], opts) => h.bridge(taskArgs(h, 'discuss', ['--agent', 'agy', ...extra]), opts);
+
+test('agy 模型族只拆词表后缀，按档位排序并解析单档、无档和旧完整 ID', () => {
+  const ids = ['gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low',
+    'claude-sonnet-4-6', 'claude-opus-4-6-thinking', 'gpt-oss-120b-medium'];
+  const families = agyFamilies(ids), levels = 'low / medium / high';
+  assert.deepEqual(AGY_EFFORTS, ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+  for (const effort of AGY_EFFORTS) assert.deepEqual(splitAgyModel(`model-${effort}`), { family: 'model', effort });
+  assert.deepEqual(splitAgyModel('claude-opus-4-6-thinking'), { family: 'claude-opus-4-6-thinking', effort: null });
+  assert.deepEqual(families, [
+    { id: 'gemini-3.8-flash', efforts: ['low', 'medium', 'high'], ids: { high: ids[0], medium: ids[1], low: ids[2] } },
+    { id: ids[3], efforts: [], ids: {}, plain: ids[3] }, { id: ids[4], efforts: [], ids: {}, plain: ids[4] },
+    { id: 'gpt-oss-120b', efforts: ['medium'], ids: { medium: ids[5] } },
+  ]);
+  for (const effort of [undefined, null, 'default']) {
+    assert.equal(agyModelId(ids[0], effort, families), ids[0]);
+    assert.equal(agyModelId('gpt-oss-120b', effort, families), ids[5]);
+    assert.equal(agyModelId(ids[3], effort, families), ids[3]);
+    assert.throws(() => agyModelId('gemini-3.8-flash', effort, families), { message: M.agyEffortMissing('gemini-3.8-flash', levels) });
+  }
+  assert.equal(agyModelId('gemini-3.8-flash', 'low', families), ids[2]);
+  assert.throws(() => agyModelId(ids[0], 'high', families), { message: M.agyEffortFullId(ids[0], 'high', 'gemini-3.8-flash') });
+  assert.throws(() => agyModelId('gemini-3.8-flash', 'max', families), { message: M.agyEffortUnknown('gemini-3.8-flash', 'max', levels) });
+  assert.throws(() => agyModelId(ids[4], 'high', families), { message: M.agyEffortUnknown(ids[4], 'high', '') });
+  assert.throws(() => agyModelId('missing', null, families), { code: 'agyModelMissing' });
+});
+
+test('agy 同族的原始无后缀 ID 优先于单档或多档默认选择', () => {
+  for (const ids of [['synthetic-medium', 'synthetic'], ['synthetic', 'synthetic-high', 'synthetic-medium']]) {
+    const families = agyFamilies(ids);
+    assert.equal(families.length, 1); assert.equal(families[0].plain, 'synthetic');
+    for (const effort of [undefined, null, 'default']) assert.equal(agyModelId('synthetic', effort, families), 'synthetic');
+    assert.equal(agyModelId('synthetic', 'medium', families), 'synthetic-medium');
+  }
+  assert.equal(Object.hasOwn(agyFamilies(['synthetic-medium'])[0], 'plain'), false);
+});
+
+test('agy --model 完整 ID 覆盖格子和上一轮档位，派出和续接都按 ID 选档', async (t) => {
+  const h = sandbox(t); configure(h); await install(h);
+  const first = output(await run(h, ['--model', 'gemini-3.8-flash-low']));
+  assert.equal(first.effort, 'low');
+  for (const call of modelCalls(h)) assert.equal(call.args[call.args.indexOf('--model') + 1], 'gemini-3.8-flash-low');
+  const before = modelCalls(h).length;
+  const next = output(await h.bridge(['resume', '--run', first.run_id, '--level', 'complex', '--brief', '-', '--model', 'gemini-3.8-flash-medium']));
+  assert.equal(next.effort, 'medium');
+  for (const call of modelCalls(h).slice(before)) assert.equal(call.args[call.args.indexOf('--model') + 1], 'gemini-3.8-flash-medium');
+});
+
+test('agy 续接旧完整 ID 协作方时不迁移到同族的新写法协作方', async (t) => {
+  const h = sandbox(t), full = 'gemini-3.8-flash-low';
+  configure(h, (c) => {
+    delete c.agents.agy; c.agents.legacy = { ...agent(), model: full }; c.agents.family = agent();
+    c.modules.discuss.complex = c.modules.review.complex = [{ agent: 'legacy' }, { agent: 'family', effort: 'high' }];
+    c.modules.discuss.seats.complex = 1;
+  }); await install(h);
+  const first = output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'legacy'])));
+  const next = output(await h.bridge(['resume', '--run', first.run_id, '--level', 'complex', '--brief', '-']));
+  for (const result of [first, next]) {
+    assert.equal(result.agent, 'legacy'); assert.equal(result.effort, 'low');
+    const meta = JSON.parse(read(path.join(result.run_dir, 'meta.json')));
+    assert.equal(meta.model, 'gemini-3.8-flash'); assert.equal(meta.agy_model_id, full);
+  }
+  for (const call of modelCalls(h)) assert.equal(call.args[call.args.indexOf('--model') + 1], full);
+});
+
+test('agy 开工行先于看板且只打一次，未写档位不预报推断值，解析失败也有开工行', async (t) => {
+  const h = sandbox(t); configure(h, (c) => {
+    c.dispatch.watch.web = true; c.agents.agy.model = 'gpt-oss-120b';
+    c.modules.discuss.complex = c.modules.review.complex = [{ agent: 'agy' }];
+  }); await install(h);
+  write(path.join(h.runs, 'board.lock.json'), { port: 12345, token: 'synthetic-agy-board', pid: process.pid });
+  const launched = await run(h); assert.equal(output(launched).effort, 'medium');
+  const rejected = await run(h, ['--model', 'gemini-3.8-flash', '--effort', 'max']);
+  assert.ok(output(rejected, 1).errors.includes(M.agyEffortUnknown('gemini-3.8-flash', 'max', 'low / medium / high')));
+  for (const result of [launched, rejected]) {
+    const rows = result.stderr.split('\n'), started = rows.findIndex((s) => s.includes(' started ·'));
+    assert.ok(started >= 0 && started < rows.findIndex((s) => s.startsWith('foreman: web board ')), result.stderr);
+    assert.equal(rows.filter((s) => s.includes(' started ·')).length, 1);
+  }
+  assert.ok(launched.stderr.includes('gpt-oss-120b · Agy CLI')); assert.equal(launched.stderr.includes('gpt-oss-120b medium · Agy CLI'), false);
+});
+
+test('agy 旧完整 ID 不写 effort 仍可派出、列入清单并续接，记录拆成模型族和档位', async (t) => {
+  const h = sandbox(t), full = 'gemini-3.8-flash-high';
+  configure(h, (c) => { c.agents.agy.model = full; c.modules.discuss.complex = c.modules.review.complex = [{ agent: 'agy' }]; });
+  await install(h); h.scenario({});
+  const first = output(await run(h));
+  assert.equal(first.model, 'gemini-3.8-flash'); assert.equal(first.effort, 'high');
+  assert.equal(output(await h.bridge(['models'])).agents.agy.listed, true);
+  const md = await h.bridge(['models', '--format', 'md']); assert.ok(md.stdout.includes('| gemini-3.8-flash | low / medium / high | — | agy |'));
+  const next = output(await h.bridge(['resume', '--run', first.run_id, '--level', 'complex', '--brief', '-']));
+  assert.equal(next.model, first.model); assert.equal(next.effort, first.effort);
+  for (const call of modelCalls(h)) assert.equal(call.args[call.args.indexOf('--model') + 1], full);
+});
+
+test('agy 派出拼回覆盖的档位，单档和无档自动选择，清单不可读时仍交给 agy', async (t) => {
+  const h = sandbox(t); configure(h); await install(h); h.scenario({});
+  const launched = await run(h, ['--effort', 'low']), result = output(launched);
+  assert.equal(result.model, 'gemini-3.8-flash'); assert.equal(result.effort, 'low');
+  const meta = JSON.parse(read(path.join(result.run_dir, 'meta.json')));
+  assert.equal(meta.model, result.model); assert.equal(meta.effort, result.effort);
+  assert.ok(launched.stderr.includes('gemini-3.8-flash low · Agy CLI'));
+  assert.equal(h.calls().filter((c) => c.operation === 'catalog').length, 1);
+  for (const call of modelCalls(h)) { assert.equal(call.args[call.args.indexOf('--model') + 1], 'gemini-3.8-flash-low'); assert.equal(call.args.includes('--effort'), false); }
+  for (const [model, effort] of [['gpt-oss-120b', 'medium'], ['claude-sonnet-4-6', null], ['claude-opus-4-6-thinking', null]]) {
+    configure(h, (c) => { c.agents.agy.model = model; c.modules.discuss.complex = c.modules.review.complex = [{ agent: 'agy' }]; }); h.scenario({});
+    const r = output(await run(h)); assert.equal(r.model, model); assert.equal(r.effort, effort);
+    assert.equal(modelCalls(h).at(-1).args[modelCalls(h).at(-1).args.indexOf('--model') + 1], effort ? `${model}-${effort}` : model);
+  }
+  configure(h); h.scenario({ agy_catalog: [] });
+  assert.equal(output(await run(h, ['--effort', 'medium'])).effort, 'medium');
+  assert.equal(modelCalls(h).at(-1).args[modelCalls(h).at(-1).args.indexOf('--model') + 1], 'gemini-3.8-flash-medium');
+  h.scenario({ agy_catalog: [], invalid_model: true }); assert.ok(output(await run(h), 1).errors.some((e) => e.includes('invalid model')));
+});
+
+test('agy check 和派出按每格组合拒绝缺档位、未知档位，单档和无档格子也核对', async (t) => {
+  const h = sandbox(t); configure(h, (c) => {
+    c.modules.discuss.complex = [{ agent: 'agy' }]; c.modules.review.complex = [{ agent: 'agy', effort: 'max' }];
+    c.modules.discuss.normal = [{ agent: 'agy', model: 'gpt-oss-120b' }]; c.modules.review.normal = [{ agent: 'agy', model: 'claude-sonnet-4-6' }];
+  }); await install(h); h.scenario({});
+  const result = output(await h.bridge(['check', '--agent', 'agy']), 1), checked = result.agents.agy;
+  assert.ok(checked.efforts.find((e) => e.variant === 'default' && e.model === 'gemini-3.8-flash').problem.includes('要在格子里写 effort'));
+  assert.ok(checked.efforts.find((e) => e.variant === 'max').problem.includes('能选的：low / medium / high'));
+  for (const entry of checked.efforts.filter((e) => !e.ok)) assert.equal(entry.error, entry.problem);
+  assert.equal(result.summary.modules.discuss.complex[0].ok, false);
+  assert.equal(result.summary.modules.discuss.complex[0].problem, M.agyEffortMissing('gemini-3.8-flash', 'low / medium / high'));
+  const md = await h.bridge(['check', '--agent', 'agy', '--format', 'md']); assert.equal(md.code, 1, md.stderr);
+  assert.ok(md.stdout.includes(M.agyEffortMissing('gemini-3.8-flash', 'low / medium / high')));
+  assert.ok(md.stdout.includes(M.agyEffortUnknown('gemini-3.8-flash', 'max', 'low / medium / high')));
+  assert.ok(md.stdout.includes(`${M.reportDefault} ⚠`));
+  for (const model of ['gpt-oss-120b', 'claude-sonnet-4-6']) assert.equal(checked.efforts.find((e) => e.model === model).ok, true);
+  assert.ok(output(await run(h), 1).errors.includes(M.agyEffortMissing('gemini-3.8-flash', 'low / medium / high')));
+  assert.ok(output(await run(h, ['--effort', 'max']), 1).errors.includes(M.agyEffortUnknown('gemini-3.8-flash', 'max', 'low / medium / high')));
+});
+
+test('项目配置按 agy 词表调低档位，调高和无法比较的默认档保持用户配置', async (t) => {
+  const h = sandbox(t); configure(h);
+  for (const [effort, expected] of [['low', 'low'], ['max', 'high'], ['default', 'high']]) {
+    h.write('.claude/foreman.json', { modules: { discuss: { complex: [{ agent: 'agy', effort }] } } });
+    const cfg = output(await h.bridge(['config', '--cwd', h.cwd])); assert.equal(cfg.resolved_modules.discuss.complex[0].effort, expected);
+  }
+});
+
+test('agy 同族不同档位在 stats 合并，不能再充当不同基础模型的补漏席', async (t) => {
+  const h = sandbox(t); configure(h, (c) => {
+    c.agents.other = { ...agent(), model: 'gemini-3.8-flash-low' };
+    c.modules.review.complex.push({ agent: 'other' }); c.modules.review.seats.complex = 1;
+  });
+  for (const [i, model] of ['gemini-3.8-flash-high', 'gemini-3.8-flash-low', 'gemini-3.8-flash'].entries())
+    seedRun(h, `agy-${i}`, { model, agent_type: 'agy cli', module: 'discuss', mode: 'discuss', kind: 'discuss' }, { status: 'done', report: discussion });
+  const stats = output(await h.bridge(['stats'])); assert.deepEqual(stats.rows.map((r) => [r.model, r.seats]), [['gemini-3.8-flash', 3]]);
+  h.write('source.txt', 'source');
+  failed(await h.bridge(['plan', '--cwd', h.cwd, '--module', 'review', '--cell', 'complex', '--group', 'agy-family',
+    '--seat', 'agy', '--seat', 'other=gap', '--target', 'files', '--file', 'source.txt']), M.gapSeatSameModel(2, 'gemini-3.8-flash'));
+});
 
 test('agy 守卫逐档逐工具拒绝写入、未知工具和未知参数', (t) => {
   const h = sandbox(t); h.write('source.txt', 'readable');
@@ -541,7 +696,12 @@ test('agy check 六步、models 两列、清理密钥环境以及模型身份和
   assert.equal(runPolicy.root, request.cwd); assert.equal(runPolicy.run_dir, request.cwd);
   assert.ok(lines(file).every((c) => c.policy && c.env.OPENAI_API_KEY === null && c.env.AWS_SECRET_ACCESS_KEY === null && c.env.SSH_AUTH_SOCK === null && c.env.GEMINI_API_KEY === 'synthetic-agy'));
   const models = output(await h.bridge(['models'])); assert.equal(models.tools['agy cli'].ok, true); assert.equal(models.agents.agy.listed, true);
-  const markdown = await h.bridge(['models', '--format', 'md']); assert.equal(markdown.code, 0); assert.ok(markdown.stdout.includes('| gemini-3.8-flash-high |')); assert.ok(markdown.stdout.includes('Agy CLI 2'));
+  assert.deepEqual(models.tools['agy cli'].models[0].efforts, ['low', 'medium', 'high']); assert.equal(models.tools['agy cli'].models[0].default_effort, null);
+  assert.ok(models.tools['agy cli'].raw_ids.includes('gemini-3.8-flash-high'));
+  const markdown = await h.bridge(['models', '--format', 'md']); assert.equal(markdown.code, 0); assert.ok(markdown.stdout.includes('| gemini-3.8-flash | low / medium / high |')); assert.ok(markdown.stdout.includes('Agy CLI 4'));
+  assert.ok(markdown.stdout.includes(`${M.reportAgyTitle}\n\n| 模型 | 推理强度 | 上下文 | 已配置 |`)); assert.ok(markdown.stdout.includes('| claude-opus-4-6-thinking | — 只能不写 |'));
+  const english = await h.bridge(['models', '--format', 'md'], { env: { FOREMAN_LANG: 'en' } });
+  assert.ok(english.stdout.includes(`${MESSAGES.en.reportAgyTitle}\n\n| Model | Effort | Context | Configured |`));
   const prices = moduleCall(h, 'prices.mjs', `console.log(JSON.stringify({gemini:x.priceFor('gemini-3.8-flash-high',{input:1000000},x.loadPrices()),opus:x.priceFor('claude-opus-4-6-thinking',{input:1000000},x.loadPrices()),oss:x.priceFor('gpt-oss-120b-medium',{input:1000000,output:1000000},x.loadPrices()),key:x.modelIdentity('claude-opus-4-6-thinking')}));`);
   assert.ok(prices.gemini > 0); assert.equal(prices.opus, 5); assert.equal(prices.oss, 0.75); assert.equal(prices.key, 'claude-opus-4-6');
 });
@@ -601,13 +761,16 @@ test('agy check 只接受令牌及 read_file allow，额度只读各桶数值', 
   assert.equal(catalog.ok, false); assert.equal(catalog.error, M.agyCatalogInvalid);
 });
 
-test('agy 配置拒绝 run 和非 default effort；默认并发共用同一函数', async (t) => {
+test('agy 配置拒绝 run、词表外 effort 和完整 ID 重复指定档位；默认并发共用同一函数', async (t) => {
   const h = sandbox(t); configure(h);
   const cfg = output(await h.bridge(['config'])); assert.equal(cfg.agents_status.agy.max_parallel, 2); assert.equal(cfg.agents_status.codex.max_parallel, 4);
   assert.deepEqual(cfg.agents_status.agy.capabilities.modes, ['discuss', 'review']);
   configure(h, (c) => { c.modules.run.complex = [{ agent: 'agy' }]; }); failed(await h.bridge(['config']), 'agy');
-  configure(h, (c) => { c.modules.discuss.complex[0].effort = 'high'; }); failed(await h.bridge(['config']), 'gemini-3.8-flash-low');
-  configure(h); failed(await run(h, ['--effort', 'high']), 'gemini-3.8-flash-high');
+  configure(h, (c) => { c.modules.discuss.complex[0].effort = 'off'; }); failed(await h.bridge(['config']), 'default / minimal / low / medium / high / xhigh / max');
+  configure(h, (c) => { c.modules.discuss.complex[0].model = 'gemini-3.8-flash-high'; });
+  failed(await h.bridge(['config']), M.agyEffortFullId('gemini-3.8-flash-high', 'high', 'gemini-3.8-flash'));
+  configure(h); failed(await run(h, ['--model', 'gemini-3.8-flash-high', '--effort', 'low']), M.agyEffortFullId('gemini-3.8-flash-high', 'low', 'gemini-3.8-flash'));
+  configure(h, (c) => { c.modules.discuss.complex[0].effort = null; }); output(await h.bridge(['config']));
   const limits = moduleCall(h, 'config.mjs', `console.log(JSON.stringify([x.agentMaxParallel({type:'agy cli'}),x.agentMaxParallel({type:'pi cli'}),x.agentMaxParallel({type:'agy cli',max_parallel:7})]));`);
   assert.deepEqual(limits, [2, 4, 7]);
 });

@@ -9,12 +9,15 @@ import { startRun, finishDiscussion, eventWriter, runLimits, reportWithRepair, s
 import { M, die, killTree, readAttachments, focusFiles, relativePath, closestMatches, sleep } from '../util.mjs';
 import { D, modelLabel, toolLabel } from '../format.mjs';
 import { defaultMaxParallel } from './parallel.mjs';
+import { AGY_EFFORTS, splitAgyModel, agyFamilies, agyModelId } from './agy-models.mjs';
 import { agyCommand, guardEnvironment, policyFor, prepareAgyRun, preflightAgy, scanProject, queryAgy, probeSandbox, workDir, removeWorkDir, timeLeft } from './agy-setup.mjs';
 import { spawnSync } from 'node:child_process';
 
 const capabilities = { modes: ['discuss', 'review'], isolation: 'tools', reads_code: true, reads_images: false, native_schema: false,
   native_review: false, images: false, resume: true, command_start_events: true };
 const PROGRESS_MS = Number(process.env.FOREMAN_TEST_PROGRESS_MS) || 5000;
+const modelProblem = (e) => e.code === 'agyModelMissing' ? M.agyModelMissing(e.args[0], closestMatches(e.args[0], e.args[1]).join(', '))
+  : e.args ? M[e.code](...e.args) : e.message;
 const usageOf = (u) => ({ input_tokens: (u.input_tokens || 0) + (u.cache_read_tokens || 0), cached_input_tokens: u.cache_read_tokens || 0,
   output_tokens: u.output_tokens || 0, reasoning_output_tokens: u.thinking_tokens || 0 });
 // 1.4.8 的事件正文位于同名键里；下游只处理平铺对象，原始行仍用于留档。
@@ -161,12 +164,19 @@ async function executeAgy(ctx) {
   } else promptFor = (shell) => `${brief}${focusFiles(files)}\n\n${ctx.parent ? M.opencodeResumeFooter : M.agyDiscussFooter(cwd, schemaText, shell)}\n`;
   const { id, dir, release } = await newRunDir(ctx);
   const run = startRun({ ...ctx, id, dir, release, readonly: 'tools' });
+  const split = splitAgyModel(ctx.model);
+  run.meta.model = run.meta.model_shown = run.meta.model_name = split.family;
+  run.meta.effort = split.effort ?? (ctx.effort === 'default' ? null : ctx.effort);
+  run.writeMeta();
   process.stderr.write(`foreman: ${D.started(ctx.mode, modelLabel(run.meta), ctx.level, dir)}\n`);
   announceBoard(ctx.cfg);
   return finishDiscussion(run, { ...await agySession(run, schema, promptFor), files, changesNote: M.agyNoChanges });
 }
 async function agySession(run, schema, promptFor) {
-  const { ctx, meta, writeMeta, started } = run, { dir, cwd, agent, model, agentName, addDirs } = ctx;
+  const { ctx, meta, writeMeta, started } = run, { dir, cwd, agent, model, effort, agentName, addDirs } = ctx;
+  const split = splitAgyModel(model);
+  ctx.model = meta.model;
+  ctx.effort = meta.effort;
   const { deadline, stallMin } = runLimits(ctx, started), event = eventWriter(dir);
   const errors = [], notes = [], warnings = [], observed = { messages: [], questions: [] };
   let usage = null, pending = null, last = '', commands = 0, items = 0, repairing = false, nextPrompt = ctx.brief;
@@ -222,7 +232,8 @@ async function agySession(run, schema, promptFor) {
       ...(tool === 'run_command' ? {} : { label: toolLabel(category, tool, { path: shown }) }),
       exit_code: info.error ? 1 : info.exit_code ?? 0, aggregated_output: (info.error || info.output).slice(0, 2000) } });
   };
-  const lowLevel = (options) => runAgy({ agent, model, cwd, addDirs, deadline, ...options });
+  let modelId = model;
+  const lowLevel = (options) => runAgy({ agent, model: modelId, cwd, addDirs, deadline, ...options });
   let sandbox = false, ready = true;
   try {
     // 开头只做静态检查；每次模型请求（含探针、续接、修复）启动前再完整自检。
@@ -230,6 +241,11 @@ async function agySession(run, schema, promptFor) {
     const version = queryAgy(agent, ['--version'], 60000, deadline);
     timeLeft(deadline);
     if (version.error || version.status !== 0) throw new Error(M.agyQueryFailed('--version', version.error?.message || version.stderr));
+    const cat = agyCatalog(agent, deadline);
+    modelId = cat.ok ? agyModelId(model, effort, cat.models) : split.effort || !effort || effort === 'default' ? model : `${model}-${effort}`;
+    meta.agy_model_id = modelId;
+    ctx.effort = meta.effort = splitAgyModel(modelId).effort;
+    writeMeta();
     const probe = await probeSandbox({ agent, cwd, addDirs, version: version.stdout.trim(), run: lowLevel, deadline });
     timeLeft(deadline);
     sandbox = probe.available;
@@ -241,7 +257,7 @@ async function agySession(run, schema, promptFor) {
       nextPrompt += `\n\n${M.agyFileList(list.status === 0 ? list.stdout.trim() : M.agyFileListUnavailable)}`;
     }
     timeLeft(deadline);
-  } catch (e) { errors.push(e.message); meta.status = e.code === 'ETIMEDOUT' || Date.now() >= deadline ? 'timeout' : 'failed'; ready = false; }
+  } catch (e) { errors.push(modelProblem(e)); meta.status = e.code === 'ETIMEDOUT' || Date.now() >= deadline ? 'timeout' : 'failed'; ready = false; }
   fs.writeFileSync(path.join(dir, 'brief.md'), nextPrompt);
   const request = async () => {
     if (!ready) return null;
@@ -265,19 +281,19 @@ async function agySession(run, schema, promptFor) {
   return { usage, errors, notes: [...new Set(notes)], warnings, report, last, commands, observed };
 }
 
-function agyCatalog(agent = {}) {
-  const source = 'agy models', r = queryAgy(agent, ['models']);
+function agyCatalog(agent = {}, deadline) {
+  const source = 'agy models', r = queryAgy(agent, ['models'], 60000, deadline);
   if (r.error || r.status !== 0) return { ok: false, source, models: [], error: r.error?.message || r.stderr || `exit ${r.status}` };
   const models = r.stdout.trim().split(/\r?\n/).filter((line) => line.includes('\t')).map((line) => {
     const [id, name] = line.split('\t');
-    return id && name ? { id, name, efforts: ['default'], default_effort: 'default' } : null;
+    return id && name ? id : null;
   });
-  return models.length && models.every(Boolean) ? { ok: true, source, models, error: null }
+  return models.length && models.every(Boolean) ? { ok: true, source, models: agyFamilies(models).map((m) => ({ ...m, default_effort: null })), raw_ids: models, error: null }
     : { ok: false, source, models: [], error: M.agyCatalogInvalid };
 }
 async function checkAgy(name, agent, efforts = [], catalog = () => agyCatalog(agent), modes = [], cwd = process.cwd()) {
   const started = Date.now(), dir = workDir('check-');
-  const out = { ok: false, type: 'agy cli', model: agent.model, version: null, model_listed: false, reply: null, error: null, fix: null, efforts: [], notes: [] };
+  const out = { ok: false, type: 'agy cli', model: splitAgyModel(agent.model).family, version: null, model_listed: false, reply: null, error: null, fix: null, efforts: [], notes: [] };
   try {
     scanProject(cwd);
     const version = queryAgy(agent, ['--version']);
@@ -285,10 +301,18 @@ async function checkAgy(name, agent, efforts = [], catalog = () => agyCatalog(ag
     out.version = version.stdout.trim();
     const cat = catalog();
     if (!cat.ok) throw new Error(cat.error);
-    out.model_listed = cat.models.some((m) => m.id === agent.model);
+    out.efforts = efforts.map((e) => {
+      const model = e.model || agent.model, supported = cat.models.find((m) => m.id === splitAgyModel(model).family)?.efforts ?? [];
+      try { agyModelId(model, e.variant, cat.models); return { ...e, ok: true, supported }; }
+      catch (error) { const problem = modelProblem(error); return { ...e, ok: false, supported, problem, error: problem }; }
+    });
+    out.model_listed = cat.models.some((m) => m.id === agent.model || Object.values(m.ids).includes(agent.model));
     if (!out.model_listed) throw new Error(M.agyModelMissing(agent.model, closestMatches(agent.model, cat.models.map((m) => m.id)).join(', ')));
+    const selected = out.efforts.find((e) => e.ok);
+    if (out.efforts.length && !selected) throw new Error(out.efforts[0].problem);
+    const model = agyModelId(selected?.model || agent.model, selected?.variant, cat.models);
     out.notes.push(...await preflightAgy(policyFor({ cwd, runDir: dir }), Date.now() + 120000));
-    const run = (options) => runAgy({ agent, cwd, ...options });
+    const run = (options) => runAgy({ agent, model, cwd, ...options });
     out.sandbox = await probeSandbox({ agent, cwd, version: out.version, run });
     if (!out.sandbox.available) out.notes.push(M.agyNoSandbox);
     // 随机文件和 read_file 放行记录一起确认读取边界，不能只靠模型声称工具可用。
@@ -311,18 +335,12 @@ async function checkAgy(name, agent, efforts = [], catalog = () => agyCatalog(ag
       || body.command.data.groups.some((g) => !Array.isArray(g.buckets))) throw new Error(M.agyQuotaInvalid);
     out.quota = body.command.data;
     if (out.quota.groups.some((g) => g.buckets.some((b) => b.remaining_fraction < 0.1))) out.notes.push(M.agyQuotaLow);
-    // 格子可以覆写模型：每个实际引用的模型 ID 都要在清单里。
-    out.efforts = efforts.map((e) => {
-      const model = e.model || agent.model, listed = cat.models.some((m) => m.id === model);
-      return { ...e, ok: e.variant === 'default' && listed, supported: ['default'],
-        ...(listed ? {} : { problem: M.agyModelMissing(model, closestMatches(model, cat.models.map((m) => m.id)).join(', ')) }) };
-    });
     out.ok = out.efforts.every((e) => e.ok);
-  } catch (e) { out.error = e.message; out.fix = M.agyCheckFix(name); }
+  } catch (e) { out.error = modelProblem(e); out.fix = M.agyCheckFix(name); }
   finally { removeWorkDir(dir); }
   return { ...out, seconds: Number(((Date.now() - started) / 1000).toFixed(1)) };
 }
-export default { type: 'agy cli', capabilities, defaultMaxParallel: defaultMaxParallel('agy cli'), readonlyLevel: () => 'tools', channel: M.channel.agy, efforts: ['default'],
+export default { type: 'agy cli', capabilities, defaultMaxParallel: defaultMaxParallel('agy cli'), readonlyLevel: () => 'tools', channel: M.channel.agy, efforts: ['default', ...AGY_EFFORTS],
   listModelsArgs: ['models'], validate: (agent, key, check, text) => {
     check(text(agent.model), `${key}.model`, M.invalid.modelName);
     check(agent.bin == null || text(agent.bin), `${key}.bin`, M.invalid.stringOrNull);

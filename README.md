@@ -284,7 +284,7 @@ flowchart TD
 - 三种任务（`discuss` 讨论、`run` 执行、`review` 审查）各分三级，另有一个不进配置的 0 级（见下文"任务等级"）；图像（`image`）不分等级，分出图（`generate`）和手画（`draw`）两格。
 - 每一格写一组候选。一格有几个候选时，Claude Code 每次按规则挑：讨论和审查每一级挑几个由 `seats` 决定（默认值见 [`config.md` 的"候选和必选"](foreman/skills/dispatch/references/config.md)，不含 Claude Code 自己），尽量用不同的模型，候选少于这个数时全上；执行每份工作派一个。标了 `"required": true` 的是必选，这一格用到时一定参加。
 - 写成 `"claude code"` 表示 Claude Code 自己做；对审查和讨论来说，就是这一格不找外部模型。图像的格子写 `null` 表示关掉。
-- `effort` 是推理强度，不写就用默认值。Codex 是 `low` 到 `ultra`；opencode 是模型的 variant；pi 是 thinking 档位；agy 不用写，档位在模型 ID 里；API 原样作为 `reasoning_effort` 发出。
+- `effort` 是推理强度，不写就用默认值。Codex 是 `low` 到 `ultra`；opencode 是模型的 variant；pi 是 thinking 档位；agy 是 `low` / `medium` / `high` 这类档位（agy 把它写在模型 ID 的后缀里，插件派出时再拼回去）；API 原样作为 `reasoning_effort` 发出。
 - 图像任务开工前先弹窗让你选路线，路线决定用到哪几格：只用到手画的纯矢量路线不碰出图那一格，那一格里的必选也不会参加。
 
 旧的 `levels` 写法照常能读：第一次读到时，插件把它改写成 `modules`，每一格的协作方、推理强度和顺序都不变，原文件备份为 `config.json.bak`。注意一处变化：以前讨论一级里写的模型全部参加，改写后它们是候选、由 Claude Code 挑；想保留全员参加，就给它们都标上 `"required": true`，`/foreman:setup` 可以帮着标，也会帮你加上图像两格。
@@ -353,7 +353,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 装了 Agy CLI（Google Antigravity CLI，命令 `agy`）并登录好账号的话，可以让它参加讨论和审查。目前只验证了 Windows 11；执行任务还不支持。
 
 1. **装守卫**：agy 不能按次加载扩展，插件只能靠 agy 的全局钩子管住它的工具。`/foreman:setup` 加 agy 时会先问你同不同意，同意后在 `~/.gemini/config/` 下写一个钩子条目 `foreman-guard`、一个启动器和守卫脚本，原来的 `hooks.json` 先备份。也可以让 Claude Code 运行 `agy-guard install`。
-2. **加进配置**：运行 `agy models` 看能用哪些模型，每个模型加一项 `{ "type": "agy cli", "model": "gemini-3.8-flash-high" }`，再加进讨论或审查的格子。推理强度是模型 ID 的后缀（`-low` / `-medium` / `-high`），想换档位就换一个 ID，`effort` 不用写。
+2. **加进配置**：运行 `agy models` 看能用哪些模型。agy 把推理强度写在模型 ID 的后缀里（比如 `gemini-3.8-flash-high`），插件把它拆开，写法和其他协作方一样：协作方写 `{ "type": "agy cli", "model": "gemini-3.8-flash" }`，格子里写 `"effort": "high"`，派出时再拼成 agy 认的 ID。只有一档或者没有档位的模型（比如 `claude-sonnet-4-6`）不用写 `effort`。旧写法（`model` 写完整 ID、不写 `effort`）照常能用。
 
 - **守卫对你平时用 agy 的影响**：没有 foreman 运行时，守卫对每次工具调用都回答"按 agy 自己的设置来"，平时用 agy 的体验不变，每次工具调用多约 0.1 秒。foreman 在某个目录里运行 agy 期间，你在同一目录里自己用 agy 会被拦下工具调用，拒绝理由里写明原因和什么时候结束。
 - **哪些情况不派 agy**：项目里（包括 `.agents/` 等目录）有 agy 的钩子、MCP 或插件配置，或者全局 `hooks.json` 里除了 foreman 的条目还有别的钩子时，插件管不住它们，这次不派 agy，结果里写明是哪个文件挡住的。
@@ -466,7 +466,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 
 - 只认 `dispatch` 的 `timeout_min`、`stall_min`、`busy_ask_min` 和 `modules`（旧写法 `levels` 也认）；
 - 时长和席位取两边更严的值：超时和每一级的席位数取较小的；卡死检测和排队检查写 0 是"不检测"，最宽松，所以你写了正数时项目写 0 不生效；
-- 每一格只能整格关掉（分级的写 `"claude code"`，图像的写 `null`）、删掉用户配置这一格里的可选条目，或者调低推理强度（只限 Codex 和 pi 这种档位有高低顺序的）；
+- 每一格只能整格关掉（分级的写 `"claude code"`，图像的写 `null`）、删掉用户配置这一格里的可选条目，或者调低推理强度（只限 Codex、pi 和 agy 这种档位有高低顺序的）；
 - 不能加人、换模型、改必选，也不能只删掉必选、留下其他人继续外派（会报错）。项目关掉的格子，Claude Code 也不能用 `--agent` 点名派出。
 
 这样别人的仓库没法借项目配置换掉执行方、把代码发给新的厂商、跳过必选的审查，或者延长超时、调高推理强度来多花你的额度。敏感项目可以删掉 API 候选，或者把讨论、审查整格写成 `"claude code"`。

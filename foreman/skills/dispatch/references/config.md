@@ -118,7 +118,7 @@
 
 | 字段 | 作用 |
 |---|---|
-| `model` | 必填，`agy models` 第一列的 ID，比如 `gemini-3.8-flash-high`。推理强度是 ID 的后缀（`-low` / `-medium` / `-high`），换档位就换 ID |
+| `model` | 必填，模型族，比如 `gemini-3.8-flash`。agy 把推理强度写在 ID 的后缀里（`gemini-3.8-flash-high`），插件拆开显示、派出时拼回去，档位写在格子的 `effort` 里。也可以照旧写完整 ID、不写 `effort` |
 | `bin` | 可选，agy 可执行文件的路径。默认在 PATH 里找，Windows 上再找 `%LOCALAPPDATA%\agy\bin\agy.exe` |
 | `max_parallel` | 可选，默认 `2`：订阅额度按 5 小时窗口算，并发高了容易一起撞限额 |
 
@@ -197,7 +197,7 @@
 - `api`：原样作为 `reasoning_effort` 发出（DeepSeek 接受 `low` / `high` / `max`）；写 `null` 表示不发。没有推理强度参数的模型写 `null`，比如小米 MiMo（只有思考开关，默认开启）。
 - `opencode cli`：模型的 variant（比如 `high`），拼成 `-m 模型#variant` 传给 opencode；`null` 表示用模型的默认设置。各模型有哪些 variant 不一样（比如免费的 DeepSeek 模型接受 `low`、`high`、`max`，不接受 `medium`），写错了 opencode 会报错。写 `default` 和不写一样。改完运行 `check`：opencode 的模型清单里没有的 variant 直接报出，其余逐个试一遍。
 - `pi cli`：`off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，作为 `--thinking` 传给 pi。每个模型支持哪些不一样（比如 deepseek-flash 是 off / low / high / max），以 pi 的模型清单为准。**写了不支持的档位，pi 不会报错，会悄悄换成最接近的一档**（先往高处找，所以可能更贵），改完一定要运行 `check`，它按清单核对。
-- `agy cli`：只接受 `default`（或不写）。档位是模型 ID 的后缀，想要别的档位就把 `model` 换成同族的 ID，写别的值校验时报错并列出同族 ID。
+- `agy cli`：`minimal`、`low`、`medium`、`high`、`xhigh`、`max` 里这个模型有的档位（`models` 列出，比如 gemini-3.8-flash 是 low / medium / high），派出时拼成 `<模型>-<档位>` 传给 agy。只有一档的模型不写就用那一档，没有档位的（比如 claude-sonnet-4-6）不写；有几档的必须写，否则 `check` 和派出时报错。`model` 已经写了带档位的完整 ID 时不能再写 `effort`。
 
 向用户汇报时，不写和 `null` 都说成"推理强度：默认"。
 
@@ -250,7 +250,7 @@
 - `modules` 可以只写要改的那几格。每一格只能：
   - 整格关掉：discuss、run、review 写 `"claude code"`，image 写 `null`；
   - 从用户配置这一格已有的条目里删掉一部分可选条目（条目顺序沿用用户配置）；
-  - 调低推理强度：只限有明确高低顺序的工具，Codex 是 low < medium < high < xhigh < max < ultra，pi 是 off < minimal < low < medium < high < xhigh < max。opencode 的 variant 和 api 的推理强度没有统一的顺序，项目配置不能改；用户配置没写推理强度的条目，项目也不能加。
+  - 调低推理强度：只限有明确高低顺序的工具，Codex 是 low < medium < high < xhigh < max < ultra，pi 是 off < minimal < low < medium < high < xhigh < max，agy 是 minimal < low < medium < high < xhigh < max。opencode 的 variant 和 api 的推理强度没有统一的顺序，项目配置不能改；用户配置没写推理强度的条目，项目也不能加。
 - 不能加条目、换协作方或模型、改 `required`、打开用户关着的格子。这些写法会被忽略并提示。
 - 不能只去掉必选、留下其他条目继续外派：会报错，要么留着必选，要么整格关掉。删得一个候选都不剩也会报错。
 - 项目在某一格写了 `"claude code"`（或 `null`）以后，这个项目里这一格不能再用 `--agent` 点名派出，哪怕用户配置里它本来就是 `"claude code"`；项目没写、用户配置里是 `"claude code"` 的格子照常可以点名。这一格有必选时，那一步算"没做"，Claude 会如实告诉你，不会自己审一遍就当作已经满足。`config --cwd` 输出的 `closed_by_project` 列出被项目关掉的格子。

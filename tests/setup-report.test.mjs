@@ -119,8 +119,10 @@ test('models md 分组排序、默认档、上下文、价格、过滤和类型�
   assert.ok(md.indexOf('| a | low') < md.indexOf('| z |')); assert.equal(/hidden|disabled|VOICE-TTS/.test(md), false);
   const json = output(await h.bridge(['models'])); json.agents.same = { type: 'api', model: 'fake-codex' };
   json.tools['pi cli'].ok = false; json.tools['pi cli'].error = 'synthetic|error';
+  json.tools['agy cli'] = { ok: true, models: [{ id: 'synthetic', plain: 'synthetic', efforts: ['medium'], ids: { medium: 'synthetic-medium' }, default_effort: null }] };
+  json.agents.synthetic = { type: 'agy cli', model: 'synthetic' };
   const rendered = await isolated(h, `import { modelsReport } from ${JSON.stringify(urlOf('report.mjs'))}; console.log(modelsReport(${JSON.stringify(json)}));`);
-  has(rendered.stdout, ['| fake-codex | low / **medium** / high | 272K | a |', 'pi：读不到模型清单（synthetic|error）']);
+  has(rendered.stdout, ['| fake-codex | low / **medium** / high | 272K | a |', 'pi：读不到模型清单（synthetic|error）', '| synthetic | — / medium | — | synthetic |']);
   assert.equal(rendered.stdout.includes('### pi ·'), false);
   const failedCatalog = await markdown(h, ['models'], { env: h.scenario({}).env }); has(failedCatalog, ['Codex：读不到模型清单（synthetic: no model catalog）', 'opencode：读不到模型清单', 'pi：读不到模型清单']);
 });

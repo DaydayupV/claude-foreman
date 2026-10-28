@@ -429,7 +429,7 @@ async function cmdCheck(o) {
   for (const { module, at, item } of eachEntry(cfg.modules)) {
     const mode = module === 'image' ? 'run' : module;
     usedModes.set(item.agent, new Set([...(usedModes.get(item.agent) || []), mode]));
-    // agy 的档位写在模型 ID 里，格子不写 effort 也要核对它覆写的模型在不在清单里。
+    // agy 格子不写 effort 也要核对：多档族必须指定，单档族可自动选择。
     const agy = cfg.agents[item.agent]?.type === 'agy cli';
     if (item.effort == null && !agy) continue;
     const model = item.model || cfg.agents[item.agent].model, variant = item.effort ?? 'default';
@@ -447,6 +447,12 @@ async function cmdCheck(o) {
   const referenced = new Set(eachEntry(cfg.modules).map(({ item }) => item.agent));
   result.ok = nodeOk && Object.entries(result.agents).every(([name, agent]) => !referenced.has(name) || agent.ok);
   result.summary = buildSummary(cfg, adapters, result.agents);
+  // 通用汇总跳过空 effort；agy 的未指定档位也可能是逐格错误。
+  for (const { item } of eachEntry(result.summary.modules)) {
+    if (item.type !== 'agy cli' || item.effort != null) continue;
+    const problem = result.agents[item.agent]?.efforts.find((e) => e.model === item.model && e.variant === 'default' && !e.ok)?.error;
+    if (problem) Object.assign(item, { ok: false, problem });
+  }
   process.stdout.write(o.format === 'md'
     ? environmentReport(result, detectEnvironment(adapters, cfg.agents), cfg.agents) + '\n' + configReport(cfg, result.summary, result.agents)
     : JSON.stringify(result, null, 2) + '\n');
@@ -476,7 +482,7 @@ async function cmdModels(o) {
   for (const [name, agent] of Object.entries(cfg.agents)) {
     const cat = agent.type === 'api' ? out.api[name] : readCatalog(agent);
     const model = agent.model ?? adapters[agent.type].status(agent).model ?? null;
-    const found = cat.ok ? cat.models.find((m) => m.id === model) : null;
+    const found = cat.ok ? cat.models.find((m) => m.id === model || agent.type === 'agy cli' && Object.values(m.ids).includes(model)) : null;
     out.agents[name] = { type: agent.type, model, listed: cat.ok && model ? !!found : null, efforts: found?.efforts ?? null,
       closest: cat.ok && model && !found ? closestMatches(model, cat.models.map((m) => m.id)) : [] };
   }
