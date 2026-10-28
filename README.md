@@ -1,5 +1,10 @@
 # claude-foreman
 
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![LINUX DO](https://img.shields.io/badge/LINUX%20DO-Community-blue?logo=linux&logoColor=white)](https://linux.do)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/DaydayupV/claude-foreman/pulls)
+[![GitHub stars](https://img.shields.io/github/stars/DaydayupV/claude-foreman?style=social)](https://github.com/DaydayupV/claude-foreman/stargazers)
+
 [English](README.en.md)
 
 ![用 CC 实现全模型协作：Claude Code 指挥 GPT、Claude、DeepSeek、Gemini 等模型](docs/images/banner.zh.png)
