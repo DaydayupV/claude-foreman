@@ -10,7 +10,15 @@ A Claude Code plugin that makes Claude Code the foreman: it plans, decides and c
 - **Your own quota**: agents run on your Codex plan, opencode subscription or API credit, not on your Claude Code quota.
 - **Visible all the way**: every handoff says who got it, with which model and reasoning effort, and a terminal view shows each model's progress live.
 
-**Intro video**: [watch on Bilibili](https://www.bilibili.com/video/BV16XJv6pE2S/)
+**Intro video**: [watch on Bilibili](https://www.bilibili.com/video/BV13sxL6aE4Z/)
+
+**In action**: the web board's star map, where each recent conversation on this computer is a galaxy and the ones handing off work light up:
+
+![The web board's star map: one galaxy per conversation, with the conversation list and usage below](docs/images/board-universe.webp)
+
+Flying into one conversation: four models discussing at once, with each seat's progress, live speed, output and cost:
+
+![One conversation on the web board: four models discussing at once, with each seat's usage below](docs/images/board-conversation.webp)
 
 ## How it works
 

@@ -10,7 +10,15 @@
 - **用你自己的额度**：协作方用的是你的 Codex 订阅、opencode 订阅或 API 余额，不占 Claude Code 的额度。
 - **全程看得见**：每次派活都写明交给了谁、什么模型和推理强度；终端里能实时看到每个模型在做什么。
 
-**介绍视频**：[在 B 站观看](https://www.bilibili.com/video/BV16XJv6pE2S/)
+**介绍视频**：[在 B 站观看](https://www.bilibili.com/video/BV13sxL6aE4Z/)
+
+**实际运行**：网页看板的星图，本机最近的每个对话是一个星系，正在派活的星系发亮：
+
+![网页看板的星图：每个对话一个星系，下方是对话列表和用量](docs/images/board-universe.webp)
+
+飞进一个对话：四个模型同时讨论，每一席的进度、实时速度、产出和费用一目了然：
+
+![网页看板的单对话视图：四个模型同时讨论，下方是每一席的用量](docs/images/board-conversation.webp)
 
 ## 工作方式
 
