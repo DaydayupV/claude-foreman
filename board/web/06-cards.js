@@ -1,7 +1,7 @@
 'use strict';
 // 世界里的 DOM：Claude Code 卡片、席位卡片、产出框、组头。按车道 id 复用元素，只改变了的文字和位置。
 
-const CHANNEL = { 'codex cli': 'Codex CLI', 'opencode cli': 'Opencode CLI', 'pi cli': 'Pi CLI', api: 'API', host: 'Claude Code' };
+const CHANNEL = { 'codex cli': 'Codex CLI', 'opencode cli': 'Opencode CLI', 'pi cli': 'Pi CLI', 'agy cli': 'Agy CLI', api: 'API', host: 'Claude Code' };
 // 用量表悬停时其余车道压暗的程度（卡片、产出框、光线共用）
 const dimOf = (id) => (UI.hot && id !== UI.hot ? 0.32 : 1);
 const place = (el, b) => { const s = el.style, x = `${b.x}px`, y = `${b.y}px`; if (s.left !== x) s.left = x; if (s.top !== y) s.top = y; };

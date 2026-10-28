@@ -62,8 +62,8 @@ export function normalize(raw, run, state) {
   const emit = (k, fields) => out.push(ev(k, fields));
   state.commands ??= new Map(); state.tools ??= new Map();
   if (raw.type.startsWith('api.')) state.queued = raw.type === 'api.queued';
-  else if (raw.type === 'pi.progress' || raw.type.startsWith('item.')) state.queued = false;
-  if (['api.reasoning', 'api.content', 'pi.progress'].includes(raw.type)) {
+  else if (raw.type === 'pi.progress' || raw.type === 'agy.progress' || raw.type.startsWith('item.')) state.queued = false;
+  if (['api.reasoning', 'api.content', 'pi.progress', 'agy.progress'].includes(raw.type)) {
     const k = raw.type === 'api.reasoning' || raw.type === 'pi.progress' && raw.phase === 'thinking' ? 'think' : 'answer';
     // 窗口结束再发最新计数，避免实时推送后无法收回被合并的事件。
     if (!state.pending) state.due = Math.max(ts, state.due ?? -Infinity) + 400;

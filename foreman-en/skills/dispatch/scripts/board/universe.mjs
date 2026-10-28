@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { agentMaxParallel } from '../config.mjs';
 import { fileURLToPath } from 'node:url';
 import { promptOf, toolsOf, turnEnded, BUSY_MAX } from './claude-feed.mjs';
 import { queuedRuns } from '../records.mjs';
@@ -203,7 +204,7 @@ function readSession(session) {
 }
 function queueOf(raw, state) {
   if (raw.type?.startsWith('api.')) { state.queued = raw.type === 'api.queued'; state.since = state.queued ? ms(raw.ts) : null; }
-  else if (raw.type === 'pi.progress' || raw.type?.startsWith('item.')) { state.queued = false; state.since = null; }
+  else if (raw.type === 'pi.progress' || raw.type === 'agy.progress' || raw.type?.startsWith('item.')) { state.queued = false; state.since = null; }
 }
 export function stateOf(session, runs, now, queued = []) {
   const tools = [...session.tools.values()], waiting = tools.find((t) => ['AskUserQuestion', 'ExitPlanMode'].includes(t.tool)) || null;
@@ -314,9 +315,9 @@ function replayMeter(prices, pick) {
   };
 }
 export function agentSlots(config, runs) {
-  const agents = new Map(config.map((agent) => [agent.id, { ...agent, running: [], queued: [] }]));
+  const agents = new Map(config.map((agent) => [agent.id, { ...agent, max_parallel: agentMaxParallel(agent), running: [], queued: [] }]));
   for (const run of [...runs].sort((a, b) => a.id.localeCompare(b.id))) if (!run.host && run.status === 'running' && run.agent) {
-    if (!agents.has(run.agent)) agents.set(run.agent, { id: run.agent, type: null, max_parallel: 4, running: [], queued: [] });
+    if (!agents.has(run.agent)) agents.set(run.agent, { id: run.agent, type: null, max_parallel: agentMaxParallel({ type: run.agent_type }), running: [], queued: [] });
     const agent = agents.get(run.agent), slot = { run: run.id, session: run.session ?? null };
     agent.running.push(slot);
     if (run.queued) agent.queued.push({ ...slot, since: run.since });
@@ -384,7 +385,7 @@ export function createUniverse(options) {
   const collect = (v) => { if (Array.isArray(v)) v.forEach(collect); else if (v && typeof v === 'object') { if (typeof v.agent === 'string') inModules.add(v.agent); else Object.values(v).forEach(collect); } };
   collect(config?.modules);
   config = Object.entries(config?.agents || {}).filter(([id]) => !inModules.size || inModules.has(id))
-    .map(([id, value]) => ({ id, type: value.type ?? null, max_parallel: value.max_parallel ?? 4 }));
+    .map(([id, value]) => ({ id, type: value.type ?? null, max_parallel: agentMaxParallel(value) }));
   const readRuns = (now) => {
     const names = new Set(list(options.runs).filter((d) => d.isDirectory() && d.name !== 'plans').map((d) => d.name));
     const full = now - runsScannedAt >= 30000 || names.size !== runNames.size || [...names].some((id) => !runNames.has(id));
@@ -667,7 +668,7 @@ export function createUniverse(options) {
         for (const id of dirtyAgents) {
           const configured = config.find((a) => a.id === id), own = [...agentRuns.get(id).values()].filter((r) => r.status === 'running');
           if (!configured && !own.length) next.delete(id);
-          else next.set(id, agentSlots([configured ?? { id, type: null, max_parallel: 4 }], own)[0]);
+          else next.set(id, agentSlots([configured ?? { id, type: null, max_parallel: agentMaxParallel({ type: own[0]?.agent_type }) }], own)[0]);
         }
         const ordered = [...config.map((a) => next.get(a.id)), ...[...next.values()].filter((a) => !config.some((c) => c.id === a.id)).sort((a, b) => a.id.localeCompare(b.id))];
         if (!equalReplay(agents, ordered)) { agents = ordered; timeline.push({ time: at, event: 'agents', data: { agents } }); }

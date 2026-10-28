@@ -27,7 +27,7 @@
   - `--commit <sha>`：那次提交引入的改动。
 - `files`、`claims`、`visual` 不要求仓库里有改动，也不要求目录是 git 仓库；非 git 目录里审已有文件用 `--target files`。
 - 结果里的 `review_target` 和 `review_scope` 写明审的是什么、文件数和材料指纹；`diff` 的完整补丁保存在记录目录的 `review.patch`。审查期间材料又变了，结果标 `stale: true`，`warnings` 里也有提示：这份审查可能没覆盖最新的版本，需要时重审。
-- Codex 自己读改动和文件。opencode 和 pi 拿到的是脚本算好的补丁（`diff`）或文件路径，外加只读工具查上下文，不能跑命令。API 协作方只看得到附带的材料：补丁或文件内容，加上项目文件清单。opencode 和 pi 的补丁超过约 20 万字符、API 的材料超过约 30 万字符时会被拒绝：按提交（`--commit`）或按文件分开审，或者改用 Codex 审查。
+- Codex 自己读改动和文件。opencode、pi 和 agy 拿到的是脚本算好的补丁（`diff`）或文件路径，外加只读工具查上下文；opencode 和 pi 不能跑命令，agy 在本机沙箱可用时能在沙箱里跑只读命令。API 协作方只看得到附带的材料：补丁或文件内容，加上项目文件清单。opencode、pi 和 agy 的补丁超过约 20 万字符、API 的材料超过约 30 万字符时会被拒绝：按提交（`--commit`）或按文件分开审，或者改用 Codex 审查。
 
 ## 补漏轮（3 级多席审查）
 3 级的多席审查在各席结束、Claude Code 去重以后（Claude Code 席的清单一起去重），再做一次补漏轮：交给这一格里还没参加过的合适模型（基础模型和前面各席都不同，包括 Claude Code 席；工具够审这份材料），新开一次审查，只问"这份清单还漏了什么"。Claude Code 席不能当补漏席。
@@ -42,7 +42,7 @@
 
 | `readonly` | 谁 | 含义 |
 |---|---|---|
-| `tools` | opencode、pi、API | 只有读文件、搜索、列目录的工具，或者根本没有工具 |
+| `tools` | opencode、pi、agy、API | 只有读文件、搜索、列目录的工具，或者根本没有工具；agy 另有沙箱里的只读命令 |
 | `sandbox` | 这类任务配了 `read-only` 沙箱的 Codex | 系统沙箱拦下写入 |
 | `audited` | 没配只读沙箱的 Codex | 只靠规则约束，事后对比快照 |
 

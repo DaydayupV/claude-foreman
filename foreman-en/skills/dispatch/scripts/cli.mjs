@@ -25,13 +25,14 @@ const FLAGS = new Set(['uncommitted', 'no-snapshot', 'verbose', 'no-intro', 'sna
 const isHelp = (arg) => arg === '--help' || arg === '-h';
 function helpText([cmd, ...rest]) {
   if (isHelp(cmd)) return M.usage;
-  const action = cmd === 'assets' && rest[0] && !rest[0].startsWith('-') ? rest.shift() : null;
+  const action = ['assets', 'agy-guard'].includes(cmd) && rest[0] && !rest[0].startsWith('-') ? rest.shift() : null;
   let asked = false;
   for (let i = 0; i < rest.length && !asked; i++) {
     asked = isHelp(rest[i]);
     if (rest[i].startsWith('--') && !FLAGS.has(rest[i].slice(2))) i++;
   }
   if (!asked) return null;
+  if (cmd === 'agy-guard') return M.agyGuardUsage;
   if (cmd !== 'assets') return Object.hasOwn(M.help, cmd) ? M.help[cmd] : die(M.usage);
   return !action ? M.assetsUsage : Object.hasOwn(M.assetsActions, action) ? M.assetsHelp(action) : die(M.assetsUsage);
 }
@@ -39,7 +40,7 @@ const HELP = helpText(process.argv.slice(2));
 if (HELP) { process.stdout.write(`${HELP}\n`); process.exit(0); }
 
 // 其余模块在 --help 之后才加载：config.mjs 一加载就会迁移旧版的配置和偏好文件，--help 不该写任何文件。
-const { USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, DEFAULT_AGENT_PARALLEL, CLAUDE_CODE, cellList, eachEntry, mapCells, resolveAgentAlias, detectEnvironment, projectFile, loadConfig, resolveProfile, validatePlan, unknownAgentError } = await import('./config.mjs');
+const { USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, agentMaxParallel, CLAUDE_CODE, cellList, eachEntry, mapCells, resolveAgentAlias, detectEnvironment, projectFile, loadConfig, resolveProfile, validatePlan, unknownAgentError } = await import('./config.mjs');
 const { cmdPlan, readPlan } = await import('./plan.mjs');
 const { buildSummary } = await import('./summary.mjs');
 const { configReport, environmentReport, modelsReport } = await import('./report.mjs');
@@ -56,7 +57,7 @@ const { loadTiers, tierOf } = await import('./tiers.mjs');
 // 先加载配置，再迁移记录和重写启动器；这些步骤仍在解析参数之前完成。
 // assets 例外：它只在本机处理图片，用不到配置和记录目录，所以两步都跳过，配置缺失或写坏了也照样能用。
 const load = (cwd) => loadConfig(cwd, adapters);
-const CONFIG = process.argv[2] === 'assets' ? null : load(null);
+const CONFIG = ['assets', 'agy-guard'].includes(process.argv[2]) ? null : load(null);
 if (CONFIG) records.initializeRecords(CONFIG);
 const { RUNS_ROOT, CLAUDE_SESSION, findRun, isRunning } = records; // 记录目录在 initializeRecords 之后才定下来
 
@@ -66,7 +67,7 @@ function parseArgs(argv) {
   const JUDGE_LISTS = ['accept', 'partial', 'reject', 'same', 'clear'];
   const opts = { 'add-dir': [], track: [], scope: [], file: [], ...(cmd === 'plan' ? { seat: [] } : {}) };
   // assets 的第一个参数是动作（template、cut 等），不是选项。
-  if (cmd === 'assets' && rest[0] && !rest[0].startsWith('--')) opts.action = rest.shift();
+  if (['assets', 'agy-guard'].includes(cmd) && rest[0] && !rest[0].startsWith('--')) opts.action = rest.shift();
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (!a.startsWith('--')) die(M.badArg(a));
@@ -219,7 +220,7 @@ function cmdConfig(o) {
     return c.isolation === 'tools' && !agent.run_access ? { ...c, modes: c.modes.filter((mode) => mode !== 'run') } : c;
   };
   const agents_status = Object.fromEntries(Object.entries(effective.agents).map(([name, agent]) => [name, {
-    type: agent.type, capabilities: capabilitiesOf(agent), model: agent.model || null, max_parallel: agent.max_parallel ?? DEFAULT_AGENT_PARALLEL,
+    type: agent.type, capabilities: capabilitiesOf(agent), model: agent.model || null, max_parallel: agentMaxParallel(agent),
     ...adapters[agent.type].status(agent),
   }]));
   const resolved = (entry) => {
@@ -403,7 +404,8 @@ async function cmdBoard(o) {
 
 // 所有协作方都报告，仅被等级引用的协作方影响总体结果。
 async function cmdCheck(o) {
-  const cfg = load(o.cwd ? resolveDir(o.cwd) : null);
+  const cwd = o.cwd ? resolveDir(o.cwd) : process.cwd();
+  const cfg = load(o.cwd ? cwd : null);
   if (o.agent) o.agent = resolveAgentAlias(o.agent, cfg, true);
   if (o.agent && !Object.hasOwn(cfg.agents, o.agent)) die(unknownAgentError('--agent', o.agent, cfg));
   const nodeOk = Number(process.versions.node.split('.')[0]) >= 18;
@@ -427,18 +429,20 @@ async function cmdCheck(o) {
   for (const { module, at, item } of eachEntry(cfg.modules)) {
     const mode = module === 'image' ? 'run' : module;
     usedModes.set(item.agent, new Set([...(usedModes.get(item.agent) || []), mode]));
-    if (item.effort == null) continue;
-    const model = item.model || cfg.agents[item.agent].model;
+    // agy 的档位写在模型 ID 里，格子不写 effort 也要核对它覆写的模型在不在清单里。
+    const agy = cfg.agents[item.agent]?.type === 'agy cli';
+    if (item.effort == null && !agy) continue;
+    const model = item.model || cfg.agents[item.agent].model, variant = item.effort ?? 'default';
     if (!variants.has(item.agent)) variants.set(item.agent, []);
     const list = variants.get(item.agent);
-    const existing = list.find((v) => v.model === model && v.variant === item.effort);
+    const existing = list.find((v) => v.model === model && v.variant === variant);
     if (existing) existing.used_at.push(at);
-    else list.push({ model, variant: item.effort, used_at: [at] });
+    else list.push({ model, variant, used_at: [at] });
   }
   // 只在要核对推理强度时才读清单。
   const readCatalog = catalogReader();
   for (const [name, agent] of Object.entries(cfg.agents)) {
-    if (!o.agent || o.agent === name) result.agents[name] = { ...await adapters[agent.type].check(name, agent, variants.get(name) || [], () => readCatalog(agent), [...(usedModes.get(name) || [])]), type: agent.type };
+    if (!o.agent || o.agent === name) result.agents[name] = { ...await adapters[agent.type].check(name, agent, variants.get(name) || [], () => readCatalog(agent), [...(usedModes.get(name) || [])], cwd), type: agent.type };
   }
   const referenced = new Set(eachEntry(cfg.modules).map(({ item }) => item.agent));
   result.ok = nodeOk && Object.entries(result.agents).every(([name, agent]) => !referenced.has(name) || agent.ok);
@@ -464,7 +468,7 @@ async function cmdModels(o) {
   const cfg = load(null);
   const out = { tools: {}, api: {}, agents: {} };
   const readCatalog = catalogReader();
-  for (const type of ['codex cli', 'opencode cli', 'pi cli']) {
+  for (const type of ['codex cli', 'opencode cli', 'pi cli', 'agy cli']) {
     out.tools[type] = readCatalog(Object.values(cfg.agents).find((a) => a.type === type) || { type });
   }
   for (const [name, agent] of Object.entries(cfg.agents)) if (agent.type === 'api') out.api[name] = await adapters.api.catalog(agent, name);
@@ -503,6 +507,12 @@ function cmdTiers(o) {
 }
 
 const { cmd, opts } = parseArgs(process.argv.slice(2));
+if (cmd === 'agy-guard') {
+  const { manageGuard } = await import('./adapters/agy-setup.mjs');
+  try { process.stdout.write(JSON.stringify(await manageGuard(opts.action), null, 2) + '\n'); }
+  catch (e) { die(e.message); }
+  process.exit(0);
+}
 // 上限一天：再大的数会让到期时刻超出 Date 的范围
 if (opts['queue-timeout'] !== undefined && (!Number.isFinite(Number(opts['queue-timeout'])) || Number(opts['queue-timeout']) < 0 || Number(opts['queue-timeout']) > 1440)) die(M.queueTimeoutInvalid);
 if (['config', 'check', 'models', 'tiers'].includes(cmd) && opts.format !== undefined && !['json', 'md'].includes(opts.format)) die(M.reportFormatInvalid);

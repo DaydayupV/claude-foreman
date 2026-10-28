@@ -126,7 +126,7 @@
 | `edit` | 执行 `run_access: "edit"`（第二期） | read 档的读，加 `edit_file`、`write_file`（限项目目录内，排除 3.5 的位置） | 无；不放行 `run_command` |
 | `shell` | 执行 `run_access: "shell"`（第二期） | edit 档全部，加 `run_command`（没有系统沙箱，和 pi 的 shell 档相同） | 无 |
 
-- **每个工具的参数白名单**：`read_file` / `view_file` 只认 `Path`；`edit_file` 只认 `Path`、`Target`、`Replacement`；`write_file` 只认 `Path`、`Content`、`Overwrite`；`run_command` 只认 `CommandLine`、`WaitMsBeforeAsync`、`toolSummary`。出现任何其他参数就拒绝，理由写明参数名。agy 自动升级后如果加了新参数，会先被拒绝，再由维护者核对后补进白名单。
+- **每个工具的参数白名单**：`read_file` / `view_file` 只认 `Path`、`StartLine`、`EndLine`（后两个第 1 期实测补上，见第 12 节）；`edit_file` 只认 `Path`、`Target`、`Replacement`；`write_file` 只认 `Path`、`Content`、`Overwrite`；`run_command` 只认 `CommandLine`、`WaitMsBeforeAsync`、`toolSummary`。出现任何其他参数就拒绝，理由写明参数名。agy 自动升级后如果加了新参数，会先被拒绝，再由维护者核对后补进白名单。
 - 所有档位都拒绝：子 agent 三件套、`send_message`、`schedule`、`search_web`、`ask_question`（无头模式答不了，理由里提示把问题写进报告）、`browser_*`、`call_mcp_tool`、`generate_image`、`notebook_*`。不认识的工具也拒绝。`manage_task` 只是任务清单，各档放行。
 - 路径按 agy 自己的规则解析，不照搬 pi 的规则。第 0b 期实测（Windows）：
   - agy 只接受绝对路径和 `file:///` 地址；
@@ -193,7 +193,7 @@ stream-json 输入下，模型名无效时退出码是 1（不是 3），`result
   2. 模型在不在 `agy models` 的清单里，不在时给出最接近的；
   3. 守卫自检（3.4）；
   4. 沙箱探针（第 4 节，有缓存时跳过）；
-  5. 发一条 "Reply with the single word OK."（约 7K 输入 token，会在 agy 历史里留一条会话），同时确认守卫留下了决定记录；
+  5. 在临时目录写一个随机令牌文件，让模型用 `read_file` 读出来并原样回复（约 1–2 万输入 token，会在 agy 历史里留一条会话），同时确认守卫留下了一条 `read_file` 的放行记录（第 1 期实现时从"Reply with the single word OK."改成这样：模型不一定调工具，回复 OK 证明不了守卫生效）；
   6. 读 `/quota`（在空的临时目录里跑），剩余低于 10% 时提示。
 - 价格和身份：
   - gemini-3.8-flash-* 和 claude-opus-4-6-thinking 已能按 `-` 后缀匹配到价格，价格测试里加上这两个；
@@ -293,7 +293,7 @@ stream-json 输入下，模型名无效时退出码是 1（不是 3），`result
 ## 10. 分期
 - **第 0 期**：已完成（第 9 节）。
 - **第 0b 期**：已完成（第 9 节），只剩桌面版 / IDE 和自动模式两项因为没有条件没能验证。
-- **第 1 期**：守卫（启动器、启动标记、决定记录）、自检、`agy-guard` 子命令和锁、读档（讨论和审查）和沙箱探针、`check`、`models`、看板、价格和身份表、默认并发、直接调用守卫、假 agy 和测试。
+- **第 1 期**（2026-10-28 完成，真实 agy 1.4.8 / 1.4.9 上验证过 check、讨论、审查和两席并发）：守卫（启动器、启动标记、决定记录）、自检、`agy-guard` 子命令和锁、读档（讨论和审查）和沙箱探针、`check`、`models`、看板、价格和身份表、默认并发、直接调用守卫、假 agy 和测试。
 - **第 2 期**：执行的 `edit` / `shell` 两档、3.5 的写入保护、异步命令处理、续接、返工。
 - **第 3 期**：`--effort` 映射成同族模型 ID、原生 `--json-schema`、图像（`generate_image`）是否接入。
 
@@ -305,3 +305,19 @@ stream-json 输入下，模型名无效时退出码是 1（不是 3），`result
 4. **接入方式标签**：用 `Agy CLI`，和命令名一致，也和 `Codex CLI`、`Pi CLI` 的叫法对齐。说明文字里第一次出现时写"Agy CLI（Google Antigravity CLI）"。
 5. **项目配置和其他钩子**：一律拒绝派出，不留按项目放行的开关。项目里（含 `--add-dir` 目录）有 agy 的钩子、MCP 或插件配置，或者全局 hooks.json 里有 foreman 以外的钩子时，这次不派 agy，结果里写明是哪个文件挡住的（3.4）。
 6. **启动标记**：接受。foreman 运行期间，同一目录里用户自己用 agy 会被启动标记拦下工具调用，拒绝理由写明原因和标记的过期时间；单元测试照样检查每条启动路径都带策略（3.2）。
+
+## 12. 第 1 期实现时的实测补充（2026-10-28，Windows 11，agy 1.4.8）
+在真实 agy 上冒烟时发现、前面各节没写到的事实，代码已按这些实现：
+- **事件是嵌套的**：每行是 `{"event":"<名字>","<名字>":{…}}`，比如 `{"event":"step_update","step_update":{…}}`、`{"event":"result","result":{…}}`；`init` 另外在顶层带 `conversation_id`。适配器读行时先归一成平铺对象。
+- **工具字段**：参数在 `tool_info.parameters`，守卫拒绝时步骤为 `state: "ERROR"`，`error` 是 `{type, message}`，`message` 以 `tool call denied by pre-tool hook: ` 开头。命令没有单独的退出码，`output` 以 `Command exited with code N.` 开头。stream-json 会把较长的参数（实测 `CommandLine`）截到约 512 个字符，所以只能按输出认探针结果，不能按命令原文匹配；钩子收到的参数是完整的。
+- **钩子输入**：`{toolCall:{name,args}, workspacePaths:[正斜杠路径], conversationId, stepIdx, modelName, lastUserInput, artifactDirectoryPath, transcriptPath}`。`read_file` 会带 `StartLine` / `EndLine`。
+- **钩子命令**：Claude Code 给子进程设了 `NoDefaultCurrentDirectoryInExePath=1`，agy 继承下来以后，`cmd /c` 不在当前目录找裸文件名，所以 Windows 上的命令写成 `.\foreman-agy-guard.cmd`。钩子命令本身失败时，cmd 的报错是系统代码页，agy 会整轮报 `string_value contains invalid UTF-8` 而失败。
+- **`run_command` 在 Windows 上用 PowerShell 跑**：带引号的程序路径要写成 `& "…\node.exe" …`。
+- **沙箱的网络**：表现为 DNS 解析失败（`ENOTFOUND`），不是权限错误；探针用 foreman 自己（沙箱外）的对照来区分"沙箱拦下"和"本来就断网"。
+- **后台更新进程**：agy 每次启动可能拉起 `agy --bg-updater`，工作目录就是这次的 cwd，几分钟内删不掉那个目录。foreman 的临时目录因此放在自己的状态目录里，删不掉的留到下次清理。
+- **`/hooks`**：结果在 `command.data.hooks`，每项 `{name, enabled, source, actions:[{event, matcher, type, command, timeout_seconds}]}`；`response` 是给人看的制表符文本。**`/quota`** 的 `command.name` 是 `usage`，额度在 `command.data.groups[].buckets[].remaining_fraction`。**`agy models`** 前面可能有一行没有制表符的 `Fetching available models...`。
+- **账号校验断流**：偶发 `Eligibility check failed: … EOF`，查询和请求都重试一次。
+- 全局 `mcp_config.json` 可能是 agy 自己留下的空文件。
+- **命令输出的编码**：PowerShell 的输出按系统代码页编码，里面有中文（比如项目路径）时，agy 会把非 UTF-8 的字节原样发给模型接口，整轮报 `INVALID_ARGUMENT (code 400)`。守卫在 Windows 上放行 `run_command` 时用 `overwrite` 在命令前面加 `[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;`（agy 会告诉模型参数被钩子改过）。
+- **沙箱里的 git**：沙箱读不到 `~/.gitconfig`，git 直接报错退出；沙箱运行时 foreman 把 `GIT_CONFIG_GLOBAL` 指向临时目录里的一个空文件。
+- **回复之后的报错**：实测有一次模型已经交回完整回复，agy 之后的一次请求被接口以 400 拒绝，result 记为 ERROR。回复还在时照常采用，错误记进 notes，回复合不合格交给报告校验。

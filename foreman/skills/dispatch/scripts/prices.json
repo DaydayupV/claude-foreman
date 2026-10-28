@@ -1,7 +1,9 @@
 {
-  "as_of": "2026-10-27",
+  "as_of": "2026-10-28",
   "note": "每百万 token 的美元价。所有协作方和 Claude Code 对话用量统一按官方 API 价计算，工具自报费用仅留档。用量按任务汇总，沿用基础价，不应用长上下文、快速模式和分时折扣（long_context、fast_multiplier 只作记录）。没有 cache_write 的条目，缓存写入按 input 价算。",
   "models": [
+    { "match": ["gpt-oss-120b"], "input": 0.15, "output": 0.60,
+      "source": "https://console.groq.com/docs/models（查看 2026-10-28）；Groq 托管的 openai/gpt-oss-120b API 基础价，仅供比较，不代表 agy 订阅的结算价" },
     { "match": ["claude-fable-5-1", "claude-mythos-5-1"], "input": 10, "cached": 0.25, "cache_write": 12.5, "output": 50,
       "source": "https://platform.claude.com/docs/en/about-claude/pricing（查看 2026-10-27）；缓存写入按 5 分钟缓存价" },
     { "match": ["claude-fable-5", "claude-mythos-5"], "input": 10, "cached": 1, "cache_write": 12.5, "output": 50,

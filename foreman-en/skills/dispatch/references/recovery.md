@@ -3,7 +3,7 @@
 Read this before deciding anything in these cases: the result has `needs_decision` set to `true` or holds `questions`; the status is `stalled`, `interrupted`, `timeout`, `quota_exhausted`, `needs_input` or `failed`; Codex reports a sandbox error; a discussion or review has an API participant (the queue check starts as soon as it does); you're about to resume a run and pick its `--reason`.
 
 ## When an agent needs an answer
-Runs are unattended: nobody can answer an agent while it runs. The script makes sure no agent gets stuck waiting: Codex needs no approvals by default; opencode gets no question tool and no permissions that need confirming; pi has no question tool, and the guard extension foreman injects only allows the tools the task needs; a CLI added later that prints a "(y/n)"-style prompt and then goes quiet is stopped after 3 minutes with the status `needs_input`.
+Runs are unattended: nobody can answer an agent while it runs. The script makes sure no agent gets stuck waiting: Codex needs no approvals by default; opencode gets no question tool and no permissions that need confirming; pi has no question tool, and the guard extension foreman injects only allows the tools the task needs; foreman's global guard blocks agy's question tool; a CLI added later that prints a "(y/n)"-style prompt and then goes quiet is stopped after 3 minutes with the status `needs_input`.
 
 Every question is collected in the result's `questions`. When `needs_decision` is `true`, something needs deciding; the run has finished, it isn't stuck.
 
@@ -16,7 +16,7 @@ Every question is collected in the result's `questions`. When `needs_decision` i
 
 By `source`:
 - `decision_request`: a question returned in a hands-on report. `recommendation` says which option it already went with. If Claude agrees, nothing changes; if not, say what to change in the resume brief (the resume then asks for changes to the work, so use `--reason rework`).
-- `permission_denied`: an action the tool tried was blocked by permissions, for example opencode reading a file outside the project, or a pi action stopped by foreman's guard. The permissions are a deliberate boundary, so don't change the config to let it through; read the material it needs yourself and put it in the resume brief, or attach it with `--file`.
+- `permission_denied`: an action the tool tried was blocked by permissions, for example opencode reading a file outside the project, or a pi or agy action stopped by foreman's guard. The permissions are a deliberate boundary, so don't change the config to let it through; read the material it needs yourself and put it in the resume brief, or attach it with `--file`.
 - `final_question`: the final answer is a question, not a report. Claude answers it and resumes with `--reason answer`, asking for the report in the required format.
 - `input_prompt` (status `needs_input`): the tool is waiting for terminal input. Look at the prompt: if Claude can decide it under the rules above, resume with `--reason answer` and write the answer in the brief; otherwise leave it to the user.
 - `asked_mid_run`: a question asked mid-run that nobody answered; it carried on with its own judgement. When checking the work, compare the approach it chose against the report, and treat it as a rework if it's wrong. These don't count toward `needs_decision`.

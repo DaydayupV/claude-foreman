@@ -248,7 +248,7 @@ async function cmdAwaitBusy(o, config, load) {
       print({ busy: [], running: [], done: true, disabled: true }); return;
     }
     checkRunners(runs.map((run) => run.meta));
-    const running = runs.filter((run) => isRunning(run.meta) && !['opencode cli', 'pi cli'].includes(agentTypeOf(run.meta)));
+    const running = runs.filter((run) => isRunning(run.meta) && !['opencode cli', 'pi cli', 'agy cli'].includes(agentTypeOf(run.meta)));
     const busy = running.map((run) => ({ run, s: queuedSeconds(run.dir), after: afterOf(run) }))
       .filter((x) => x.after > 0 && x.s != null && x.s >= x.after * 60);
     if (busy.length || !running.length) {

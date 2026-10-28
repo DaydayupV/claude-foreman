@@ -114,6 +114,21 @@ Sign-in and keys are handled by pi itself (`/login` inside pi, or the provider's
 
 Like opencode it has no OS sandbox, and both levels take a change snapshot before starting.
 
+**`type: "agy cli"`** (Agy CLI on this machine, that is Google Antigravity CLI, command `agy`)
+
+| Field | What it does |
+|---|---|
+| `model` | Required, an ID from the first column of `agy models`, such as `gemini-3.8-flash-high`. The effort is the suffix of the ID (`-low` / `-medium` / `-high`); to change it, change the ID |
+| `bin` | Optional, the path to the agy executable. By default it's looked up on PATH, and on Windows also at `%LOCALAPPDATA%\agy\bin\agy.exe` |
+| `max_parallel` | Optional, default `2`: the plan quota is counted in 5-hour windows, and many parallel calls tend to hit the limit together |
+
+It can only take part in discussions and reviews: `run_access` isn't accepted, and it can't go into `run` or `draw` cells. agy handles its own sign-in; the plugin doesn't touch it. agy can't load an extension per call, so the plugin controls its tools through agy's global hooks:
+- A guard must be installed first (`agy-guard install`; `/foreman-en:setup` asks for the user's consent first): it adds a `foreman-guard` entry to `~/.gemini/config/hooks.json` and writes a launcher and the guard script in the same folder. When no foreman run is active the guard answers `ask`, so the user's own agy use isn't affected;
+- A self-check before every dispatch: if the project (from the working directory up to the repository root, plus each `--add-dir`) has agy hooks, MCP or plugin config in `.agents` or a similar folder, or the global `hooks.json` has hooks besides foreman's, agy isn't dispatched and the error names the file; if the guard files don't match the plugin's copy, they're rewritten under a lock;
+- The guard allows only file reads (limited to the project directory and `--add-dir` folders) and the task list; when a probe confirms agy's sandbox works on this machine (Windows 11 24H2 or later), read access also allows commands inside the sandbox: they can't change files inside or outside the project or reach the network, but the system temp folder stays writable. Without the sandbox there's no shell, and discussion material gets a `git ls-files` list instead;
+- Secret-like environment variables are removed before starting agy; during a run, a launch marker in the foreman state folder makes the guard block tool calls from agy without a policy in that folder; every guard decision goes to `agy-guard.jsonl` in the `run_dir`, and a round that used tools without any decision record fails;
+- The user's own GEMINI.md and skills load as usual, and global MCP servers start but their tools are blocked; sessions show up in agy's history.
+
 **`type: "api"`** (models with an OpenAI-compatible API)
 
 | Setting | What it does |
@@ -128,16 +143,16 @@ Like opencode it has no OS sandbox, and both levels take a change snapshot befor
 ### What each type can do
 `agents_status.<ID>.capabilities` in the `config` output lists what each agent can do, and config checks use it: putting an agent in a cell it can't do is an error.
 
-| | codex cli | opencode cli | pi cli | api |
-|---|---|---|---|---|
-| Tasks (`modes`) | hands-on work, reviews, discussions | hands-on work (needs `run_access`), reviews, discussions | hands-on work (needs `run_access`), reviews, discussions | discussions, reviews (text material only) |
-| Isolation (`isolation`) | OS sandbox (`os`), per the sandbox setting | tool permissions only (`tools`) | tool permissions plus a guard extension (`tools`) | none (`none`); text in and out only |
-| Reads code itself (`reads_code`) | yes | yes | yes | no; relies on attached files |
-| Native report format (`native_schema`) | yes | no; prompt plus one repair | no; same | no; same |
-| Native review (`native_review`) | yes | no | no | no |
-| Images (`images`) | yes | no | no | no |
-| Reads images (`reads_images`), which decides who can do a `visual` review | yes (view_image) | no for now (not verified yet) | no for now (not verified yet) | no |
-| How discussions and reviews stay read-only (the result's `readonly`) | `sandbox` (with a `read-only` sandbox) or `audited` | `tools` | `tools` | `tools` |
+| | codex cli | opencode cli | pi cli | agy cli | api |
+|---|---|---|---|---|---|
+| Tasks (`modes`) | hands-on work, reviews, discussions | hands-on work (needs `run_access`), reviews, discussions | hands-on work (needs `run_access`), reviews, discussions | reviews, discussions | discussions, reviews (text material only) |
+| Isolation (`isolation`) | OS sandbox (`os`), per the sandbox setting | tool permissions only (`tools`) | tool permissions plus a guard extension (`tools`) | a guard in the global hooks (`tools`); read-only commands in agy's sandbox | none (`none`); text in and out only |
+| Reads code itself (`reads_code`) | yes | yes | yes | yes | no; relies on attached files |
+| Native report format (`native_schema`) | yes | no; prompt plus one repair | no; same | no; same | no; same |
+| Native review (`native_review`) | yes | no | no | no | no |
+| Images (`images`) | yes | no | no | no | no |
+| Reads images (`reads_images`), which decides who can do a `visual` review | yes (view_image) | no for now (not verified yet) | no for now (not verified yet) | no for now (not verified yet) | no |
+| How discussions and reviews stay read-only (the result's `readonly`) | `sandbox` (with a `read-only` sandbox) or `audited` | `tools` | `tools` | `tools` | `tools` |
 
 ## modules
 
@@ -182,6 +197,7 @@ How image tasks go out: before work starts on each new graphic deliverable, Clau
 - `api`: sent as is as `reasoning_effort` (DeepSeek takes `low` / `high` / `max`), and `null` means don't send it. Use `null` for models with no reasoning effort parameter, such as Xiaomi MiMo (only a thinking on/off switch, on by default).
 - `opencode cli`: the model's variant (for example `high`), passed to opencode as `-m model#variant`; `null` means the model's default. Each model has its own variants (the free DeepSeek model, for example, takes `low`, `high` and `max` but not `medium`), and opencode reports an error for a wrong one. `default` is the same as leaving it out. After a change, run `check`: variants missing from opencode's model list are reported at once, and the rest are tried one by one.
 - `pi cli`: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, passed to pi as `--thinking`. Each model supports its own set (deepseek-flash, for example, takes off / low / high / max), as pi's model list says. **pi doesn't report an unsupported level; it quietly switches to the nearest one** (looking upward first, so it may cost more). Always run `check` after a change; it checks against the list.
+- `agy cli`: only `default` (or nothing). The effort is the suffix of the model ID, so for another level change `model` to a sibling ID; any other value fails validation, and the error lists the sibling IDs.
 
 When reporting to the user, describe a missing or `null` effort as "effort: default".
 
@@ -196,6 +212,7 @@ When there's no user config, the first run of the script (any subcommand) checks
 - whether a usable Codex exists: it starts and is signed in;
 - whether opencode exists: it starts, and how many models `opencode models` lists;
 - whether pi exists: it starts, and how many models `pi --list-models` lists;
+- whether agy exists: it starts;
 - common API key environment variables: `DEEPSEEK_API_KEY`, `KIMI_API_KEY` / `MOONSHOT_API_KEY`, `MIMO_API_KEY`.
 
 What gets generated (every cell is written as a list of candidates, none required):
@@ -205,7 +222,7 @@ What gets generated (every cell is written as a list of candidates, none require
 | A usable Codex | Two `codex cli` agents, `gpt-6.1-sol` and `gpt-6-astra`. Hands-on work: Claude does simple and normal, complex goes to gpt-6.1-sol at max. Reviews: gpt-6.1-sol medium / high, complex on gpt-6-astra at max. Discussions: gpt-6.1-sol medium / high, complex on gpt-6-astra at max. Images: generate on gpt-6.1-sol at medium, draw on gpt-6-astra at max |
 | No usable Codex | The nine discuss, run and review cells are `"claude code"`, and both image cells are `null` |
 | API keys | One `api` agent per provider, with `api_key_env` pointing at the variable found and the model name as its ID, **not added to any cell** |
-| opencode, pi | Nothing added; `/foreman-en:setup` helps the user pick a model |
+| opencode, pi, agy | Nothing added; `/foreman-en:setup` helps the user pick a model |
 
 Choices that cost money or affect safety (which opencode or pi model to use, letting API models join discussions, who is required) are never made automatically; `/foreman-en:setup` asks the user. Running setup again later picks up newly installed tools.
 

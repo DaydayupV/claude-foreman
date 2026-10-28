@@ -75,7 +75,7 @@ description: 按配置把执行类编码工作派给 Codex、opencode、pi 等�
 - **R7 实际运行验收**：执行的交付在最终版本上实际跑一次全量测试、构建或脚本，不采信协作方自己说"通过了"。动画和图形交付前还要自己截图（`assets capture`，做法见 `references/image-assets.md` 第六节第 8 步），动画用 `assets playback` 跑一圈播放，把播放文件给用户看（`references/image.md` 第 10 条）。
 - **R8 先核实再采信**：参与方对代码的说法、讨论观点、审查发现，都对照原文核实后才采信；最终裁决由 Claude Code 负责，按证据决定，不按多数票、不因为谁坚持就让步。
 - **R9 不完整就照实说**：`incomplete`、失败、没验证、补漏席没跑完、审查结果 `stale`、某一方越界写入，都告诉用户，不说成已完成。
-- **R10 只经脚本调用协作方**：测试、验收、试跑、一次性问答也一样，只读的问答用 `discuss`；钩子会拦下直接调用 `codex exec`、`codex review`、`opencode run` 或用 pi 跑任务的命令。Codex 报沙箱错误时停下来，按 `references/recovery.md` 处理，不自己绕开。
+- **R10 只经脚本调用协作方**：测试、验收、试跑、一次性问答也一样，只读的问答用 `discuss`；钩子会拦下直接调用 `codex exec`、`codex review`、`opencode run`、用 pi 跑任务或用 agy 跑模型的命令。Codex 报沙箱错误时停下来，按 `references/recovery.md` 处理，不自己绕开。
 
 ## 每一步之前先读
 | 什么时候 | 先读 |

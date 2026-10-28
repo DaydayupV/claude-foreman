@@ -41,7 +41,7 @@ const D = {
   watchAnswerSubmitted: (round) => `report submitted (round ${round})`,
   watchReplayOne: (command) => `replay a seat: ${command}`,
   dashCancelConfirm: (models) => `Press x again to stop ${models}, or any other key to cancel`,
-  channel: { codex: 'Codex CLI', api: 'API', opencode: 'Opencode CLI', pi: 'Pi CLI' },
+  channel: { codex: 'Codex CLI', api: 'API', opencode: 'Opencode CLI', pi: 'Pi CLI', agy: 'Agy CLI' },
   modelLabel: (model, channel, effort, fromConfig) => `${model}${effort ? ` ${effort}` : ''} · ${channel}${fromConfig ? ' · model from Codex config' : ''}`,
   watchReview: {
     issues_found: (n, parts) => `${n} issue${n === 1 ? '' : 's'}${parts ? ` · ${parts}` : ''}`,
@@ -238,7 +238,7 @@ const shortModel = (model) => String(model).slice(String(model).lastIndexOf('/')
 const fullModel = (m) => (modelOf(m).includes('/') ? modelOf(m) : null);
 // 模型标签：<模型> <强度> · <接入方式>，没有推理强度时只写模型。旧记录没有 agent_type 和 model_name，都是 Codex CLI。
 // Claude Code 席写 <自报的模型> · Claude Code。开工那一行（source）另外注明模型来自 Codex 配置。
-const CHANNEL_KEY = { api: 'api', 'opencode cli': 'opencode', 'pi cli': 'pi' };
+const CHANNEL_KEY = { api: 'api', 'opencode cli': 'opencode', 'pi cli': 'pi', 'agy cli': 'agy' };
 const modelLabel = (m, { source = false } = {}) => (agentTypeOf(m) === 'host' ? D.dots([m.model, 'Claude Code'])
   : D.modelLabel(shortModel(modelOf(m)), D.channel[CHANNEL_KEY[agentTypeOf(m)] || 'codex'], m?.effort,
     source && !m?.model && !!m?.model_name && agentTypeOf(m) === 'codex cli'));

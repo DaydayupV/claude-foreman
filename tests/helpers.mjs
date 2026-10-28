@@ -18,6 +18,7 @@ export const boardEnv = (extra = {}) => ({ ...process.env, APPDATA: NO_DESKTOP, 
 export const CODEX = path.join(ROOT, 'tests/fake/codex.mjs');
 export const OPENCODE = path.join(ROOT, 'tests/fake/opencode.mjs');
 export const PI = path.join(ROOT, 'tests/fake/pi.mjs');
+export const AGY = path.join(ROOT, 'tests/fake/agy.mjs');
 export const read = (file) => fs.readFileSync(file, 'utf8');
 export const json = (file) => JSON.parse(read(file));
 // 活动日志可能刚写了一部分，只读取以换行结束的完整记录。

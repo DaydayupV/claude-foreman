@@ -30,8 +30,9 @@
 - **Codex**：能自己读代码、跑只读命令来核实。
 - **opencode 协作方**（`type` 为 `opencode cli`）：通过本机的 Opencode CLI 调用模型。脚本只给它读文件、搜索和列目录的工具，它能自己翻项目里的代码，但不能运行命令，也不能改文件。只能读项目目录里的文件，项目外的材料要摘进说明。它每读一次文件都多一次请求，比 API 协作方费额度；订阅额度紧的高档模型放在 3 级用。结果里的 `cost_usd` 按模型官方 API 价格算；它自己报的费用另存在 `reported_cost_usd`，只留档，汇报时不写。
 - **pi 协作方**（`type` 为 `pi cli`）：通过本机的 Pi CLI 调用模型，和 opencode 协作方一样只有读文件、搜索和列目录的工具，读的路径限定在项目目录里（由 foreman 注入的守卫扩展检查）。`cost_usd` 按模型官方 API 价格算；pi 自己报的费用另存在 `reported_cost_usd`，只留档。pi 读用户自己的 pi 配置和登录信息，但不加载用户装的扩展、skill 和 MCP。
+- **agy 协作方**（`type` 为 `agy cli`）：通过本机的 Agy CLI（Google Antigravity CLI）调用 Gemini、Claude 等模型，用 Google 账号的订阅额度（5 小时和每周两个窗口，默认并发 2）。守卫只放行读文件，路径限定在项目目录里；本机 agy 的沙箱可用时，还能在沙箱里跑只读命令（改不了项目内外的文件、上不了网，系统临时目录除外），这一点比 opencode、pi 强；沙箱不可用时没有 shell，脚本附上 `git ls-files` 清单，结果的 `notes` 会写明。项目或全局有 agy 的其他钩子、MCP 或插件配置时脚本拒绝派出，报错写明是哪个文件：这时换别的候选，并告诉用户原因，不要替用户改那些文件。`cost_usd` 按模型官方 API 价格算。
 - **API 协作方**（`type` 为 `api`，比如 DeepSeek）：只看得到说明和附带的材料，自己翻不了代码。用 `--file "<路径>"` 把相关文件附上（可以给多次，`--file "<路径>:<起始行>-<结束行>"` 只附一段），说明里提到的代码、要讨论或审查的核心模块都要附。材料总量有上限（约 30 万字符），超了脚本会报错，这时精选文件或改用行范围；脚本还会自动附上项目文件清单。附带的材料会发给对应厂商，偏好文件或项目配置不让发的项目，不加 API 协作方。它在 `open_questions` 里要求看的文件，下一轮用 `--file` 补上。`agents_status` 里 `key_set` 为 `false` 的 API 协作方会直接失败：挑它之前提醒用户在 `~/.claude/foreman/config.json` 的这个协作方里填 `api_key`（立即生效），或者设置 `api_key_env` 指向的环境变量并重启 Claude Code。有 API 参与方时，按 `references/recovery.md` 的"API 参与方繁忙时"在后台启动排队检查。
-- 给 Codex、opencode 和 pi 协作方传 `--file` 时，脚本只把路径列成"重点文件"，不附内容，它们会自己去读。
+- 给 Codex、opencode、pi 和 agy 协作方传 `--file` 时，脚本只把路径列成"重点文件"，不附内容，它们会自己去读。
 - 所有参与方对代码的说法，Claude 都要对照原文核实后才能采信。
 
 ## Claude Code 席

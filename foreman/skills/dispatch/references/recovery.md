@@ -3,7 +3,7 @@
 下面几种情况，在做决定之前读这一篇：结果里 `needs_decision` 为 `true` 或有 `questions`；状态是 `stalled`、`interrupted`、`timeout`、`quota_exhausted`、`needs_input`、`failed`；Codex 报沙箱错误；讨论或审查里有 API 参与方（发起时就要启动排队检查）；要续接一个任务、要选 `--reason`。
 
 ## 协作方要人回答时
-调度是无人值守的：协作方运行时没有人能回答它。脚本保证它们不会因为等人而卡住：Codex 默认不需要审批；opencode 不开放提问工具和需要确认的权限；pi 没有提问工具，foreman 注入的守卫扩展只放行这次任务需要的工具；以后接入的 CLI 如果在终端打出"(y/n)"之类的提示后没了动静，3 分钟后自动结束，状态为 `needs_input`。
+调度是无人值守的：协作方运行时没有人能回答它。脚本保证它们不会因为等人而卡住：Codex 默认不需要审批；opencode 不开放提问工具和需要确认的权限；pi 没有提问工具，foreman 注入的守卫扩展只放行这次任务需要的工具；agy 的提问工具被 foreman 的全局守卫拒绝；以后接入的 CLI 如果在终端打出"(y/n)"之类的提示后没了动静，3 分钟后自动结束，状态为 `needs_input`。
 
 所有提问都收集在结果的 `questions` 里。`needs_decision` 为 `true` 时说明有事要决定；任务已经结束，不是卡住了。
 
@@ -16,7 +16,7 @@
 
 按 `source` 分别处理：
 - `decision_request`：执行报告里交回的问题。`recommendation` 里写了它已经按哪个做了。Claude 同意就不用改，不同意就在续接说明里写明要怎么改（这时续接要求改交付，写 `--reason rework`）。
-- `permission_denied`：工具想做的操作被权限挡住了，比如 opencode 想读项目目录外的文件，或者 pi 的操作被 foreman 的守卫挡下。权限是有意设的边界，不要为了放行去改配置；它需要的材料由 Claude 读出来，写进续接说明，或者用 `--file` 附上。
+- `permission_denied`：工具想做的操作被权限挡住了，比如 opencode 想读项目目录外的文件，或者 pi、agy 的操作被 foreman 的守卫挡下。权限是有意设的边界，不要为了放行去改配置；它需要的材料由 Claude 读出来，写进续接说明，或者用 `--file` 附上。
 - `final_question`：最终回答是一个问题，不是报告。Claude 回答它，用 `resume --reason answer` 续接，并要求按格式交报告。
 - `input_prompt`（状态 `needs_input`）：工具在等终端输入。看提示内容：属于上面 Claude 能决定的，用 `resume --reason answer` 续接，在说明里写明答复；否则交给用户。
 - `asked_mid_run`：运行中提过的问题，没人回答，它已按自己的判断继续了。验收时对照报告看它选的做法，不合适就按返工处理。这类不计入 `needs_decision`。

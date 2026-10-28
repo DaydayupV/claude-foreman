@@ -51,7 +51,7 @@ const runningOf = (s) => s.counts?.running ?? s.runs.filter((r) => r.status === 
 // 协作方代号去掉末尾表示接入方式的几段（-codex-cli、-opencode-cli-ocgo、-pi-cli-api 这类），名额带上更短；
 // 接入方式按配置里的 type 写（代号后缀是用户自己起的，猜不准：pi 接的 API 模型常以 -api 结尾）
 const agentName = (id) => { let s = id, prev; do { prev = s; s = s.replace(/-(codex|opencode|pi|cli|api|ocgo|contributor)$/, ''); } while (s !== prev && s); return s || id; };
-const VIA = { 'codex cli': 'codex', 'opencode cli': 'opencode', 'pi cli': 'pi', api: 'api' };
+const VIA = { 'codex cli': 'codex', 'opencode cli': 'opencode', 'pi cli': 'pi', 'agy cli': 'agy', api: 'api' };
 const agentVia = (a) => VIA[a.type] || '';
 
 function renderSlots() {

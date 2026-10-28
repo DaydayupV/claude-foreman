@@ -27,7 +27,7 @@ When `resolved_modules.review.<level>` is `"claude code"`, that level gets no ou
   - `--commit <sha>`: the changes that commit introduced.
 - `files`, `claims` and `visual` need no changes in the repository, and the folder needn't be a git repository; to review existing files in a folder without git, use `--target files`.
 - `review_target` and `review_scope` in the result say what was reviewed, how many files, and the material's fingerprint; for a `diff`, the full patch is saved as `review.patch` in the run directory. If the material changed while the review ran, the result is marked `stale: true` and `warnings` says so: the review may not cover the latest version, so review again if it matters.
-- Codex reads the changes and files itself. opencode and pi get the patch the script computed (for `diff`) or the file paths, plus read-only tools for context, and can't run commands. API agents only see the attached material: the patch or the file contents, plus the project file list. A patch over about 200,000 characters for opencode or pi, or material over about 300,000 characters for an API agent, is refused: review commit by commit (`--commit`) or file by file, or give the review to Codex.
+- Codex reads the changes and files itself. opencode, pi and agy get the patch the script computed (for `diff`) or the file paths, plus read-only tools for context; opencode and pi can't run commands, while agy can run read-only commands inside its sandbox when that works on this machine. API agents only see the attached material: the patch or the file contents, plus the project file list. A patch over about 200,000 characters for opencode, pi or agy, or material over about 300,000 characters for an API agent, is refused: review commit by commit (`--commit`) or file by file, or give the review to Codex.
 
 ## Gap pass (multi-seat level 3 reviews)
 After the seats of a multi-seat level 3 review finish and Claude Code merges duplicates (the Claude Code seat's list included), run one gap pass: a new review by a suitable model from the cell that hasn't taken part yet (a base model different from every earlier seat, the Claude Code seat included, with tools that can handle the material), asking only "what does this list still miss?" The Claude Code seat can't be the gap seat.
@@ -42,7 +42,7 @@ Discussions and reviews may not change project files. The result's `readonly` sa
 
 | `readonly` | Who | What it means |
 |---|---|---|
-| `tools` | opencode, pi, API | Only tools for reading, searching and listing files, or no tools at all |
+| `tools` | opencode, pi, agy, API | Only tools for reading, searching and listing files, or no tools at all; agy also has read-only commands in its sandbox |
 | `sandbox` | Codex with a `read-only` sandbox set for this kind of task | The OS sandbox blocks writes |
 | `audited` | Codex without a read-only sandbox | Only the rules hold it back, plus a snapshot comparison afterwards |
 

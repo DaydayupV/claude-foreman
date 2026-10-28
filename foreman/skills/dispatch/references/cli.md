@@ -20,6 +20,7 @@ node "<脚本路径>" board --stop（关掉直播看板服务）
 node "<脚本路径>" config [--cwd "<项目目录>"] [--format json|md]
 node "<脚本路径>" check  [--agent <协作方>] [--format json|md]
 node "<脚本路径>" models [--format json|md]
+node "<脚本路径>" agy-guard <install|uninstall|status>（agy 的全局守卫，见下面 check 一节）
 node "<脚本路径>" tiers  [--model <名字>]... [--all] [--cwd "<项目目录>"] [--format json|md]（模型档位、综合分和长短处，规则见 references/model-tiers.md）
 node "<脚本路径>" await-busy (--group <组名> | --run <run_id>) [--after 分钟]
 node "<脚本路径>" cancel --run <run_id>
@@ -28,18 +29,21 @@ node "<脚本路径>" stats  [--module discuss|run|review|image] [--since <天�
 node "<脚本路径>" assets <template|cut|check|diff|layers|patch|trace|capture|playback> …（各命令的参数见 references/assets-cli.md）
 ```
 
-- 执行单席直派时，`--agent <协作方>` 只能从这一格的候选里选。不写时：这一格只有一个候选就用它，有一个必选就用它，否则必须写。这一格还有别的必选时，单席派发会被拒绝，要先建计划。格子是 `"claude code"` 时，只有用户配置里这一格本来就是 `"claude code"` 才能用 `--agent` 点名派出（结果标 `outside_cell`），项目配置关掉的不行；讨论和审查遇到这种格子时，用户点名的协作方照样写进计划的 `--seat`，计划标 `outside_cell`，推理强度用内置默认值。每个协作方能做哪些任务看 `capabilities.modes`：`api` 协作方能参加 `discuss` 和 `review`（只审文本，不能审 `visual`）；`opencode cli` 和 `pi cli` 能做 `review` 和 `discuss`，配置里写了 `run_access` 的还能做 `run`。升级前的旧代号（比如 `codex`）照样认，脚本会提示新代号。
+- 执行单席直派时，`--agent <协作方>` 只能从这一格的候选里选。不写时：这一格只有一个候选就用它，有一个必选就用它，否则必须写。这一格还有别的必选时，单席派发会被拒绝，要先建计划。格子是 `"claude code"` 时，只有用户配置里这一格本来就是 `"claude code"` 才能用 `--agent` 点名派出（结果标 `outside_cell`），项目配置关掉的不行；讨论和审查遇到这种格子时，用户点名的协作方照样写进计划的 `--seat`，计划标 `outside_cell`，推理强度用内置默认值。每个协作方能做哪些任务看 `capabilities.modes`：`api` 协作方能参加 `discuss` 和 `review`（只审文本，不能审 `visual`）；`opencode cli` 和 `pi cli` 能做 `review` 和 `discuss`，配置里写了 `run_access` 的还能做 `run`；`agy cli` 只能做 `review` 和 `discuss`。升级前的旧代号（比如 `codex`）照样认，脚本会提示新代号。
 - 用户点名要某个推理强度（比如"用 ultra 跑"）时，照常写 `--level`，再加 `--effort <强度>`：它只换推理强度，协作方还是按格子选。
 - 用户点名要某个模型时，加 `--model <模型>`。只能换同一个提供方的模型：`codex cli` 和 `api` 协作方可以换成任意模型，`opencode cli` 和 `pi cli` 的新模型要和原来的有同一个 `提供方/` 前缀；换了模型的结果标 `model_overridden`。
 - 交给谁、模型、推理强度、沙箱、审批、超时由配置文件决定；Codex 没有配置的项沿用它自己的 `~/.codex/config.toml`。拿不准当前设置时先运行 `config --cwd "<项目目录>"`。
 - `plan`、`submit`、`status --plan` 的检查和输出见下面一节；`judge` 和 `stats` 见最后一节。
 
 ## check
-检查环境能不能用：Node.js、Git，以及配置里的每个协作方，结果在 `agents.<代号>` 里。opencode、pi 和 API 协作方各会发一个很小的真实请求（几十个 token），按量付费的会产生一点费用；只想查某一个时用 `--agent`。
+检查环境能不能用：Node.js、Git，以及配置里的每个协作方，结果在 `agents.<代号>` 里。opencode、pi 和 API 协作方各会发一个很小的真实请求（几十个 token），agy 发一个要读一次文件的小请求（约 1–2 万输入 token，用 agy 的订阅额度；第一次还要跑一次沙箱探针），按量付费的会产生一点费用；只想查某一个时用 `--agent`。
 - **Codex CLI**：能否启动、是否已登录；再按 Codex 自带的模型清单核对各格子配置的推理强度（不发请求），结果列在 `efforts` 里；按各类任务实际用的沙箱模式，用 `codex sandbox` 在沙箱里跑一条 echo（不调模型），结果列在 `sandbox` 里，`danger-full-access` 不进沙箱、不测。Windows 上沙箱起不来时，会顺带试 unelevated 沙箱，能用时写在 `fix` 里。
 - **API**：key 是否设置，并发一个很小的请求确认能连通。
 - **opencode**：能否启动、`opencode models` 里有没有这个模型，并发一个很小的请求确认能用；各格子给它配置了推理强度（variant）的，先按 opencode 的模型清单核对，清单里没有的直接判不通过，其余每个档位再各发一个小请求，结果列在 `variants` 里。
 - **pi**：能否启动、模型清单里有没有这个模型，并发一个很小的请求确认能用；推理强度只按清单核对（pi 遇到模型不支持的档位不报错，会悄悄换成最接近的一档，发请求试不出来），结果列在 `efforts` 里。
+- **agy**：能否启动、`agy models` 里有没有这个模型；守卫自检（项目和全局配置、守卫文件、agy 实际加载的钩子）；沙箱探针（同一 agy 版本、系统和磁盘只测一次，结果缓存）；再发一个请求，让模型用 `read_file` 读一个临时文件并原样回复，确认守卫放行并留下了决定记录；最后读额度，任一额度桶剩余不到 10% 时提醒。会在 agy 的历史里留下会话。守卫没装、文件不一致或有别的钩子时，`fix` 会写明处理办法。
+
+`agy-guard install` 在 `~/.gemini/config/` 下装守卫（先备份 `hooks.json`），`uninstall` 删掉条目和文件，`status` 只读、报告装没装、文件是否一致和正在运行的 agy 任务。装和卸会拿一把跨进程的锁，有 agy 任务在运行时拒绝。**只在用户同意后运行 `install`**（`/foreman:setup` 的弹窗，或者用户明确要求），它改的是用户目录里 agy 的全局配置。
 
 总体 `ok` 只看 Node.js 和被格子引用到的协作方（包括图像格子）；没被引用的不通过只是报告出来，不影响使用。每项不通过时，结果里的 `fix` 写明该怎么处理，转告用户即可。
 
@@ -64,7 +68,7 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
   - `--route` 必须写，只能是 1–4，而且和格子对得上：① 位图只用 generate；② 位图 + 矢量混合用 generate 和 draw；③ 纯矢量、先出参考图用 generate（只出参考图）和 draw；④ 纯矢量 / 代码只用 draw。计划只管一格，所以路线 ④ 的 draw 计划不看 generate 格子里的必选。别的模块写 `--route` 会被拒绝。
   - generate 的席位不带角色（`--seat 代号=角色` 会被拒绝）：画面要求由 Claude 统一写进任务说明。
   - 确认凭据：插件的钩子（`hooks/record-answers.mjs`，PreToolUse 和 PostToolUse，只认 AskUserQuestion）把问题或 header 里带"图像路线"（英文 "Image route"，大小写不限）的弹窗按 Claude 会话记在配置目录下的 `answers/<会话 id>.jsonl`：弹出时记一行 `asked`，用户回答后记一行 `answered`（带 `answers`，键是问题原文，值是选中的选项 label，选 Other 时是用户写的字）。别的弹窗不记；30 天前的文件会被清掉。`plan --module image` 取环境变量 `CLAUDE_CODE_SESSION_ID` 对应的文件，看最近一次路线弹窗：没有会话 id、没有路线弹窗、最近一次没有回答（取消了或还没选）、回答不是以 ①–④ 开头的某个选项，或者选的路线和 `--route` 不一致，都不建计划。一次弹窗问了几个交付物的路线时，其中任何一条和 `--route` 一致都算。同一次回答可以建几份计划。
-- 审查计划在建计划时就定下审查对象和材料：`--target`、`--file` 和范围参数只能写在审查计划上（别的模块写了会被拒绝），校验和单席 `review` 一样，`diff` 没有改动时不建计划。计划的 `review` 记下这些参数和材料指纹（非 git 目录里的 `diff` 没有指纹，为 `null`）。`diff` 审查计划里不是 Codex 的席位，按它运行时的预算（opencode、pi 20 万字符，API 30 万字符）放不下去掉生成文件后的材料时，建计划时就拒绝，报错写明是哪几席、各多少字符，以及换成 Codex 席或缩小范围；不会等到启动这一席才被拒、留下一份永远等不到结果的计划。
+- 审查计划在建计划时就定下审查对象和材料：`--target`、`--file` 和范围参数只能写在审查计划上（别的模块写了会被拒绝），校验和单席 `review` 一样，`diff` 没有改动时不建计划。计划的 `review` 记下这些参数和材料指纹（非 git 目录里的 `diff` 没有指纹，为 `null`）。`diff` 审查计划里不是 Codex 的席位，按它运行时的预算（opencode、pi、agy 20 万字符，API 30 万字符）放不下去掉生成文件后的材料时，建计划时就拒绝，报错写明是哪几席、各多少字符，以及换成 Codex 席或缩小范围；不会等到启动这一席才被拒、留下一份永远等不到结果的计划。
 - `diff` 审查时，opencode、pi 和 API 拿到的是脚本用 git 算好的补丁；Git 属性 `linguist-generated` 为 `set` 或 `true` 的生成文件只列在清单里，不放补丁。opencode、pi 的清单和补丁超过 20 万字符时，只有新侧为工作区的 `uncommitted`、`base` 范围才把放不下的补丁改成行号，让它们在项目目录里直接读取：只列新侧行数大于 0 的段，没有这些段时注明只有删除、改名或权限变化（新文件读全文，删除的文件注明读不到原文）。`commit` 范围不能按行号读取历史版本，过滤生成文件后仍超限就拒绝；只剩清单和位置说明仍超限也拒绝。API 不能读文件，去掉生成文件后整个提示仍超过 30 万字符就拒绝。遇到上限可以用 `--commit` 按提交分开审，或换成 Codex（它自己读改动，没有这个限制）。材料指纹仍包含生成文件，生成文件变化也会使原材料失效。
 - 通过后写进记录目录的 `plans/<plan_id>.json`，输出计划内容：`plan_id`、`module`、`cell`、`group`、`seats`（每席的序号 `seat`、`agent`、`role`、`model`、`effort`、`required`）、`required`、`why`、`review`（只有审查计划有；没写范围参数的 `diff` 审查记成 `uncommitted: true`）、`route` 和 `route_confirmation`（只有图像计划有：路线号，以及凭的是哪次回答：`tool_use_id`、问题、回答和回答时间），以及 `file`（计划文件）和 `commands`（每一席的启动命令；里面的说明文件、标题、范围和输出目录是占位符，换成实际的再用）。
 - 每一席用 `run / discuss / review --plan <plan_id> --seat <序号> --brief …` 启动：协作方、推理强度、目录、等级和组都取自计划，不能再写 `--agent`；要换推理强度加 `--effort`，换模型加 `--model`（规则同单席派发）；执行席位照常要 `--scope`；审查席位不再写 `--target`、`--file` 和范围参数，脚本按计划重算一次材料，指纹和计划里的不一致就拒绝启动（材料在建计划之后变了），这时按现在的材料重建计划。启动时按当前配置把整份计划重新校验一遍：配置改过（包括这一席的模型或推理强度变了）、必选变了或者项目关了这一格，都会被拒绝，这时重新建计划。同一席只能启动一次，返工用 `resume`，续接沿用原来的计划和席位；计划里的席位续接时不能换等级。审查席没交回有效结果（失败、卡死、取消，或者 `verdict` 为 `incomplete`）时，可以用同一条命令重新启动这一席；这一席还有一轮在运行、或者已经交回有效结果时会被拒绝。执行、讨论和图像席位一般不能重新启动；只有这一席没有一轮交回有效结果，而且最新一轮既没有会话 id、记录目录里也没有 `messages.json`（第一轮还没拿到会话就失败了，没法续接）时，才可以用同一条命令重新启动。同一席的各轮按 run id 排先后（run id 在登记锁里生成，严格递增）。
@@ -81,7 +85,7 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
 - 补漏席是角色为 `补漏`（英文插件写 `gap`）的席位。它用的协作方没标必选、计划里又有必选席时，`state` 只看必选席，补漏席还没跑完计划也会显示 `complete`。所以另有 `gap_unfinished`：还没交回有效结果的补漏席（没启动、还在运行、失败或结果无效），每项是 `seat`、`agent`、`status`，没有时为空数组；实时查看和 `status --group` 在计划那一行加一句"gap seat not finished: …"，写明是哪一席、处于什么状态（not started、running、no valid result，或者 failed 这类状态词）。
 
 ## models
-列出本机 Codex、opencode、pi 自带的模型清单（含每个模型支持的推理强度），以及每个 API 协作方的接口列出的模型名（不含推理强度），并核对配置里的模型在不在清单里、不在时给出最接近的写法。只读，不发模型请求。用户问有哪些模型可选、或者要换模型和推理强度时用。
+列出本机 Codex、opencode、pi、agy 自带的模型清单（含每个模型支持的推理强度；agy 的档位在模型 ID 里），以及每个 API 协作方的接口列出的模型名（不含推理强度），并核对配置里的模型在不在清单里、不在时给出最接近的写法。只读，不发模型请求。用户问有哪些模型可选、或者要换模型和推理强度时用。
 
 ## 结果字段
 `run`、`image`、`resume`、`discuss`、`review` 的结果以 JSON 打印到 stdout，主要字段：

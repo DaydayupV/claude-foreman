@@ -50,7 +50,7 @@ export function costOf(result, prices) {
   // 和 util.mjs 的 agentTypeOf 保持一致，看板单独加载时不引入终端依赖。
   const agent_type = ({ codex: 'codex cli', opencode: 'opencode cli', 'openai-compatible': 'api' })[result.agent_type] || result.agent_type || 'codex cli';
   const usage_scope = result.usage_scope ?? (result.mode === 'resume' ? 'session_total' : 'this_run');
-  if (['api', 'codex cli', 'opencode cli', 'pi cli'].includes(agent_type) && usage_scope === 'this_run'
+  if (['api', 'codex cli', 'opencode cli', 'pi cli', 'agy cli'].includes(agent_type) && usage_scope === 'this_run'
     && usage && [usage.input_tokens, usage.cached_input_tokens, usage.cache_write_input_tokens, usage.output_tokens].some((n) => n != null)
     // 续接相减时会话累计倒退会得出负数：这轮用量不可信，不计价（和 stats 的处理一致）
     && !Object.values(usage).some((n) => n < 0)) {

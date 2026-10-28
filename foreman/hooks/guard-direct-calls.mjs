@@ -11,11 +11,11 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.join(HERE, '..', 'skills', 'dispatch', 'scripts', 'cli.mjs');
 
 const MESSAGES = {
-  zh: `已拦截：不要直接调用 codex exec / codex review / opencode run / pi。协作方的调用都必须通过 foreman 插件的脚本：
+  zh: `已拦截：不要直接调用 codex exec / codex review / opencode run / pi / agy。协作方的调用都必须通过 foreman 插件的脚本：
   node "${SCRIPT}" <run|discuss|review|resume|plan|submit|image> ...
 用法见 foreman:dispatch skill。测试、验收和一次性问答也一样，只读问答用 discuss。
 如果是脚本本身满足不了的需求（比如沙箱导致协作方无法运行），停下来把情况告诉用户，由用户决定，不要设法绕过。`,
-  en: `Blocked: don't call codex exec / codex review / opencode run / pi directly. Every call to an agent must go through the foreman-en plugin's script:
+  en: `Blocked: don't call codex exec / codex review / opencode run / pi / agy directly. Every call to an agent must go through the foreman-en plugin's script:
   node "${SCRIPT}" <run|discuss|review|resume|plan|submit|image> ...
 See the foreman-en:dispatch skill. This applies to tests, checks and one-off questions too; use discuss for read-only questions.
 If the script can't do what's needed (for example a sandbox stops an agent from running), stop and tell the user so they can decide. Don't look for a way around it.`,
@@ -40,6 +40,13 @@ function piRunsModel(words) {
     if (PI_VALUE_OPTIONS.has(w)) n++;
   }
   return true;
+}
+
+// agy 的查询白名单不能掩盖后面的模型参数，-- 之后也一律视为提示词。
+function agyRunsModel(words) {
+  if (words.length === 1 && words[0] === '--version') return false;
+  return !new Set(['models', 'agents', 'changelog', 'help']).has(words[0])
+    || words.slice(1).some((w) => w === '--' || /^-(?:p|i).*$/.test(w) || /^--(?:print|prompt|input-format)(?:=|$)/.test(w));
 }
 
 // npx 先跳过它自己的选项（带值的连值一起跳过），再看要运行的包：-p / --package 可以写几次，
@@ -69,7 +76,7 @@ function callsAgentDirectly(command) {
     while (i < tokens.length && /^\w+=/.test(tokens[i])) i++; // 跳过 VAR=value 前缀
     const first = base(tokens[i] || '');
     let rest;
-    let opencode = false, pi = false;
+    let opencode = false, pi = false, agy = false;
     const npx = /^npx(\.cmd)?$/.test(first) ? npxPackage(tokens, i) : null;
     if (npx?.call && callsAgentDirectly(npx.call)) return true;
     const npxRuns = (pattern) => !!npx && npx.pkgs.some((pkg) => pattern.test(pkg));
@@ -81,8 +88,10 @@ function callsAgentDirectly(command) {
     else if (/^pi(\.exe|\.cmd|\.ps1)?$/.test(first)) { rest = tokens.slice(i + 1); pi = true; }
     else if (/^node(\.exe)?$/.test(first) && PI_ENTRY.test((tokens[i + 1] || '').replace(/^["']|["']$/g, ''))) { rest = tokens.slice(i + 2); pi = true; }
     else if (npxRuns(/^@earendil-works\/pi-coding-agent(@.*)?$/)) { rest = tokens.slice(npx.rest); pi = true; }
+    else if (/^agy(\.exe|\.cmd|\.ps1)?$/.test(first)) { rest = tokens.slice(i + 1); agy = true; }
     else continue;
     const words = rest.map((t) => t.replace(/^["']|["']$/g, ''));
+    if (agy) { if (agyRunsModel(words)) return true; continue; }
     if (pi) {
       if (piRunsModel(words)) return true;
       continue;

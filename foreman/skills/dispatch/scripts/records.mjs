@@ -1,7 +1,7 @@
 // 记录目录、启动登记锁、准入、活动状态和 watch 启动器。
 import fs from 'node:fs';
 import path from 'node:path';
-import { ENTRY, defaultRunsRoot, runsMovedNow, resolveAgentAlias, DEFAULT_AGENT_PARALLEL } from './config.mjs';
+import { ENTRY, defaultRunsRoot, runsMovedNow, resolveAgentAlias, agentMaxParallel } from './config.mjs';
 import { M, die, notice, pidExists, processStartTimes, sleep, pathKey, clip, oneLine, plainCommand, retryBusy, replaceFile, PROFILE, profile, LANGUAGE } from './util.mjs';
 import { D } from './format.mjs';
 import { acquireLock } from './locks.mjs';
@@ -139,7 +139,7 @@ async function newRunDir(ctx) {
               const next = waiting.findIndex((q) => q.sequence === ticket.sequence) + 1;
               if (rejection || next !== 1) {
                 const remaining = Math.max(1, Math.round((Date.parse(ticket.expires_at) - Date.now()) / 60000));
-                if (next !== position) notice(M.queuePosition(candidate.agent, ctx.cfg.agents[candidate.agent].max_parallel ?? DEFAULT_AGENT_PARALLEL, next, remaining));
+                if (next !== position) notice(M.queuePosition(candidate.agent, agentMaxParallel(ctx.cfg.agents[candidate.agent]), next, remaining));
                 position = next;
                 continue;
               }
@@ -310,7 +310,7 @@ function describeActivity(dir) {
       : last.type === 'api.repair' ? D.stepApiRepair
       : last.type === 'api.error' ? last.message
       : last.type === 'api.usage' ? D.watchTokens(last.usage) : D.watchEnded('done');
-  } else if (last?.type === 'pi.progress') step = last.phase === 'thinking' ? D.stepApiThinking(last.total_chars) : D.stepApiAnswering(last.total_chars);
+  } else if (last?.type === 'pi.progress' || last?.type === 'agy.progress') step = last.phase === 'thinking' ? D.stepApiThinking(last.total_chars) : D.stepApiAnswering(last.total_chars);
   else if (last?.type === 'image.viewed') step = D.stepImageViewed(path.basename(last.path));
   else if (last?.type === 'foreman.snapshot' && last.phase === 'start') step = D.stepSnapshot;
   else if (running.size) step = D.stepCommand(clip(oneLine(plainCommand([...running.values()].pop())), 160));
@@ -604,7 +604,7 @@ function admission(meta, cfg, { runs, unreadable } = readRunsLocked(meta.id), qu
     }));
     if (paths.length) return M.scopeOverlap(meta.group, other.id, paths);
   }
-  const limit = cfg.agents[meta.agent].max_parallel ?? DEFAULT_AGENT_PARALLEL;
+  const limit = agentMaxParallel(cfg.agents[meta.agent]);
   const same = running.filter((r) => resolveAgentAlias(r.meta.agent || 'codex', cfg) === meta.agent); // 旧记录没有 agent 字段，都是 Codex
   if (same.length >= limit) {
     const message = M.agentFull(meta.agent, same.length, limit, M.list(same.map((r) => r.id)));

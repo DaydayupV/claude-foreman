@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
+import { agentMaxParallel, DEFAULT_AGENT_PARALLEL } from './adapters/parallel.mjs';
 import { HERE, M, notice, isObject, readJson, die, pidAlive, pidExists, retryBusy, replaceFile, closestMatches } from './util.mjs';
 
 const ENTRY = path.join(HERE, 'cli.mjs');
@@ -28,6 +29,7 @@ function envOf(name, legacy) {
 }
 
 const HOME_DIR = path.join(os.homedir(), '.claude', 'foreman');
+const foremanStateDir = () => HOME_DIR;
 const CUSTOM_CONFIG = envOf('FOREMAN_CONFIG', 'CODEX_BRIDGE_CONFIG');
 const USER_CONFIG = CUSTOM_CONFIG || path.join(HOME_DIR, 'config.json');
 const USER_PREFS = path.join(path.dirname(USER_CONFIG), 'preferences.md');
@@ -57,7 +59,6 @@ function projectFile(cwd, current, legacy) {
   return old;
 }
 
-const DEFAULT_AGENT_PARALLEL = 4;
 const LEVELS = ['simple', 'normal', 'complex'];
 // 讨论和审查每一级默认的外部席位数（不含 Claude Code 席和补漏席）。默认值只在这里写，文档里只在 references/config.md 写一次。
 const DEFAULT_SEATS = { discuss: { simple: 2, normal: 4, complex: 8 }, review: { simple: 1, normal: 2, complex: 2 } };
@@ -261,7 +262,7 @@ function renameAgentsByModel(config, adapters) {
     return id;
   };
   const add = (name, agent) => {
-    const base = nameOf(name, agent), suffix = { 'codex cli': 'codex', 'opencode cli': 'opencode', 'pi cli': 'pi', api: 'api' }[agent.type];
+    const base = nameOf(name, agent), suffix = { 'codex cli': 'codex', 'opencode cli': 'opencode', 'pi cli': 'pi', 'agy cli': 'agy', api: 'api' }[agent.type];
     let id = base;
     for (let n = 1; Object.hasOwn(agents, id); n++) {
       if (isDeepStrictEqual(agents[id], agent)) return id;
@@ -413,7 +414,8 @@ function validateConfig(cfg, adapters, fail = die) {
         if (mode === 'run' && adapter.capabilities.isolation === 'tools') check(!!agent.run_access, `${at}.agent`, M.runAccessRequired(item.agent, agent.type));
       }
       check(item.model == null || (text(item.model) && item.model !== CLAUDE_CODE), `${at}.model`, why.modelName);
-      check(item.effort === undefined || (adapter.efforts ? adapter.efforts.includes(item.effort) : item.effort === null || text(item.effort)), `${at}.effort`, adapter.efforts ? why.effortValue(item.effort, adapter.efforts.join(' / ')) : why.apiEffort);
+      check(item.effort === undefined || (adapter.efforts ? adapter.efforts.includes(item.effort) : item.effort === null || text(item.effort)), `${at}.effort`, agent.type === 'agy cli'
+        ? M.agyEffort(item.model || agent.model) : adapter.efforts ? why.effortValue(item.effort, adapter.efforts.join(' / ')) : why.apiEffort);
       check(item.required === undefined || typeof item.required === 'boolean', `${at}.required`, why.boolean);
     }
     const required = requiredCount(value);
@@ -518,6 +520,7 @@ function projectConfig(cfg, project, adapters) {
 function detectEnvironment(adapters, agents = {}) {
   const commands = {}, started = {};
   const call = (type, args) => {
+    if (type === 'agy cli') return adapters[type].query(Object.values(agents).find((a) => a.type === type) || {}, args, 30000);
     if (!commands[type]) {
       started[type] = Date.now();
       commands[type] = adapters[type].locate(Object.values(agents).find((a) => a.type === type) || {});
@@ -533,11 +536,14 @@ function detectEnvironment(adapters, agents = {}) {
   const models = ocFound ? call('opencode cli', ['models']) : null;
   const pi = call('pi cli', ['--version']), piFound = !pi.error && pi.status === 0;
   const piModels = piFound ? call('pi cli', adapters['pi cli'].listModelsArgs) : null;
+  const agy = call('agy cli', ['--version']), agyFound = !agy.error && agy.status === 0;
+  const agyModels = agyFound ? call('agy cli', ['models']) : null;
   return { codex: { found, logged_in: !!login && !login.error && login.status === 0 && /logged in/i.test(`${login.stdout}${login.stderr}`) && !/not logged in/i.test(`${login.stdout}${login.stderr}`) },
     opencode: { found: ocFound, models: models?.status === 0 ? new Set(models.stdout.split(/\s+/).filter((s) => s.includes('/'))).size : 0 },
     // pi --list-models 输出一张表：第一行是表头，之后每行一个模型。
     // 一个模型都没有（还没登录）时只打印一句提示和几行文档路径，不是表
     pi: { found: piFound, models: piModels?.status === 0 && !/No models available/i.test(piModels.stdout) ? Math.max(0, piModels.stdout.trim().split(/\r?\n/).filter(Boolean).length - 1) : 0 },
+    agy: { found: agyFound, models: agyModels?.status === 0 ? agyModels.stdout.trim().split(/\r?\n/).filter((s) => s.includes('\t')).length : 0 },
     api_keys: ['DEEPSEEK_API_KEY', 'KIMI_API_KEY', 'MOONSHOT_API_KEY', 'MIMO_API_KEY'].filter((key) => !!process.env[key]) };
 }
 
@@ -761,7 +767,7 @@ function resolveProfile(cfg, seat, o, adapters, fallbackModel = null, parentAgen
   } else if (!adapter.capabilities.modes.includes(mode)) die(M.modeNotSupported(entry.agent, agent.type, mode, M.list(adapter.capabilities.modes)));
   if (mode === 'run' && (!image || level === 'draw') && adapter.capabilities.isolation === 'tools' && !agent.run_access) die(M.runAccessRequired(entry.agent, agent.type));
   if (mode === 'run' && adapter.capabilities.isolation !== 'os' && o['no-snapshot']) die(M.snapshotRequired);
-  if (effort !== undefined && effort !== null && adapter.efforts && !adapter.efforts.includes(effort)) die(M.effortChoices(adapter.efforts.join(' / ')));
+  if (effort !== undefined && effort !== null && adapter.efforts && !adapter.efforts.includes(effort)) die(agent.type === 'agy cli' ? M.agyEffort(o.model || entry.model || agent.model) : M.effortChoices(adapter.efforts.join(' / ')));
   const base = entry.model || agent.model || fallbackModel;
   const model = o.model || base;
   if (o.model && ['opencode cli', 'pi cli'].includes(agent.type) && (!base?.includes('/') || !model.includes('/') || model.split('/')[0] !== base.split('/')[0])) die(M.modelVendorChanged(entry.agent, model, base));
@@ -770,6 +776,6 @@ function resolveProfile(cfg, seat, o, adapters, fallbackModel = null, parentAgen
     ...(outside ? { outside_cell: true } : {}), ...(o.model && model !== base ? { model_overridden: true } : {}) };
 }
 
-export { ENTRY, SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA, USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, DEFAULT_AGENT_PARALLEL, DEFAULT_CONFIG, DEFAULT_SEATS, CLAUDE_CODE, LEVELS,
+export { ENTRY, SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA, USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, DEFAULT_AGENT_PARALLEL, agentMaxParallel, foremanStateDir, DEFAULT_CONFIG, DEFAULT_SEATS, CLAUDE_CODE, LEVELS,
   MODULE_CELLS, ROUTE_CELLS, canGenerate, cellList, eachCell, eachEntry, mapCells, resolveCell, validatePlan, resolveProfile, projectFile, loadConfig, defaultRunsRoot, runsMovedNow,
   readAgentAliases, readRawConfig, readOldBackups, resolveAgentAlias, migrateStructure, renameAgentsByModel, detectEnvironment, buildStarterConfig, staleAliases, unknownAgentError };

@@ -114,6 +114,21 @@
 
 和 opencode 一样没有系统沙箱，两档都必须先拍改动快照才开始执行。
 
+**`type: "agy cli"`**（本机的 Agy CLI，即 Google Antigravity CLI，命令 `agy`）
+
+| 字段 | 作用 |
+|---|---|
+| `model` | 必填，`agy models` 第一列的 ID，比如 `gemini-3.8-flash-high`。推理强度是 ID 的后缀（`-low` / `-medium` / `-high`），换档位就换 ID |
+| `bin` | 可选，agy 可执行文件的路径。默认在 PATH 里找，Windows 上再找 `%LOCALAPPDATA%\agy\bin\agy.exe` |
+| `max_parallel` | 可选，默认 `2`：订阅额度按 5 小时窗口算，并发高了容易一起撞限额 |
+
+只能参加讨论和审查，不能写 `run_access`，也不能放进 `run`、`draw` 格子。登录由 agy 自己管，插件不碰。agy 不能按次加载扩展，插件靠它的全局钩子管住工具：
+- 用之前要装守卫（`agy-guard install`，`/foreman:setup` 会先征求用户同意）：在 `~/.gemini/config/hooks.json` 里加一个 `foreman-guard` 条目，同目录写启动器和守卫脚本。没有 foreman 运行时守卫回答 `ask`，用户平时用 agy 不受影响；
+- 每次派出前自检：项目（从工作目录往上到仓库根，加上每个 `--add-dir`）的 `.agents` 等目录里有 agy 的钩子、MCP 或插件配置，或者全局 `hooks.json` 里有 foreman 以外的钩子，就不派，报错写明是哪个文件；守卫文件和插件里的不一致时在锁里重新写入；
+- 守卫只放行读文件（路径限定在项目目录和 `--add-dir` 里）和任务清单；本机 agy 的沙箱经探针确认可用时（Windows 11 24H2 及以上），读档再放行沙箱里的命令：沙箱里改不了项目内外的文件、上不了网，但系统临时目录仍然可写。沙箱不可用时没有 shell，讨论材料附上 `git ls-files` 的清单；
+- 启动前去掉密钥类环境变量；运行期间在 foreman 状态目录写启动标记，同一目录里没有带策略的 agy 会被守卫拒绝工具调用；守卫的每次决定记在 `run_dir` 的 `agy-guard.jsonl`，用了工具却没有决定记录的一轮判失败；
+- 用户自己的 GEMINI.md、skill 照常加载，全局 MCP 服务器会启动但工具被拒绝；会话出现在 agy 的历史里。
+
 **`type: "api"`**（兼容 OpenAI 接口的模型）
 
 | 字段 | 作用 |
@@ -128,16 +143,16 @@
 ### 能做什么（能力表）
 `config` 输出的 `agents_status.<代号>.capabilities` 列出每个协作方能做什么。配置校验也按它来：把协作方放进它做不了的格子，会报错。
 
-| | codex cli | opencode cli | pi cli | api |
-|---|---|---|---|---|
-| 能做的任务（`modes`） | 执行、审查、讨论 | 执行（要写 `run_access`）、审查、讨论 | 执行（要写 `run_access`）、审查、讨论 | 讨论、审查（只审文本材料） |
-| 隔离（`isolation`） | 系统沙箱（`os`），看沙箱配置 | 只有工具权限（`tools`） | 只有工具权限加守卫扩展（`tools`） | 无（`none`），只收发文字 |
-| 自己读代码（`reads_code`） | 能 | 能 | 能 | 不能，靠附带文件 |
-| 原生格式约束（`native_schema`） | 有 | 没有，靠提示词加一次修复 | 没有，同左 | 没有，同左 |
-| 原生审查（`native_review`） | 有 | 没有 | 没有 | 没有 |
-| 出图（`images`） | 能 | 不能 | 不能 | 不能 |
-| 看图（`reads_images`），决定能不能做 `visual` 审查 | 能（view_image） | 先记为不能（还没验证） | 先记为不能（还没验证） | 不能 |
-| 讨论和审查的只读保障（结果的 `readonly`） | `sandbox`（配了 `read-only` 沙箱）或 `audited` | `tools` | `tools` | `tools` |
+| | codex cli | opencode cli | pi cli | agy cli | api |
+|---|---|---|---|---|---|
+| 能做的任务（`modes`） | 执行、审查、讨论 | 执行（要写 `run_access`）、审查、讨论 | 执行（要写 `run_access`）、审查、讨论 | 审查、讨论 | 讨论、审查（只审文本材料） |
+| 隔离（`isolation`） | 系统沙箱（`os`），看沙箱配置 | 只有工具权限（`tools`） | 只有工具权限加守卫扩展（`tools`） | 全局钩子里的守卫（`tools`）；只读命令在 agy 沙箱里 | 无（`none`），只收发文字 |
+| 自己读代码（`reads_code`） | 能 | 能 | 能 | 能 | 不能，靠附带文件 |
+| 原生格式约束（`native_schema`） | 有 | 没有，靠提示词加一次修复 | 没有，同左 | 没有，同左 | 没有，同左 |
+| 原生审查（`native_review`） | 有 | 没有 | 没有 | 没有 | 没有 |
+| 出图（`images`） | 能 | 不能 | 不能 | 不能 | 不能 |
+| 看图（`reads_images`），决定能不能做 `visual` 审查 | 能（view_image） | 先记为不能（还没验证） | 先记为不能（还没验证） | 先记为不能（还没验证） | 不能 |
+| 讨论和审查的只读保障（结果的 `readonly`） | `sandbox`（配了 `read-only` 沙箱）或 `audited` | `tools` | `tools` | `tools` | `tools` |
 
 ## modules
 
@@ -182,6 +197,7 @@
 - `api`：原样作为 `reasoning_effort` 发出（DeepSeek 接受 `low` / `high` / `max`）；写 `null` 表示不发。没有推理强度参数的模型写 `null`，比如小米 MiMo（只有思考开关，默认开启）。
 - `opencode cli`：模型的 variant（比如 `high`），拼成 `-m 模型#variant` 传给 opencode；`null` 表示用模型的默认设置。各模型有哪些 variant 不一样（比如免费的 DeepSeek 模型接受 `low`、`high`、`max`，不接受 `medium`），写错了 opencode 会报错。写 `default` 和不写一样。改完运行 `check`：opencode 的模型清单里没有的 variant 直接报出，其余逐个试一遍。
 - `pi cli`：`off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，作为 `--thinking` 传给 pi。每个模型支持哪些不一样（比如 deepseek-flash 是 off / low / high / max），以 pi 的模型清单为准。**写了不支持的档位，pi 不会报错，会悄悄换成最接近的一档**（先往高处找，所以可能更贵），改完一定要运行 `check`，它按清单核对。
+- `agy cli`：只接受 `default`（或不写）。档位是模型 ID 的后缀，想要别的档位就把 `model` 换成同族的 ID，写别的值校验时报错并列出同族 ID。
 
 向用户汇报时，不写和 `null` 都说成"推理强度：默认"。
 
@@ -196,6 +212,7 @@
 - 有没有能用的 Codex：能启动、已登录；
 - 有没有 opencode：能启动，`opencode models` 列出了几个模型；
 - 有没有 pi：能启动，`pi --list-models` 列出了几个模型；
+- 有没有 agy：能启动；
 - 常见 API key 的环境变量：`DEEPSEEK_API_KEY`、`KIMI_API_KEY` / `MOONSHOT_API_KEY`、`MIMO_API_KEY`。
 
 按检测结果生成（每一格都写成候选列表，不标必选）：
@@ -205,7 +222,7 @@
 | 能用的 Codex | 两个 `codex cli` 协作方 `gpt-6.1-sol` 和 `gpt-6-astra`。执行：simple、normal 由 Claude 做，complex 用 gpt-6.1-sol max。审查：gpt-6.1-sol medium / high，complex 用 gpt-6-astra max。讨论：gpt-6.1-sol medium / high，complex 用 gpt-6-astra max。图像：generate 用 gpt-6.1-sol medium，draw 用 gpt-6-astra max |
 | 没有能用的 Codex | discuss、run、review 九格都是 `"claude code"`，image 两格是 `null` |
 | API key | 每家一个 `api` 协作方，`api_key_env` 指向检测到的变量，代号用模型名，**不放进任何格子** |
-| opencode、pi | 不写，要用哪个模型由 `/foreman:setup` 引导用户选 |
+| opencode、pi、agy | 不写，要用哪个模型由 `/foreman:setup` 引导用户选 |
 
 花钱或有安全影响的决定（用哪个 opencode 或 pi 模型、让 API 模型参加讨论、谁必选）都不会自动做，统一由 `/foreman:setup` 问用户。以后装了新工具，重跑 setup 就能补进配置。
 
