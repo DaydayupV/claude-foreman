@@ -10,12 +10,12 @@
     {
       "name": "foreman",
       "source": "./foreman",
-      "description": "Claude Code 主导的多模型协作：执行类编码工作按配置派给 Codex、opencode、pi 等 CLI 工具并验收，请它们独立审查代码，复杂方案让几个模型一起讨论。（中文版）"
+      "description": "Claude Code 主导的多模型协作：讨论、执行、审查各按难度分级，把编码工作派给 Codex、opencode、pi 和 API 模型并验收，请其他模型独立审查、一起讨论复杂方案；图形素材走出图和手画流程，网页看板实时显示各模型的进度、用量和费用。（中文版）"
     },
     {
       "name": "foreman-en",
       "source": "./foreman-en",
-      "description": "Claude Code-led multi-model teamwork: hand off hands-on coding work to CLI agents such as Codex, opencode and pi and check the results, get independent code reviews, and have several models weigh in on complex designs. (English)"
+      "description": "Claude Code-led multi-model teamwork: levels each discussion, hands-on task and review by difficulty, hands coding work to Codex, opencode, pi and API models and checks the results, gets independent reviews and multi-model discussions of complex designs, runs graphics through image generation and drawing, and shows every model's progress, usage and cost live on a web board. (English)"
     }
   ]
 }
