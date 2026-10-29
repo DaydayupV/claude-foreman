@@ -211,7 +211,7 @@ test('judge 双向连接 host 与外部，stats 单列 host、原样模型、按
   assert.equal(host.self_judged, true); assert.equal(host.model, 'fake-codex'); assert.equal(host.seats, 1); assert.equal(host.runs, 2);
   assert.deepEqual(host.tokens, { input: null, cached_input: null, output: null, runs: 0, missing_runs: 0 });
   assert.deepEqual(host.cost_usd, { total: null, runs: 0, missing_runs: 0 });
-  assert.deepEqual(host.duration_s, { total: 0, median_per_seat: null, missing_runs: 0 });
+  assert.deepEqual(host.duration_s, { total: 0, median_per_seat: null, p90_per_seat: null, missing_runs: 0 });
   assert.ok(stats.notes.includes(M.statsNotes.find((n) => n.startsWith('Claude Code'))));
   output(await h.bridge(['judge', '--run', a.run_id, '--accept', 'H1', '--same', 'H1=20000101-external:P1']));
   output(await h.bridge(['judge', '--run', '20000101-external', '--same', `P1=${a.run_id}:H1`]));

@@ -25,7 +25,7 @@ node "<脚本路径>" tiers  [--model <名字>]... [--all] [--cwd "<项目目录
 node "<脚本路径>" await-busy (--group <组名> | --run <run_id>) [--after 分钟]
 node "<脚本路径>" cancel --run <run_id>
 node "<脚本路径>" judge  --run <run_id> [--accept "<编号,…>"] [--partial "<编号,…>"] [--reject "<编号,…>"] [--same "<编号>=<run_id>:<编号>,…"] [--clear "<编号,…>"]
-node "<脚本路径>" stats  [--module discuss|run|review|image] [--since <天数>]
+node "<脚本路径>" stats  [--module discuss|run|review|image] [--since <天数>] [--by effort,cell]
 node "<脚本路径>" assets <template|cut|check|diff|layers|patch|trace|capture|playback> …（各命令的参数见 references/assets-cli.md）
 ```
 
@@ -129,7 +129,7 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
 
 ```bash
 node "<脚本路径>" judge --run <run_id> [--accept "F1,F3"] [--partial "F4"] [--reject "F2"] [--same "F1=<run_id>:F3,…"] [--clear "F5,…"]
-node "<脚本路径>" stats [--module discuss|run|review|image] [--since <天数>] [--group <组名>] [--plan <plan_id>]
+node "<脚本路径>" stats [--module discuss|run|review|image] [--since <天数>] [--group <组名>] [--plan <plan_id>] [--by effort,cell]
 ```
 
 **judge**
@@ -144,16 +144,18 @@ node "<脚本路径>" stats [--module discuss|run|review|image] [--since <天数
 - 不改任何记录，读记录目录里的全部任务。读不了 `meta.json` 的任务，以及父任务读不了、归不了席位的续接，记在 `totals.unreadable`；还在运行的轮次记在 `totals.running_skipped`；根本没调用协作方就失败的席位（结果里 `not_started` 为 true，比如开工前拍快照失败）记在 `totals.not_started`（没有时不出现）；这些都不进统计，根任务还在运行的整个席位不算。
 - 席位：一个没有父任务的任务，加上它所有的续接（讨论的后续轮次、返工、回答问题），算一个席位。`--since <天数>` 按这个根任务的开始时间过滤，`--module` 按根任务的模块过滤（旧记录没有 `module` 的按 `kind` 推断），`--group`、`--plan` 按根任务的组名和计划过滤（几个会话并行时只看一批；这时 `totals.running_skipped` 也只数这一批，`totals.unreadable` 分不出组，照旧全数）。
 - 按（基础模型，模块）分行。基础模型是模型名去掉最后一个 `/` 以前的提供方前缀、再转小写，所以经 opencode、pi、api 接入的同一个模型合成一行。席位数和返工记在根任务的模型上；每一轮的用时、用量、费用和去留记在那一轮自己的模型上（返工升级时可能换了模型）。Claude Code 席的报告单独成行（`participant: "host"`、`self_judged: true`，有自报模型时一并列出），按"计划 + 席位 0"算一席，不和外部模型行合并，不计用量、费用和 `missing_runs`；算"只有它发现"时它照常参与重叠判断，外部席位的这项数字因此更真实。`notes` 里写明它的去留是自评，不能和外部席位直接比，也不要据此改模型档位。
+- `--by effort,cell`（可以只写一项，也可以写几次）再按推理强度（`effort`）和/或等级（`cell`，旧记录没有时用 `level`）分行，这一行多出同名字段；不写时照旧按（基础模型，模块）分行、没有这两个字段。和模型一样，席位、返工和每席用时按根任务的推理强度和等级算，每一轮的用量、费用和去留按那一轮自己的算（返工升级时可能换了等级）。比较改档前后（比如审查从 xhigh 改成 high）时配合 `--since` 或 `--module review` 用。
 - 每行的字段：
   - `seats`、`runs`：席位数和轮数。
-  - `findings_reported`：审查报告里一共报了多少条（只算审查）；`judged_runs`、`judged`：记过去留的轮数和条数（结构化报告是 `no_issues`、一条都没报的审查轮次不用 `judge`，自动算作记过、0 条）；`accepted`、`partial`、`rejected`：成立、部分成立、不成立的条数。
+  - `findings_reported`：审查报告里一共报了多少条（只算审查）；`judged_runs`、`judged`：记过去留的轮数和条数（结构化报告是 `no_issues`、一条都没报的审查轮次不用 `judge`，自动算作记过、0 条）；`accepted`、`partial`、`rejected`：成立、部分成立、不成立的条数；`accepted_weighted`：成立条数加部分成立条数的一半。
   - `unique`：只有这个模型发现、核实成立（含部分成立）的问题数。同一席位各轮里编号相同的条目算同一条，同伴里的条目再按 `--same` 连成一个个问题，一个问题只由这一个基础模型的席位报出，就给它记一条。只在同一份计划（没有计划时是同一个任务组和 Claude 会话）里有两个以上不同的基础模型都记过去留时才统计；`unique_basis_runs` 是参与统计的轮数，一轮都没有时 `unique` 为 `null`。
   - `rework`（只对执行和图像，其他模块为 `null`）：`seats`、`reworked`、`rate`。一席曾被续接要求修正或补齐原任务的交付（`resume --reason rework`，兼有回答问题的也算），就算返工过，每席最多算一次；`answer`（只回答问题、补材料或给决定）和 `recover`（断点续跑）的续接不算。没有声明原因的旧续接沿用旧规则推断：上一轮正常交回报告（报告是 partial 的也算）、不是交回问题的才算返工。同一计划同一席重新启动的几条记录算同一个席位。
   - `rework_basis`（只在执行和图像行）：`inferred_seats` 是至少有一次续接没有声明原因、用了旧规则推断的席位数，`inferred_reworked` 是没有声明过 `rework`、只靠推断记成返工的席位数。`seats - inferred_seats` 个席位的每次续接都有声明。
-  - `duration_s`：`total`（各轮用时之和）、`median_per_seat`（没有运行中的轮次、每一轮都有用时的席位，按席位总用时取中位数）、`missing_runs`（没有用时的轮数）。
+  - `duration_s`：`total`（各轮用时之和）、`median_per_seat`（没有运行中的轮次、每一轮都有用时的席位，按席位总用时取中位数）、`p90_per_seat`（同一批席位的 90 分位数，按最近秩取：从小到大排第 ⌈0.9 × 席位数⌉ 个）、`missing_runs`（没有用时的轮数）。
   - `tokens`：`input`、`cached_input`、`output`，有用量的轮数 `runs`，缺失的轮数 `missing_runs`。记的是会话累计（`usage_scope` 为 `session_total`）的续接，只算这一轮新增的部分。Codex 的轮次没记用量、又是这个会话的最后一轮（后面没有任何续接，正在运行的也算）时，从 Codex 自己的会话记录补读；读不到的计入 `missing_runs`，不当成 0。
   - `output_tokens_per_s`：平均输出速度，只用同时有用量和用时的轮次（输出 token 之和除以用时之和），口径和结果里的同名字段一样（含跑命令和等待的时间，和网页看板的生成估速不能直接比）；没有这样的轮次时为 `null`。
   - `speed_basis`：速度用到的轮数 `runs`、秒数 `seconds`、输出 token `output_tokens`，以及排除的轮数 `excluded`：`no_usage`（没记用量）、`no_duration`（没有用时）、`mixed_session_total`（前一轮缺用量，这一轮的会话累计差值里混着那一轮的输出）。取消、超时的轮次不排除，它们的速度偏低。
   - `cost_usd`：`total`、`runs`、`missing_runs`。一律按模型官方 API 价格算（插件自带的价格表 `scripts/prices.json`），和实际扣费不一定相同。表里没有的模型算不出费用，计入 `missing_runs`（Claude Code 席不算）。
-- 输出 JSON：`runs_dir`、`module`、`since_days`、`group`、`plan`、`generated_at`、`totals`（`runs`、`seats`、`judged_runs`、`running_skipped`、`unreadable`、`unreadable_verdicts`）、`rows`（按讨论、审查、执行、图像的顺序，同一模块里席位多的在前）和 `notes`（上面几条口径的说明）。
+- 计划用时 `plans`：读记录目录下 `plans/` 里的计划文件（只读 `*.json`，那里的 `*.decision.md` 是决策记录），按（模块，等级）汇总每份计划从建计划（`created_at`）到最后一个外部席结束（各轮 `meta.json` 的 `ended_at`，续接也算）的墙钟时间，含排队、等名额、Claude Code 写报告和续接的时间。`--module`、`--since`、`--group`、`--plan` 同样过滤计划（`--since` 看建计划的时间）。只算每一席都已启动、没有在运行、每一轮都有结束时间的计划；其余计入 `unfinished`，结束的席位失败了也算结束。没有外部席的计划不出现。字段：`counted`、`unfinished`、`unreadable`（计划文件读不出或没有 `created_at`）和 `rows`：每行 `module`、`cell`、`plans`（算进用时的计划数）、`unfinished`、`wall_clock_s`（`median`、`p90`，口径同 `p90_per_seat`，保留一位小数，没有计划时为 `null`）。某一级一共建了几份计划是 `plans + unfinished`。
+- 输出 JSON：`runs_dir`、`module`、`since_days`、`group`、`plan`、`by`（`--by` 给的维度，没给时为 `[]`）、`generated_at`、`totals`（`runs`、`seats`、`judged_runs`、`running_skipped`、`unreadable`、`unreadable_verdicts`）、`rows`（按讨论、审查、执行、图像的顺序，同一模块里席位多的在前；给了 `--by` 时再按等级 simple、normal、complex 和推理强度排）、`plans` 和 `notes`（上面几条口径的说明）。
 - 怎么用：偏好文件可以引用这份统计改某个模型的档位（比如"本地实测里 deepseek-v4.1-flash 审查的独有发现多，审查时按强档用"），以偏好文件为准；脚本不自动排名，也不改配置和档位。记过去留的轮数少时（看 `judged_runs` 和 `unique_basis_runs`），这些数字只作参考。

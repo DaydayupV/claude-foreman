@@ -82,6 +82,7 @@ function parseArgs(argv) {
     if (key === 'add-dir' || key === 'track' || key === 'scope' || key === 'file' || key === 'seat' && cmd === 'plan') opts[key].push(val);
     else if (cmd === 'tiers' && key === 'model') (opts.model ??= []).push(val);
     else if (cmd === 'judge' && JUDGE_LISTS.includes(key)) (opts[key] ??= []).push(val); // 没写的选项保持没写
+    else if (cmd === 'stats' && key === 'by') (opts.by ??= []).push(val);
     else opts[key] = val;
   }
   return { cmd, opts };
