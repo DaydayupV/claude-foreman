@@ -277,7 +277,9 @@ test('agy 丢失策略时启动标记命中拒绝、未命中或过期 ask', (t)
 
 test('agy 标记按真实子进程的启动时间拒绝或清理，查不到保留，未命中不查', async (t) => {
   const h = sandbox(t); configure(h); await install(h);
-  const child = h.start(h.write('live-pid.mjs', "console.log('ready');setInterval(()=>{},1000)"));
+  // 本测试要做二十多次真实进程查询（Windows 上每次启动 PowerShell 约 1 秒），单跑就超过助手默认的 20 秒，
+  // 那时子进程被提前结束，后面的拒绝断言会看到死进程；子进程要活到最后由本测试自己结束。
+  const child = h.start(h.write('live-pid.mjs', "console.log('ready');setInterval(()=>{},1000)"), [], { timeout: 180000 });
   await poll(() => child.stdout.includes('ready'), '标记子进程启动');
   const started = moduleCall(h, 'util.mjs', `console.log(JSON.stringify(x.processStartedAt(${child.child.pid})));`);
   assert.ok(Number.isFinite(started));
