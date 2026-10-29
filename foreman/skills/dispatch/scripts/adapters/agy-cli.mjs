@@ -6,7 +6,7 @@ import { DISCUSS_SCHEMA, REVIEW_SCHEMA } from '../config.mjs';
 import { MAX_REVIEW_CHARS, reviewPatchText } from '../review-scope.mjs';
 import { newRunDir, isCancelled, cancelSource, announceBoard } from '../records.mjs';
 import { startRun, finishDiscussion, eventWriter, runLimits, reportWithRepair, spawnCli, validateSchema } from '../runner.mjs';
-import { M, die, killTree, readAttachments, focusFiles, relativePath, closestMatches, sleep } from '../util.mjs';
+import { M, die, killTree, readAttachments, filesOutside, focusFiles, relativePath, closestMatches, sleep } from '../util.mjs';
 import { D, modelLabel, toolLabel } from '../format.mjs';
 import { defaultMaxParallel } from './parallel.mjs';
 import { AGY_EFFORTS, splitAgyModel, agyFamilies, agyModelId } from './agy-models.mjs';
@@ -148,7 +148,8 @@ async function executeAgy(ctx) {
   if (ctx.parent && !ctx.sessionId) die(M.noSession(ctx.parent));
   ctx = { ...ctx, addDirs: ctx.addDirs || opts['add-dir'].map((d) => path.resolve(d)) };
   const review = ctx.kind === 'review', schemaText = fs.readFileSync(review ? REVIEW_SCHEMA : DISCUSS_SCHEMA, 'utf8');
-  const files = readAttachments(opts.file, cwd, false), schema = JSON.parse(schemaText);
+  const files = readAttachments(opts.file, cwd, false), schema = JSON.parse(schemaText), outside = filesOutside(files, [cwd, ...ctx.addDirs]);
+  if (outside.length) die(M.filesOutsideCwd(ctx.agentName, M.list(outside), true));
   let promptFor;
   if (review) {
     const scope = ctx.reviewScope, opening = { files: M.reviewPromptFiles, claims: M.reviewPromptClaims }[ctx.reviewTarget];

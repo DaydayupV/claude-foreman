@@ -76,6 +76,17 @@ function readAttachments(specs, cwd, api) {
   });
 }
 
+// opencode、pi、agy 只能用自己的工具读允许的目录（项目目录，agy 另有 --add-dir）：列出落在这些目录外的附件路径。
+// 按真实路径比较，Windows 上不分大小写。
+function filesOutside(files, roots) {
+  const real = (p) => { let r; try { r = fs.realpathSync.native(p); } catch { r = path.resolve(p); } return process.platform === 'win32' ? r.toLowerCase() : r; };
+  const dirs = roots.map(real);
+  return files.map((f) => f.path).filter((file) => !dirs.some((dir) => {
+    const rel = path.relative(dir, real(file));
+    return rel === '' || !rel.startsWith('..') && !path.isAbsolute(rel);
+  }));
+}
+
 function focusFiles(files) {
   return files.length ? `\n\n${M.focusFiles(files.map((f) => `- ${f.shown}${f.range ? (LANGUAGE === 'en' ? ` (lines ${f.range[0]}–${f.range[1]})` : `（第 ${f.range[0]}–${f.range[1]} 行）`) : ''}`).join('\n'))}` : '';
 }
@@ -389,4 +400,4 @@ function wrapWidth(s, width) {
   return lines;
 }
 
-export { retryBusy, replaceFile, HERE, LANGUAGE, M, notice, isObject, readJson, die, need, resolveDir, readBrief, MAX_MATERIAL_CHARS, readAttachments, readImages, focusFiles, binCommand, pathCommand, npmEntry, isGitRepo, pidAlive, pidExists, processStartTimes, processStartedAt, killTreeIfSame, killTree, relativePath, pathKey, RECONNECT, isReconnect, sleep, clip, oneLine, plainCommand, isAscii, modelOf, agentTypeOf, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision, closestMatches, charWidth, textWidth, fitWidth, wrapWidth };
+export { retryBusy, replaceFile, HERE, LANGUAGE, M, notice, isObject, readJson, die, need, resolveDir, readBrief, MAX_MATERIAL_CHARS, readAttachments, readImages, filesOutside, focusFiles, binCommand, pathCommand, npmEntry, isGitRepo, pidAlive, pidExists, processStartTimes, processStartedAt, killTreeIfSame, killTree, relativePath, pathKey, RECONNECT, isReconnect, sleep, clip, oneLine, plainCommand, isAscii, modelOf, agentTypeOf, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision, closestMatches, charWidth, textWidth, fitWidth, wrapWidth };

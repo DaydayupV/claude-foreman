@@ -7,7 +7,7 @@ import { SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA } from '../config.mjs';
 import { MAX_REVIEW_CHARS, reviewPatchText } from '../review-scope.mjs';
 import { newRunDir, isCancelled, cancelSource, announceBoard } from '../records.mjs';
 import { startRun, finishDiscussion, execute, eventWriter, runLimits, reportWithRepair, spawnCli, validateSchema } from '../runner.mjs';
-import { M, LANGUAGE, die, isObject, binCommand, pathCommand, npmEntry, killTree, readAttachments, focusFiles, relativePath, closestMatches } from '../util.mjs';
+import { M, LANGUAGE, die, isObject, binCommand, pathCommand, npmEntry, killTree, readAttachments, filesOutside, focusFiles, relativePath, closestMatches } from '../util.mjs';
 import { D, modelLabel, toolLabel } from '../format.mjs';
 
 function opencodeCommand(agent) {
@@ -157,7 +157,8 @@ async function executeOpencode(ctx) {
   const agentId = review ? 'foreman-review' : exec ? 'foreman-run' : OPENCODE_AGENT;
   const schemaText = fs.readFileSync(review ? REVIEW_SCHEMA : exec ? SCHEMA : DISCUSS_SCHEMA, 'utf8');
   const schema = JSON.parse(schemaText);
-  const files = readAttachments(opts.file, cwd, false);
+  const files = readAttachments(opts.file, cwd, false), outside = filesOutside(files, [cwd]);
+  if (outside.length) die(M.filesOutsideCwd(ctx.agentName, M.list(outside), false));
   let prompt;
   if (review) {
     const scope = ctx.reviewScope;

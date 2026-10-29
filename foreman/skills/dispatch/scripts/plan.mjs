@@ -4,7 +4,7 @@ import path from 'node:path';
 import { ENTRY, USER_CONFIG, MODULE_CELLS, resolveAgentAlias, resolveProfile, validatePlan, isSplit, seatsFor, gapFor } from './config.mjs';
 import { RUNS_ROOT, CLAUDE_SESSION, listRuns, readMeta, checkRunners, runOutcome } from './records.mjs';
 import { validateReviewMaterial, reviewPatchText, MAX_REVIEW_CHARS } from './review-scope.mjs';
-import { M, die, need, resolveDir, readAttachments, MAX_MATERIAL_CHARS, isObject } from './util.mjs';
+import { M, die, need, resolveDir, readAttachments, filesOutside, MAX_MATERIAL_CHARS, isObject } from './util.mjs';
 import { apiReviewPrompt, API_BRIEF_RESERVE } from './adapters/api.mjs';
 import { D, outcomeStyle } from './format.mjs';
 import { modelIdentity } from './models.mjs';
@@ -106,6 +106,12 @@ function cmdPlan(o, load, adapters) {
       base: o.base ?? null, commit: o.commit ?? null, fingerprint: material?.fingerprint ?? null };
   }
   const cell = validatePlan(cfg, plan, adapters);
+  // opencode、pi、agy 读不到项目目录外的文件：建计划时就拒绝，免得这几席只能绕开材料去审
+  if (o.file.length) {
+    const outside = filesOutside(o.file.map((spec) => ({ path: path.resolve(cwd, spec.replace(/:\d+-\d+$/, '')) })), [cwd]);
+    const tools = [...new Set(seats.filter((seat) => adapters[cfg.agents[seat.agent]?.type]?.capabilities.isolation === 'tools').map((seat) => seat.agent))];
+    if (outside.length && tools.length) die(M.planFilesOutsideCwd(M.list(tools), M.list(outside)));
+  }
   // 建计划时按各席运行时的材料预算检查，免得启动前被拒而一直等不到记录。
   if (material?.target === 'diff') {
     const max = { cli: MAX_REVIEW_CHARS, api: MAX_MATERIAL_CHARS, reserve: API_BRIEF_RESERVE };

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { plannedSandbox as sandbox, output, failed, baseConfig, opencodeAgent, piAgent, apiAgent, read, json, write, poll, ROOT, MESSAGES } from './helpers.mjs';
+import { plannedSandbox as sandbox, output, failed, baseConfig, opencodeAgent, piAgent, apiAgent, read, json, write, poll, hostArgs, ROOT, MESSAGES } from './helpers.mjs';
 import { review } from './fixtures/reports.mjs';
 import { apiServer } from './fake/api-server.mjs';
 const M = MESSAGES.zh;
@@ -268,4 +268,18 @@ test('Codex 审查忽略中途和最终提问，格式不合格仍保留原文',
   const r = output(await h.bridge(args(h, ['--target', 'files', '--file', 'source.txt']), { env: s.env }));
   assert.ok(!r.questions.some((q) => ['asked_mid_run', 'final_question'].includes(q.source)));
   assert.equal(r.last_message, 'Should I continue?'); assert.ok(r.warnings.includes(M.badReport));
+});
+
+test('项目目录外的审查文件：有 opencode 席时建计划就拒绝，只有 Codex 时照常；opencode 讨论带外部文件也拒绝', async (t) => {
+  const h = sandbox(t), c = baseConfig(); c.agents.oc = opencodeAgent();
+  c.modules.review.normal = [{ agent: 'codex' }, { agent: 'oc' }]; c.modules.discuss.normal = [{ agent: 'oc' }]; h.config(c);
+  const outside = write(path.join(h.home, 'outside', 'notes.patch'), 'diff\n'), inside = h.write('notes.md', '材料\n');
+  const plan = (seats, file) => ['plan', '--cwd', h.cwd, '--module', 'review', '--cell', 'normal', '--group', 'outside', '--target', 'files', '--file', file,
+    ...seats.flatMap((seat) => ['--seat', seat]), '--count-why', '测试'];
+  failed(await h.bridge(plan(['codex', 'oc'], outside)), MESSAGES.zh.planFilesOutsideCwd('oc', outside));
+  output(await h.bridge(plan(['codex'], outside)));
+  output(await h.bridge(plan(['codex', 'oc'], inside)));
+  const d = output(await h.bridge(['plan', '--cwd', h.cwd, '--module', 'discuss', '--cell', 'normal', '--group', 'outside-d', '--seat', 'oc']));
+  output(await h.bridge(hostArgs(h, d)));
+  failed(await h.bridge(['discuss', '--plan', d.plan_id, '--seat', '1', '--brief', '-', '--file', outside]), MESSAGES.zh.filesOutsideCwd('oc', outside, false));
 });
