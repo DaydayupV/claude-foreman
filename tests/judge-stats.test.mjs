@@ -256,7 +256,7 @@ test('stats 合并两种接入的基础模型，费用未知的外部任务都�
   assert.equal(flash.output_tokens_per_s, 15);
   assert.equal(codex.output_tokens_per_s, null);
   assert.deepEqual(flash.cost_usd, { total: null, runs: 0, missing_runs: 5 });
-  assert.deepEqual(flash.duration_s, { total: 20, median_per_seat: 4, missing_runs: 0 });
+  assert.deepEqual(flash.duration_s, { total: 20, median_per_seat: 4, p90_per_seat: 6, missing_runs: 0 });
   assert.equal(flash.findings_reported, 2);
   assert.deepEqual(codex.cost_usd, { total: null, runs: 0, missing_runs: 2 });
   assert.deepEqual(Object.keys(codex).filter((k) => k.startsWith('cost_')), ['cost_usd']);
@@ -286,8 +286,8 @@ test('stats 按链扣除累计用量、处理倒退并将升级轮次记在各�
   assert.deepEqual(large.tokens, { input: 105, cached_input: 25, output: 25, runs: 3, missing_runs: 2 });
   // small：(10 + 0) / (2 + 4)；large：用量倒退的 a4 和没用量的 b2 不算，(10 + 5 + 10) / (3 + 4 + 6)
   assert.deepEqual([small.output_tokens_per_s, large.output_tokens_per_s], [1.7, 1.9]);
-  assert.deepEqual(small.duration_s, { total: 6, median_per_seat: 20, missing_runs: 0 });
-  assert.deepEqual(large.duration_s, { total: 18, median_per_seat: null, missing_runs: 1 });
+  assert.deepEqual(small.duration_s, { total: 6, median_per_seat: 20, p90_per_seat: 20, missing_runs: 0 });
+  assert.deepEqual(large.duration_s, { total: 18, median_per_seat: null, p90_per_seat: null, missing_runs: 1 });
   assert.deepEqual(large.rework, { seats: 0, reworked: 0, rate: null });
 });
 
@@ -388,7 +388,7 @@ test('stats 同计划同席的无 parent 重启只算一席，重复观点沿用
   verdict(peer, { F2: { verdict: 'reject' } });
   const r = output(await h.bridge(['stats'])), [alpha, beta] = r.rows;
   assert.deepEqual([r.totals.seats, r.totals.runs, alpha.seats, alpha.runs, beta.seats], [2, 3, 1, 2, 1]);
-  assert.deepEqual(alpha.duration_s, { total: 5, median_per_seat: 5, missing_runs: 0 });
+  assert.deepEqual(alpha.duration_s, { total: 5, median_per_seat: 5, p90_per_seat: 5, missing_runs: 0 });
   assert.deepEqual(alpha.tokens, { input: 30, cached_input: 0, output: 0, runs: 2, missing_runs: 0 });
   assert.deepEqual([alpha.unique, alpha.unique_basis_runs, beta.unique], [1, 2, 0]);
 });
@@ -471,7 +471,7 @@ test('stats 空记录、坏元数据/结果/verdict 和运行中跳过计数，�
   }
   const r = output(await h.bridge(['stats']));
   assert.deepEqual(r.totals, { runs: 3, seats: 3, judged_runs: 1, running_skipped: 1, unreadable: 1, unreadable_verdicts: 2 });
-  assert.deepEqual(r.rows[0].duration_s, { total: 0, median_per_seat: null, missing_runs: 3 });
+  assert.deepEqual(r.rows[0].duration_s, { total: 0, median_per_seat: null, p90_per_seat: null, missing_runs: 3 });
   assert.equal(r.rows[0].tokens.missing_runs, 3);
   const filtered = output(await h.bridge(['stats', '--module', 'discuss'], { env: { FOREMAN_LANG: 'en' } }));
   assert.deepEqual(filtered.totals, { runs: 0, seats: 0, judged_runs: 0, running_skipped: 1, unreadable: 1, unreadable_verdicts: 0 });
@@ -503,7 +503,7 @@ test('stats 完整席位链阻止向运行中续接补读，排除中位用时�
   seedRun(h, 'finished-resume', { parent: 'running-root', mode: 'resume', model: 'skipped' }, { status: 'done', duration_s: 3 });
   const r = output(await h.bridge(['stats']));
   assert.deepEqual(r.rows[0].tokens, { input: null, cached_input: null, output: null, runs: 0, missing_runs: 1 });
-  assert.deepEqual(r.rows[0].duration_s, { total: 2, median_per_seat: null, missing_runs: 0 });
+  assert.deepEqual(r.rows[0].duration_s, { total: 2, median_per_seat: null, p90_per_seat: null, missing_runs: 0 });
   assert.deepEqual(r.totals, { runs: 1, seats: 1, judged_runs: 0, running_skipped: 2, unreadable: 0, unreadable_verdicts: 0 });
   assert.deepEqual(r.rows.map((row) => row.model), ['alpha']);
 });
@@ -700,4 +700,106 @@ test('stats 按 --group、--plan 只看一批，speed_basis 写明速度用到�
   // 别的组还在跑的任务，按组过滤时不算进 running_skipped
   seedRun(h, 'o2', { group: 'other', model: 'alpha', status: 'running', pid: process.pid, ended_at: undefined });
   assert.deepEqual([output(await h.bridge(['stats', '--group', 'mine'])).totals.running_skipped, output(await h.bridge(['stats'])).totals.running_skipped], [0, 1]);
+});
+
+test('stats --by effort,cell 分行并保留根席和各轮归属，补齐 p90 和加权成立条数', async (t) => {
+  const h = sandbox(t), meta = { ...review, model: 'alpha', session_id: null };
+  const fixtures = [
+    ['a', 'low', 'simple', 'complex', 10], ['b', 'high', 'simple', 'complex', 20],
+    ['c', undefined, undefined, 'normal', 30], ['d', 'medium', 'complex', 'simple', 40],
+    ['e', 'high', 'alpha', 'complex', 50], ['f', 'high', 'zeta', 'complex', 60],
+    ['g', 'high', undefined, undefined, 70], ['h', null, 'simple', 'complex', 80],
+    ['i', 'high', 'beta', 'complex', 90], ['j', 'high', 'delta', 'complex', 100],
+  ];
+  for (const [id, effort, cell, level, duration_s] of fixtures) {
+    const dir = seedRun(h, id, { ...meta, effort, cell, level }, { ...report(...(id === 'a' ? ['F1', 'F2', 'F3'] : [])), duration_s });
+    if (id === 'a') verdict(dir, { F1: { verdict: 'accept' }, F2: { verdict: 'partial' }, F3: { verdict: 'reject' } });
+  }
+  const resume = seedRun(h, 'a2', { ...meta, parent: 'a', mode: 'resume', effort: 'max', cell: 'complex' }, { ...report('F4'), duration_s: 5 });
+  verdict(resume, { F4: { verdict: 'accept' } });
+  const all = output(await h.bridge(['stats'])), [combined] = all.rows;
+  assert.deepEqual(all.by, []);
+  assert.equal(all.rows.length, 1);
+  assert.deepEqual(Object.keys(all), ['runs_dir', 'module', 'since_days', 'group', 'plan', 'by', 'generated_at', 'totals', 'rows', 'plans', 'notes']);
+  assert.deepEqual(Object.keys(combined), ['model', 'module', 'seats', 'runs', 'findings_reported', 'judged_runs', 'judged', 'accepted', 'partial', 'rejected',
+    'accepted_weighted', 'unique', 'unique_basis_runs', 'rework', 'duration_s', 'tokens', 'output_tokens_per_s', 'speed_basis', 'cost_usd']);
+  assert.deepEqual([combined.seats, combined.runs, combined.accepted, combined.partial, combined.rejected, combined.accepted_weighted], [10, 11, 2, 1, 1, 2.5]);
+  assert.deepEqual(combined.duration_s, { total: 555, median_per_seat: 55, p90_per_seat: 90, missing_runs: 0 });
+  const split = output(await h.bridge(['stats', '--by', 'effort,cell']));
+  assert.deepEqual(split.by, ['effort', 'cell']);
+  assert.deepEqual(Object.keys(split.rows[0]).slice(0, 6), ['model', 'module', 'effort', 'cell', 'seats', 'runs']);
+  assert.deepEqual(split.rows.map(({ effort, cell, seats, runs }) => [effort, cell, seats, runs]), [
+    ['high', 'simple', 1, 1], ['low', 'simple', 1, 1], [null, 'simple', 1, 1], [null, 'normal', 1, 1],
+    ['medium', 'complex', 1, 1], ['high', 'alpha', 1, 1], ['high', 'beta', 1, 1], ['high', 'delta', 1, 1],
+    ['high', 'zeta', 1, 1], ['high', null, 1, 1], ['max', 'complex', 0, 1],
+  ]);
+  assert.deepEqual(split.rows[1].duration_s, { total: 10, median_per_seat: 15, p90_per_seat: 15, missing_runs: 0 });
+  assert.equal(split.rows[1].accepted_weighted, 1.5);
+  assert.deepEqual(split.rows.at(-1).duration_s, { total: 5, median_per_seat: null, p90_per_seat: null, missing_runs: 0 });
+  assert.equal(split.rows.at(-1).accepted_weighted, 1);
+  const repeated = output(await h.bridge(['stats', '--by', 'effort', '--by', 'cell']));
+  assert.deepEqual(repeated.by, split.by);
+  assert.deepEqual(repeated.rows, split.rows);
+  for (const dim of ['effort', 'cell']) {
+    const single = output(await h.bridge(['stats', '--by', dim]));
+    assert.deepEqual(single.by, [dim]);
+    assert.equal(single.rows.length, dim === 'effort' ? 5 : 8);
+    assert.ok(single.rows.every((row) => Object.hasOwn(row, dim) && !Object.hasOwn(row, dim === 'effort' ? 'cell' : 'effort')));
+  }
+});
+
+test('stats 拒绝非法 --by 值并输出中英文 statsBadBy', async (t) => {
+  const h = sandbox(t);
+  for (const lang of ['zh', 'en']) failed(await h.bridge(['stats', '--by', 'effort,level'], { env: { FOREMAN_LANG: lang } }),
+    MESSAGES[lang].statsBadBy('level', MESSAGES[lang].list(['effort', 'cell'])));
+});
+
+test('stats plans 汇总含续接的计划墙钟，区分未完和不可读并按计划字段过滤', async (t) => {
+  const h = sandbox(t), created = Date.now() - 60000, at = (seconds) => new Date(created + seconds * 1000).toISOString();
+  assert.deepEqual(output(await h.bridge(['stats'])).plans, { counted: 0, unfinished: 0, unreadable: 0, rows: [] });
+  const plan = (id, extra = {}) => write(path.join(h.runs, 'plans', `${id}.json`), {
+    plan_id: id, module: 'review', cell: 'normal', group: 'batch', created_at: at(0), seats: [{ seat: 1 }], ...extra,
+  });
+  const run = (id, plan, extra = {}) => seedRun(h, id, { ...review, plan, seat: 1, group: 'run-group', session_id: null, ended_at: at(10), ...extra }, { duration_s: 1 });
+  plan('p1', { seats: [{ seat: 1 }, { seat: 2 }] });
+  run('p1-a', 'p1', { started_at: at(-3 * 86400) });
+  run('p1-b', 'p1', { seat: 2, ended_at: at(25) });
+  run('p1-resume', 'p1', { parent: 'p1-a', mode: 'resume', ended_at: at(40.16) });
+  run('p1-host', 'p1', { seat: 0, participant: 'host', status: 'running', pid: process.pid, ended_at: undefined });
+  plan('p2', { cell: undefined, level: 'normal' });
+  run('p2-a', 'p2', { ended_at: at(20.04) });
+  plan('missing', { seats: [{ seat: 1 }, { seat: 2 }] });
+  run('missing-a', 'missing');
+  run('missing-host', 'missing', { seat: 2, participant: 'host' });
+  plan('running');
+  run('running-a', 'running', { status: 'running', pid: process.pid, ended_at: at(999) });
+  plan('no-end', { cell: 'complex' });
+  run('no-end-a', 'no-end', { ended_at: 'invalid' });
+  plan('exec', { module: 'run', cell: 'simple' });
+  run('exec-a', 'exec', { module: 'run', kind: 'exec', mode: 'run', ended_at: at(6.04) });
+  plan('other-group', { group: 'other' });
+  run('other-a', 'other-group', { ended_at: at(100.46) });
+  plan('old', { created_at: at(-3 * 86400) });
+  run('old-a', 'old', { ended_at: at(-3 * 86400 + 2) });
+  plan('empty', { seats: [] });
+  plan('host-only', { seats: undefined });
+  plan('bad-date', { created_at: 'invalid' });
+  write(path.join(h.runs, 'plans', 'corrupt.json'), '{broken');
+  write(path.join(h.runs, 'plans', 'p1.decision.md'), '{not a plan');
+  const all = output(await h.bridge(['stats']));
+  assert.deepEqual(all.plans, { counted: 5, unfinished: 3, unreadable: 2, rows: [
+    { module: 'review', cell: 'normal', plans: 4, unfinished: 2, wall_clock_s: { median: 30.1, p90: 100.5 } },
+    { module: 'review', cell: 'complex', plans: 0, unfinished: 1, wall_clock_s: { median: null, p90: null } },
+    { module: 'run', cell: 'simple', plans: 1, unfinished: 0, wall_clock_s: { median: 6, p90: 6 } },
+  ] });
+  const exec = output(await h.bridge(['stats', '--module', 'run']));
+  assert.deepEqual(exec.plans, { counted: 1, unfinished: 0, unreadable: 2, rows: [all.plans.rows[2]] });
+  const batch = output(await h.bridge(['stats', '--module', 'review', '--group', 'batch', '--since', '1']));
+  assert.deepEqual(batch.plans, { counted: 2, unfinished: 3, unreadable: 2, rows: [
+    { module: 'review', cell: 'normal', plans: 2, unfinished: 2, wall_clock_s: { median: 30.1, p90: 40.2 } },
+    all.plans.rows[1],
+  ] });
+  assert.deepEqual(output(await h.bridge(['stats', '--plan', 'p1'])).plans, { counted: 1, unfinished: 0, unreadable: 2, rows: [
+    { module: 'review', cell: 'normal', plans: 1, unfinished: 0, wall_clock_s: { median: 40.2, p90: 40.2 } },
+  ] });
 });

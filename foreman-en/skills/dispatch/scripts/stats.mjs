@@ -147,6 +147,15 @@ function median(values) {
   const mid = Math.floor(values.length / 2);
   return values.length % 2 ? values[mid] : (values[mid - 1] + values[mid]) / 2;
 }
+function percentile(values, p) {
+  if (!values.length) return null;
+  return [...values].sort((a, b) => a - b)[Math.ceil(p * values.length) - 1];
+}
+function compareCell(a, b) {
+  const cells = ['simple', 'normal', 'complex'];
+  const rank = (cell) => cell == null ? 4 : cells.includes(cell) ? cells.indexOf(cell) : 3;
+  return rank(a) - rank(b) || (a ?? '').localeCompare(b ?? '');
+}
 
 function countUnique(groups) {
   const modelKey = (row) => JSON.stringify([row.participant === 'host', row.model]);
@@ -191,6 +200,8 @@ function countUnique(groups) {
 
 function cmdStats(o, statsOf) {
   if (o.module != null && !MODULES.includes(o.module)) die(M.statsBadModule(o.module, M.list(MODULES)));
+  const by = [...new Set(split(o.by))];
+  for (const value of by) if (!['effort', 'cell'].includes(value)) die(M.statsBadBy(value, M.list(['effort', 'cell'])));
   const since = o.since == null ? null : Number(o.since);
   if (since != null && (!Number.isFinite(since) || since <= 0)) die(M.statsBadSince(o.since));
   const cutoff = since == null ? null : Date.now() - since * 86400000;
@@ -208,13 +219,14 @@ function cmdStats(o, statsOf) {
   const rows = new Map(), seatTimes = new Map(), groups = new Map();
   const rowFor = (meta, result, module) => {
     const host = meta.participant === 'host', model = host ? meta.model ?? 'claude-code' : baseModel(meta, result);
-    const key = JSON.stringify([host, model, module]);
+    const dimensions = Object.fromEntries(by.map((dim) => [dim, dim === 'effort' ? meta.effort ?? null : meta.cell ?? meta.level ?? null]));
+    const key = JSON.stringify([host, model, module, ...Object.values(dimensions)]);
     if (!rows.has(key)) {
-      const row = { model, module, ...(host ? { participant: 'host', self_judged: true } : {}), seats: 0, runs: 0, findings_reported: module === 'review' ? 0 : null,
-        judged_runs: 0, judged: 0, accepted: 0, partial: 0, rejected: 0, unique: null, unique_basis_runs: 0,
+      const row = { model, module, ...dimensions, ...(host ? { participant: 'host', self_judged: true } : {}), seats: 0, runs: 0, findings_reported: module === 'review' ? 0 : null,
+        judged_runs: 0, judged: 0, accepted: 0, partial: 0, rejected: 0, accepted_weighted: 0, unique: null, unique_basis_runs: 0,
         rework: ['run', 'image'].includes(module) ? { seats: 0, reworked: 0, rate: null } : null,
         ...(['run', 'image'].includes(module) ? { rework_basis: { inferred_seats: 0, inferred_reworked: 0 } } : {}),
-        duration_s: { total: 0, median_per_seat: null, missing_runs: 0 },
+        duration_s: { total: 0, median_per_seat: null, p90_per_seat: null, missing_runs: 0 },
         tokens: { input: null, cached_input: null, output: null, runs: 0, missing_runs: 0 },
         output_tokens_per_s: null,
         // 速度用到了哪些轮次、排除了多少轮和原因，方便判断这个数字有多可靠
@@ -323,14 +335,50 @@ function cmdStats(o, statsOf) {
   countUnique(groups);
   for (const row of rows.values()) {
     row.duration_s.median_per_seat = median(seatTimes.get(row));
+    row.duration_s.p90_per_seat = percentile(seatTimes.get(row), 0.9);
+    row.accepted_weighted = row.accepted + 0.5 * row.partial;
     const basis = row.speed_basis;
     if (basis.seconds > 0) row.output_tokens_per_s = Math.round(basis.output_tokens / basis.seconds * 10) / 10;
     // 加起来的金额去掉浮点尾巴（单条结果的金额本来就是取整过的）
     if (row.cost_usd.total != null) row.cost_usd.total = usd(row.cost_usd.total);
     if (row.rework?.seats) row.rework.rate = Number((row.rework.reworked / row.rework.seats).toFixed(2));
   }
-  print({ runs_dir: RUNS_ROOT, module: o.module ?? null, since_days: since, group: o.group ?? null, plan: o.plan ?? null, generated_at: new Date().toISOString(), totals,
-    rows: [...rows.values()].sort((a, b) => MODULES.indexOf(a.module) - MODULES.indexOf(b.module) || b.seats - a.seats || a.model.localeCompare(b.model)),
+
+  // 每份计划从建计划到最后一个外部席结束的墙钟时间；有席位没跑完、还在跑或没有结束时间的计划只计入 unfinished
+  const plans = { counted: 0, unfinished: 0, unreadable: 0, rows: [] }, planGroups = new Map();
+  const plansDir = path.join(RUNS_ROOT, 'plans');
+  const planFiles = fs.existsSync(plansDir) ? fs.readdirSync(plansDir).filter((file) => file.endsWith('.json')) : [];
+  const planRuns = new Map();
+  for (const run of runs) if (run.meta?.plan && run.meta.participant !== 'host') planRuns.set(run.meta.plan, [...planRuns.get(run.meta.plan) ?? [], run]);
+  for (const file of planFiles) {
+    const id = file.slice(0, -'.json'.length), plan = readRecord(plansDir, file), created = Date.parse(plan?.created_at);
+    if (!Number.isFinite(created)) { plans.unreadable++; continue; }
+    if (o.module != null && plan.module !== o.module || cutoff != null && !(created >= cutoff)
+      || o.group != null && plan.group !== o.group || o.plan != null && id !== o.plan) continue;
+    if (!plan.seats?.length) continue;
+    const cell = plan.cell ?? plan.level ?? null, key = JSON.stringify([plan.module, cell]);
+    if (!planGroups.has(key)) planGroups.set(key, { module: plan.module, cell, unfinished: 0, times: [] });
+    const row = planGroups.get(key);
+    const external = planRuns.get(id) ?? [];
+    const ends = external.map((run) => Date.parse(run.meta.ended_at));
+    const finished = plan.seats.every(({ seat }) => external.some((run) => run.meta.seat === seat))
+      && !external.some((run) => run.running) && ends.every(Number.isFinite);
+    if (finished) {
+      plans.counted++;
+      row.times.push((Math.max(...ends) - created) / 1000);
+    } else { plans.unfinished++; row.unfinished++; }
+  }
+  plans.rows = [...planGroups.values()]
+    .sort((a, b) => MODULES.indexOf(a.module) - MODULES.indexOf(b.module) || compareCell(a.cell, b.cell))
+    .map(({ module, cell, unfinished, times }) => ({ module, cell, plans: times.length, unfinished,
+      wall_clock_s: {
+        median: times.length ? Math.round(median(times) * 10) / 10 : null,
+        p90: times.length ? Math.round(percentile(times, 0.9) * 10) / 10 : null,
+      } }));
+  print({ runs_dir: RUNS_ROOT, module: o.module ?? null, since_days: since, group: o.group ?? null, plan: o.plan ?? null, by, generated_at: new Date().toISOString(), totals,
+    rows: [...rows.values()].sort((a, b) => MODULES.indexOf(a.module) - MODULES.indexOf(b.module) || b.seats - a.seats || a.model.localeCompare(b.model)
+      || compareCell(a.cell, b.cell) || (a.effort == null) - (b.effort == null) || (a.effort ?? '').localeCompare(b.effort ?? '')),
+    plans,
     notes: M.statsNotes });
 }
 
