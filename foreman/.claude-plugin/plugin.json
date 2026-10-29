@@ -1,6 +1,6 @@
 {
   "name": "foreman",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Claude Code 主导的多模型协作：讨论、执行、审查各按难度分级，把编码工作派给 Codex、opencode、pi 和 API 模型并验收，请其他模型独立审查、一起讨论复杂方案；图形素材走出图和手画流程，网页看板实时显示各模型的进度、用量和费用。",
   "author": {
     "name": "DaydayupV"
