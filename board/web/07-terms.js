@@ -7,7 +7,8 @@
 //  - Claude Code 自己的对话流单独一栏，放在最前
 // 有新内容时自动滚到底，往上翻看时不打扰。以后做多对话，切换对话就是换一组车道（termUnits）重画，标题跟着换。
 
-const PANEL = { cols: new Map(), open: new Set(), seen: false, numbers: new Map(), fold: new Map(), doneLines: new Map(), allDone: false };
+// open：席位 id → 用户点开（true）还是收起（false）；没点过的按默认（组里只有这一席时展开）
+const PANEL = { cols: new Map(), open: new Map(), seen: false, numbers: new Map(), fold: new Map(), doneLines: new Map(), allDone: false };
 const groupPlans = (group, t) => [...new Map(B.life.filter((p) => p.k === 'fplan' && p.group === group && p.ts <= t).map((p) => [p.plan, p])).values()];
 // 同一帧里用量表和终端区会对每一组各问一次：按此刻和数据版本记一份（回放暂停时此刻不变，数据变了也要重算）
 const QUEUE_AT = { t: null, v: -1, list: null };
@@ -47,8 +48,10 @@ $('termsec').addEventListener('click', (e) => {
   if (line || head) { PANEL.fold.set((line || head.parentNode).dataset.lane, !!line); UI.ver++; wake(); return; }
   const seat = e.target.closest('.seat');
   if (!seat) return;
+  // 展开的席位只在身份行、分工行上点才收起：在正文里点（选文字、拖滚动条）不收
+  if (seat.classList.contains('open') && e.target.closest('.term, .use')) return;
   const id = seat.dataset.lane;
-  if (!PANEL.open.delete(id)) PANEL.open.add(id);
+  PANEL.open.set(id, !seat.classList.contains('open'));
   UI.ver++; wake();
 });
 
@@ -313,6 +316,10 @@ function seatsOf(u, t) {
   return { history, blocks, all, plans, numbers, queue, states };
 }
 
+// 组里只有一席（没有 Claude Code 席、没有排队、计划也只有这一席）：这一席默认展开成完整时间线并撑满整栏，
+// 和不在组里的单任务栏一样；以后有第二席加进来就照常收起
+const loneGroup = (blocks, queue, plans) => blocks.length === 1 && !blocks[0].host && !queue.length && plans.every((p) => !p.host && (p.seats || []).length <= 1);
+
 function fillGroup(col, u, t) {
   const seats = groupSeats(u, t), { history, blocks, plans, numbers, queue, states } = seats;
   // 写上轮次用的是副本：groupSeats 的结果同一帧里用量表也在用
@@ -320,6 +327,7 @@ function fillGroup(col, u, t) {
   for (const run of all) { const b = blocks.find((b) => (b.host || currentRun(b.lane, t)).id === run.id); if (b.lane) run.meta.round = roundOf(b.lane, t); }
   const head = Display.groupTask(all, plans, queue);
   setText(col.querySelector('header b'), head.text);
+  col.querySelector('header b').title = head.sceneWhy;
   const notes = Display.planNotes(plans, history.map((r) => ({ ...r,
     outcome: Display.resultOutcome(r.meta.ended_at != null && r.meta.ended_at <= t || r.meta.participant === 'host' ? r.result : { status: 'running' }, r.meta) })));
   let noteBox = col.querySelector('.plan-notes');
@@ -332,13 +340,15 @@ function fillGroup(col, u, t) {
     const part = document.createElement('i'); part.className = p.kind; part.dataset.tone = Display.toneOf(p.kind); part.textContent = p.text; count.append(part);
   }
   col.classList.toggle('running', states.some((s) => s.running) || queue.length > 0);
+  const lone = loneGroup(blocks, queue, plans);
+  col.classList.toggle('lone', lone);
   const box = col.querySelector('.seats'), seen = new Set();
   blocks.forEach((b, i) => {
     let el = col.seats.get(b.id);
     if (!el) { el = seatShell(b.id); col.seats.set(b.id, el); }
     seen.add(b.id);
     if (box.children[i] !== el) box.insertBefore(el, box.children[i] || null);
-    if (b.host) fillHostSeat(el, b.host, numbers.runs.get(b.host.id)); else fillSeat(el, b.lane, t, numbers.runs.get(currentRun(b.lane, t).id), head.split);
+    if (b.host) fillHostSeat(el, b.host, numbers.runs.get(b.host.id)); else fillSeat(el, b.lane, t, numbers.runs.get(currentRun(b.lane, t).id), head.split, lone);
   });
   for (const [id, el] of col.seats) if (!seen.has(id)) { el.remove(); col.seats.delete(id); }
   // 已结束的组每席照样显示完整结论，不像原生终端那样放不下时收成四行：组里放不下就在组内滚动
@@ -363,9 +373,9 @@ function seatShell(id) {
 }
 
 // 一席：身份行（席位号、模型、状态和用时）、分工行（角色或这一份的标题）、正文、结束后的用量
-function fillSeat(el, lane, t, no, split = false) {
+function fillSeat(el, lane, t, no, split = false, lone = false) {
   const r = currentRun(lane, t), run = Display.displayRun(r), key = avatarFor(r.model, r.agent_type), st = seatStatus(lane, r, t);
-  const open = PANEL.open.has(lane.id), ended = r.ended_at != null && r.ended_at <= t;
+  const open = PANEL.open.get(lane.id) ?? lone, ended = r.ended_at != null && r.ended_at <= t;
   el.style.setProperty('--tint', rgba(key));
   el.classList.toggle('running', !!st.running); el.classList.toggle('open', open);
   el.classList.toggle('bad', st.kind === 'failed');
@@ -378,7 +388,7 @@ function fillSeat(el, lane, t, no, split = false) {
   setText(el.querySelector('.st'), st.right.filter(Boolean).join(' '));
   setText(el.querySelector('.role'), Display.seatLine(run.meta, { title: split }));
   const ol = el.querySelector('.term'), width = termWidth(ol);
-  let lines = open ? timeline(lane, t, { open: true }) : ended ? conclusion(r, width)
+  let lines = open ? timeline(lane, t, { open: true }).slice(-400) : ended ? conclusion(r, width)
     : Display.liveLines(liveState(lane, r, t), 8, width, TERM_C).map((text) => ({ cls: 'plain', text }));
   if (!lines.length && st.running && !liveState(lane, r, t).api.req) lines = [{ cls: 'plain', text: Display.D.watchWorking }];
   el.fullLines = lines;
@@ -388,7 +398,7 @@ function fillSeat(el, lane, t, no, split = false) {
 }
 
 function fillHostSeat(el, h, no = 0) {
-  const run = Display.displayRun(h), open = PANEL.open.has(el.dataset.lane);
+  const run = Display.displayRun(h), open = PANEL.open.get(el.dataset.lane) ?? false;
   const st = Display.seatState(run.meta, run.result, {}, 0);
   el.style.setProperty('--tint', rgba('claude')); el.classList.add('host'); el.classList.toggle('open', open);
   el.dataset.tone = Display.toneOf(st.kind);

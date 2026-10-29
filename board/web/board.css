@@ -127,7 +127,8 @@ body.uni #termsec, body.uni #more, body.uni #world, body.uni #view::after, body.
 .card .rate .now { color: var(--tint); }
 .card .term { position: absolute; left: 5px; right: 4px; margin: 0; padding: 0; list-style: none; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; color: var(--mid); }
 .card .term li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; }
-.term .ts { color: var(--dim); display: inline-block; width: 6ch; }
+/* 时间是行内块，会继承行的悬挂缩进（text-indent: -8ch），自己的文字被推到框外、在栏的左边被裁掉：清零 */
+.term .ts { color: var(--dim); display: inline-block; width: 6ch; text-indent: 0; }
 .term .mk { color: var(--edge2); }
 .term .node, .term .user, .term .link { color: var(--text); }
 .term .node .mk, .term .user .mk { color: var(--tint); }
@@ -314,6 +315,11 @@ body.table-all #usage:not([data-mode="uni"]) .tbody { overflow: visible; mask-im
 .tgroup .dispatch-queue { color: var(--mid); border-top: 1px dashed rgba(170,170,182,.13); }
 .seat.open .term .ts { display: inline-block; }
 .tcol .seat.open .term li { padding-left: 8ch; text-indent: -8ch; }
+/* 只有一席的组：展开的这一席撑满整栏，正文在自己里面滚动、贴底，和单任务栏一样 */
+.tgroup.lone .seats { display: flex; flex-direction: column; }
+.tgroup.lone .seat.open { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.tgroup.lone .seat.open > :not(.term) { flex: none; }
+.tgroup.lone .seat.open .term { flex: 1; min-height: 0; max-height: none; overflow-y: auto; }
 
 /* 窄屏：平板去掉次要的列和提示，名额面板窄一些；手机上名额面板只留标题（点一下展开），
    表格只留关键几列，终端各栏上下排。单对话的画布在手机上仍然很小，主要看表格和终端 */

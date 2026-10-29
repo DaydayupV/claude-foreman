@@ -181,7 +181,7 @@ function renderWorld(t, L) {
     h.classList.toggle('collapsed', g.collapsed);
     const head = groupHead(g.lanes, t);
     setText(h.querySelector('b'), `${g.collapsed ? '▸' : '▾'} ${head.title}`);
-    h.title = `${head.title} · ${head.counts}`;
+    h.title = [`${head.title} · ${head.counts}`, head.sceneWhy].filter(Boolean).join('\n');
     for (const lane of g.lanes) {
       const row = L.rows.get(lane.id);
       let card = UI.cards.get(lane.id), out = UI.outs.get(lane.id);
@@ -209,15 +209,17 @@ function renderWorld(t, L) {
 
 function groupHead(all, t) {
   const lanes = all.filter((l) => !l.ghost), planned = all.length - lanes.length;
+  const plans = plansAt(t).filter((p) => all.some((l) => p.id === (l.ghost ? l.plan : currentRun(l, t).plan)));
+  const runs = lanes.map((l) => { const run = Display.displayRun(currentRun(l, t)); run.meta.round = roundOf(l, t); return run; });
+  const head = Display.groupTask(runs, plans.map((p) => p.ev));
   if (!lanes.length) {
-    const p = plansAt(t).find((x) => x.id === all[0].plan);
-    return { title: [p && p.module, 'planned', p && p.ev.cell].filter(Boolean).join(' · '), counts: `${planned} planned` };
+    const p = plans.find((x) => x.id === all[0].plan);
+    return { title: [p && p.module, 'planned', p && p.ev.cell, head.text].filter(Boolean).join(' · '), sceneWhy: head.sceneWhy, counts: `${planned} planned` };
   }
   // 和原生终端的组视图一样：执行拆成几份的写 split，标题是各份标题用" / "连起来；讨论和审查带角色的写 roles，否则 panel；
   // 各份等级不同时不写等级（写在各自的分工行里）
-  const runs = lanes.map((l) => { const run = Display.displayRun(currentRun(l, t)); run.meta.round = roundOf(l, t); return run; });
   const st = lanes.map((l) => laneStatus(l, t)), running = st.filter((s) => s.running).length;
-  return { title: Display.groupTask(runs).text,
+  return { title: head.text, sceneWhy: head.sceneWhy,
     counts: `${planned ? `${planned} planned · ` : ''}${running ? `${running} running · ` : ''}${st.length - running} finished` };
 }
 
