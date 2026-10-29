@@ -1,12 +1,13 @@
-// foreman 1.2.0 的 agy 守卫；正文 sha256: 12ba35fb5a6488b2b07aa65477d9d069e0f097262c9df4e93c93d7d38e7d615e
+// foreman 1.2.0 的 agy 守卫；正文 sha256: 45f5c1e1e85519f005b92f6ce2235208df19cb8996a1a3cf28da24e58c923328
 // 只依赖 Node 内置模块，复制到用户目录后仍可独立运行。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// read_file 实测会带 StartLine / EndLine 只读一段。
-const KEYS = { read_file: ['Path', 'StartLine', 'EndLine'], view_file: ['Path', 'StartLine', 'EndLine'], edit_file: ['Path', 'Target', 'Replacement'],
+// read_file 实测会带 StartLine / EndLine 只读一段；agy 1.4.9 起有时还带 ByteOffset（从第几个字节读起）。
+const READ_KEYS = ['Path', 'StartLine', 'EndLine', 'ByteOffset'];
+const KEYS = { read_file: READ_KEYS, view_file: READ_KEYS, edit_file: ['Path', 'Target', 'Replacement'],
   write_file: ['Path', 'Content', 'Overwrite'], run_command: ['CommandLine', 'WaitMsBeforeAsync', 'toolSummary'] };
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const deny = (reason) => ({ decision: 'deny', reason: `foreman guard: ${reason}` });

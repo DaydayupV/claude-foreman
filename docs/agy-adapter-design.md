@@ -126,7 +126,7 @@
 | `edit` | 执行 `run_access: "edit"`（第二期） | read 档的读，加 `edit_file`、`write_file`（限项目目录内，排除 3.5 的位置） | 无；不放行 `run_command` |
 | `shell` | 执行 `run_access: "shell"`（第二期） | edit 档全部，加 `run_command`（没有系统沙箱，和 pi 的 shell 档相同） | 无 |
 
-- **每个工具的参数白名单**：`read_file` / `view_file` 只认 `Path`、`StartLine`、`EndLine`（后两个第 1 期实测补上，见第 12 节）；`edit_file` 只认 `Path`、`Target`、`Replacement`；`write_file` 只认 `Path`、`Content`、`Overwrite`；`run_command` 只认 `CommandLine`、`WaitMsBeforeAsync`、`toolSummary`。出现任何其他参数就拒绝，理由写明参数名。agy 自动升级后如果加了新参数，会先被拒绝，再由维护者核对后补进白名单。
+- **每个工具的参数白名单**：`read_file` / `view_file` 只认 `Path`、`StartLine`、`EndLine`、`ByteOffset`（`StartLine`、`EndLine` 第 1 期实测补上，`ByteOffset` 在 agy 1.4.9 的真机测试里补上，见第 12 节）；`edit_file` 只认 `Path`、`Target`、`Replacement`；`write_file` 只认 `Path`、`Content`、`Overwrite`；`run_command` 只认 `CommandLine`、`WaitMsBeforeAsync`、`toolSummary`。出现任何其他参数就拒绝，理由写明参数名。agy 自动升级后如果加了新参数，会先被拒绝，再由维护者核对后补进白名单。只读工具（`read_file`、`view_file`、`run_command`）因为不认识的参数被拒时，适配器记成一条说明，不算要用户决定的权限问题：用户没有什么可放行的，agy 一般会去掉参数重试。
 - 所有档位都拒绝：子 agent 三件套、`send_message`、`schedule`、`search_web`、`ask_question`（无头模式答不了，理由里提示把问题写进报告）、`browser_*`、`call_mcp_tool`、`generate_image`、`notebook_*`。不认识的工具也拒绝。`manage_task` 只是任务清单，各档放行。
 - 路径按 agy 自己的规则解析，不照搬 pi 的规则。第 0b 期实测（Windows）：
   - agy 只接受绝对路径和 `file:///` 地址；
@@ -310,7 +310,7 @@ stream-json 输入下，模型名无效时退出码是 1（不是 3），`result
 在真实 agy 上冒烟时发现、前面各节没写到的事实，代码已按这些实现：
 - **事件是嵌套的**：每行是 `{"event":"<名字>","<名字>":{…}}`，比如 `{"event":"step_update","step_update":{…}}`、`{"event":"result","result":{…}}`；`init` 另外在顶层带 `conversation_id`。适配器读行时先归一成平铺对象。
 - **工具字段**：参数在 `tool_info.parameters`，守卫拒绝时步骤为 `state: "ERROR"`，`error` 是 `{type, message}`，`message` 以 `tool call denied by pre-tool hook: ` 开头。命令没有单独的退出码，`output` 以 `Command exited with code N.` 开头。stream-json 会把较长的参数（实测 `CommandLine`）截到约 512 个字符，所以只能按输出认探针结果，不能按命令原文匹配；钩子收到的参数是完整的。
-- **钩子输入**：`{toolCall:{name,args}, workspacePaths:[正斜杠路径], conversationId, stepIdx, modelName, lastUserInput, artifactDirectoryPath, transcriptPath}`。`read_file` 会带 `StartLine` / `EndLine`。
+- **钩子输入**：`{toolCall:{name,args}, workspacePaths:[正斜杠路径], conversationId, stepIdx, modelName, lastUserInput, artifactDirectoryPath, transcriptPath}`。`read_file` 会带 `StartLine` / `EndLine`；agy 1.4.9 起有时还带 `ByteOffset`（数字，实测为 0），被拒后 agy 会去掉它重试。
 - **钩子命令**：Claude Code 给子进程设了 `NoDefaultCurrentDirectoryInExePath=1`，agy 继承下来以后，`cmd /c` 不在当前目录找裸文件名，所以 Windows 上的命令写成 `.\foreman-agy-guard.cmd`。钩子命令本身失败时，cmd 的报错是系统代码页，agy 会整轮报 `string_value contains invalid UTF-8` 而失败。
 - **`run_command` 在 Windows 上用 PowerShell 跑**：带引号的程序路径要写成 `& "…\node.exe" …`。
 - **沙箱的网络**：表现为 DNS 解析失败（`ENOTFOUND`），不是权限错误；探针用 foreman 自己（沙箱外）的对照来区分"沙箱拦下"和"本来就断网"。

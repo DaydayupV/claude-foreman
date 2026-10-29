@@ -218,7 +218,11 @@ async function agySession(run, schema, promptFor) {
       return;
     }
     completed.add(key); currentTools.delete(key);
-    if (String(info.error || info.output).startsWith('tool call denied by pre-tool hook: foreman guard:')) observed.questions.push({ source: 'permission_denied',
+    const denial = /^tool call denied by pre-tool hook: foreman guard: (.*)/s.exec(String(info.error || info.output))?.[1];
+    // 只读工具因为守卫不认识的参数被拦（agy 新版本加了参数）：用户没有什么可决定的，agy 会去掉参数重试，记成说明。
+    const unknownArg = /^unexpected argument (\S+) for (read_file|view_file|run_command)$/.exec(denial?.trim() ?? '');
+    if (unknownArg) notes.push(M.agyGuardUnknownArg(unknownArg[2], unknownArg[1]));
+    else if (denial !== undefined) observed.questions.push({ source: 'permission_denied',
       question: `${tool} ${JSON.stringify(args)}`, detail: JSON.stringify({ tool, input: args }) });
     if (['edit_file', 'write_file'].includes(tool)) {
       event({ type: 'item.completed', item: { id: item.id, tool, type: 'file_change', category: 'edit', changes: [] } });

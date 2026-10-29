@@ -478,6 +478,20 @@ test('agy 工具错误对象和字符串识别守卫拒绝，命令输出解析�
   assert.ok(lines(path.join(result.run_dir, 'agy.jsonl')).some((e) => e.step_update?.tool_info?.error?.type === 'TOOL_ERROR'));
 });
 
+test('agy 守卫放行 ByteOffset；只读工具因不认识的参数被拦时记成说明，不算要决定的问题', async (t) => {
+  const h = sandbox(t); configure(h); await install(h); h.write('source.txt', 'safe');
+  const file = path.join(h.cwd, 'source.txt');
+  h.scenario({ steps: [
+    { tool: { name: 'read_file', args: { Path: file, StartLine: 1, EndLine: 5, ByteOffset: 0 } } },
+    { tool: { name: 'read_file', args: { Path: file, FutureArg: 1 } } },
+  ] });
+  const r = output(await run(h)), decisions = lines(path.join(r.run_dir, 'agy-guard.jsonl'));
+  assert.equal(r.status, 'done');
+  assert.deepEqual(decisions.map((d) => d.decision), ['allow', 'deny']);
+  assert.equal(r.questions.filter((q) => q.source === 'permission_denied').length, 0);
+  assert.ok(r.notes.includes(M.agyGuardUnknownArg('read_file', 'FutureArg')));
+});
+
 test('agy 真启动器拒绝写工具，工具事件、权限问题、进度、用量与价格进入公共结果', async (t) => {
   const h = sandbox(t); configure(h); await install(h); h.write('source.txt', 'original');
   h.scenario({ steps: [
