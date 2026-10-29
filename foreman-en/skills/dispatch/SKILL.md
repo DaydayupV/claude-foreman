@@ -32,7 +32,7 @@ Decide who does a piece of work in this order:
 A request often goes through several stages: settle the approach (**discuss**), do the work (**run**), and before delivering, decide whether to have it reviewed (**review**). The order isn't fixed, and they can come back more than once (for example "run → review → discuss a design problem the review raised → run"). Each time a kind's trigger comes up, level it by that kind's own criteria; don't put the whole request into one kind:
 - The three kinds are told apart by what they deliver: changing something (writing code, running experiments, producing screenshots and data) → **run**; judging something that already exists (code changes, existing files, research conclusions and their evidence, screenshots and playback files), delivering a list of issues → **review**; deciding what to do next (approaches, trade-offs, research directions) → **discuss**. Parts of a review that need experiments or rendered screenshots are done as hands-on work, and the review only reads the results.
 - A discussion is levelled before you give the approach, or before you judge the result of work already done and decide what to do next (also when the user only asks for advice); hands-on work before you start it; a review once the thing under review exists and has passed checking, by its actual risk. When a kind comes up again, level it from 0 as usual. Don't discuss or review just to follow the flow.
-- **None of them go by how much changes** (except the size threshold for reviews). **When unsure, go one level up.**
+- **None of them go by how much changes** (except the size threshold for reviews). **For discussions and hands-on work, when unsure, go one level up**; for a review you're unsure about, follow "Levels" in `references/review.md`.
 - Claude handles level 0 itself, without calling the script; level 1 `simple`, level 2 `normal` and level 3 `complex` go by `resolved_modules.<kind>.<level>`: pick from its candidates, or Claude does it if it says `"claude code"`. Don't override the config because a task looks big or small, and don't look outside the cell.
 - The numeric thresholds are defaults; if the preference files say otherwise, follow them: the level 0 criteria for hands-on work, the review size (roughly 300 lines or 5 files), 1 rework, and more than 10 minutes per part when splitting work.
 
@@ -61,10 +61,10 @@ Judging something that already exists isn't a discussion: evidence reviews of re
 |---|---|
 | Level 0 | Small changes, docs, comments, styling, copy, pure configuration; one-off scripts or prototypes already run and checked; low-risk changes with test coverage. Claude's check is enough; no outside review |
 | Level 1 `simple` | Large but mechanical changes, such as bulk renames and replacements or folder migrations |
-| Level 2 `normal` | Larger ordinary features and fixes (roughly 300 lines or 5 files or more); level 3 hands-on work Claude did itself (including when the config gives that level to Claude) |
-| Level 3 `complex` | High-risk code: money and billing, deleting or migrating data, concurrency, auth and security, irreversible operations; fixes for bugs whose cause was unknown; evidence reviews before research conclusions are recorded |
+| Level 2 `normal` | Larger ordinary features and fixes (roughly 300 lines or 5 files or more); level 3 hands-on work Claude did itself (including when the config gives that level to Claude); evidence reviews before ordinary research conclusions are recorded |
+| Level 3 `complex` | Changes that alter high-risk behaviour, or whose effect on it can't be ruled out: money and billing, deleting or migrating data, concurrency, auth and security, irreversible operations; evidence reviews of research conclusions that such decisions will rest on |
 
-When several levels fit, take the highest. A design critique goes by how costly a wrong choice would be (as for discussions), a visual check by how much the deliverable matters.
+When several levels fit, take the highest. A review goes only by the material under review: it doesn't inherit the hands-on level, who made the change, or how hard the cause was to find. A design critique goes by how costly a wrong choice would be (as for discussions), a visual check by how much the deliverable matters.
 
 ## Hard rules
 These hold whatever the preference files say; the script can only enforce some of them.
