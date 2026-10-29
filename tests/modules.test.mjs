@@ -3,8 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { sandbox, output, failed, baseConfig, read, json, write, opencodeAgent, apiAgent, CODEX, ROOT, MESSAGES, DEFAULT_SEATS } from './helpers.mjs';
+import { sandbox, output, failed, baseConfig as oldBaseConfig, read, json, write, opencodeAgent, apiAgent, CODEX, ROOT, MESSAGES, DEFAULT_SEATS } from './helpers.mjs';
 const M = MESSAGES.zh;
+const baseConfig = () => {
+  const c = oldBaseConfig();
+  c.modules.review.gap = { simple: false, normal: false, complex: true };
+  return c;
+};
 
 test('模块遍历顺序一致，单对象只在内存规范为列表', async (t) => {
   const h = sandbox(t), c = baseConfig();
@@ -47,7 +52,7 @@ test('levels 迁移一次备份，顺序强度不变且不补格子或 required'
   assert.equal(results.filter((r) => r.stderr.includes('有一处行为变化')).length, 1);
   assert.equal(read(bak), before);
   assert.deepEqual(json(h.userConfig), { agents: { ...c.agents, second: { ...c.agents.codex } }, dispatch: { watch: { terminal: true, web: false } }, levels: M.levelsNote, modules: {
-    discuss: { ...levels.discuss, seats: DEFAULT_SEATS.discuss }, run: { complex: [levels.run.complex] }, review: { simple: [levels.review.simple], seats: DEFAULT_SEATS.review },
+    discuss: { ...levels.discuss, seats: DEFAULT_SEATS.discuss }, run: { complex: [levels.run.complex] }, review: { simple: [levels.review.simple], seats: DEFAULT_SEATS.review, gap: { simple: false, normal: false, complex: true } },
   } });
   // 说明留在 modules 前面，打开文件先看到它
   assert.deepEqual(Object.keys(json(h.userConfig)), ['agents', 'dispatch', 'levels', 'modules']);
@@ -83,7 +88,7 @@ test('旧配置里的 dispatch.max_seats 不再使用：照常加载、不限制
 
 test('读配置时：缺少 modules 补 seats 和 watch，不加 levels，项目配置不改', async (t) => {
   const h = sandbox(t), agents = baseConfig().agents;
-  const modules = Object.fromEntries(['discuss', 'review'].map((module) => [module, { seats: DEFAULT_SEATS[module] }]));
+  const modules = Object.fromEntries(['discuss', 'review'].map((module) => [module, { seats: DEFAULT_SEATS[module], ...(module === 'review' ? { gap: { simple: false, normal: false, complex: true } } : {}) }]));
   h.config({ dispatch: { auto: false, runs_dir: null }, agents });
   output(await h.bridge(['config']));
   assert.deepEqual(json(h.userConfig), { dispatch: { auto: false, runs_dir: null, watch: { terminal: true, web: false } }, agents, modules });
@@ -139,22 +144,24 @@ for (const [name, config] of [
   assert.equal((await h.bridge(['config'])).stderr, '');
 });
 
-test('项目配置里的 levels 说明和 modules 同时出现时照常收紧', async (t) => {
+test('项目配置里的 levels 说明和 modules 同时出现时照常覆盖', async (t) => {
   const h = sandbox(t);
   const file = h.write('.claude/foreman.json', { levels: M.levelsNote, modules: { run: { complex: 'claude code' } } });
   const before = read(file), r = await h.bridge(['config', '--cwd', h.cwd]), out = output(r);
   assert.equal(out.effective.modules.run.complex, 'claude code');
-  assert.deepEqual(out.closed_by_project, ['run.complex']);
+  assert.equal(out.effective.modules.run.complex, 'claude code');
+  assert.deepEqual(out.project_config.cells, ['run.complex']);
   assert.ok(!r.stderr.includes(M.projectOldFormat(file)), r.stderr);
   assert.equal(read(file), before);
 });
 
-test('image_configured 只看用户是否写了图像块，项目配置不影响', async (t) => {
+test('image_configured 看用户配置或项目配置有没有写图像块', async (t) => {
   const h = sandbox(t), c = baseConfig(); delete c.modules.image; h.config(c);
   h.write('.claude/foreman.json', { modules: { image: { generate: [{ agent: 'codex' }] } } });
   let out = output(await h.bridge(['config', '--cwd', h.cwd]));
-  assert.equal(out.image_configured, false);
-  assert.deepEqual(out.resolved_modules.image, { generate: null, draw: null });
+  assert.equal(out.image_configured, true);
+  assert.equal(output(await h.bridge(['config'])).image_configured, false);
+  assert.deepEqual(out.resolved_modules.image, { generate: [{ agent: 'codex', model: 'fake-codex', effort: null, required: false, tier: null }], draw: null });
   c.modules.image = {}; h.config(c);
   assert.equal(output(await h.bridge(['config', '--cwd', h.cwd])).image_configured, true);
   c.modules.image = { generate: null, draw: null }; h.config(c);

@@ -47,16 +47,21 @@ test('run 计划没有 host，旧计划只数外部席，其他模块不能带 h
   failed(await h.bridge(submitArgs(h, old)), M.submitNoHost(p.plan_id));
 });
 
-for (const module of ['discuss', 'review']) test(`${module} 用户关闭的格子可以建格子外计划，项目关闭仍拒绝`, async (t) => {
-  const h = sandbox(t), c = baseConfig(); c.modules[module].complex = 'claude code'; h.config(c);
-  const p = output(await h.bridge(planArgs(h, module)));
-  assert.equal(p.outside_cell, true); assert.deepEqual(p.required, []); assert.equal(p.seats[0].effort, 'max');
-  output(await h.bridge(submitArgs(h, p)));
-  const s = h.scenario({ last_message: module === 'discuss' ? discussion : review });
-  const r = output(await h.bridge(launch(p), { env: s.env }));
-  assert.equal(r.outside_cell, true); assert.equal(json(path.join(r.run_dir, 'meta.json')).outside_cell, true);
-  h.write('.claude/foreman.json', { modules: { [module]: { complex: 'claude code' } } });
-  failed(await h.bridge(planArgs(h, module)), M.planCellClosedByProject(`modules.${module}.complex`));
+for (const module of ['discuss', 'review']) test(`${module} 用户和项目配成 Claude Code 的格子均可建格子外计划并派出`, async (t) => {
+  for (const project of [false, true]) {
+    const h = sandbox(t), c = baseConfig();
+    if (project) h.write('.claude/foreman.json', { modules: { [module]: { complex: 'claude code' } } });
+    else c.modules[module].complex = 'claude code';
+    h.config(c);
+    const p = output(await h.bridge(planArgs(h, module)));
+    assert.equal(p.outside_cell, true); assert.deepEqual(p.required, []); assert.equal(p.seats[0].effort, 'max');
+    assert.equal(json(p.file).outside_cell, true);
+    output(await h.bridge(submitArgs(h, p)));
+    const s = h.scenario({ last_message: module === 'discuss' ? discussion : review });
+    const r = output(await h.bridge(launch(p), { env: s.env }));
+    assert.equal(r.status, 'done'); assert.equal(r.outside_cell, true);
+    assert.equal(json(path.join(r.run_dir, 'meta.json')).outside_cell, true);
+  }
 });
 
 test('格子外计划仍检查协作方存在、模块能力和 visual 看图能力', async (t) => {

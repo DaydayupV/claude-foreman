@@ -48,7 +48,7 @@ test('图像计划的路线、格子、角色及审查参数错误在确认前�
   noPlans(h);
 });
 
-test('图像计划重验候选、必选、关格、模型和强度，并且路线 4 不看 generate 必选', async (t) => {
+test('图像计划重验候选、必选、模型和强度，用户和项目空格使用相同提示', async (t) => {
   const h = sandbox(t), c = configure(h); c.agents.second = { ...c.agents.codex };
   c.modules.image.generate.push({ agent: 'second' }); h.config(c);
   failed(await h.bridge(planArgs(h, 'generate', 2, ['second'])), M.planMissingRequired('modules.image.generate', 'codex'));
@@ -57,7 +57,7 @@ test('图像计划重验候选、必选、关格、模型和强度，并且路�
   failed(await h.bridge(planArgs(h)), M.planCellClosed('modules.image.generate'));
   c.modules.image.generate = entries; h.config(c);
   const project = h.write('.claude/foreman.json', { modules: { image: { generate: null } } });
-  failed(await h.bridge(planArgs(h)), M.planCellClosedByProject('modules.image.generate'));
+  failed(await h.bridge(planArgs(h)), M.planCellClosed('modules.image.generate'));
   fs.unlinkSync(project); noPlans(h); answer(h);
   const p = output(await h.bridge(planArgs(h))), saved = json(p.file);
   write(p.file, { ...saved, route: 4 });
@@ -240,7 +240,7 @@ test('image 只从计划启动并要求 scope，generate 的元数据、执行�
   assert.equal(state.state, 'complete'); assert.equal(state.route, 1); assert.equal(state.seats[0].stale, null);
 });
 
-test('图像续接沿用格子、路线、计划及席位，不读 run 等级且排除旧图片', async (t) => {
+test('图像续接沿用格子、路线、计划及席位并排除旧图片，用户和项目空格均拒绝', async (t) => {
   const h = sandbox(t), c = configure(h); answer(h, 2);
   const p = output(await h.bridge(planArgs(h))), firstScenario = h.scenario({ images: ['old.png'] });
   const first = output(await h.bridge(launch(p, ['--scope', 'out']), { env: firstScenario.env }));
@@ -263,7 +263,7 @@ test('图像续接沿用格子、路线、计划及席位，不读 run 等级且
   failed(await h.bridge(['resume', '--run', second.run_id, '--brief', '-', '--reason', 'rework']), M.imageCellClosed('modules.image.generate'));
   c.modules.image.generate = [{ agent: 'codex' }]; h.config(c);
   h.write('.claude/foreman.json', { modules: { image: { generate: null } } });
-  failed(await h.bridge(['resume', '--run', second.run_id, '--brief', '-', '--reason', 'rework']), M.cellClosedByProject('modules.image.generate', false));
+  failed(await h.bridge(['resume', '--run', second.run_id, '--brief', '-', '--reason', 'rework']), M.imageCellClosed('modules.image.generate'));
 });
 
 test('普通执行及其续接出图告警，draw 路线 3/4 检查位图而路线 2 允许混合', async (t) => {

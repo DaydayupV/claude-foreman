@@ -24,12 +24,28 @@ const frameWhere = (watch, size, check) => poll(() => {
   return frame;
 }, '组视图画出预期的一帧');
 const has = (text) => (frame) => frame.some((line) => line.includes(text));
-const planFor = (h, group, seats) => {
+const planFor = (h, group, seats, extra = {}) => {
   const plan = `${group}-plan`;
   write(path.join(h.runs, 'plans', `${plan}.json`), { plan_id: plan, module: 'run', cell: 'complex', group, cwd: h.cwd,
-    seats: seats.map((seat) => ({ seat, agent: 'codex' })), required: [] });
+    seats: seats.map((seat) => ({ seat, agent: 'codex' })), required: [], ...extra });
   return plan;
 };
+
+test('组标题在等级后显示场景，多份计划用 M.list 列出不同场景', async (t) => {
+  const h = sandbox(t), group = 'scene-group', size = '120x40';
+  const first = planFor(h, group, [1], { scene: 'code' });
+  seedRun(h, '20000101-000001-code', { ...live, group, plan: first, seat: 1, level: 'complex', model: 'alpha' });
+  const watch = open(h, group, size);
+  await frameWhere(watch, size, (frame) => frame[0].includes('complex · code'));
+  const second = 'scene-research';
+  write(path.join(h.runs, 'plans', `${second}.json`), { plan_id: second, module: 'run', cell: 'complex', group,
+    scene: 'research', seats: [{ seat: 1, agent: 'codex' }], required: [] });
+  seedRun(h, '20000101-000002-research', { ...live, group, plan: second, seat: 1, level: 'complex', model: 'beta' });
+  await frameWhere(watch, size, (frame) => [MESSAGES.zh.list(['code', 'research']), MESSAGES.zh.list(['research', 'code'])]
+    .some((list) => frame[0].includes(`complex · ${list}`)));
+  watch.stop();
+  await watch.done;
+});
 
 test('12 席按计划编号，1、0 打开第 10 席，单按 1 等 600 ms 后打开第 1 席', async (t) => {
   const h = sandbox(t), group = 'twelve', size = '120x70';

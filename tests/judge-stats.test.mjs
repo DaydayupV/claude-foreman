@@ -748,10 +748,32 @@ test('stats --by effort,cell 分行并保留根席和各轮归属，补齐 p90 �
   }
 });
 
+test('stats --by scene 从计划分行，组合 effort/cell 并将缺失或不可读计划记为 null', async (t) => {
+  const h = sandbox(t);
+  for (const [id, scene] of [['code', 'code'], ['research', 'research'], ['old', undefined]]) {
+    write(path.join(h.runs, 'plans', `${id}.json`), { plan_id: id, scene });
+  }
+  write(path.join(h.runs, 'plans', 'broken.json'), '{broken');
+  for (const [i, [plan, effort]] of [['code', 'high'], ['code', 'low'], ['research', 'high'],
+    [null, 'high'], ['old', 'high'], ['missing', 'high'], ['broken', 'high']].entries()) {
+    seedRun(h, `scene-${i}`, { ...review, model: 'alpha', session_id: null, plan, seat: i, effort, cell: 'complex', scene: 'ignored' }, report());
+  }
+  const single = output(await h.bridge(['stats', '--by', 'scene']));
+  assert.deepEqual(single.by, ['scene']);
+  assert.deepEqual(single.rows.map(({ scene, seats }) => [scene, seats]), [[null, 4], ['code', 2], ['research', 1]]);
+  for (const by of ['scene,effort', 'scene,effort,cell']) {
+    const split = output(await h.bridge(['stats', '--by', by]));
+    assert.deepEqual(split.by, by.split(','));
+    assert.deepEqual(split.rows.map(({ scene, effort, seats }) => [scene, effort, seats]),
+      [[null, 'high', 4], ['code', 'high', 1], ['research', 'high', 1], ['code', 'low', 1]]);
+    if (by.includes('cell')) assert.ok(split.rows.every((row) => row.cell === 'complex'));
+  }
+});
+
 test('stats 拒绝非法 --by 值并输出中英文 statsBadBy', async (t) => {
   const h = sandbox(t);
   for (const lang of ['zh', 'en']) failed(await h.bridge(['stats', '--by', 'effort,level'], { env: { FOREMAN_LANG: lang } }),
-    MESSAGES[lang].statsBadBy('level', MESSAGES[lang].list(['effort', 'cell'])));
+    MESSAGES[lang].statsBadBy('level', MESSAGES[lang].list(['effort', 'cell', 'scene'])));
 });
 
 test('stats plans 汇总含续接的计划墙钟，区分未完和不可读并按计划字段过滤', async (t) => {

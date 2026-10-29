@@ -12,7 +12,9 @@ const LANGUAGE = process.env.FOREMAN_LANG || process.env.CODEX_BRIDGE_LANG || ((
   try { return JSON.parse(fs.readFileSync(path.join(HERE, 'language.json'), 'utf8')).language; } catch { return 'zh'; }
 })();
 const M = MESSAGES[LANGUAGE] || MESSAGES.zh;
-const notice = (msg) => process.stderr.write(`foreman: ${msg}\n`);
+// 启动时和带 --cwd 时各读一次配置，同一条提示在一次运行里只打印一次。
+const noticed = new Set();
+const notice = (msg) => { if (!noticed.has(msg)) { noticed.add(msg); process.stderr.write(`foreman: ${msg}\n`); } };
 // 语言要在提示文字之前确定，所以旧变量名的提示放到这里补上。
 if (!process.env.FOREMAN_LANG && process.env.CODEX_BRIDGE_LANG) notice(M.legacyEnv('CODEX_BRIDGE_LANG', 'FOREMAN_LANG'));
 

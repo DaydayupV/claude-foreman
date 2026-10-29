@@ -1,5 +1,5 @@
 // setup 的固定 Markdown：环境、总配置和本机模型清单，文字统一从 messages 取。
-import { CLAUDE_CODE, LEVELS, cellList, readRawConfig } from './config.mjs';
+import { CLAUDE_CODE, LEVELS, cellList, readRawConfig, isSplit, seatsFor, gapFor } from './config.mjs';
 import { M, isObject } from './util.mjs';
 
 const dash = '—';
@@ -11,7 +11,6 @@ const modules = ['discuss', 'review', 'run', 'image'];
 const entries = (summary) => modules.flatMap((module) => (module === 'image' ? ['generate', 'draw'] : LEVELS)
   .flatMap((cell) => cellList(summary.modules[module][cell])));
 const checkMark = (ok, problem = false) => problem ? '⚠' : ok === true ? '✅' : ok === false ? '❌' : dash;
-const closed = (cfg, module, cell) => cfg.closed_by_project.includes(`${module}.${cell}`) ? M.reportProjectClosed : '';
 
 export const environmentReport = (checks, environment, agents) => {
   const issues = ['node', 'git', 'watch'].filter((key) => !checks[key].ok)
@@ -52,7 +51,7 @@ const cellTable = (cfg, summary, module, checks) => {
   const headers = [M.reportCandidate, ...(module === 'image' ? M.reportImageColumns : cells), ...(checks ? [M.reportCheck] : [])];
   const values = cells.map((cell) => summary.modules[module][cell]), rows = [];
   const pseudo = (value, name, text) => {
-    if (values.includes(value)) rows.push([name, ...cells.map((cell, i) => values[i] === value ? text + closed(cfg, module, cell) : dash), ...(checks ? [dash] : [])]);
+    if (values.includes(value)) rows.push([name, ...cells.map((cell, i) => values[i] === value ? text : dash), ...(checks ? [dash] : [])]);
   };
   pseudo(CLAUDE_CODE, M.reportHost, module === 'run' ? M.reportHostRun : M.reportNoOutside);
   if (module === 'image') pseudo(null, M.reportOffRow, M.reportOff);
@@ -60,7 +59,7 @@ const cellTable = (cfg, summary, module, checks) => {
   for (const name of names) {
     const items = values.map((value) => cellList(value).find((item) => item.agent === name));
     rows.push([name, ...items.map((item, i) => !item ? dash : (item.effort ?? M.reportDefault)
-      + (item.model && item.model !== summary.agents[name]?.model ? ` · ${item.model}` : '') + (item.required ? ' ★' : '') + (item.problem ? ' ⚠' : '') + closed(cfg, module, cells[i])),
+      + (item.model && item.model !== summary.agents[name]?.model ? ` · ${item.model}` : '') + (item.required ? ' ★' : '') + (item.problem ? ' ⚠' : '')),
     ...(checks ? [checkMark(checks[name]?.ok, items.some((item) => item?.problem))] : [])]);
   }
   return table(headers, rows);
@@ -69,20 +68,30 @@ const cellTable = (cfg, summary, module, checks) => {
 const seatsTable = (cfg, summary) => {
   // 是否默认看原文，不把恰好等于默认值的显式配置误标为默认。
   const raw = cfg.sources.map((file) => readRawConfig(file));
-  if (cfg.project_override) raw.push(raw[0]?.projects?.[cfg.project_override.path]);
   const rows = ['discuss', 'review'].flatMap((module) => LEVELS.map((cell) => {
     const label = `${M.reportModuleNames[module]} ${cell}`, value = summary.modules[module][cell];
-    if (value === CLAUDE_CODE) return [label, dash, dash, dash, M.reportNoOutside];
+    const split = isSplit(cfg, module, cell);
+    // 场景和配置对不上时按配置里实际写的场景名列出，缺的值写 —，方便对照着改
+    const written = ['seats', 'gap'].flatMap((field) => isObject(cfg.modules[module][field]?.[cell]) ? Object.keys(cfg.modules[module][field][cell]) : []);
+    const scenes = [...cfg.scenes.names.filter((scene) => written.includes(scene)), ...new Set(written.filter((scene) => !cfg.scenes.names.includes(scene)))];
+    const byScene = (fn) => split ? scenes.map((scene) => `${scene} ${fn(scene) ?? dash}`).join(' · ') : fn();
+    const gapValue = module === 'review' ? byScene((scene) => { const on = gapFor(cfg, cell, scene); return on == null ? null : on ? M.reportGapOn : M.reportGapOff; }) : dash;
+    if (value === CLAUDE_CODE) return [label, dash, gapValue, dash, dash, M.reportNoOutside];
     const candidates = [...new Map(cellList(value).map((item) => [item.agent, item])).values()];
     const required = candidates.filter((item) => item.required), n = candidates.length, r = required.length;
-    const s = cfg.modules[module].seats[cell], names = M.list(required.map((item) => item.agent));
-    const gap = module === 'review' && cell === 'complex';
-    let practice = n <= s ? (n === s ? M.reportAllCandidates(n) : M.reportFewerCandidates(s, n))
-      : r === s ? (gap ? M.reportOnlyRequiredGap : M.reportOnlyRequired)(names, n - r)
-        : r ? M.reportRequiredPlus(names, n - r, s - r) : M.reportPickCandidates(n, s);
-    if (gap) practice += n <= s ? M.reportNoGap : r === s ? '' : M.reportGapLeft;
+    const names = M.list(required.map((item) => item.agent));
+    const practice = (scene) => {
+      const s = seatsFor(cfg, module, cell, scene), gap = module === 'review' && gapFor(cfg, cell, scene);
+      if (s == null) return dash;
+      let text = n <= s ? (n === s ? M.reportAllCandidates(n) : M.reportFewerCandidates(s, n))
+        : r === s ? (gap ? M.reportOnlyRequiredGap : M.reportOnlyRequired)(names, n - r)
+          : r ? M.reportRequiredPlus(names, n - r, s - r) : M.reportPickCandidates(n, s);
+      if (gap) text += n <= s ? M.reportNoGap : r === s ? '' : M.reportGapLeft;
+      return text;
+    };
     const explicit = raw.some((config) => Object.hasOwn(config?.modules?.[module]?.seats || {}, cell));
-    return [label, `${s}${explicit ? '' : M.reportDefaultSeats}`, n, r, practice];
+    return [label, `${byScene((scene) => seatsFor(cfg, module, cell, scene))}${explicit ? '' : M.reportDefaultSeats}`, gapValue, n, r,
+      split ? scenes.map((scene) => `${scene}：${practice(scene)}`).join('；') : practice()];
   }));
   return table(M.reportSeatsHeaders, rows);
 };
@@ -118,7 +127,7 @@ const notes = (summary, checks) => {
       const names = summary.warnings.filter((w) => w.kind === warning.kind).map((w) => w.agent);
       rows.push(warning.kind === 'unused_agent' ? `- ℹ ${M.reportUnusedAgents(names.length, M.list(names))}` : `- ⚠ ${M.reportPlaintextKeys(M.list(names))}`);
     } else {
-      const icon = ['readonly_audited', 'shell_access', 'stale_alias', 'host_seat_infeasible'].includes(warning.kind) ? '⚠' : 'ℹ';
+      const icon = warning.kind === 'scenes_mismatch' ? '❌' : ['readonly_audited', 'shell_access', 'stale_alias', 'host_seat_infeasible'].includes(warning.kind) ? '⚠' : 'ℹ';
       rows.push(`- ${icon} ${M.reportSentence(warning.message)}`);
     }
   }
@@ -127,6 +136,7 @@ const notes = (summary, checks) => {
 
 export const configReport = (cfg, summary, checks = null) => {
   const blocks = [M.reportConfigTitle, `${M.reportCellsTitle}　${M.reportCellsIntro}`];
+  if (cfg.project_config) blocks.splice(1, 0, M.reportProjectConfig(cfg.project_config.path, M.list(cfg.project_config.cells)));
   for (const module of modules) blocks.push(M.reportModuleNames[module], module === 'image' && !cfg.image_configured
     ? M.reportImageUnconfigured : cellTable(cfg, summary, module, checks));
   blocks.push(M.reportSeatsTitle, seatsTable(cfg, summary), M.reportSeatsNotes.map((text) => `- ${text}`).join('\n'), M.reportAgentsTitle);

@@ -3,17 +3,15 @@
 The config is JSON. These layers are applied in order, later ones overriding earlier ones:
 1. the script's built-in defaults;
 2. the user config `~/.claude/foreman/config.json` (the environment variable `FOREMAN_CONFIG` changes the path);
-3. per-project overrides under `projects` in the user config (they can loosen; see "Per-project overrides");
-4. the project config `<project dir>/.claude/foreman.json` (it can only tighten; see the end).
+3. the project config `<project dir>/.claude/foreman.json` (it overrides the user config; see "Project config: overrides the user config" at the end).
 
-It has three parts, plus an optional `projects`:
+It has three parts:
 
 | Part | What it answers |
 |---|---|
 | `dispatch` | How the plugin hands off work: whether to do it on its own, discussion rounds, time limits and so on |
 | `agents` | Which agents there are and how to reach them |
-| `modules` | Which candidates each cell of each task type has, who is required, and with what effort |
-| `projects` (optional) | Per-project-directory overrides of `modules` and a few time limits; see "Per-project overrides" |
+| `modules` | Which candidates each cell of each task type has, who is required, and with what effort; how many seats each discussion and review level uses, and whether a review adds a gap seat |
 
 How to reach an agent goes only in `agents`; who gets what goes only in `modules`.
 
@@ -36,7 +34,8 @@ Example:
     },
     "run":    { "simple": "claude code", "normal": "claude code", "complex": [{ "agent": "gpt-6.1-sol", "effort": "max" }] },
     "review": { "simple": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "normal": [{ "agent": "gpt-6.1-sol", "effort": "high" }], "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }],
-                "seats": { "simple": 1, "normal": 2, "complex": 2 } },
+                "seats": { "simple": 1, "normal": 2, "complex": 2 },
+                "gap":   { "simple": false, "normal": false, "complex": false } },
     "image":  { "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "draw": [{ "agent": "gpt-6-astra", "effort": "max" }] }
   }
 }
@@ -172,22 +171,24 @@ There is also a level 0 (below the threshold, not worth an outside model), which
 - A list of candidates: `[{ "agent": "<ID>", "effort": "<effort>", "required": true }, …]`. A single object works the same as a one-item list. Each agent can appear only once per cell.
 - `null` (image only): the cell is closed. With generate closed, no images are generated; with draw closed, Claude draws bending pieces and pure vector work itself. Claude can't produce bitmaps, so image cells can't be `"claude code"`.
 
-`discuss` and `review` also take `seats`, how many external models each level uses, with all three levels written in the config file; change the numbers right there. New configs come with it; when a user config lacks some of it, the script fills in the defaults and writes them into the file the first time it reads it. The defaults and rules are under "Candidates and required agents" below.
+`discuss` and `review` also take `seats`, how many external models each level uses; `review` also takes `gap`, whether each level adds a gap seat. All three levels are written in the config file; change them right there. New configs come with both; when a user config lacks some of them, the script fills them in and writes them into the file the first time it reads it. The defaults and rules are under "Candidates and required agents" below; writing them per scene is under "Scenes".
 
 What can go in a cell is checked against the capability table: discuss candidates must be able to discuss, review candidates to review; run candidates must be able to do hands-on work, and opencode and pi also need `run_access`; generate candidates must be able to generate images (the adapter declares `images` and implements image detection: which images appeared in this round and what each call passed; only codex cli for now); draw takes the same as run.
 
 How image tasks go out: before work starts on each new graphic deliverable, Claude has the user choose the route in a pop-up (① bitmap, ② bitmap + vector mix, ③ pure vector with a reference image first, ④ pure vector / code), then creates a plan with `plan --module image --cell <generate|draw> --route <route number>` and starts it with `image --plan … --seat …`. The route decides which cells are used, and only those cells get plans, so required agents in an unused cell don't come into play (with route ④, for example, the generate cell's required agent isn't needed). The script checks the answer to the latest route pop-up in this session; see "plan, image and status --plan" in `references/cli.md`.
 
 ### Candidates and required agents
-- When a cell has several candidates, Claude picks by the rules in `references/seats.md` (drop those that can't do it, add every required agent, fill discussion and review seats up to the configured number with different base models, one executor per work package) and says in a sentence whom it picked and why. The script only checks the hard rules a machine can check.
-- `seats` (`discuss` and `review` only): the number of external seats at each level, not counting the Claude Code seat or a level 3 review's gap seat. The defaults (the only place in the plugin that states the numbers; other documents point here):
+- When a cell has several candidates, Claude picks by the rules in `references/seats.md` (drop those that can't do it, add every required agent, fill discussion and review seats up to the configured number with different base models, one executor per work package) and says in a sentence whom it picked and why. The script only checks the hard rules a machine can check. In scene mode, discussions and reviews pick in the order the candidates are listed, earlier ones first; see "Scenes".
+- `seats` (`discuss` and `review` only): the number of external seats at each level, not counting the Claude Code seat or the gap seat. The defaults (the only place in the plugin that states the numbers; other documents point here):
 
   | | simple | normal | complex |
   |---|---|---|---|
   | `discuss` | 2 | 4 | 8 |
   | `review` | 1 | 2 | 2 |
 
-  Required agents count toward it, so it can't be lower than the cell's required count, or loading the config fails; it can be higher than the number of candidates, which means all of them take part. To always use a fixed set of agents at some level, list only those and set the seats to their number, or mark them all required. When `plan` creates a discussion or review plan, it checks that the external seats equal `min(seats, usable candidates)` (for a `visual` review only candidates that can read images count); otherwise it needs `--count-why "<reason>"`. Usable candidates are counted by agent ID, so one model reached two ways counts twice. When the user config leaves levels out, the first load writes the missing ones into the file with the defaults (never less than the cell's required count, so old configs with many required agents keep working; levels already written stay as they are), backs up the original as `<file name>.bak` (with a time and process ID appended if that backup exists), keeps the file's permissions, and says what it added; if the file can't be written (read-only, for example, or another process holds the rewrite lock for more than 10 seconds), the defaults are filled in memory only and a notice says the file wasn't updated. A wrong `seats` (bad format, fewer than the required count) isn't fixed automatically; loading fails as before. Project configs are never rewritten, and levels they leave out follow the user config. Older plugin versions that don't know `seats` fail on it, so upgrade every computer. The numbers in use are in `resolved_modules.<discuss|review>.seats` of the `config` output.
+  Required agents count toward it, so it can't be lower than the cell's required count, or loading the config fails; it can be higher than the number of candidates, which means all of them take part. To always use a fixed set of agents at some level, list only those and set the seats to their number, or mark them all required. When `plan` creates a discussion or review plan, it checks that the external seats equal `min(seats, usable candidates)` (for a `visual` review only candidates that can read images count); otherwise it needs `--count-why "<reason>"`. Usable candidates are counted by agent ID, so one model reached two ways counts twice. Each level takes a positive integer; to split it by scene, write `{ "<scene>": positive integer, … }`; see "Scenes".
+- `gap` (`review` only): whether each review level adds a gap seat, `true` or `false`; to split it by scene, write `{ "<scene>": true/false, … }`. All three levels default to `false`. When it's on, the plan must list one gap seat (when the cell still has a suitable candidate); how the gap pass works is under "Gap pass" in `references/review.md`. When it's off, there's no gap pass. Writing it under `discuss` is an error.
+- When the user config leaves out parts of `seats` or `gap`, the first load writes them into the file: missing `seats` levels get the defaults (never less than the cell's required count, so old configs with many required agents keep working); a missing `gap` as a whole becomes `{ "simple": false, "normal": false, "complex": true }`, the same as before the upgrade, when only level 3 reviews had a gap pass. Levels already written stay as they are. The original is backed up as `<file name>.bak` (with a time and process ID appended if that backup exists), the file keeps its permissions, and a notice says what was added; if the file can't be written (read-only, for example, or another process holds the rewrite lock for more than 10 seconds), the values are filled in memory only and a notice says the file wasn't updated. Wrong values (bad format, fewer than the required count) aren't fixed automatically; loading fails as before. Project configs are never rewritten, and levels they leave out follow the user config. Older plugin versions that don't know `seats` or `gap` fail on them, so upgrade every computer. The values in use are in `resolved_modules.<discuss|review>.seats` and `resolved_modules.review.gap` of the `config` output.
 - `required: true` means this agent must take part whenever the cell is used; without it the entry is an ordinary candidate that Claude may or may not add. One agent may be required in reviews and only a candidate in discussions, so `required` goes on the cell's entry, not on the agent definition.
 - To hand one task to several seats, Claude first creates a dispatch plan (`plan`); the script checks that every required agent has a seat and that a discussion or review has as many external seats as `seats` says, and then each seat is started. A single-seat hands-on handoff is refused when the cell has another required agent. Discussions and reviews always use a plan: it comes with the Claude Code seat, which submits its report with `submit` before the external seats can start.
 - When a required agent is at its parallel limit, its dispatch command queues for a slot (see the parallel limit below). When a required agent fails, runs out of quota or is cancelled, the task counts as incomplete; another candidate doesn't stand in for it.
@@ -244,39 +245,66 @@ Choices that cost money or affect safety (which opencode or pi model to use, let
   - formats from before 0.10, such as `auto_dispatch` or top-level `model` and `sandbox`.
 - The model and effort each cell actually uses stay the same.
 - The old-to-new ID mapping is kept in `~/.claude/foreman/agent-aliases.json`. Resuming an old run, an old ID passed to `--agent`, and old IDs in a project config are all mapped to the new ID automatically.
-- A file with both `levels` (an object) and `modules` is an error; the script doesn't guess which one counts. The note above doesn't count. `levels` in a project config isn't rewritten on disk; it's read as `modules` in memory, with a notice suggesting the new format. An old version of the plugin ignores `modules` in a project config, so a project that must also constrain people still on the old plugin can keep the `levels` form in its project config.
+- A file with both `levels` (an object) and `modules` is an error; the script doesn't guess which one counts. The note above doesn't count. `levels` in a project config isn't rewritten on disk; it's read as `modules` in memory, with a notice suggesting the new format.
+- `projects` in the user config (overrides keyed by project directory) is no longer used: it has no effect when read, a notice says so on every load, and `summary.warnings` has an `obsolete_projects` entry. Write `.claude/foreman.json` in each project instead (see the end); `/foreman-en:setup` can move the entries there and delete `projects` from the user config.
+- When upgrading from 1.2 or earlier, the project config changes from "can only tighten" to "overrides the user config": loosening settings that used to be ignored (added candidates, more seats, longer time limits and so on) take effect after the upgrade.
 
-## Per-project overrides: in the user config
-When one project should use more models than usual, a different set of candidates, or other time limits, add a top-level `projects` to the user config, keyed by project directory:
+## Scenes
+The same discussion or review level often serves different occasions: a review of research evidence should be broad, with more providers and a gap seat; a review of high-risk code should be precise, using only the two strongest. In that case you can split the seat counts and the gap switch by scene. If you don't need this, skip this section and keep writing numbers and `true`/`false` in `seats` and `gap`.
+
+**1. Define the scenes in a preference file**: the user preferences `~/.claude/foreman/preferences.md` (in the same folder as the user config) or the project preferences `<project dir>/.claude/foreman.md` get a scene block:
+
+```markdown
+<!-- foreman:scenes -->
+## Scene routing
+- **code**: judging or deciding changes to code, interfaces, configs, scripts and tests; reviews with `--target diff` always count as code.
+- **research**: research conclusions and evidence, research plans, cards, docs, research-direction ideas; reviews with `--target claims` always count as research.
+- Split work that has both into two plans; when unsure, pick the scene with more seats.
+<!-- /foreman:scenes -->
+```
+
+- Each line in the block that starts with `- **<name>**:` defines a scene. Names use only lowercase letters, digits and hyphens, and start with a letter.
+- The rest of the text is routing guidance for Claude Code: which discussions or reviews belong to which scene. The script doesn't read it; Claude Code picks by it when creating a plan.
+- When the project preferences have a scene block, only the project's scenes are used; an empty scene block means the project doesn't use scenes. When the project preferences have no scene block, the user preferences' block is used.
+- A file can have only one scene block, and the start and end markers must pair up.
+
+**2. Write per-scene values in the config**:
 
 ```json
-"projects": {
-  "O:/work/app": {
-    "dispatch": { "timeout_min": 600 },
-    "modules": { "review": { "normal": [{ "agent": "a" }, { "agent": "b" }], "seats": { "normal": 3 } } }
-  },
-  "~/code/lib": { "modules": { "run": { "normal": "claude code" } } }
+"review": {
+  "complex": [ { "agent": "gpt-6.1-sol", "effort": "max", "required": true }, { "agent": "gpt-6-astra", "effort": "max" }, { "agent": "deepseek-flash" }, { "agent": "glm-5.3" } ],
+  "seats": { "simple": 1, "normal": 2, "complex": { "code": 2, "research": 4 } },
+  "gap":   { "simple": false, "normal": false, "complex": { "code": false, "research": true } }
 }
 ```
 
-- Keys are absolute project directory paths and may start with `~`; on Windows they need a drive letter (`O:/work/app`) or a full UNC path (`//server/share/app`). A working directory matches when it is that directory or inside it (a subfolder, a worktree in the repository); when several keys match, only the most specific (longest) one applies, they don't stack. Case doesn't matter on Windows.
-- An entry can only set `modules` and `discuss_max_rounds`, `timeout_min`, `stall_min`, `busy_ask_min` under `dispatch`. `agents`, `auto`, `watch`, `intro` and `runs_dir` apply to the whole machine or session, belong at the top level only, and are an error inside `projects`. Agents are referenced by the IDs defined in the top-level `agents`.
-- It merges the way the top level overrides the defaults: a cell it writes is replaced as a whole (to add a few models to the global candidates, list the global ones too), cells it doesn't write keep the top-level value, and `seats` override per level. It can loosen as well as tighten.
-- Every config load checks all entries in `projects`, not just the current project's, and an error names the entry.
-- It lives in your own user config and doesn't travel with the repository, which is why it can loosen. A repository's `.claude/foreman.json` still can only tighten, measured against the config after `projects` is applied.
-- `project_override` in the `config --cwd` output is `{ "path": "<the key of the entry used, as written>" }`, or `null` when none applies.
+- A level written as an object is split by scene: every scene must be listed, with names exactly as defined in the scene block. A level written as a number or `true`/`false` is the same for every scene.
+- **Candidate order is the priority**: at a level written per scene, discussion and review external seats are picked in the order the candidates are listed (levels not written per scene are still picked by Claude as before): required agents first, then down the list, skipping those that can't do the task and those with the same base model as one already picked. The gap seat also takes the next one in order. So list the strong models first: "2 seats" is then the first two strong models, and "4 seats" adds the cheaper breadth seats further down. When you really need to skip a candidate (material can't go to that provider, its quota has run out), write `--count-why` when creating the plan.
+- When creating a plan for a level that is split by scene, write `--scene <scene>` and `--scene-why "<which line of the preferences it follows>"`.
 
-## Project config: can only tighten
-- A project config only accepts `timeout_min`, `stall_min`, `busy_ask_min` under `dispatch`, plus `modules` (including `seats` under `discuss` and `review`; the old `levels` form is accepted too). Anything else, including the whole `agents` block, is ignored with a notice.
-- Time and seat limits take the stricter value: `timeout_min` and each level's `seats` take the smaller one (lowering `seats` below the cell's required count is an error); for `stall_min` and `busy_ask_min`, 0 means no check, which is the loosest, so a project 0 has no effect when the user set a positive number, and when both are positive the smaller one wins.
-- `modules` can contain just the cells to change. Each cell can only:
-  - be closed as a whole: `"claude code"` for discuss, run and review, `null` for image;
-  - drop some optional entries the user config already has in that cell (the user config's order is kept);
-  - lower the effort, only for tools whose efforts have a clear order: Codex is low < medium < high < xhigh < max < ultra, pi is off < minimal < low < medium < high < xhigh < max, agy is minimal < low < medium < high < xhigh < max. opencode variants and api efforts have no common order, so a project can't change them; nor can it add an effort to an entry that has none in the user config.
-- It can't add entries, swap agents or models, change `required`, or open a cell the user closed; those are ignored with a notice.
-- It can't drop only the required agents while keeping others handing work out: that's an error; keep the required agents or close the whole cell. When none of the entries it writes match the user config (say, a cloned repository uses someone else's agent IDs), it says so and closes that cell for the project.
-- Once a project writes `"claude code"` (or `null`) for a cell, nothing at that cell can be named with `--agent` in that project, even if the cell is already `"claude code"` in the user config; cells the project doesn't mention that are `"claude code"` in the user config can still be named. If the cell has required agents, that step counts as "not done", and Claude says so plainly instead of reviewing it itself and calling the requirement met. With `--cwd`, `closed_by_project` in the `config` output lists the cells a project closed.
-- This way a cloned repository can't use its project config to swap the agent doing the work (say, from a sandboxed Codex to a tool without a sandbox), send your code to a new provider, skip a required review, or stretch time limits and raise efforts to spend more of your quota. For a sensitive project, drop the api candidates, or set discussions and reviews to `"claude code"` as a whole.
+**When things don't match**:
+- Scenes are defined, but neither `seats` nor `gap` is written per scene: work goes out by level as usual, with a notice.
+- Values are written per scene, but the preferences define no scenes, or the scene names don't match: `config` and `check` report it, and discussion and review plans can't be created until it's fixed. Other commands (hands-on work, images, `status`, the board) work as usual.
+- The scenes in effect are in `scenes` of the `config` output: `names` (scene names), `source` (`user` or `project`), `file`, and `problems` (what doesn't match).
+
+## Project config: overrides the user config
+When one project should use a different set of candidates, more or fewer providers, or other time limits, write `<project dir>/.claude/foreman.json` in the project:
+
+```json
+{
+  "dispatch": { "timeout_min": 600 },
+  "modules": {
+    "review": { "normal": [{ "agent": "a" }, { "agent": "b" }], "seats": { "normal": 3 }, "gap": { "complex": true } },
+    "run": { "normal": "claude code" }
+  }
+}
+```
+
+- It can only set `modules` and `discuss_max_rounds`, `timeout_min`, `stall_min`, `busy_ask_min` under `dispatch`. `agents`, `auto`, `watch`, `intro` and `runs_dir` apply to the whole machine or session; in a project config they are ignored with a notice. Agents are referenced by the IDs defined in the user config's `agents`.
+- It merges the way the user config overrides the defaults: a cell it writes is replaced as a whole (to add a few models to the user config's candidates, list the original ones too), cells it doesn't write keep the user config's value, and `seats` and `gap` override per level. It can add candidates, change required agents, raise seat counts, turn the gap seat on, change efforts and lengthen time limits.
+- The merged config is checked as a whole, and an error names the project config file.
+- Only the `.claude/foreman.json` in the project directory itself counts: the one in whatever directory `--cwd` names.
+- `project_config` in the `config --cwd` output is `{ "path": "<file path>", "cells": [<the cells and time limits it overrides>] }`, or `null` when there's no project config; `check`'s overview lists it too.
 
 ## Other rules
 - Each agent's parallel limit counts its own running runs across all groups and sessions; at the limit, a dispatch queues in arrival order by default: it takes a ticket under `.state/queue/<agent>/` in the runs folder, checks once a second, and starts when it is first in line and a slot is free; stderr shows its place in line and the minutes it may still wait. `--queue-timeout <minutes>` changes the longest wait (60 by default, 1440 at most); 0 doesn't queue and refuses right away, listing the runs holding the slots. A queued process that ends removes its ticket; a ticket left by a killed process is reclaimed by the next checker once its process is gone or the ticket has expired. `status` lists the queued tickets. A dispatch plan itself holds no slot.
@@ -284,14 +312,17 @@ When one project should use more models than usual, a different set of candidate
 - When the sandbox isn't `read-only` / `workspace-write` (for example `danger-full-access`), Codex can write to any directory: `--cwd` only sets where it starts and **doesn't limit what it can write**. The scope is then held only by the brief and by reviewing the diff afterwards.
 - After the user changes settings, run `config` to confirm:
   - `resolved_modules` shows each cell's final candidates, with each one's model, effort and whether it's required;
-  - `project_override` is `{ "path": "<the key of the projects entry used>" }` (with `--cwd`; `null` when none applies);
-  - `closed_by_project` lists the cells closed by the project config (with `--cwd`);
+  - `project_config` is the project config's path and the cells it overrides (with `--cwd`; `null` when there's no project config);
+  - `scenes` is the scene definition in effect and anything that doesn't match (see "Scenes");
   - `image_configured` says whether the user config has an image block: when it's `false`, the `null` image cells are just defaults, not something the user turned off;
   - `agents_status` shows each agent's type and capabilities, whether its key is set, and the executable it uses;
   - `summary` is the overview of the whole config: who each cell goes to, the cells each agent is used in, and warnings (unused agents, plaintext keys, shell access for hands-on work or drawing, old IDs in `agent-aliases.json` that point to IDs no longer there). `check` outputs it too, with check results.
 
 ## Passing on what the script prints about the config
 - When the script prints "First run: created config file", pass on what it found (Codex, opencode, pi, API keys) and who now gets each kind of task, and suggest running `/foreman-en:setup` to choose models.
+- When the script prints that it wrote into the config file whether each review level uses a gap seat, tell the user: the gap seat can now be switched on or off per level; it was written to match the old behavior (only level 3 reviews have a gap pass); to turn it off, or on at another level, change `review.gap`; and where the original was backed up.
+- When the script prints that `projects` in the user config is no longer used, tell the user which entries no longer take effect, and suggest running `/foreman-en:setup` to move them to each project's `.claude/foreman.json`.
+- When the script prints that a preference file defines scenes but neither `seats` nor `gap` in the config is written per scene, tell the user the scenes aren't in effect, and that to use them, `seats` and `gap` need to be written per scene as in "Scenes"; when `scenes.problems` in the `config` output isn't empty, pass on each item, and say discussion and review plans can't be created until they're fixed.
 - When the script prints that it rewrote the config file in the new format, tell the user: the config uses the new format (`type` is now `codex cli` / `opencode cli` / `api`, `"claude"` is now `"claude code"`), agent IDs were renamed after their models (pass on the list the script printed), the models and efforts actually used are unchanged, and where the original was backed up.
 - When the script prints that it rewrote levels as modules in the config file, tell the user: the config now uses `modules`, and every cell keeps its agents, efforts and order; one behavior change: the agents at a discussion level used to all take part, and now they are candidates Claude picks from, so to keep everyone taking part, mark them `"required": true`; the config has no image cells yet; `levels` is kept in the file as a one-line note, so an old version of the plugin stops with an error instead of quietly having Claude do everything; and where the original was backed up. Suggest running `/foreman-en:setup` to mark required agents and add the two image cells. Keep that `levels` note when editing the config.
 - **Codex's read-only sandbox on Windows**: the default elevated sandbox may fail to start even file-reading commands in `read-only` mode. Before setting `read-only` for discussions and reviews, run `check`: if the sandbox won't start, follow its `fix` and set `sandbox = "unelevated"` under `[windows]` in `~/.codex/config.toml`. Without a read-only sandbox (`readonly` is `audited`), read-only is held by the rules and a snapshot comparison afterwards, and any write marks the run failed; see "Read-only" in `references/review.md`.

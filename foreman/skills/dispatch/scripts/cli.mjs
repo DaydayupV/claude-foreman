@@ -40,9 +40,10 @@ const HELP = helpText(process.argv.slice(2));
 if (HELP) { process.stdout.write(`${HELP}\n`); process.exit(0); }
 
 // 其余模块在 --help 之后才加载：config.mjs 一加载就会迁移旧版的配置和偏好文件，--help 不该写任何文件。
-const { USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, agentMaxParallel, CLAUDE_CODE, cellList, eachEntry, mapCells, resolveAgentAlias, detectEnvironment, projectFile, loadConfig, resolveProfile, validatePlan, unknownAgentError } = await import('./config.mjs');
+const { USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, agentMaxParallel, CLAUDE_CODE, cellList, eachEntry, mapCells, isSplit, resolveAgentAlias, detectEnvironment, projectFile, loadConfig, resolveProfile, validatePlan, unknownAgentError } = await import('./config.mjs');
 const { cmdPlan, readPlan } = await import('./plan.mjs');
-const { buildSummary } = await import('./summary.mjs');
+const { buildSummary: summarize } = await import('./summary.mjs');
+const { modelIdentity } = await import('./models.mjs');
 const { configReport, environmentReport, modelsReport } = await import('./report.mjs');
 const records = await import('./records.mjs');
 const { adapters } = await import('./adapters/index.mjs');
@@ -60,6 +61,16 @@ const load = (cwd) => loadConfig(cwd, adapters);
 const CONFIG = ['assets', 'agy-guard'].includes(process.argv[2]) ? null : load(null);
 if (CONFIG) records.initializeRecords(CONFIG);
 const { RUNS_ROOT, CLAUDE_SESSION, findRun, isRunning } = records; // 记录目录在 initializeRecords 之后才定下来
+
+// summary.mjs 保持只读，新增配置提醒在 config/check 共用的出口补齐。
+function buildSummary(cfg, adapters, checks = null) {
+  const summary = summarize(cfg, adapters, checks);
+  if (cfg.scenes.problems.length) summary.warnings.push({ kind: 'scenes_mismatch', problems: cfg.scenes.problems, message: M.planScenesProblem(M.list(cfg.scenes.problems)) });
+  else if (cfg.scenes.names.length && !['discuss', 'review'].some((module) => ['simple', 'normal', 'complex'].some((cell) => isSplit(cfg, module, cell)))) {
+    summary.warnings.push({ kind: 'scenes_unused', message: M.scenesUnused(cfg.scenes.file, M.list(cfg.scenes.names)) });
+  }
+  return summary;
+}
 
 function parseArgs(argv) {
   const [cmd, ...rest] = argv;
@@ -110,7 +121,16 @@ function dispatchProfile(o, module) {
   const cfg = load(cwd);
   // 席位数只在建计划时检查，配置调整后已有计划仍能启动。
   if (plan) validatePlan(cfg, plan, adapters);
-  return { cwd, cfg, plan, profile: resolveProfile(cfg, seat, o, adapters) };
+  const profile = resolveProfile(cfg, seat, o, adapters);
+  if (module === 'review' && ['补漏', 'gap'].includes(seat.role?.trim().toLowerCase())) {
+    const host = records.listRuns().map((id) => records.readMeta(path.join(RUNS_ROOT, id)))
+      .find((meta) => meta?.plan === plan.plan_id && meta.participant === 'host');
+    const own = profile.model ?? adapters[profile.agent.type].status?.(profile.agent)?.model ?? profile.agentName;
+    // 升级前建的计划（没有 gap 字段）照旧放行
+    if (host && !host.model && Object.hasOwn(plan, 'gap')) die(M.gapSeatHostModelMissing(seat.seat));
+    if (host?.model && modelIdentity(host.model) === modelIdentity(own)) die(M.gapSeatSameAsHost(seat.seat, modelIdentity(host.model)));
+  }
+  return { cwd, cfg, plan, profile };
 }
 
 async function cmdRun(o) {
@@ -214,7 +234,7 @@ async function cmdReview(o) {
 
 function cmdConfig(o) {
   const cfg = load(o.cwd ? resolveDir(o.cwd) : null);
-  const { sources, closed_by_project, image_configured, project_override, ...effective } = cfg;
+  const { sources, image_configured, project_config, scenes, ...effective } = cfg;
   // opencode、pi 没写 run_access 时派不了执行任务：列出的能力和派发时的检查保持一致，免得按 modes 挑人挑到派不出去的
   const capabilitiesOf = (agent) => {
     const c = adapters[agent.type].capabilities;
@@ -235,11 +255,11 @@ function cmdConfig(o) {
   const result = {
     user_config: USER_CONFIG,
     loaded_from: sources,
-    project_override,
+    project_config,
+    scenes,
     effective: shown,
     agents_status,
     resolved_modules,
-    closed_by_project,
     image_configured,
     runs_dir: RUNS_ROOT,
     watch_launcher: path.join(RUNS_ROOT, 'watch.mjs'),
@@ -247,7 +267,7 @@ function cmdConfig(o) {
     preferences: [USER_PREFS, ...(o.cwd ? [projectFile(resolveDir(o.cwd), PROJECT_PREFS, LEGACY_PROJECT_PREFS)] : [])]
       .map((file) => ({ file, exists: fs.existsSync(file) })),
     environment: detectEnvironment(adapters, effective.agents),
-    summary: buildSummary(effective, adapters),
+    summary: buildSummary(cfg, adapters),
   };
   process.stdout.write(o.format === 'md' ? configReport(cfg, result.summary) : JSON.stringify(result, null, 2) + '\n');
 }
@@ -448,7 +468,7 @@ async function cmdCheck(o) {
       ...(agent.type === 'agy cli' ? [!!o.reprobe] : [])), type: agent.type };
   }
   const referenced = new Set(eachEntry(cfg.modules).map(({ item }) => item.agent));
-  result.ok = nodeOk && Object.entries(result.agents).every(([name, agent]) => !referenced.has(name) || agent.ok);
+  result.ok = nodeOk && !cfg.scenes.problems.length && Object.entries(result.agents).every(([name, agent]) => !referenced.has(name) || agent.ok);
   result.summary = buildSummary(cfg, adapters, result.agents);
   // 通用汇总跳过空 effort；agy 的未指定档位也可能是逐格错误。
   for (const { item } of eachEntry(result.summary.modules)) {

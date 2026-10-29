@@ -119,14 +119,17 @@ test('组视图和 status --group 写出计划完不完整、缺了哪个必选'
   assert.ok(done.stdout.includes(D.watchPlanState(complete.plan_id, 'complete', '')), done.stdout);
 });
 
-test('项目配置关掉的格子，建计划和启动席位都说明是项目配置关的', async (t) => {
+test('项目配成 Claude Code 后可建格子外计划并启动席位，执行计划仍拒绝空格', async (t) => {
   const h = sandbox(t); planConfig(h);
-  const p = await makePlan(h, 'closed-later');
   h.write('.claude/foreman.json', { modules: { discuss: { complex: 'claude code' } } });
-  failed(await h.bridge(['plan', '--cwd', h.cwd, '--module', 'discuss', '--cell', 'complex', '--group', 'closed-now', '--seat', 'codex']), M.planCellClosedByProject('modules.discuss.complex'));
-  failed(await h.bridge(['discuss', '--plan', p.plan_id, '--seat', '1', '--brief', '-']), M.planCellClosedByProject('modules.discuss.complex'));
+  const p = await makePlan(h, 'project-claude');
+  assert.equal(p.outside_cell, true); assert.deepEqual(p.required, []);
+  assert.equal(json(p.file).outside_cell, true);
+  const r = output(await h.bridge(['discuss', '--plan', p.plan_id, '--seat', '1', '--brief', '-']));
+  assert.equal(r.status, 'done'); assert.equal(r.agent, 'codex'); assert.equal(r.outside_cell, true);
+  assert.equal(json(path.join(r.run_dir, 'meta.json')).outside_cell, true);
   failed(await h.bridge(['plan', '--cwd', h.cwd, '--module', 'run', '--cell', 'simple', '--group', 'user-closed', '--seat', 'codex']), M.planCellClosed('modules.run.simple'));
-  assert.equal(h.records().filter((m) => m.participant !== 'host').length, 0);
+  assert.equal(h.records().filter((m) => m.participant !== 'host').length, 1);
 });
 
 test('结果已完成时优先于活进程号，cancel 不结束它，进程退出后才回写终态', async (t) => {

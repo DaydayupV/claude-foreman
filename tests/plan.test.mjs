@@ -166,7 +166,7 @@ test('无计划续接沿用上一轮实际强度，命令覆盖后下一轮继�
     ['high', 'high', 'low', 'low'].map((effort) => `model_reasoning_effort="${effort}"`));
 });
 
-test('启动重新校验整份计划，新增必选、移除候选和项目关闭均拒绝', async (t) => {
+test('启动重新校验整份计划，新增必选、移除候选和项目改成 Claude Code 均重验', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex }; h.config(c);
   const p = output(await h.bridge(planArgs(h))), args = launch(p);
   c.modules.discuss.complex.push({ agent: 'second', required: true }); h.config(c);
@@ -176,7 +176,7 @@ test('启动重新校验整份计划，新增必选、移除候选和项目关�
   c.modules.discuss.complex = [{ agent: 'second' }]; h.config(c);
   failed(await h.bridge(args), M.agentNotInLevel('codex', 'modules.discuss.complex', 'second'));
   h.config(baseConfig()); h.write('.claude/foreman.json', { modules: { discuss: { complex: 'claude code' } } });
-  failed(await h.bridge(args), M.planCellClosedByProject('modules.discuss.complex'));
+  failed(await h.bridge(args), M.levelIsClaude('modules.discuss.complex'));
   assert.equal(h.records().filter((m) => m.participant !== 'host').length, 0);
 });
 
@@ -304,10 +304,10 @@ test('无必选计划要每席结束且至少一席有效，review 允许非空�
   const out = await status(); assert.equal(out.state, 'incomplete'); assert.deepEqual(out.missing_required, []);
 });
 
-test('status --plan 列出未启动的补漏和 gap 席，跑完后清空且不改变 state 算法', async (t) => {
+test('旧计划 status --plan 列出未启动的补漏和 gap 席，跑完后清空且不改变 state 算法', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex };
   c.modules.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second' }]; h.config(c);
-  const p = output(await h.bridge([...planArgs(h, 'discuss', ['codex', 'second=补漏', 'second=gap', 'second=复核']), '--count-why', '四席分别验证主讨论与补漏状态']));
+  const p = output(await h.bridge([...planArgs(h, 'discuss', ['codex', 'second=视角甲', 'second=视角乙', 'second=复核']), '--count-why', '四席分别验证主讨论与补漏状态']));
   output(await h.bridge(hostArgs(h, p)));
   const saved = json(p.file); saved.seats[1].role = ' 补漏 '; saved.seats[2].role = ' GaP '; write(p.file, saved);
   const meta = { plan: p.plan_id, kind: 'discuss', mode: 'discuss' };
@@ -329,10 +329,11 @@ test('status --plan 列出未启动的补漏和 gap 席，跑完后清空且不�
   assert.deepEqual(after.gap_unfinished, []);
 });
 
-test('status --group 计划行显示未启动及运行中的 gap seat not finished', async (t) => {
+test('旧计划 status --group 计划行显示未启动及运行中的 gap seat not finished', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex };
   c.modules.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second' }]; h.config(c);
-  const p = output(await h.bridge([...planArgs(h, 'discuss', ['codex', 'second=补漏', 'second=gap']), '--count-why', '只留一席主讨论，其余两席验证补漏状态']));
+  const p = output(await h.bridge([...planArgs(h, 'discuss', ['codex', 'second=视角甲', 'second=视角乙']), '--count-why', '只留一席主讨论，其余两席验证补漏状态']));
+  const saved = json(p.file); saved.seats[1].role = '补漏'; saved.seats[2].role = 'gap'; write(p.file, saved);
   output(await h.bridge(hostArgs(h, p)));
   const meta = { plan: p.plan_id, group: 'plan-group', kind: 'discuss', mode: 'discuss' };
   seedRun(h, '20000101-main', { ...meta, seat: 1 }, { report: discussion });

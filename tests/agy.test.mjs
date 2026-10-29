@@ -180,11 +180,13 @@ test('agy check 和派出按每格组合拒绝缺档位、未知档位，单档�
   assert.ok(output(await run(h, ['--effort', 'max']), 1).errors.includes(M.agyEffortUnknown('gemini-3.8-flash', 'max', 'low / medium / high')));
 });
 
-test('项目配置按 agy 词表调低档位，调高和无法比较的默认档保持用户配置', async (t) => {
+test('项目配置可以调低、调高或改用 agy 默认档位', async (t) => {
   const h = sandbox(t); configure(h);
-  for (const [effort, expected] of [['low', 'low'], ['max', 'high'], ['default', 'high']]) {
+  for (const effort of ['low', 'max', 'default']) {
     h.write('.claude/foreman.json', { modules: { discuss: { complex: [{ agent: 'agy', effort }] } } });
-    const cfg = output(await h.bridge(['config', '--cwd', h.cwd])); assert.equal(cfg.resolved_modules.discuss.complex[0].effort, expected);
+    const r = await h.bridge(['config', '--cwd', h.cwd]), cfg = output(r);
+    assert.equal(cfg.resolved_modules.discuss.complex[0].effort, effort);
+    assert.equal(r.stderr, '');
   }
 });
 

@@ -100,7 +100,7 @@ function seatBlock(run, feed, rows, width, no, split, collapse = false) {
 
 async function watchGroup(group, o, loadCfg) {
   let planRuns = [], lastGrouped = [], pending = [], groupPlans = [];
-  const groupTask = (all) => displayGroupTask(all, groupPlans, pending);
+  const groupTask = (all) => displayGroupTask(all, groupPlans, pending, M.list);
   // 编号从完整计划重建，尚未启动的席位也预留；祖先暂时读不到时才沿用上次号码。
   let numbers, numberSession;
   const numberOf = (run) => numbers.runs.get(run.id);

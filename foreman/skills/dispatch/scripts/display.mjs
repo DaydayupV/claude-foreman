@@ -246,8 +246,8 @@ const modelLabel = (m, { source = false } = {}) => (agentTypeOf(m) === 'host' ? 
 // 任务属于哪个模块；旧记录没有 module，按 kind 和模式推断
 const moduleOf = (m) => m?.module ?? (m?.kind === 'exec' ? 'run' : m?.kind ?? m?.mode);
 // 任务行：<模块> · [<模式> · ]<标题> · <等级>[ · round N]；图像任务用格子和路线代替等级
-const taskLine = (m, { mode = null, title = m?.title, round = m?.round } = {}) => D.dots([moduleOf(m), mode, title && oneLine(title),
-  ...(moduleOf(m) === 'image' ? [m?.cell, m?.route && `route ${'①②③④'[m.route - 1]}`] : [m?.level]), round > 1 && D.watchRound(round)]);
+const taskLine = (m, { mode = null, title = m?.title, round = m?.round, scene = null } = {}) => D.dots([moduleOf(m), mode, title && oneLine(title),
+  ...(moduleOf(m) === 'image' ? [m?.cell, m?.route && `route ${'①②③④'[m.route - 1]}`] : [m?.level]), scene, round > 1 && D.watchRound(round)]);
 const clock = (ms) => {
   const s = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
   // 一天以上写成"5d 12h"：132:09:27 夹在 3:30 这种分:秒中间，分不清是小时还是分钟
@@ -464,7 +464,7 @@ function seatLine(m, { title = false, width = Infinity } = {}, C = unpainted) {
   return parts.map((p) => p.style(p.text)).join(C.dim(' · '));
 }
 
-function groupTask(all, plans = [], queue = []) {
+function groupTask(all, plans = [], queue = [], list = D.list) {
   const seats = all.filter((run) => run.meta.participant !== 'host').map((run) => run.meta);
   const metas = seats.length ? seats : all.length ? all.map((run) => run.meta) : queue.map((q) => {
     const plan = plans.find((p) => (p.plan_id ?? p.plan) === q.plan);
@@ -477,7 +477,9 @@ function groupTask(all, plans = [], queue = []) {
   const same = (key) => (new Set(metas.map((m) => m[key] ?? null)).size === 1 ? metas[0]?.[key] : null);
   const titles = [...new Set(metas.map((m) => withoutRole(oneLine(m.title || ''), m.role)).filter(Boolean))];
   const round = same('round');
-  return { split: module === 'run' && titles.length > 1, text: taskLine({ ...metas[0], level: same('level'), cell: same('cell') }, { mode, title: titles.join(' / '), round }),
+  const scenes = [...new Set(plans.map((p) => p.scene).filter(Boolean))];
+  return { split: module === 'run' && titles.length > 1, text: taskLine({ ...metas[0], level: same('level'), cell: same('cell') }, { mode, title: titles.join(' / '), round, scene: list(scenes) }),
+    sceneWhy: plans.filter((p) => p.scene && p.scene_why).map((p) => `${p.scene}: ${p.scene_why}`).join('\n'),
     // 简短的组标题（网页用量表的组行）：只写类型和标题
     short: D.dots([moduleOf(metas[0]), titles.length && oneLine(titles.join(' / '))]) };
 }

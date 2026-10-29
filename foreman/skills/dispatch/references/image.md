@@ -6,7 +6,7 @@
 
 ## 两格
 - 出图交给 `resolved_modules.image.generate` 里的协作方，手画（会弯的部件、纯矢量）交给 `resolved_modules.image.draw` 里的，推理强度用它在那一格写的。generate 只挑能出图的（`capabilities.images` 为 `true`，目前只有 `codex cli` 类型），draw 挑能执行的；有几个候选时按 `references/seats.md` 挑。
-- **格子关着时**：generate 是 `null` 时用户关掉了出图，告诉用户这次不出图，不要改用别的办法凑；draw 是 `null` 时，会弯的部件和纯矢量绘制由 Claude 自己画。`image_configured` 为 `false`（配置里还没有图像块，比如从旧配置改写过来的）时两格都按关着处理，建议用户运行 `/foreman:setup` 加上图像两格。被项目配置关掉的（`closed_by_project`）如实告诉用户。
+- **格子关着时**：generate 是 `null` 时用户关掉了出图，告诉用户这次不出图，不要改用别的办法凑；draw 是 `null` 时，会弯的部件和纯矢量绘制由 Claude 自己画。`image_configured` 为 `false`（配置里还没有图像块，比如从旧配置改写过来的）时两格都按关着处理，建议用户运行 `/foreman:setup` 加上图像两格。
 
 ## 流程和规则
 1. **范围**：要模型画的图形内容都走这里，不论最后交付的是位图，还是 SVG、HTML、canvas 或动画：照片、插画、贴图、精灵图、封面和主视觉、角色和吉祥物、场景、插画风图标、UI 组件的视觉、要切成单个素材或转成 SVG 的素材（包括 SVG、HTML、canvas 作品和动画里整块使用的插画）、给现有图片去背景、修改现有图片，以及照定稿图手画会弯的部件、纯矢量绘制。用户明确要求手写 SVG 或纯代码时不出图（仍然弹窗，路线 ④）。

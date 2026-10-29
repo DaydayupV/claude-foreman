@@ -254,14 +254,13 @@ flowchart TD
 
 ### 配置的结构
 
-配置分三块，另有一个可选的 `projects`：
+配置分三块：
 
 | 块 | 管什么 |
 |---|---|
 | `dispatch` | 插件怎么派活：是否主动派、实时查看、启动动画、讨论轮数、超时、记录目录 |
 | `agents` | 有哪些协作方、怎么连接 |
-| `modules` | 每类任务的每一格有哪些候选、谁必选、用什么推理强度 |
-| `projects`（可选） | 按项目目录覆盖 `modules` 和几个时长，见下面“按项目覆盖” |
+| `modules` | 每类任务的每一格有哪些候选、谁必选、用什么推理强度；讨论和审查每一级几席、审查要不要补漏席 |
 
 一个最小的例子：Codex 做复杂的执行和所有审查，复杂的讨论再加一个 opencode 里的模型，出图和手画也交给 Codex。没写的字段用默认值。
 
@@ -283,7 +282,7 @@ flowchart TD
 
 - `agents` 的键是协作方的**代号**，`modules` 和 `--agent` 用它引用。建议直接用模型名，可以用字母、数字、`.`、`-`、`_`。
 - 三种任务（`discuss` 讨论、`run` 执行、`review` 审查）各分三级，另有一个不进配置的 0 级（见下文"任务等级"）；图像（`image`）不分等级，分出图（`generate`）和手画（`draw`）两格。
-- 每一格写一组候选。一格有几个候选时，Claude Code 每次按规则挑：讨论和审查每一级挑几个由 `seats` 决定（默认值见 [`config.md` 的"候选和必选"](foreman/skills/dispatch/references/config.md)，不含 Claude Code 自己），尽量用不同的模型，候选少于这个数时全上；执行每份工作派一个。标了 `"required": true` 的是必选，这一格用到时一定参加。
+- 每一格写一组候选。一格有几个候选时，Claude Code 每次按规则挑：讨论和审查每一级挑几个由 `seats` 决定（默认值见 [`config.md` 的"候选和必选"](foreman/skills/dispatch/references/config.md)，不含 Claude Code 自己），尽量用不同的模型，候选少于这个数时全上；审查每一级要不要另加补漏席由 `gap` 决定，默认不加；执行每份工作派一个。标了 `"required": true` 的是必选，这一格用到时一定参加。
 - 写成 `"claude code"` 表示 Claude Code 自己做；对审查和讨论来说，就是这一格不找外部模型。图像的格子写 `null` 表示关掉。
 - `effort` 是推理强度，不写就用默认值。Codex 是 `low` 到 `ultra`；opencode 是模型的 variant；pi 是 thinking 档位；agy 是 `low` / `medium` / `high` 这类档位（agy 把它写在模型 ID 的后缀里，插件派出时再拼回去）；API 原样作为 `reasoning_effort` 发出。
 - 图像任务开工前先弹窗让你选路线，路线决定用到哪几格：只用到手画的纯矢量路线不碰出图那一格，那一格里的必选也不会参加。
@@ -316,7 +315,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 0 级固定由 Claude Code 自己做，不在配置里；1–3 级有哪些候选、谁必选、用什么推理强度由你在 `modules` 里决定，Claude Code 只在这一格的候选里挑。等级看判断和风险，不看改动多少：照清单机械地改 20 个文件是简单，改模块之间的接口是复杂。审查只看被审的改动本身：执行时是 3 级、根因难查，都不会让审查自动升到 3 级；只有改变了高风险行为、或者排除不了对它的影响才算 3 级。修完以后，只有修复本身又碰到高风险时才复审一次，而且只审修复的部分。派出去的每次调用都必须带上等级，漏了脚本直接报错，不会悄悄按某个档位运行。
 
 - 想临时指定时，对 Claude Code 说"用 ultra 跑"或"用某某模型跑"，Claude Code 会加上 `--effort`（只换推理强度）或 `--model`（只能换同一个提供方的模型）。
-- 某一级写成 `"claude code"` 时，你仍然可以明确要求把某个任务派出去，Claude Code 会用 `--agent` 点名；但项目配置关掉的格子不行。
+- 某一级写成 `"claude code"` 时，你仍然可以明确要求把某个任务派出去，Claude Code 会用 `--agent` 点名。
 - 一次派几个席位（比如几个模型讨论同一个议题）时，Claude Code 先建一份派发计划，脚本检查必选是否都在、讨论和审查的外部席位数是否和 `seats` 一致，再逐席启动。必选的模型失败或额度用完时，这件事算没做完，不会拿别的模型顶替。
 - 0 级只限一处就能改完的小改动。默认 `simple` 也由 Claude Code 自己做；把 `simple` 交给协作方的话，除了 0 级的小改动，其余的活都会派出去。
 
@@ -424,7 +423,8 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
       "simple":  [{ "agent": "gpt-6-astra", "effort": "medium" }],
       "normal":  [{ "agent": "gpt-6-astra", "effort": "high" }, { "agent": "deepseek-flash", "effort": "high" }],
       "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "deepseek-flash", "effort": "max" }, { "agent": "glm-5.3" }],
-      "seats":   { "simple": 1, "normal": 2, "complex": 2 }
+      "seats":   { "simple": 1, "normal": 2, "complex": 2 },
+      "gap":     { "simple": false, "normal": false, "complex": true }
     },
     "image": {
       "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }],
@@ -443,7 +443,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 | `mimo-v2.6-pro` | pi | 复杂讨论的候选 |
 | `kimi-k2.6` | API，key 在环境变量 `KIMI_API_KEY` 里 | 复杂讨论的候选 |
 
-简单和常规的执行由 Claude Code 自己做。讨论和审查的候选随等级增加：每次由 Claude Code 从候选里挑几席（个数由 `seats` 决定，三级都写在配置里），`gpt-6-astra` 在复杂的讨论和审查里必选，一定参加。
+简单和常规的执行由 Claude Code 自己做。讨论和审查的候选随等级增加：每次由 Claude Code 从候选里挑几席（个数由 `seats` 决定，三级都写在配置里），`gpt-6-astra` 在复杂的讨论和审查里必选，一定参加。复杂的审查另加一个补漏席（`gap`）：各席审完后，再请一个没参加过的模型只找"清单还漏了什么"。
 
 这份配置没用到、但常会调整的字段：
 
@@ -461,28 +461,52 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 
 </details>
 
-### 按项目覆盖
+### 项目配置
 
-某个项目要多用几个模型、换一套候选或改时长时，在用户配置里加 `projects`，按项目目录写，工作目录在这个目录下就生效：
+某个项目要换一套候选、多用或少用几个模型、改时长时，在项目里写 `<项目目录>/.claude/foreman.json`，它覆盖你的用户配置：
 
 ```json
-"projects": {
-  "O:/work/app": { "modules": { "review": { "normal": [{ "agent": "gpt-6.1-sol", "required": true }, { "agent": "glm-5.3" }, { "agent": "kimi-k2.6" }] } } }
+{
+  "dispatch": { "timeout_min": 600 },
+  "modules": {
+    "review": {
+      "normal": [{ "agent": "gpt-6.1-sol", "required": true }, { "agent": "glm-5.3" }, { "agent": "kimi-k2.6" }],
+      "seats": { "normal": 3 }
+    }
+  }
 }
 ```
 
-写了的格子整格替换，可以放宽；只能写 `modules` 和几个时长，协作方要在顶层 `agents` 里定义。它写在你自己的配置里、不随仓库走，所以可以放宽；仓库里的项目配置照旧只能收紧。
+- 只能写 `modules`（包括 `seats`、`gap`），以及 `dispatch` 的 `discuss_max_rounds`、`timeout_min`、`stall_min`、`busy_ask_min`；协作方要在用户配置的 `agents` 里定义，项目里不能新加。
+- 写了的格子整格替换，没写的沿用用户配置；`seats`、`gap` 按等级覆盖。可以加候选、改必选、调高席位、延长时长。
+- 以前写在用户配置 `projects` 里的按项目覆盖已经不用了，`/foreman:setup` 可以帮你搬到各项目的 `.claude/foreman.json`。
 
-### 项目配置
+### 按场景分开席位
 
-项目配置只能收紧，不能放宽：
+同一级的讨论或审查有时服务于不同的场合：研究证据的审查想"广"，多找几家、加补漏席；高风险代码的审查想"准"，只用最强的两家。这时可以按场景分开写席位数和补漏开关。不需要的话不用管，照常写数字就行。
 
-- 只认 `dispatch` 的 `timeout_min`、`stall_min`、`busy_ask_min` 和 `modules`（旧写法 `levels` 也认）；
-- 时长和席位取两边更严的值：超时和每一级的席位数取较小的；卡死检测和排队检查写 0 是"不检测"，最宽松，所以你写了正数时项目写 0 不生效；
-- 每一格只能整格关掉（分级的写 `"claude code"`，图像的写 `null`）、删掉用户配置这一格里的可选条目，或者调低推理强度（只限 Codex、pi 和 agy 这种档位有高低顺序的）；
-- 不能加人、换模型、改必选，也不能只删掉必选、留下其他人继续外派（会报错）。项目关掉的格子，Claude Code 也不能用 `--agent` 点名派出。
+先在偏好文件里定义场景和怎么选（`/foreman:setup` 可以帮你写）：
 
-这样别人的仓库没法借项目配置换掉执行方、把代码发给新的厂商、跳过必选的审查，或者延长超时、调高推理强度来多花你的额度。敏感项目可以删掉 API 候选，或者把讨论、审查整格写成 `"claude code"`。
+```markdown
+<!-- foreman:scenes -->
+## 场景路由
+- **code**：评判或决定代码、接口、配置、脚本、测试的改动；`--target diff` 的审查一律算 code。
+- **research**：研究结论和证据、研究方案、卡片、说明文档、研究方向构思；`--target claims` 的审查一律算 research。
+- 两类都有的拆成两个计划；拿不准时选席位多的场景。
+<!-- /foreman:scenes -->
+```
+
+再在配置里按场景写：
+
+```json
+"review": {
+  "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "gpt-6.1-sol", "effort": "max" }, { "agent": "deepseek-flash" }, { "agent": "glm-5.3" }],
+  "seats": { "simple": 1, "normal": 2, "complex": { "code": 2, "research": 4 } },
+  "gap":   { "simple": false, "normal": false, "complex": { "code": false, "research": true } }
+}
+```
+
+按场景写了的那一级，候选的排列顺序就是优先级：必选先上，再按顺序往下补。上面的例子里，代码审查用 astra 和 sol 两席、不补漏；研究审查四家全上，候选用完了就不做补漏轮。Claude Code 建计划时按偏好里的路由选场景，写明依据。偏好里的场景和配置里的场景名对不上时，讨论和审查的计划建不了，`config` 会指出哪里不一致。详见 [`config.md` 的"场景"](foreman/skills/dispatch/references/config.md)。
 
 ### 偏好文件
 
@@ -491,7 +515,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 - 用户级：`~/.claude/foreman/preferences.md`
 - 项目级：`<项目目录>/.claude/foreman.md`
 
-偏好文件只能在插件的硬规则以内调整做法：配置文件本身、必选、材料能不能发给某一家、讨论和审查只读、要弹窗确认的事和每一级的席位数，都不受偏好文件影响。在这个范围以内，和插件自带的规则冲突时以偏好文件为准。项目级偏好来自项目仓库（可能是别人的），只能让做法更严：它要求跳过确认、少审、换掉你配置的模型之类的，Claude Code 不会照做，会告诉你。例如：
+偏好文件只能在插件的硬规则以内调整做法：配置文件本身、必选、材料能不能发给某一家、讨论和审查只读、要弹窗确认的事和每一级的席位数，都不受偏好文件影响。在这个范围以内，和插件自带的规则冲突时以偏好文件为准。两份都读，冲突时以项目级为准。例如：
 
 ```markdown
 # foreman 偏好
@@ -513,7 +537,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
   - Windows 上 Codex 默认的 elevated 沙箱要先以管理员身份完成一次设置，设置坏了每条命令都会失败（报 `windows sandbox failed`）。改了沙箱之后让 Claude Code 运行一次 `check`：它不调模型地测一遍沙箱，坏了会列出修法，比如改用 `[windows] sandbox = "unelevated"`。
   - 审批 `approval` 保持默认的 `never` 就好：派出去的任务没人能批准，沙箱坏了要修沙箱。
 - **opencode 和 pi 做执行时没有系统沙箱。** `edit` 档写不了项目以外的文件、不能运行命令；`shell` 档的命令能访问整台机器。默认不开放，要你自己在用户配置里写，项目配置开不了。
-- **代码会发给协作方背后的厂商。** 派给 Codex 的发给 OpenAI；opencode、pi 和 API 模型发给对应的厂商，agy 发给 Google，API 模型还会收到 Claude Code 附上的文件。涉及敏感代码的项目先确认没问题，必要时用项目配置收紧。
+- **代码会发给协作方背后的厂商。** 派给 Codex 的发给 OpenAI；opencode、pi 和 API 模型发给对应的厂商，agy 发给 Google，API 模型还会收到 Claude Code 附上的文件。涉及敏感代码的项目先确认没问题，必要时在项目配置里去掉 API 候选，或者把讨论、审查整格写成 `"claude code"`。
 - **API key 可以写在用户配置里，也可以放在环境变量里。** 写在配置里是明文，`~/.claude/foreman/config.json` 不要提交或分享；项目配置里写的 key 不生效。`config` 命令不显示 key，脚本也不会把 key 写进运行记录。
 - **按量计费的都会产生费用。** Codex 用 API key 计费时、API 模型、opencode 和 pi 接入的按量计费厂商，每次派活或讨论都会花钱。不想让 Claude Code 自己发起派活、讨论和审查，就把 `dispatch.auto` 设成 `false`，它会先问你。
 - **协作方不会因为等人回答而卡住。** Codex 默认不需要审批，opencode 不开放提问和需要确认的权限，pi 没有提问工具，agy 的提问工具被守卫拒绝。它们要人回答的事都收集在结果里，由 Claude Code 判断：你已有授权内的直接决定后续接，业务取舍、扩大范围、花钱和不可逆的操作才问你。

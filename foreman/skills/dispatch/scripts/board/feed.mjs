@@ -618,6 +618,8 @@ export function createFeed(root, options = {}) {
     const p = entry?.value;
     if (!p || !Number.isFinite(ms(p.created_at))) return null;
     return { run: 'cc', lane: 'cc', ts: ms(p.created_at), k: 'fplan', plan: clip(id), group: clip(p.group), t: clip(p.why), module: clip(p.module), cell: clip(p.cell ?? p.level),
+      // 没有场景的旧计划不加这两项，回放输出和以前一致
+      ...(p.scene ? { scene: clip(p.scene), scene_why: clip(p.scene_why) } : {}),
       host: p.host ? { role: clip(p.host.role) } : null, seats: (p.seats || []).map((s) => ({ seat: s.seat, model: clip(s.model), agent: clip(s.agent), role: clip(s.role), required: !!s.required })) };
   };
   // 裁决：verdict.json 里同一时刻记下的几条算一次，数出接受、部分接受、拒绝各几条

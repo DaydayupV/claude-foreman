@@ -166,13 +166,18 @@ test('审查计划保存实际默认未提交范围，旧 false 计划启动仍�
   assert.equal(output(await h.bridge([...args, '--commit', 'HEAD'])).review.uncommitted, false);
 });
 
-test('项目关格的派出和续接错误仅在显式 --agent 时提点名', async (t) => {
+test('项目配成 Claude Code 后未点名用通用提示，点名派出和续接标为格子外', async (t) => {
   const h = sandbox(t); h.write('.claude/foreman.json', { modules: { run: { complex: 'claude code' } } });
   seedRun(h, 'parent', { module: 'run', cell: 'complex' });
   for (const args of [['run', '--cwd', h.cwd, '--level', 'complex', '--brief', '-'], ['resume', '--run', 'parent', '--level', 'complex', '--brief', '-', '--reason', 'rework']]) {
     for (const named of [false, true]) {
-      const r = await h.bridge([...args, ...(named ? ['--agent', 'codex'] : [])]);
-      failed(r, M.cellClosedByProject('modules.run.complex', named)); assert.equal(r.stderr.includes('--agent'), named);
+      const r = await h.bridge([...args, '--no-snapshot', ...(named ? ['--agent', 'codex'] : [])]);
+      if (!named) failed(r, M.levelForClaude('complex'));
+      else {
+        const out = output(r);
+        assert.equal(out.status, 'done'); assert.equal(out.agent, 'codex'); assert.equal(out.outside_cell, true);
+        assert.equal(json(path.join(out.run_dir, 'meta.json')).outside_cell, true);
+      }
     }
   }
 });

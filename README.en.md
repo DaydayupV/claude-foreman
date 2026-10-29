@@ -254,14 +254,13 @@ Choices that cost money or affect safety are never made automatically; `/foreman
 
 ### How the config is laid out
 
-It has three parts, plus an optional `projects`:
+It has three parts:
 
 | Part | What it covers |
 |---|---|
 | `dispatch` | How the plugin hands off work: whether to do it on its own, the live view, the intro, discussion rounds, time limits, the run directory |
 | `agents` | Which agents there are and how to reach them |
-| `modules` | Which candidates each cell of each task type has, who is required, and with what effort |
-| `projects` (optional) | Per-project-directory overrides of `modules` and a few time limits; see "Per-project overrides" below |
+| `modules` | Which candidates each cell of each task type has, who is required, and with what effort; how many seats each discussion and review level uses, and whether a review adds a gap seat |
 
 A minimal example: Codex does complex hands-on work and every review, complex discussions add one model from opencode, and Codex also generates images and hand-draws pieces. Anything left out uses its default.
 
@@ -283,7 +282,7 @@ A minimal example: Codex does complex hands-on work and every review, complex di
 
 - Each key under `agents` is the agent's **ID**, which `modules` and `--agent` refer to. Naming it after its model works best; IDs may use letters, digits, `.`, `-` and `_`.
 - Each of the three task types (`discuss`, `run` for hands-on work, `review`) has three levels, plus a level 0 that isn't in the config (see "Task levels" below); images (`image`) have no levels, just two cells: `generate` for image generation and `draw` for hand-drawing.
-- Each cell lists candidates. When a cell has several, Claude Code picks by its rules each time: for discussions and reviews, `seats` sets how many per level (defaults in ["Candidates and required agents" in `config.md`](foreman-en/skills/dispatch/references/config.md), not counting Claude Code itself), using different models where possible and all of them when there are fewer candidates; for hands-on work, one agent per piece of work. An entry marked `"required": true` is required and always takes part when the cell is used.
+- Each cell lists candidates. When a cell has several, Claude Code picks by its rules each time: for discussions and reviews, `seats` sets how many per level (defaults in ["Candidates and required agents" in `config.md`](foreman-en/skills/dispatch/references/config.md), not counting Claude Code itself), using different models where possible and all of them when there are fewer candidates; whether a review level adds a gap seat is set by `gap`, off by default; for hands-on work, one agent per piece of work. An entry marked `"required": true` is required and always takes part when the cell is used.
 - `"claude code"` means Claude Code does it itself; for reviews and discussions, that cell uses no outside model. `null` turns an image cell off.
 - `effort` is the reasoning effort; leave it out for the default. For Codex it's `low` to `ultra`; for opencode, the model's variant; for pi, its thinking level; for agy, a level such as `low` / `medium` / `high` (agy puts it in the model ID suffix, and the plugin adds it back when dispatching); for API models it's sent as `reasoning_effort` as is.
 - Image tasks start with a pop-up where you choose the route, and the route decides which cells are used: a pure vector route that only draws never touches the generate cell, so that cell's required agents don't take part.
@@ -316,7 +315,7 @@ Each time Claude Code enters a discussion, hands-on work or a review, it levels 
 Level 0 is always done by Claude Code and isn't in the config; which candidates levels 1–3 have, who is required and with what effort is up to you in `modules`, and Claude Code only picks from the cell's candidates. Levels go by judgement and risk, not by how much changes: renaming across 20 files from a list is simple, while changing an interface between modules is complex. A review goes only by the change under review: level 3 hands-on work or a cause that was hard to find doesn't make the review level 3 by itself; only changes that alter high-risk behaviour, or whose effect on it can't be ruled out, do. After fixes, there's a second review only when the fix itself touches high-risk behaviour, and it covers just the fix. Every call that goes out must carry a level; if it's missing, the script errors out rather than quietly picking one.
 
 - To choose on the spot, tell Claude Code "run it with ultra" or "use such-and-such model"; Claude Code adds `--effort` (it only changes the effort) or `--model` (only another model from the same provider).
-- When a level is `"claude code"`, you can still explicitly ask for a task to be handed off, and Claude Code names an agent with `--agent`; but not for a cell the project config closed.
+- When a level is `"claude code"`, you can still explicitly ask for a task to be handed off, and Claude Code names an agent with `--agent`.
 - To hand one task to several seats (say, several models discussing one topic), Claude Code first creates a dispatch plan; the script checks that every required agent is in it and that a discussion or review has as many external seats as `seats` says, then each seat is started. If a required model fails or runs out of quota, the task counts as unfinished; another model doesn't stand in for it.
 - Level 0 is only for small changes done in one place. By default Claude Code also does `simple` itself; give `simple` to an agent and everything except level 0 changes gets handed off.
 
@@ -424,7 +423,8 @@ Both take a change snapshot first, and Claude Code reviews the diff file by file
       "simple":  [{ "agent": "gpt-6-astra", "effort": "medium" }],
       "normal":  [{ "agent": "gpt-6-astra", "effort": "high" }, { "agent": "deepseek-flash", "effort": "high" }],
       "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "deepseek-flash", "effort": "max" }, { "agent": "glm-5.3" }],
-      "seats":   { "simple": 1, "normal": 2, "complex": 2 }
+      "seats":   { "simple": 1, "normal": 2, "complex": 2 },
+      "gap":     { "simple": false, "normal": false, "complex": true }
     },
     "image": {
       "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }],
@@ -443,7 +443,7 @@ Both take a change snapshot first, and Claude Code reviews the diff file by file
 | `mimo-v2.6-pro` | pi | A candidate for complex discussions |
 | `kimi-k2.6` | API, with the key in the `KIMI_API_KEY` environment variable | A candidate for complex discussions |
 
-Claude Code does simple and normal hands-on work itself. Discussions and reviews get more candidates as the level rises: each time Claude Code picks a few seats from them (as many as `seats` says, with all three levels written in the config), and `gpt-6-astra` is required for complex discussions and reviews, so it always takes part.
+Claude Code does simple and normal hands-on work itself. Discussions and reviews get more candidates as the level rises: each time Claude Code picks a few seats from them (as many as `seats` says, with all three levels written in the config), and `gpt-6-astra` is required for complex discussions and reviews, so it always takes part. Complex reviews also add a gap seat (`gap`): after the seats finish, one more model that hasn't taken part looks only for "what the list still misses".
 
 Fields this config doesn't use but that are often adjusted:
 
@@ -461,28 +461,52 @@ Fields this config doesn't use but that are often adjusted:
 
 </details>
 
-### Per-project overrides
+### Project config
 
-When one project should use more models, a different set of candidates or other time limits, add `projects` to your user config, keyed by project directory; it applies when the working directory is inside that directory:
+When one project should use a different set of candidates, more or fewer models, or other time limits, write `<project>/.claude/foreman.json` in the project; it overrides your user config:
 
 ```json
-"projects": {
-  "O:/work/app": { "modules": { "review": { "normal": [{ "agent": "gpt-6.1-sol", "required": true }, { "agent": "glm-5.3" }, { "agent": "kimi-k2.6" }] } } }
+{
+  "dispatch": { "timeout_min": 600 },
+  "modules": {
+    "review": {
+      "normal": [{ "agent": "gpt-6.1-sol", "required": true }, { "agent": "glm-5.3" }, { "agent": "kimi-k2.6" }],
+      "seats": { "normal": 3 }
+    }
+  }
 }
 ```
 
-A cell it writes is replaced as a whole, so it can loosen; it can only set `modules` and a few time limits, and agents must be defined in the top-level `agents`. It lives in your own config and doesn't travel with the repository, which is why it can loosen; a repository's project config still can only tighten.
+- It can only set `modules` (including `seats` and `gap`) and `discuss_max_rounds`, `timeout_min`, `stall_min`, `busy_ask_min` under `dispatch`; agents must be defined in the user config's `agents`, and a project can't add new ones.
+- A cell it writes is replaced as a whole, and cells it doesn't write keep the user config's value; `seats` and `gap` override per level. It can add candidates, change who is required, raise seat counts and lengthen time limits.
+- The per-project overrides that used to go under `projects` in the user config are no longer used; `/foreman-en:setup` can move them to each project's `.claude/foreman.json`.
 
-### Project config
+### Seats per scene
 
-A project config can only tighten, never loosen:
+The same discussion or review level sometimes serves different occasions: a review of research evidence should be broad, with more providers and a gap seat; a review of high-risk code should be precise, using only the two strongest. In that case you can split the seat counts and the gap switch by scene. If you don't need this, skip it and keep writing numbers as usual.
 
-- it only accepts `timeout_min`, `stall_min`, `busy_ask_min` under `dispatch`, plus `modules` (the old `levels` form too);
-- time and seat limits take the stricter of the two values: the smaller time limit and per-level seat count win; for stall detection and the queue check, 0 means "don't check", which is the loosest, so a project 0 has no effect when you set a positive number;
-- each cell can only be closed as a whole (`"claude code"` for a graded cell, `null` for an image cell), drop optional entries your user config has in that cell, or lower the effort (only for Codex, pi and agy, whose efforts have a clear order);
-- it can't add agents, swap models or change who is required, and it can't drop only the required agents while keeping others handing work out (that's an error). Claude Code can't name an agent with `--agent` for a cell the project closed either.
+First define the scenes and how to choose between them in a preference file (`/foreman-en:setup` can write it for you):
 
-This way a repository you cloned can't use its project config to swap the agent doing the work, send your code to a new provider, skip a required review, or stretch time limits and raise efforts to spend more of your quota. For a sensitive project, drop the API candidates, or set discussions and reviews to `"claude code"` as a whole.
+```markdown
+<!-- foreman:scenes -->
+## Scene routing
+- **code**: judging or deciding changes to code, interfaces, configs, scripts and tests; reviews with `--target diff` always count as code.
+- **research**: research conclusions and evidence, research plans, cards, docs, research-direction ideas; reviews with `--target claims` always count as research.
+- Split work that has both into two plans; when unsure, pick the scene with more seats.
+<!-- /foreman:scenes -->
+```
+
+Then write per-scene values in the config:
+
+```json
+"review": {
+  "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "gpt-6.1-sol", "effort": "max" }, { "agent": "deepseek-flash" }, { "agent": "glm-5.3" }],
+  "seats": { "simple": 1, "normal": 2, "complex": { "code": 2, "research": 4 } },
+  "gap":   { "simple": false, "normal": false, "complex": { "code": false, "research": true } }
+}
+```
+
+At a level written per scene, the order of the candidates is their priority: required agents go first, then down the list. In the example above, code reviews use two seats, astra and sol, with no gap seat; research reviews use all four, and with no candidates left there is no gap pass. Claude Code picks the scene by the routing in the preferences when it creates a plan, and says which line it followed. When the scenes in the preferences don't match the scene names in the config, discussion and review plans can't be created, and `config` points out what doesn't match. Details are under ["Scenes" in `config.md`](foreman-en/skills/dispatch/references/config.md).
 
 ### Preference files
 
@@ -491,7 +515,7 @@ Some habits don't fit in JSON, such as which code in your project counts as high
 - User level: `~/.claude/foreman/preferences.md`
 - Project level: `<project>/.claude/foreman.md`
 
-Preference files only adjust how things are done within the plugin's hard rules: the config files themselves, required agents, whether material may go to a given provider, read-only discussions and reviews, the things that need a confirmation pop-up, and each level's seat count can't be changed by preference files. Within that, they win over the plugin's built-in rules. Project-level preferences come from the project repository (possibly someone else's) and can only make things stricter: if one asks to skip confirmations, review less or swap out the models you configured, Claude Code won't follow it and will tell you. For example:
+Preference files only adjust how things are done within the plugin's hard rules: the config files themselves, required agents, whether material may go to a given provider, read-only discussions and reviews, the things that need a confirmation pop-up, and each level's seat count can't be changed by preference files. Within that, they win over the plugin's built-in rules. Both files are read, and where they conflict the project level wins. For example:
 
 ```markdown
 # foreman preferences
@@ -513,7 +537,7 @@ Custom roles for role-mode discussions go here too; the format is under "Custom 
   - Codex's default elevated sandbox on Windows needs a one-time setup with administrator rights, and if that setup is broken, every command fails (with `windows sandbox failed`). After changing the sandbox, have Claude Code run `check`: it tests the sandbox without calling a model and lists fixes if it's broken, such as switching to `[windows] sandbox = "unelevated"`.
   - Leave `approval` at the default `never`: nobody can approve in a handed-off task, and a broken sandbox needs fixing at the sandbox.
 - **opencode and pi have no OS sandbox when doing hands-on work.** At `edit` they can't write outside the project or run commands; at `shell` their commands can reach the whole machine. It's off by default; only you can turn it on, in the user config, and a project config can't.
-- **Your code goes to the providers behind your agents.** Work handed to Codex goes to OpenAI; opencode, pi and API models send it to their providers, agy to Google, and API models also receive the files Claude Code attaches. Check that this is acceptable for sensitive projects, and tighten things with a project config if needed.
+- **Your code goes to the providers behind your agents.** Work handed to Codex goes to OpenAI; opencode, pi and API models send it to their providers, agy to Google, and API models also receive the files Claude Code attaches. Check that this is acceptable for sensitive projects; if needed, drop the API candidates in the project config, or set discussions and reviews to `"claude code"` as a whole.
 - **API keys can go in the user config or in environment variables.** In the config they're plain text, so don't commit or share `~/.claude/foreman/config.json`; keys in a project config are ignored. The `config` command never shows keys, and the script never writes them into run records.
 - **Pay-as-you-go means real costs.** Codex with API-key billing, API models, and pay-as-you-go providers reached through opencode or pi all cost money for each handoff or discussion. Set `dispatch.auto` to `false` if you don't want Claude Code starting handoffs, discussions and reviews on its own; it asks you first instead.
 - **Agents don't get stuck waiting for an answer.** Codex needs no approvals by default, opencode gets no way to ask questions or request confirmable permissions, pi has no question tool, and the guard blocks agy's question tool. Anything they need answered is collected in the result, and Claude Code decides: within the authority you've already given, it decides and resumes; it only asks you about business trade-offs, wider scope, extra cost and irreversible steps.

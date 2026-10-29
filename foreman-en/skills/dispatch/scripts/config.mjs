@@ -63,6 +63,7 @@ function projectFile(cwd, current, legacy) {
 const LEVELS = ['simple', 'normal', 'complex'];
 // 讨论和审查每一级默认的外部席位数（不含 Claude Code 席和补漏席）。默认值只在这里写，文档里只在 references/config.md 写一次。
 const DEFAULT_SEATS = { discuss: { simple: 2, normal: 4, complex: 8 }, review: { simple: 1, normal: 2, complex: 2 } };
+const DEFAULT_GAP = { review: { simple: false, normal: false, complex: false } };
 const MODES = ['run', 'review', 'discuss'];
 const CLAUDE_CODE = 'claude code';
 const MODULE_CELLS = { discuss: LEVELS, run: LEVELS, review: LEVELS, image: ['generate', 'draw'] };
@@ -94,6 +95,9 @@ function normalizeModules(cfg) {
     // 用户配置写入失败或合并项目配置时，仍在内存里补齐。
     const seats = Object.fromEntries(LEVELS.map((cell) => [cell, Math.max(DEFAULT_SEATS[module][cell], requiredCount(cells[cell]))]));
     modules[module] = { ...cells, seats: { ...seats, ...cells.seats } };
+  }
+  if (isObject(modules.review) && (!Object.hasOwn(modules.review, 'gap') || isObject(modules.review.gap))) {
+    modules.review = { ...modules.review, gap: { ...DEFAULT_GAP.review, ...modules.review.gap } };
   }
   return { ...cfg, modules };
 }
@@ -166,10 +170,13 @@ function mergeConfig(base, extra) {
         if (isObject(out.modules[module]) && !Object.hasOwn(out.modules[module], cell)) out.modules[module] = { ...out.modules[module], [cell]: value };
       }
       for (const module of ['discuss', 'review']) {
-        const cells = out.modules[module], seats = base.modules?.[module]?.seats;
-        if (!isObject(cells) || !seats) continue;
-        out.modules[module] = { ...cells, seats: !Object.hasOwn(cells, 'seats') ? { ...seats }
-          : isObject(cells.seats) ? { ...seats, ...cells.seats } : cells.seats };
+        if (!isObject(out.modules[module])) continue;
+        for (const field of ['seats', 'gap']) {
+          const cells = out.modules[module], prev = base.modules?.[module]?.[field];
+          if (!prev) continue;
+          out.modules[module] = { ...cells, [field]: !Object.hasOwn(cells, field) ? { ...prev }
+            : isObject(cells[field]) ? { ...prev, ...cells[field] } : cells[field] };
+        }
       }
     }
     if (k === 'agents' && isObject(v)) {
@@ -248,7 +255,10 @@ function migrateConfig(config, file, base, project) {
     return cells === undefined || isObject(cells) && (!Object.hasOwn(cells, 'seats')
       || isObject(cells.seats) && LEVELS.some((cell) => !Object.hasOwn(cells.seats, cell)));
   });
-  return { config: result, old, modules: hasLevels, seats, note, watch };
+  const review = result.modules?.review;
+  const gap = !project && (result.modules === undefined || isObject(result.modules))
+    && (review === undefined || isObject(review) && !Object.hasOwn(review, 'gap'));
+  return { config: result, old, modules: hasLevels, seats, gap, note, watch };
 }
 
 function renameAgentsByModel(config, adapters) {
@@ -290,13 +300,12 @@ function migrateStructure(config, file, base, project, adapters) {
   if (!project && migratedConfigs.has(file)) return migratedConfigs.get(file);
   const converted = migrateConfig(config, file, base, project);
   if (project) return converted.config;
-  if (!converted.old && !converted.modules && !converted.seats.length && !converted.watch) return config;
+  if (!converted.old && !converted.modules && !converted.seats.length && !converted.gap && !converted.watch) return config;
   let result = structuredClone(converted.old || converted.modules || converted.watch ? converted.config : config);
-  // projects 不经旧结构迁移，避免项目覆盖被改写或随 mergeConfig 丢失。
+  // 废弃的 projects 保留原文，交给 setup 迁移，不参与生效配置。
   if (Object.hasOwn(config, 'projects')) result.projects = structuredClone(config.projects);
   if (converted.old && isObject(config.agents) && !Object.hasOwn(config.agents, 'codex')
-    && ![result.modules, ...Object.values(isObject(config.projects) ? config.projects : {}).map((entry) => entry?.modules)]
-      .some((modules) => isObject(modules) && eachEntry(modules).some(({ item }) => item?.agent === 'codex'))) delete result.agents.codex;
+    && !eachEntry(result.modules).some(({ item }) => item?.agent === 'codex')) delete result.agents.codex;
   for (const agent of Object.values(result.agents || {})) if (Object.hasOwn(OLD_TYPES, agent?.type)) agent.type = OLD_TYPES[agent.type];
   let renamed = { aliases: {} };
   const lock = `${file}.structure.lock`, tmp = `${file}.${process.pid}.tmp`, aliasTmp = `${aliasesFile}.${process.pid}.tmp`;
@@ -310,7 +319,7 @@ function migrateStructure(config, file, base, project, adapters) {
   // 持有者用 pidExists 判断：没权限探测也算还活着。锁文件是空的或写坏了（建锁后、写进程号前崩溃）时，放了 2 秒以上就当残留。
   const lockAge = () => { try { return Date.now() - fs.statSync(lock).mtimeMs; } catch { return 0; } };
   const stale = () => { const pid = ownerOf(); return pid !== null && (Number.isInteger(pid) && pid > 0 ? !pidExists(pid) : lockAge() > 2000); };
-  // 只补 seats 时配置本身有错，就不改写也不提示改写失败：随后读配置时会报出真正的错误。旧写法的改写失败照旧提示。
+  // 只补 seats/gap 时配置本身有错，就留给后面的校验报出真正的错误。
   let locked = false, invalid = false;
   const deadline = Date.now() + 10000;
   try {
@@ -320,6 +329,8 @@ function migrateStructure(config, file, base, project, adapters) {
       const seats = Object.fromEntries(LEVELS.map((cell) => [cell, Math.max(DEFAULT_SEATS[module][cell], requiredCount(cells[cell]))]));
       result.modules = { ...result.modules, [module]: { ...cells, seats: { ...seats, ...cells.seats } } };
     }
+    if (converted.gap) result.modules = { ...result.modules, review: { ...result.modules?.review,
+      gap: { ...DEFAULT_GAP.review, complex: true } } };
     validateConfig(normalizeModules(mergeConfig(DEFAULT_CONFIG, result)), adapters, (msg) => { invalid = true; throw new Error(msg); });
     for (;;) {
       try { retryBusy(() => fs.writeFileSync(lock, String(process.pid), { flag: 'wx' })); locked = true; break; }
@@ -363,9 +374,10 @@ function migrateStructure(config, file, base, project, adapters) {
     if (converted.watch) notice(M.configWatchWritten(file, bak));
     if (converted.seats.length) notice(M.configSeatsWritten(file, bak, M.list(converted.seats.map((module) =>
       `${M.reportModuleNames[module].toLowerCase()} ${LEVELS.map((cell) => result.modules[module].seats[cell]).join('/')}`))));
+    if (converted.gap) notice(M.configGapWritten(file, bak));
   } catch (e) {
     if (converted.old || converted.modules || converted.watch) notice(M.configMigrateFailed(file, e.message));
-    else if (!invalid) notice(M.configSeatsWriteFailed(file, e.message));
+    else if (!invalid) notice(converted.seats.length ? M.configSeatsWriteFailed(file, e.message) : M.configMigrateFailed(file, e.message));
   } finally {
     fs.rmSync(tmp, { force: true });
     fs.rmSync(aliasTmp, { force: true });
@@ -428,8 +440,11 @@ function validateConfig(cfg, adapters, fail = die) {
     }
     const required = requiredCount(value);
     if (module === 'run' || module === 'image') check(required <= 1, key, why.oneRequired);
-    if (['discuss', 'review'].includes(module) && value !== CLAUDE_CODE && required > cfg.modules[module].seats[cell]) {
-      fail(M.seatsBelowRequired(`modules.${module}.seats.${cell}`, cfg.modules[module].seats[cell], required));
+    if (['discuss', 'review'].includes(module)) {
+      const seats = cfg.modules[module].seats[cell], key = `modules.${module}.seats.${cell}`;
+      for (const [at, n] of isObject(seats) ? Object.entries(seats).map(([scene, n]) => [`${key}.${scene}`, n]) : [[key, seats]]) {
+        if (n < required) fail(M.seatsBelowRequired(at, n, required));
+      }
     }
   }
 }
@@ -440,9 +455,14 @@ function validateModuleKeys(modules, check) {
     check(Object.hasOwn(MODULE_CELLS, module), `modules.${module}`, M.invalid.module);
     check(isObject(cells), `modules.${module}`, M.invalid.object);
     for (const cell of Object.keys(cells)) {
-      if (cell === 'seats') {
-        check(['discuss', 'review'].includes(module), `modules.${module}.seats`, M.seatsModuleOnly);
-        check(isObject(cells.seats) && Object.entries(cells.seats).every(([level, n]) => LEVELS.includes(level) && Number.isInteger(n) && n >= 1), `modules.${module}.seats`, M.invalid.seats);
+      if (cell === 'seats' || cell === 'gap') {
+        const key = `modules.${module}.${cell}`;
+        check(cell === 'gap' ? module === 'review' : ['discuss', 'review'].includes(module), key,
+          cell === 'gap' ? M.gapReviewOnly(key) : M.seatsModuleOnly);
+        const valid = cell === 'gap' ? (n) => typeof n === 'boolean' : (n) => Number.isInteger(n) && n >= 1;
+        check(isObject(cells[cell]) && Object.keys(cells[cell]).every((level) => LEVELS.includes(level)), key, M.invalid[cell]);
+        for (const [level, value] of Object.entries(cells[cell])) check(valid(value) || isObject(value) && Object.keys(value).length > 0
+          && Object.entries(value).every(([scene, n]) => /^[a-z][a-z0-9-]*$/.test(scene) && valid(n)), `${key}.${level}`, M.invalid[cell]);
       } else check(MODULE_CELLS[module].includes(cell), `modules.${module}.${cell}`, module === 'image' ? M.invalid.imageCell : M.invalid.level);
     }
   }
@@ -453,121 +473,67 @@ function validateCell(value, module, key, check) {
   check((Array.isArray(value) || isObject(value)) && cellList(value).length > 0, key, module === 'image' ? M.invalid.imageCandidates : M.invalid.candidates);
 }
 
-function sameOrInside(dir, root) {
-  [dir, root] = [dir, root].map((value) => {
-    const resolved = path.resolve(value);
-    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-  });
-  const relative = path.relative(root, dir);
-  return relative === '' || relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
-}
-
-function projectOverride(cfg, raw, cwd, adapters) {
-  if (raw?.projects === undefined) return { cfg, path: null };
-  if (!isObject(raw.projects)) die(M.configInvalid('projects', M.invalid.object));
-  const dirs = [];
-  let matched = null, result = cfg;
-  for (const [key, entry] of Object.entries(raw.projects)) {
-    const expanded = /^~[\\/]/.test(key) ? path.join(os.homedir(), key.slice(2)) : key;
-    // Windows 上 \work 这种不带盘符的根路径随当前盘变，也不算绝对路径；UNC 要写全 \\server\share
-    if (!path.isAbsolute(expanded) || process.platform === 'win32' && !/^([A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+)/.test(expanded)) die(M.projectsKeyNotAbsolute(key));
-    const dir = path.resolve(expanded);
-    const same = dirs.find((prev) => sameOrInside(dir, prev.dir) && sameOrInside(prev.dir, dir));
-    if (same) die(M.projectsSameDir(same.key, key));
-    dirs.push({ key, dir });
-    const fail = (message) => die(M.projectsEntryInvalid(key, message));
-    if (!isObject(entry)) fail(M.invalid.object);
-    for (const [field, value] of Object.entries(entry)) {
-      if (!['modules', 'dispatch'].includes(field)) die(M.projectsFieldNotAllowed(key, field));
-      if (field === 'dispatch' && isObject(value)) {
-        for (const name of Object.keys(value)) {
-          if (!['discuss_max_rounds', 'timeout_min', 'stall_min', 'busy_ask_min'].includes(name)) die(M.projectsFieldNotAllowed(key, `dispatch.${name}`));
-        }
-      }
-    }
-    const next = normalizeModules(mergeConfig(cfg, entry));
-    validateConfig(next, adapters, fail);
-    // 按目录边界匹配子目录，只用最长的键，避免父子覆盖叠加。
-    if (cwd && sameOrInside(cwd, dir) && (!matched || dir.length > matched.dir.length)) {
-      matched = { key, dir };
-      result = next;
-    }
-  }
-  return { cfg: result, path: matched?.key ?? null };
-}
-
-function projectConfig(cfg, project, adapters) {
+function projectConfig(cfg, project, file, adapters) {
   const allowed = {}, ignored = [];
-  const check = (ok, key, reason) => { if (!ok) die(M.configInvalid(key, reason)); };
   for (const [key, value] of Object.entries(project)) {
     if (key === 'dispatch' && isObject(value)) {
       allowed.dispatch = {};
       for (const [field, val] of Object.entries(value)) {
-        if (!['timeout_min', 'stall_min', 'busy_ask_min'].includes(field)) { ignored.push(`dispatch.${field}`); continue; }
-        const at = `dispatch.${field}`, user = cfg.dispatch[field];
-        check(Number.isFinite(val) && (field === 'timeout_min' ? val > 0 : val >= 0), at, M.invalid.minutes);
-        const disabled = field === 'stall_min' || field === 'busy_ask_min';
-        const looser = disabled ? user > 0 && (val === 0 || val > user) : val > user;
-        if (looser) notice(M.projectLooser(at, val, user));
-        allowed.dispatch[field] = looser ? user : val;
+        if (['discuss_max_rounds', 'timeout_min', 'stall_min', 'busy_ask_min'].includes(field)) allowed.dispatch[field] = val;
+        else ignored.push(`dispatch.${field}`);
       }
-    } else if (key === 'modules') {
-      validateModuleKeys(value, check);
-      allowed.modules = mapCells(value, (entry, { module, cell, key: at }) => {
-        validateCell(entry, module, at, check);
-        const original = cfg.modules[module][cell];
-        if (entry === CLAUDE_CODE || entry === null) { cfg.closed_by_project.push(`${module}.${cell}`); return entry; }
-        if (original === CLAUDE_CODE || original === null) { notice(M.projectCellOpened(at)); return original; }
-        const seen = new Set();
-        const kept = cellList(entry).flatMap((item, i) => {
-          const pos = `${at}[${i}]`;
-          check(isObject(item), pos, M.levelEntryChoices);
-          check(typeof item.agent === 'string' && !!item.agent.trim(), `${pos}.agent`, M.invalid.agentRef);
-          check(item.required === undefined || typeof item.required === 'boolean', `${pos}.required`, M.invalid.boolean);
-          const name = resolveAgentAlias(item.agent, cfg), prev = cellList(original).find((p) => p.agent === name);
-          check(!seen.has(name), pos, M.invalid.duplicate);
-          seen.add(name);
-          const agent = cfg.agents[name], adapter = adapters[agent?.type];
-          if (adapter) check(item.effort === undefined || agent.type === 'agy cli' && item.effort === null || (adapter.efforts ? adapter.efforts.includes(item.effort) : item.effort === null || typeof item.effort === 'string' && !!item.effort.trim()), `${pos}.effort`, adapter.efforts ? M.invalid.effortValue(item.effort, adapter.efforts.join(' / ')) : M.invalid.apiEffort);
-          if (!prev) { notice(M.projectAgentDropped(item.agent, at)); return []; }
-          for (const field of Object.keys(item)) if (!['agent', 'effort', 'required'].includes(field)) notice(M.projectAgentDropped(field, at));
-          if (Object.hasOwn(item, 'required') && item.required !== !!prev.required) notice(M.projectRequiredChanged(at, name));
-          const next = { ...prev };
-          if (Object.hasOwn(item, 'effort') && item.effort !== prev.effort) {
-            if (prev.effort === undefined) notice(M.projectEffortNoBase(at, name));
-            else if (!['codex cli', 'pi cli', 'agy cli'].includes(agent.type)
-              || agent.type === 'agy cli' && (!AGY_EFFORTS.includes(prev.effort) || !AGY_EFFORTS.includes(item.effort))) notice(M.projectEffortUnordered(at, name, agent.type));
-            else if (adapter.efforts.indexOf(item.effort) > adapter.efforts.indexOf(prev.effort)) notice(M.projectEffortRaised(at, name, item.effort, prev.effort));
-            else next.effort = item.effort;
-          }
-          return [next];
-        });
-        const missing = cellList(original).filter((item) => item.required && !kept.some((p) => p.agent === item.agent));
-        if (missing.length && kept.length) die(M.projectRequiredDropped(at, M.list(missing.map((item) => item.agent))));
-        // 项目写的协作方这一格一个都没有（比如克隆来的仓库用的是别人的一套代号）：按项目关掉这一格，只会更严，
-        // 不让这个仓库里的所有命令（连 status、board 都）报错退出
-        if (!kept.length) { notice(M.projectLevelEmpty(at)); cfg.closed_by_project.push(`${module}.${cell}`); return module === 'image' ? null : CLAUDE_CODE; }
-        return cellList(original).flatMap((item) => kept.filter((p) => p.agent === item.agent));
-      });
-    } else ignored.push(key);
+    } else if (['modules', 'dispatch'].includes(key)) allowed[key] = value;
+    else ignored.push(key);
   }
   if (ignored.length) notice(M.projectIgnored(M.list(ignored)));
-  for (const module of ['discuss', 'review']) {
-    const seats = allowed.modules?.[module]?.seats;
-    if (!seats) continue;
-    allowed.modules[module].seats = { ...seats };
-    for (const [cell, n] of Object.entries(seats)) {
-      const key = `modules.${module}.seats.${cell}`, user = cfg.modules[module].seats[cell];
-      if (n > user) notice(M.projectLooser(key, n, user));
-      const kept = Math.min(n, user);
-      allowed.modules[module].seats[cell] = kept;
-      if (cfg.closed_by_project.includes(`${module}.${cell}`)) continue;
-      const required = requiredCount(allowed.modules[module][cell] ?? cfg.modules[module][cell]);
-      if (kept < required) die(M.projectCellSeatsBelowRequired(key, kept, required));
-    }
-  }
-  return allowed;
+  const merged = normalizeModules(mergeConfig(cfg, allowed));
+  validateConfig(merged, adapters, (message) => die(M.projectConfigInvalid(file, message)));
+  const cells = Object.entries(allowed.modules || {}).flatMap(([module, values]) => Object.entries(values).flatMap(([cell, value]) =>
+    ['seats', 'gap'].includes(cell) ? Object.keys(value).map((level) => `${module}.${cell}.${level}`) : [`${module}.${cell}`]));
+  cells.push(...Object.keys(allowed.dispatch || {}).map((key) => `dispatch.${key}`));
+  return { cfg: merged, cells };
 }
+
+function readScenes(cwd) {
+  const read = (file, source) => {
+    if (!file || !fs.existsSync(file)) return null;
+    // 文件在但读不了（被占用、没有权限）时按没有场景块处理，提醒一句，不让所有命令都崩
+    let text;
+    try { text = retryBusy(() => fs.readFileSync(file, 'utf8')); } catch (e) { notice(M.scenesReadFailed(file, e.message)); return null; }
+    const lines = text.split(/\r?\n/);
+    const starts = [], ends = [];
+    lines.forEach((line, i) => {
+      if (line.trim() === '<!-- foreman:scenes -->') starts.push(i);
+      if (line.trim() === '<!-- /foreman:scenes -->') ends.push(i);
+    });
+    if (!starts.length && !ends.length) return null;
+    const names = [], problems = [];
+    const problem = (reason) => problems.push(M.scenesBlockInvalid(file, reason));
+    if (starts.length !== ends.length || starts.some((at, i) => at >= ends[i] || i > 0 && at < ends[i - 1])) problem(M.scenesBlockUnpaired);
+    if (starts.length > 1 || ends.length > 1) problem(M.scenesBlockMultiple);
+    if (!problems.length) for (const line of lines.slice(starts[0] + 1, ends[0])) {
+      const name = /^\s*-\s+\*\*([^*]+)\*\*\s*[：:]/.exec(line)?.[1];
+      if (!name) continue;
+      if (!/^[a-z][a-z0-9-]*$/.test(name)) problem(M.scenesBadName(name));
+      else if (names.includes(name)) problem(M.scenesDuplicate(name));
+      else names.push(name);
+    }
+    return { names, source, file, problems };
+  };
+  const user = read(USER_PREFS, 'user');
+  const project = read(cwd && projectFile(cwd, PROJECT_PREFS, LEGACY_PROJECT_PREFS), 'project');
+  return project || user || { names: [], source: null, file: null, problems: [] };
+}
+
+const isSplit = (cfg, module, cell) => isObject(cfg.modules[module].seats?.[cell]) || module === 'review' && isObject(cfg.modules.review.gap[cell]);
+const seatsFor = (cfg, module, cell, scene) => {
+  const value = cfg.modules[module].seats[cell];
+  return isObject(value) ? value[scene] : value;
+};
+const gapFor = (cfg, cell, scene) => {
+  const value = cfg.modules.review.gap[cell];
+  return isObject(value) ? value[scene] : value;
+};
 
 function detectEnvironment(adapters, agents = {}) {
   const commands = {}, started = {};
@@ -623,6 +589,7 @@ function buildStarterConfig(environment) {
   }
   for (const module of ['discuss', 'review']) cfg.modules[module].seats = Object.fromEntries(LEVELS.map((cell) =>
     [cell, Math.max(DEFAULT_SEATS[module][cell], requiredCount(cfg.modules[module][cell]))]));
+  cfg.modules.review.gap = { ...DEFAULT_GAP.review };
   return cfg;
 }
 
@@ -645,7 +612,6 @@ function loadConfig(cwd, adapters) {
   let user = readJson(USER_CONFIG);
   let imageConfigured = false;
   if (user) {
-    // 迁移时文件被别的进程改过会按新内容重读，projects 也要用迁移返回的这一份
     const migrated = user = migrateStructure(user, USER_CONFIG, LEGACY_DEFAULT_CONFIG, false, adapters);
     imageConfigured = isObject(migrated.modules?.image);
     cfg = mergeConfig(cfg, migrated); sources.push(USER_CONFIG);
@@ -657,17 +623,39 @@ function loadConfig(cwd, adapters) {
   }
   cfg = normalizeModules(cfg);
   validateConfig(cfg, adapters);
-  const override = projectOverride(cfg, user, cwd, adapters);
-  imageConfigured ||= isObject(user?.projects?.[override.path]?.modules?.image);
-  cfg = { ...override.cfg, closed_by_project: [] };
+  if (user && Object.hasOwn(user, 'projects')) notice(M.obsoleteProjects(M.list(Object.keys(user.projects || {}))));
+  let project_config = null;
   if (cwd) {
     const file = projectFile(cwd, PROJECT_CONFIG, LEGACY_PROJECT_CONFIG), project = readJson(file);
-    if (project) { cfg = mergeConfig(cfg, projectConfig(cfg, migrateStructure(project, file, cfg, true, adapters), adapters)); sources.push(file); }
+    if (project) {
+      const migrated = migrateStructure(project, file, cfg, true, adapters), merged = projectConfig(cfg, migrated, file, adapters);
+      imageConfigured ||= isObject(migrated.modules?.image);
+      cfg = merged.cfg;
+      project_config = { path: file, cells: merged.cells };
+      sources.push(file);
+    }
   }
   const runsDir = envOf('FOREMAN_RUNS_DIR', 'CODEX_RUNS_DIR');
   if (runsDir) cfg = mergeConfig(cfg, { dispatch: { runs_dir: runsDir } });
   validateConfig(cfg, adapters);
-  return { ...cfg, sources, image_configured: imageConfigured, project_override: override.path === null ? null : { path: override.path } };
+  const scenes = readScenes(cwd), defined = scenes.names.length > 0 && !scenes.problems.length;
+  let split = false;
+  for (const module of ['discuss', 'review']) for (const field of module === 'review' ? ['seats', 'gap'] : ['seats']) {
+    for (const [cell, value] of Object.entries(cfg.modules[module][field])) {
+      if (!isObject(value)) continue;
+      split = true;
+      const key = `modules.${module}.${field}.${cell}`;
+      if (!defined) scenes.problems.push(M.scenesNotDefined(key));
+      else {
+        const missing = scenes.names.filter((name) => !Object.hasOwn(value, name)), extra = Object.keys(value).filter((name) => !scenes.names.includes(name));
+        if (missing.length || extra.length) scenes.problems.push(M.scenesMismatch(key, scenes.file, M.list(missing), M.list(extra)));
+      }
+    }
+  }
+  if (defined && !split) notice(M.scenesUnused(scenes.file, M.list(scenes.names)));
+  // 场景块写错而配置没有按场景写时，按普通模式派，只提醒，不拦计划。
+  if (!split && scenes.problems.length) { for (const problem of scenes.problems) notice(problem); scenes.problems = []; }
+  return { ...cfg, sources, image_configured: imageConfigured, project_config, scenes };
 }
 
 
@@ -724,7 +712,7 @@ function resolveCell(cfg, module, cell) {
   const key = `modules.${module}.${cell}`, value = cfg.modules[module][cell];
   const candidates = cellList(value).map((item) => ({ ...item, agent: resolveAgentAlias(item.agent, cfg), required: !!item.required }));
   return { module, cell, key, closed: value === CLAUDE_CODE || value === null,
-    closedByProject: (cfg.closed_by_project || []).includes(`${module}.${cell}`), candidates,
+    candidates,
     required: candidates.filter((item) => item.required).map((item) => item.agent) };
 }
 
@@ -735,7 +723,6 @@ function validatePlan(cfg, plan, adapters) {
     if (!ROUTE_CELLS[plan.route].includes(plan.cell)) die(M.planRouteCell('①②③④'[plan.route - 1], plan.cell, M.routeUses[plan.route]));
   } else if (plan.route != null) die(M.planRouteImageOnly);
   const cell = resolveCell(cfg, plan.module, plan.cell);
-  if (cell.closedByProject) die(M.planCellClosedByProject(cell.key));
   const outside = !!plan.host && ['discuss', 'review'].includes(plan.module) && cfg.modules[plan.module][plan.cell] === CLAUDE_CODE;
   if (cell.closed && !outside) die(M.planCellClosed(cell.key));
   const names = cell.candidates.map((item) => item.agent);
@@ -792,7 +779,6 @@ function resolveProfile(cfg, seat, o, adapters, fallbackModel = null, parentAgen
   const selected = parentAgent || (seat.agent && resolveAgentAlias(seat.agent, cfg)) || requested;
   let entry, outside = false;
   if (cell.closed) {
-    if (cell.closedByProject) die(M.cellClosedByProject(cell.key, o.agent != null));
     if (image) die(M.imageCellClosed(cell.key));
     // 上一轮是点名派出的（outside_cell）：续接沿用它，计划里的席位和单独派出的都一样，不用再写一遍 --agent
     const name = requested || (seat.outside_cell ? selected : null);
@@ -840,6 +826,6 @@ function resolveProfile(cfg, seat, o, adapters, fallbackModel = null, parentAgen
     ...(outside ? { outside_cell: true } : {}), ...(o.model && model !== base ? { model_overridden: true } : {}) };
 }
 
-export { ENTRY, SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA, USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, DEFAULT_AGENT_PARALLEL, agentMaxParallel, foremanStateDir, DEFAULT_CONFIG, DEFAULT_SEATS, CLAUDE_CODE, LEVELS,
-  MODULE_CELLS, ROUTE_CELLS, canGenerate, cellList, eachCell, eachEntry, mapCells, resolveCell, validatePlan, resolveProfile, projectFile, loadConfig, defaultRunsRoot, runsMovedNow,
+export { ENTRY, SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA, USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, DEFAULT_AGENT_PARALLEL, agentMaxParallel, foremanStateDir, DEFAULT_CONFIG, DEFAULT_SEATS, DEFAULT_GAP, CLAUDE_CODE, LEVELS,
+  MODULE_CELLS, ROUTE_CELLS, canGenerate, cellList, eachCell, eachEntry, mapCells, resolveCell, validatePlan, resolveProfile, projectFile, loadConfig, readScenes, isSplit, seatsFor, gapFor, defaultRunsRoot, runsMovedNow,
   readAgentAliases, readRawConfig, readOldBackups, resolveAgentAlias, migrateStructure, renameAgentsByModel, detectEnvironment, buildStarterConfig, staleAliases, unknownAgentError };

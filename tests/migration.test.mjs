@@ -15,20 +15,51 @@ function legacy(h, meta = { status: 'done', pid: 0 }) {
   return root;
 }
 
-test('旧配置和旧偏好在第一次运行时复制到新位置，旧文件保留', async (t) => {
-  const h = sandbox(t, { config: false });
-  const oldConfig = write(path.join(h.home, '.claude/codex-bridge.json'), baseConfig());
+test('旧配置和偏好复制到新位置后补写 gap，旧文件与备份保留原文', async (t) => {
+  const h = sandbox(t, { config: false }), c = baseConfig(); delete c.modules.review.gap;
+  const oldConfig = write(path.join(h.home, '.claude/codex-bridge.json'), c);
   const oldPrefs = write(path.join(h.home, '.claude/codex-bridge.md'), '合成用户偏好\n');
   const configText = read(oldConfig), prefsText = read(oldPrefs);
   const r = await h.bridge(['config']);
   output(r);
-  assert.equal(read(h.userConfig), configText);
+  assert.deepEqual(JSON.parse(read(h.userConfig)).modules.review.gap, { simple: false, normal: false, complex: true });
+  assert.equal(read(`${h.userConfig}.bak`), configText);
   assert.equal(read(path.join(h.home, '.claude/foreman/preferences.md')), prefsText);
   assert.equal(read(oldConfig), configText);
   assert.equal(read(oldPrefs), prefsText);
   assert.ok(r.stderr.includes(M.legacyConfigCopied(oldConfig, h.userConfig)));
   assert.ok(r.stderr.includes(M.legacyPrefsCopied(oldPrefs, path.join(h.home, '.claude/foreman/preferences.md'))));
+  assert.ok(r.stderr.includes(M.configGapWritten(h.userConfig, `${h.userConfig}.bak`)));
   assert.equal((await h.bridge(['config'])).stderr, '');
+});
+
+test('用户配置缺 gap 时只备份补写一次，改写失败在内存补齐并清理锁', async (t) => {
+  for (const denied of [false, true]) {
+    const h = sandbox(t), c = baseConfig(); delete c.modules.review.gap; h.config(c);
+    const original = read(h.userConfig);
+    const file = h.write('gap-migrate.mjs', `import fs from 'node:fs';
+import { loadConfig } from ${JSON.stringify(url('config.mjs'))};
+import { adapters } from ${JSON.stringify(url('adapters/index.mjs'))};
+const rename = fs.renameSync;
+if (${denied}) fs.renameSync = (from, to) => {
+  if (to === ${JSON.stringify(h.userConfig)}) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+  return rename(from, to);
+};
+console.log(JSON.stringify([loadConfig(null, adapters), loadConfig(null, adapters)]));`);
+    const r = await h.start(file).done, [first, second] = output(r);
+    assert.deepEqual(first, second);
+    assert.deepEqual(first.modules.review.gap, { simple: false, normal: false, complex: true });
+    assert.equal(read(`${h.userConfig}.bak`), original);
+    if (denied) {
+      assert.equal(read(h.userConfig), original);
+      assert.equal(r.stderr, `foreman: ${M.configMigrateFailed(h.userConfig, 'EACCES')}\n`);
+    } else {
+      assert.equal(r.stderr, `foreman: ${M.configGapWritten(h.userConfig, `${h.userConfig}.bak`)}\n`);
+      assert.deepEqual(JSON.parse(read(h.userConfig)).modules.review.gap, first.modules.review.gap);
+      assert.equal((await h.bridge(['config'])).stderr, '');
+    }
+    assert.equal(fs.readdirSync(path.dirname(h.userConfig)).some((name) => name.endsWith('.lock') || name.endsWith('.tmp')), false);
+  }
 });
 
 test('旧记录目录整体迁移并重写 watch 启动器', async (t) => {

@@ -11,7 +11,7 @@ const modes = ['run', 'review', 'discuss'], levels = ['simple', 'normal', 'compl
 const self = () => ({ ...Object.fromEntries(modes.map((mode) => [mode, Object.fromEntries(levels.map((lv) => [lv, 'claude code']))])), image: { generate: null, draw: null } });
 const args = (h, mode, rest = []) => [mode, '--cwd', h.cwd, '--brief', '-', ...(mode === 'run' ? ['--no-snapshot'] : []), ...rest];
 
-test('多个 Codex、无 Codex 和三类能力表及省略强度的配置', async (t) => {
+test('多个 Codex、无 Codex 和三类能力表，省略强度与缺失 gap 的配置', async (t) => {
   const h = sandbox(t), c = baseConfig();
   c.agents['second.1'] = { type: 'codex cli', bin: CODEX };
   c.agents.api = apiAgent('http://127.0.0.1:1');
@@ -32,6 +32,7 @@ test('多个 Codex、无 Codex 和三类能力表及省略强度的配置', asyn
   h.config({ agents: {} });
   const modules = self();
   for (const mode of ['discuss', 'review']) modules[mode].seats = DEFAULT_SEATS[mode];
+  modules.review.gap = { simple: false, normal: false, complex: true };
   assert.deepEqual(output(await h.bridge(['config'])).effective.modules, modules);
 });
 
@@ -133,38 +134,37 @@ test('check 无协作方、未引用失败和已引用失败，以及只检查�
   assert.equal(output(await h.bridge(['check', '--agent', 'api']), 1).ok, false);
 });
 
-test('项目只能保留同格候选，整格关闭并忽略模型覆盖', async (t) => {
+test('项目整格替换候选、必选、模型和强度，可以打开格子并延长时长', async (t) => {
   const h = sandbox(t), c = baseConfig();
   c.agents.second = { ...c.agents.codex };
   c.agents.api = apiAgent('http://127.0.0.1:1');
-  c.modules.discuss.normal = [{ agent: 'codex', effort: 'high' }, { agent: 'api', effort: null }];
+  c.modules.discuss.normal = [{ agent: 'codex', effort: 'high', required: true }, { agent: 'api', effort: null }];
   h.config(c);
   h.write('.claude/foreman.json', { modules: { run: { complex: { agent: 'second' } } } });
-  let closed = await h.bridge(['config', '--cwd', h.cwd]);
-  assert.equal(output(closed).effective.modules.run.complex, 'claude code');
-  assert.ok(closed.stderr.includes(M.projectLevelEmpty('modules.run.complex')));
-  h.write('.claude/foreman.json', { agents: { codex: { model: 'unsafe' } }, dispatch: { timeout_min: 2, stall_min: 3, busy_ask_min: 4, auto: false }, modules: {
-    run: { simple: { agent: 'codex' } }, review: { simple: 'claude code', normal: { agent: 'codex', effort: 'low', model: 'unsafe' }, complex: { agent: 'codex' } },
-    discuss: { simple: 'claude code', normal: [{ agent: 'api', effort: 'low', model: 'unsafe' }, { agent: 'second' }] },
+  let replaced = await h.bridge(['config', '--cwd', h.cwd]);
+  assert.deepEqual(output(replaced).effective.modules.run.complex, [{ agent: 'second' }]);
+  assert.equal(replaced.stderr, '');
+  h.write('.claude/foreman.json', { agents: { codex: { model: 'ignored-model' } }, dispatch: { discuss_max_rounds: 5, timeout_min: 2, stall_min: 3, busy_ask_min: 4, auto: false }, modules: {
+    run: { simple: { agent: 'codex' } }, review: { simple: 'claude code', normal: { agent: 'codex', effort: 'low', model: 'project-model' }, complex: { agent: 'codex' } },
+    discuss: { simple: 'claude code', normal: [{ agent: 'api', effort: 'low', model: 'project-model' }, { agent: 'second', required: true }] },
   } });
   const r = await h.bridge(['config', '--cwd', h.cwd]), out = output(r).effective;
   assert.equal(out.agents.codex.model, 'fake-codex');
   assert.equal(out.dispatch.auto, true);
-  assert.deepEqual([out.dispatch.timeout_min, out.dispatch.stall_min, out.dispatch.busy_ask_min], [1, 3, 4]);
-  assert.deepEqual(out.modules.run, c.modules.run);
+  assert.deepEqual([out.dispatch.discuss_max_rounds, out.dispatch.timeout_min, out.dispatch.stall_min, out.dispatch.busy_ask_min], [5, 2, 3, 4]);
+  assert.deepEqual(out.modules.run, { ...c.modules.run, simple: [{ agent: 'codex' }] });
   assert.equal(out.modules.review.simple, 'claude code');
-  assert.deepEqual(out.modules.review.normal, [{ agent: 'codex', effort: 'low' }]);
-  assert.deepEqual(out.modules.review.complex, [{ agent: 'codex', effort: 'max' }]);
-  assert.deepEqual(out.modules.discuss.normal, [{ agent: 'api', effort: null }]);
-  assert.ok(r.stderr.includes(M.projectCellOpened('modules.run.simple')));
-  assert.ok(r.stderr.includes(M.projectAgentDropped('model', 'modules.review.normal')));
+  assert.deepEqual(out.modules.review.normal, [{ agent: 'codex', effort: 'low', model: 'project-model' }]);
+  assert.deepEqual(out.modules.review.complex, [{ agent: 'codex' }]);
+  assert.deepEqual(out.modules.discuss.normal, [{ agent: 'api', effort: 'low', model: 'project-model' }, { agent: 'second', required: true }]);
+  assert.equal(r.stderr, `foreman: ${M.projectIgnored(M.list(['agents', 'dispatch.auto']))}\n`);
   h.write('.claude/foreman.json', { modules: { discuss: { normal: [{ agent: 'second' }] } } });
-  closed = await h.bridge(['config', '--cwd', h.cwd]);
-  assert.equal(output(closed).effective.modules.discuss.normal, 'claude code');
-  assert.ok(closed.stderr.includes(M.projectLevelEmpty('modules.discuss.normal')));
+  replaced = await h.bridge(['config', '--cwd', h.cwd]);
+  assert.deepEqual(output(replaced).effective.modules.discuss.normal, [{ agent: 'second' }]);
+  assert.equal(replaced.stderr, '');
 });
 
-for (const scenario of ['nothing', 'codex', 'opencode', 'pi', 'api', 'all', 'logged-out', 'empty-models']) test(`环境检测和初始配置：${scenario}`, async (t) => {
+for (const scenario of ['nothing', 'codex', 'opencode', 'pi', 'api', 'all', 'logged-out', 'empty-models']) test(`环境检测和初始配置显式关闭补漏：${scenario}`, async (t) => {
   const h = sandbox(t, { config: false }), codex = ['codex', 'all', 'logged-out'].includes(scenario), oc = ['opencode', 'all', 'empty-models'].includes(scenario), pi = ['pi', 'all'].includes(scenario);
   const available = codex && scenario !== 'logged-out', keys = ['api', 'all'].includes(scenario) ? ['DEEPSEEK_API_KEY', 'KIMI_API_KEY', 'MOONSHOT_API_KEY', 'MIMO_API_KEY'] : [];
   const s = h.scenario({ logged_in: available, models: scenario === 'empty-models' ? [] : ['fake/model', 'fake/second'],
@@ -195,9 +195,11 @@ await import(${JSON.stringify(pathToFileURL(BRIDGE).href)});`);
   } else {
     const expected = self();
     for (const module of ['discuss', 'review']) expected[module].seats = DEFAULT_SEATS[module];
+    expected.review.gap = { simple: false, normal: false, complex: false };
     assert.deepEqual(cfg.modules, expected);
   }
   for (const module of ['discuss', 'review']) assert.deepEqual(cfg.modules[module].seats, DEFAULT_SEATS[module]);
+  assert.deepEqual(cfg.modules.review.gap, { simple: false, normal: false, complex: false });
   assert.equal(Object.hasOwn(cfg.dispatch, 'max_seats'), false);
   if (keys.length) assert.equal(cfg.agents['kimi-k2.6'].api_key_env, 'KIMI_API_KEY');
   let parts = available ? M.starterCodex('gpt-6.1-sol', 'gpt-6-astra') : M.starterNoCodex;

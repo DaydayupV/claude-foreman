@@ -14,6 +14,8 @@ export async function cmdSubmit(o, load) {
   if (!['discuss', 'review'].includes(plan.module) || !plan.host) die(M.submitNoHost(plan.plan_id));
   // plan 打印的命令里 --model 是占位符（<当前模型 ID>）：照抄没换掉时拒绝，不把占位符记成模型
   if (typeof o.model === 'string' && /^<.*>$/.test(o.model.trim())) die(M.submitModelPlaceholder(o.model));
+  // 补漏席启动时要和 Claude Code 席比较基础模型，所以带补漏席的审查计划必须报模型
+  if (plan.module === 'review' && plan.seats?.some((seat) => ['补漏', 'gap'].includes(seat.role?.trim().toLowerCase())) && !o.model?.trim()) die(M.submitModelForGap(plan.plan_id));
   const file = path.resolve(need(o, 'report')), kind = plan.module;
   if (!fs.existsSync(file)) die(M.fileNotFound(file));
   const bytes = fs.readFileSync(file);

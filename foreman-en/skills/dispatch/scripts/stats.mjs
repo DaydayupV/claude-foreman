@@ -201,7 +201,7 @@ function countUnique(groups) {
 function cmdStats(o, statsOf) {
   if (o.module != null && !MODULES.includes(o.module)) die(M.statsBadModule(o.module, M.list(MODULES)));
   const by = [...new Set(split(o.by))];
-  for (const value of by) if (!['effort', 'cell'].includes(value)) die(M.statsBadBy(value, M.list(['effort', 'cell'])));
+  for (const value of by) if (!['effort', 'cell', 'scene'].includes(value)) die(M.statsBadBy(value, M.list(['effort', 'cell', 'scene'])));
   const since = o.since == null ? null : Number(o.since);
   if (since != null && (!Number.isFinite(since) || since <= 0)) die(M.statsBadSince(o.since));
   const cutoff = since == null ? null : Date.now() - since * 86400000;
@@ -216,10 +216,14 @@ function cmdStats(o, statsOf) {
     if (running && (o.group == null || meta.group === o.group) && (o.plan == null || meta.plan === o.plan)) totals.running_skipped++;
     return { id, dir, meta, running, result: meta && !running ? readRecord(dir, 'result.json') : null };
   });
+  const plansDir = path.join(RUNS_ROOT, 'plans');
+  const planFiles = fs.existsSync(plansDir) ? fs.readdirSync(plansDir).filter((file) => file.endsWith('.json')) : [];
+  const planRecords = new Map(planFiles.map((file) => [file.slice(0, -'.json'.length), readRecord(plansDir, file)]));
   const rows = new Map(), seatTimes = new Map(), groups = new Map();
   const rowFor = (meta, result, module) => {
     const host = meta.participant === 'host', model = host ? meta.model ?? 'claude-code' : baseModel(meta, result);
-    const dimensions = Object.fromEntries(by.map((dim) => [dim, dim === 'effort' ? meta.effort ?? null : meta.cell ?? meta.level ?? null]));
+    const dimensions = Object.fromEntries(by.map((dim) => [dim, dim === 'scene' ? planRecords.get(meta.plan)?.scene ?? null
+      : dim === 'effort' ? meta.effort ?? null : meta.cell ?? meta.level ?? null]));
     const key = JSON.stringify([host, model, module, ...Object.values(dimensions)]);
     if (!rows.has(key)) {
       const row = { model, module, ...dimensions, ...(host ? { participant: 'host', self_judged: true } : {}), seats: 0, runs: 0, findings_reported: module === 'review' ? 0 : null,
@@ -346,12 +350,10 @@ function cmdStats(o, statsOf) {
 
   // 每份计划从建计划到最后一个外部席结束的墙钟时间；有席位没跑完、还在跑或没有结束时间的计划只计入 unfinished
   const plans = { counted: 0, unfinished: 0, unreadable: 0, rows: [] }, planGroups = new Map();
-  const plansDir = path.join(RUNS_ROOT, 'plans');
-  const planFiles = fs.existsSync(plansDir) ? fs.readdirSync(plansDir).filter((file) => file.endsWith('.json')) : [];
   const planRuns = new Map();
   for (const run of runs) if (run.meta?.plan && run.meta.participant !== 'host') planRuns.set(run.meta.plan, [...planRuns.get(run.meta.plan) ?? [], run]);
-  for (const file of planFiles) {
-    const id = file.slice(0, -'.json'.length), plan = readRecord(plansDir, file), created = Date.parse(plan?.created_at);
+  for (const [id, plan] of planRecords) {
+    const created = Date.parse(plan?.created_at);
     if (!Number.isFinite(created)) { plans.unreadable++; continue; }
     if (o.module != null && plan.module !== o.module || cutoff != null && !(created >= cutoff)
       || o.group != null && plan.group !== o.group || o.plan != null && id !== o.plan) continue;
@@ -377,7 +379,8 @@ function cmdStats(o, statsOf) {
       } }));
   print({ runs_dir: RUNS_ROOT, module: o.module ?? null, since_days: since, group: o.group ?? null, plan: o.plan ?? null, by, generated_at: new Date().toISOString(), totals,
     rows: [...rows.values()].sort((a, b) => MODULES.indexOf(a.module) - MODULES.indexOf(b.module) || b.seats - a.seats || a.model.localeCompare(b.model)
-      || compareCell(a.cell, b.cell) || (a.effort == null) - (b.effort == null) || (a.effort ?? '').localeCompare(b.effort ?? '')),
+      || compareCell(a.cell, b.cell) || (a.effort == null) - (b.effort == null) || (a.effort ?? '').localeCompare(b.effort ?? '')
+      || (a.scene == null) - (b.scene == null) || (a.scene ?? '').localeCompare(b.scene ?? '')),
     plans,
     notes: M.statsNotes });
 }

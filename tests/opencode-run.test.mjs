@@ -129,13 +129,18 @@ test('run_access 只校验 opencode，config 展示权限和执行能力', async
   }
 });
 
-test('opencode 执行和续接需要用户授权，项目配置不能开启执行', async (t) => {
+test('opencode 执行和续接需要用户授权，项目 agents 被忽略后仍校验执行能力', async (t) => {
   const h = sandbox(t), c = configure(h);
   delete c.agents.oc.run_access; h.config(c);
   failed(await h.bridge(['config']), M.runAccessRequired('oc', 'opencode cli'));
   c.modules.run.complex = 'claude code'; h.config(c);
-  h.write('.claude/foreman.json', { agents: { oc: { run_access: 'shell' } }, modules: { run: { complex: { agent: 'oc' } } } });
-  const r = output(await h.bridge(['config', '--cwd', h.cwd]));
+  const project = h.write('.claude/foreman.json', { agents: { oc: { run_access: 'shell' } }, modules: { run: { complex: { agent: 'oc' } } } });
+  const invalid = await h.bridge(['config', '--cwd', h.cwd]);
+  failed(invalid, M.projectConfigInvalid(project, M.configInvalid('modules.run.complex[0].agent', M.runAccessRequired('oc', 'opencode cli'))));
+  assert.ok(invalid.stderr.includes(M.projectIgnored('agents')));
+  h.write('.claude/foreman.json', { agents: { oc: { run_access: 'shell' } } });
+  const config = await h.bridge(['config', '--cwd', h.cwd]), r = output(config);
+  assert.equal(config.stderr, `foreman: ${M.projectIgnored('agents')}\n`);
   assert.equal(r.agents_status.oc.run_access, null);
   assert.equal(r.effective.modules.run.complex, 'claude code');
   failed(await h.bridge(taskArgs(h, 'run', ['--agent', 'oc'])), M.runAccessRequired('oc', 'opencode cli'));

@@ -1,10 +1,10 @@
 // 派发计划固定席位和审查材料，真正启动时再检查当前配置并登记任务。
 import fs from 'node:fs';
 import path from 'node:path';
-import { ENTRY, USER_CONFIG, MODULE_CELLS, resolveAgentAlias, resolveProfile, validatePlan } from './config.mjs';
+import { ENTRY, USER_CONFIG, MODULE_CELLS, resolveAgentAlias, resolveProfile, validatePlan, isSplit, seatsFor, gapFor } from './config.mjs';
 import { RUNS_ROOT, CLAUDE_SESSION, listRuns, readMeta, checkRunners, runOutcome } from './records.mjs';
 import { validateReviewMaterial, reviewPatchText, MAX_REVIEW_CHARS } from './review-scope.mjs';
-import { M, die, need, resolveDir, readAttachments, MAX_MATERIAL_CHARS } from './util.mjs';
+import { M, die, need, resolveDir, readAttachments, MAX_MATERIAL_CHARS, isObject } from './util.mjs';
 import { apiReviewPrompt, API_BRIEF_RESERVE } from './adapters/api.mjs';
 import { D, outcomeStyle } from './format.mjs';
 import { modelIdentity } from './models.mjs';
@@ -61,6 +61,7 @@ function routeConfirmation(sessionId, route) {
 }
 
 function cmdPlan(o, load, adapters) {
+  if ((o.scene != null || o['scene-why'] != null) && !['discuss', 'review'].includes(o.module)) die(M.planSceneModuleOnly);
   if (o['host-role'] != null && !['discuss', 'review'].includes(o.module)) die(M.hostRoleOnly);
   if (o['count-why'] != null && !['discuss', 'review'].includes(o.module)) die(M.countWhyOnly);
   if (o.module !== 'review' && (o.target != null || o.file.length || o.uncommitted || o.base != null || o.commit != null)) die(M.planReviewOnly);
@@ -71,16 +72,31 @@ function cmdPlan(o, load, adapters) {
   } else if (o.route != null) die(M.planRouteImageOnly);
   if (!MODULE_CELLS[o.module].includes(o.cell)) die(M.planCellChoices(o.module, M.list(MODULE_CELLS[o.module])));
   const cwd = resolveDir(need(o, 'cwd')), group = need(o, 'group'), cfg = load(cwd);
+  if (['discuss', 'review'].includes(o.module)) {
+    if (cfg.scenes.problems.length) die(M.planScenesProblem(M.list(cfg.scenes.problems)));
+    if (o.scene == null && isSplit(cfg, o.module, o.cell)) die(M.planSceneRequired(
+      `modules.${o.module}.${isObject(cfg.modules[o.module].seats[o.cell]) ? 'seats' : 'gap'}.${o.cell}`, M.list(cfg.scenes.names)));
+    if (o.scene == null && o['scene-why'] != null) die(M.planSceneWhyRequired);
+    if (o.scene != null) {
+      if (!cfg.scenes.names.length) die(M.planSceneNoScenes);
+      if (!cfg.scenes.names.includes(o.scene)) die(M.planSceneUnknown(o.scene, M.list(cfg.scenes.names)));
+      if (!o['scene-why']?.trim()) die(M.planSceneWhyRequired);
+    }
+  }
   if (!o.seat.length) die(M.planNoSeats);
   const seats = o.seat.map((value, i) => {
     const match = /^([A-Za-z0-9][A-Za-z0-9._-]*)(?:=([^=]+))?$/.exec(value);
     if (!match || match[2] !== undefined && !match[2].trim()) die(M.badSeat(value));
     return { seat: i + 1, agent: resolveAgentAlias(match[1], cfg, true), role: match[2]?.trim() || null };
   });
+  const isGap = (seat) => ['补漏', 'gap'].includes(seat.role?.trim().toLowerCase());
+  if (seats.filter(isGap).length > 1) die(M.planGapMultiple);
+  if (o.module === 'discuss' && seats.some(isGap)) die(M.planGapDiscuss);
   // 讨论和审查的 1 级不带角色（角色是 2、3 级的检查视角，见 references/seats.md）；补漏席不是角色
   if (['discuss', 'review'].includes(o.module) && o.cell === 'simple'
     && (o['host-role'] != null || seats.some((seat) => seat.role && !['补漏', 'gap'].includes(seat.role.toLowerCase())))) die(M.planRolesLevel1);
   const plan = { module: o.module, cell: o.cell, seats, seat_target: null, count_why: o['count-why'] ?? null,
+    scene: o.scene ?? null, scene_why: o['scene-why'] ?? null, gap: o.module === 'review' && gapFor(cfg, o.cell, o.scene),
     ...(o.module === 'image' ? { route: Number(o.route) } : {}) };
   if (['discuss', 'review'].includes(o.module)) plan.host = { seat: 0, role: o['host-role'] ?? null };
   let material;
@@ -107,26 +123,56 @@ function cmdPlan(o, load, adapters) {
     if (tooLarge.length) die(M.planReviewTooLarge(M.list(tooLarge), max));
   }
   if (cell.outside_cell) plan.outside_cell = true;
-  if (plan.host && !cell.outside_cell) {
-    const configured = cfg.modules[o.module].seats[o.cell];
-    const usable = new Set(cell.candidates.filter(({ agent }) => {
-      const capabilities = adapters[cfg.agents[agent].type].capabilities;
-      return capabilities.modes.includes(o.module) && (plan.review?.target !== 'visual' || capabilities.reads_images);
-    }).map(({ agent }) => agent)).size;
-    plan.seat_target = Math.min(configured, usable);
-    const n = seats.filter((seat) => !(o.module === 'review' && o.cell === 'complex' && ['补漏', 'gap'].includes(seat.role?.trim().toLowerCase()))).length;
-    if (n !== plan.seat_target && !plan.count_why?.trim()) die(M.planSeatCount(`modules.${o.module}.seats.${o.cell}`, configured, plan.seat_target, n));
-  }
   plan.seats = seats.map((seat) => {
     const profile = resolveProfile(cfg, { ...seat, module: o.module, cell: o.cell, ...(plan.outside_cell ? { plan: true, outside_cell: true } : {}) }, {}, adapters);
     return { ...seat, model: profile.model ?? null, effort: profile.effort, required: cell.required.includes(seat.agent) };
   });
-  // 补漏席要找前面各席都没用过的基础模型：同一个模型的各种写法（提供方前缀、Bedrock 写法、小数版本号、官方别名）只算一个
-  if (o.module === 'review' && o.cell === 'complex') {
-    const isGap = (seat) => ['补漏', 'gap'].includes(seat.role?.trim().toLowerCase());
-    const base = (seat) => modelIdentity(seat.model ?? seat.agent);
-    const used = new Set(plan.seats.filter((seat) => !isGap(seat)).map(base));
-    for (const seat of plan.seats.filter(isGap)) if (used.has(base(seat))) die(M.gapSeatSameModel(seat.seat, base(seat)));
+  if (plan.host) {
+    // 没写 model 的协作方按它实际会用的模型算（比如 Codex 配置里的默认模型），读不出时才用代号
+    const base = (seat) => modelIdentity(seat.model ?? adapters[cfg.agents[seat.agent]?.type]?.status?.(cfg.agents[seat.agent])?.model ?? seat.agent);
+    const main = plan.seats.filter((seat) => !isGap(seat)), gap = plan.seats.find(isGap), used = new Set(main.map(base));
+    if (gap && used.has(base(gap))) die(M.gapSeatSameModel(gap.seat, base(gap)));
+    // 按场景拆分的一级先按实际模型去重、按候选顺序检查；其余等级仍按协作方计数，由 Claude 挑。
+    // 必选的基础模型先占位，排在后面的同一个模型不再算候选。
+    const sceneMode = isSplit(cfg, o.module, o.cell);
+    const seen = new Set(cell.candidates.filter(({ agent }) => cell.required.includes(agent))
+      .map(({ agent }) => base({ agent, model: resolveProfile(cfg, { agent, seat: 1, module: o.module, cell: o.cell }, {}, adapters).model })));
+    const usable = cell.candidates.filter(({ agent }) => {
+      const c = adapters[cfg.agents[agent].type].capabilities;
+      return c.modes.includes(o.module) && (plan.review?.target !== 'visual' || c.reads_images);
+    }).map((candidate, i) => {
+      const profile = resolveProfile(cfg, { agent: candidate.agent, seat: i + 1, module: o.module, cell: o.cell }, {}, adapters);
+      return { agent: candidate.agent, model: profile.model };
+    }).filter((candidate) => {
+      if (!sceneMode || cell.required.includes(candidate.agent)) return true;
+      const id = base(candidate);
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+    const seatsKey = `modules.${o.module}.seats.${o.cell}${isObject(cfg.modules[o.module].seats[o.cell]) ? `.${o.scene}` : ''}`;
+    if (!cell.outside_cell) {
+      const configured = seatsFor(cfg, o.module, o.cell, o.scene);
+      plan.seat_target = Math.min(configured, usable.length);
+      if (main.length !== plan.seat_target && !plan.count_why?.trim()) die(M.planSeatCount(seatsKey, configured, plan.seat_target, main.length));
+      if (sceneMode) {
+        const expected = [...cell.required];
+        for (const candidate of usable) if (expected.length < plan.seat_target && !expected.includes(candidate.agent)) expected.push(candidate.agent);
+        const actual = [...new Set(main.map((seat) => seat.agent))];
+        if ((actual.length !== expected.length || expected.some((agent) => !actual.includes(agent))) && !plan.count_why?.trim()) {
+          die(M.planSeatOrder(seatsKey, M.list(expected), M.list(actual)));
+        }
+      }
+    }
+    if (o.module === 'review') {
+      const gapKey = `modules.review.gap.${o.cell}${isObject(cfg.modules.review.gap[o.cell]) ? `.${o.scene}` : ''}`;
+      const candidates = usable.filter((candidate) => !used.has(base(candidate)));
+      if (!plan.count_why?.trim()) {
+        if (!plan.gap && gap) die(M.planGapOff(gapKey));
+        if (plan.gap && candidates.length && !gap) die(M.planGapMissing(gapKey, M.list(candidates.map((seat) => seat.agent))));
+        if (sceneMode && gap && candidates.length && candidates[0].agent !== gap.agent) die(M.planGapNotNext(candidates[0].agent, gap.agent));
+      }
+    }
   }
   if (o.module === 'image') plan.route_confirmation = routeConfirmation(CLAUDE_SESSION, plan.route);
   Object.assign(plan, { created_at: new Date().toISOString(), claude_session: CLAUDE_SESSION, cwd,
@@ -198,6 +244,7 @@ function planStatus(id, runs = null, plan = readPlan(id)) {
   }
   return { plan_id: id, module: plan.module, cell: plan.cell, ...(plan.module === 'image' ? { route: plan.route } : {}), group: plan.group, created_at: plan.created_at, state, seats,
     seat_target: plan.seat_target ?? null, count_why: plan.count_why ?? null,
+    scene: plan.scene ?? null, scene_why: plan.scene_why ?? null, gap: plan.gap ?? null,
     ...(host ? { host } : {}), missing,
     missing_required: required.filter((seat) => seat.ok !== true).map(({ seat, agent, status }) => ({ seat, agent, status })),
     gap_unfinished: gap.map(({ seat, agent, status }) => ({ seat, agent, status })),

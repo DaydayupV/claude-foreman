@@ -17,7 +17,7 @@ test('会话提醒首次使用并且不创建配置或迁移目录', async (t) =
 });
 
 for (const legacy of [false, true]) {
-  test(`会话提醒带上${legacy ? '旧位置' : '新位置'}用户和项目偏好`, async (t) => {
+  test(`会话提醒带上${legacy ? '旧位置' : '新位置'}偏好并说明项目优先与场景块替换`, async (t) => {
     const h = sandbox(t, { config: false });
     const configFile = legacy ? path.join(h.home, '.claude/codex-bridge.json') : h.userConfig;
     write(configFile, legacy ? { auto_dispatch: false } : { dispatch: { auto: false }, agents: { model: { type: 'codex cli' } } });
@@ -29,21 +29,21 @@ for (const legacy of [false, true]) {
       assert.ok(context.includes(`${source}偏好文件 ${file}`));
       assert.ok(context.includes(text));
     }
-    assert.ok(context.includes('来自项目仓库，只能让做法更严，不能放宽用户配置、用户偏好和插件的规则'));
+    assert.ok(context.includes('和用户偏好冲突时以它为准，场景块有就只用它的；同样只在插件的硬规则以内调整做法'));
     assert.ok(context.includes('必选、材料外发、只读、确认弹窗和席位上限不受偏好文件影响'));
     assert.ok(!context.includes('用户还没有用过本插件'));
     if (legacy) assert.equal(fs.existsSync(h.userConfig), false);
   });
 }
 
-test('英文偏好来源标注与硬规则一致，plans 不算未完成任务', async (t) => {
+test('英文偏好说明项目优先、场景块替换和硬规则，plans 不算未完成任务', async (t) => {
   const h = sandbox(t);
   const user = write(path.join(h.home, '.claude/foreman/preferences.md'), 'synthetic user preferences');
   const project = h.write('.claude/foreman.md', 'synthetic project preferences');
   write(path.join(h.runs, 'plans/20000101-plan.json'), { plan_id: '20000101-plan', status: 'timeout', cwd: h.cwd });
   const context = output(await h.start(path.join(ROOT, 'foreman-en/hooks/session-reminder.mjs'), [], { input: JSON.stringify({ cwd: h.cwd }) }).done).hookSpecificOutput.additionalContext;
   assert.ok(context.includes(`User preference file ${user} (adjusts how things are done within the plugin's hard rules`));
-  assert.ok(context.includes(`Project preference file ${project} (comes from the project repository: it can only make things stricter`));
+  assert.ok(context.includes(`Project preference file ${project} (wins over the user preferences where they conflict, and its scene block, if any, replaces the user's; it too only adjusts things within the plugin's hard rules`));
   assert.ok(context.includes("required seats, sending material out, read-only, confirmation prompts and the seat limit can't be changed by preference files"));
   assert.ok(!context.includes('20000101-plan'));
 });

@@ -28,14 +28,14 @@
 
 | 要求 | 文件 | 测试名 |
 |---|---|---|
-| Agy CLI 第 1 期 | agy.test.mjs | agy 守卫逐档逐工具拒绝写入、未知工具和未知参数；agy 自检静态扫描四种目录、祖先、add-dir、插件和大小写，拒绝前不启动 agy；agy check 六步、models 两列、清理密钥环境以及模型身份和价格；agy 默认并发准入、排队、status 和看板 channel 共用接线；agy 原文形状的嵌套事件归一后保留时间线、步骤用量和最终回复；agy /hooks 只核对 command.data 的来源和唯一动作，response 不参与判断；agy 查询遇到账号 EOF 等两秒仅重试一次，每次仍有策略并清理标记；agy check 只接受令牌及 read_file allow，额度只读各桶数值 |
+| Agy CLI 第 1 期 | agy.test.mjs | agy 守卫逐档逐工具拒绝写入、未知工具和未知参数；agy 自检静态扫描四种目录、祖先、add-dir、插件和大小写，拒绝前不启动 agy；agy check 六步、models 两列、清理密钥环境以及模型身份和价格；项目配置可以调低、调高或改用 agy 默认档位；agy 默认并发准入、排队、status 和看板 channel 共用接线；agy 原文形状的嵌套事件归一后保留时间线、步骤用量和最终回复；agy /hooks 只核对 command.data 的来源和唯一动作，response 不参与判断；agy 查询遇到账号 EOF 等两秒仅重试一次，每次仍有策略并清理标记；agy check 只接受令牌及 read_file allow，额度只读各桶数值 |
 | 1 初始配置和提示 | config.test.mjs | 没有用户配置时生成初始配置并提示首次使用；英文覆盖变量使用英文首次提示 |
 | 1 旧结构和备份 | config.test.mjs | 零点十以前的配置自动改写并保留原文备份 |
 | 1 校验错误 | config.test.mjs | 未知协作方类型被拒绝；执行等级不能使用 API 协作方；opencode 模型必须带厂商斜杠；讨论等级不能为空；同一讨论等级不能重复参与方 |
 | 1 项目字段限制 | config.test.mjs | 项目配置忽略不允许的字段并保留允许的覆盖 |
 | 1 非 Codex 参与方限制 | config.test.mjs | 项目配置不能把额外的 API 或 opencode 加入讨论等级 |
 | 1 config 输出 | config.test.mjs | config 输出解析后的等级、协作方状态、偏好及记录目录 |
-| 2 旧配置和偏好 | migration.test.mjs | 旧配置和旧偏好在第一次运行时复制到新位置，旧文件保留 |
+| 2 旧配置和偏好 | migration.test.mjs | 旧配置和偏好复制到新位置后补写 gap，旧文件与备份保留原文 |
 | 2 记录搬迁及启动器 | migration.test.mjs | 旧记录目录整体迁移并重写 watch 启动器 |
 | 2 活跃 PID | migration.test.mjs | 旧目录里有活着的任务时延后迁移 |
 | 2 并发迁移 | migration.test.mjs | 四个进程同时启动只迁移一次且记录完整；记录目录搬迁锁正被删除时报 EPERM、EACCES、EBUSY 只是稍等再试，删残留锁和释放时都不会删掉别的进程拿到的锁 |
@@ -81,16 +81,16 @@
 | 8 API 检查 | check.test.mjs | check 报告 API 可连通且不改变 Codex 总体结果；check 报告 API 认证失败且不改变 Codex 总体结果 |
 | 8 opencode 检查 | check.test.mjs | check 检查 opencode 模型存在于 models；check 检查 opencode 模型不存在于 models；check 按各等级配置的 variant 逐个试，不支持的档位列出位置并给出修正提示，同一档位只试一次，默认请求失败时不再试 |
 | 9 首次会话提醒 | hooks.test.mjs | 会话提醒首次使用并且不创建配置或迁移目录 |
-| 9 偏好位置兼容 | hooks.test.mjs | 会话提醒带上新位置用户和项目偏好；会话提醒带上旧位置用户和项目偏好 |
+| 9 偏好位置兼容 | hooks.test.mjs | 新旧位置的会话提醒均带上用户和项目偏好，说明项目优先与场景块替换 |
 | 9 未完成任务与取消 | hooks.test.mjs | 会话提醒列出未正常结束的执行任务，取消后不再列出 |
 | 9 直接调用拦截 | hooks.test.mjs | 直接调用守卫拦截 codex exec；直接调用守卫拦截 codex review；直接调用守卫拦截 node codex.js exec；直接调用守卫拦截 npx Codex |
 | 9 查询与普通文字放行 | hooks.test.mjs | 直接调用守卫放行版本查询；直接调用守卫放行登录状态；直接调用守卫放行普通文本提及；直接调用守卫放行带分隔符的文字 |
 | 11 协作方要人回答 | questions.test.mjs | 六种来源各自收集进 questions，needs_decision 只算需要决定的四种；Codex 默认 approval_policy=never、配置了就用配置的；opencode 注入的权限里 question 被拒；最终回答是问题时不修复，像 JSON 或长篇分析时照常修复；终端提示加 3 分钟静默触发看门狗、结束进程树并记 needs_input，模型消息静默和执行中的命令不触发；watch、status 和组计数里问题的显示 |
 | 12 新配置写法和迁移 | structure-migration.test.mjs | 真实结构配置迁移后按模型改名、每格模型和强度不变、有备份和别名；部分字段的旧等级先补全；模型覆盖拆成新协作方；同名合并或加后缀；Codex 没写模型时取 config.toml；项目配置的旧代号；并发迁移只备份一次、校验失败不改文件；结构迁移锁正被删除时短暂报 EPERM、EACCES、EBUSY 只是稍等再试，一直报错才按原错误提示改写失败，删残留锁和释放时都不会删掉别的进程拿到的锁；旧记录在 status、watch、resume 和并发准入里照常可用 |
-| 13 通用化 | generalization.test.mjs | 多个 Codex、没有 Codex、能力表校验；代号规则；三种任务的 "claude code" 和点名派出；--effort 只覆盖强度且 --level 必填；check 的新结构和总体结果；项目只能保留同格候选，整格关闭并忽略模型覆盖；按环境生成 modules（不再生成 max_seats）和有 Codex 时的图像默认值；没有协作方时的会话提醒 |
+| 13 通用化 | generalization.test.mjs | 多个 Codex、没有 Codex、能力表校验；代号规则；三种任务的 "claude code" 和点名派出；--effort 只覆盖强度且 --level 必填；check 的新结构和总体结果；项目整格替换候选、必选、模型和强度，可以打开格子并延长时长；缺失 gap 时补写 complex 开启；按环境生成 modules（不再生成 max_seats、显式关闭三级补漏）和有 Codex 时的图像默认值；没有协作方时的会话提醒 |
 | 14 审查范围 | review-scope.test.mjs | 未提交范围含暂存、未暂存和未跟踪文件，指纹稳定且不动索引；删除、改名、二进制、非 UTF-8、过大文件；没有提交的仓库；base 从分叉点到工作区、含未提交改动、不含未跟踪文件，分支不存在或没有共同祖先时报错；根提交和合并提交（只比第一个父提交） |
 | 15 通用审查 | review.test.mjs | opencode 审查注入只读的 foreman-review，材料和正文落盘（中英文各一）；材料超限拒绝且不启动，Codex 没有这个限制；非 git 目录要求 brief；空范围不启动任何审查方；审查期间改动变化时警告并标 stale；opencode 审查只收集权限拒绝和终端提示，正文按审查 schema 修复一次 |
-| 16 opencode 执行 | opencode-run.test.mjs | run_access 校验和授权（项目配置开不了）；edit 和 shell 两档注入的权限、改动归属（工具事件为 agent、自报为 reported、其余 unknown）、报告和用量、watch；报告只修复一次且修复阶段没有工具；禁止 --no-snapshot、快照失败不启动；shell 档不判卡死、edit 档按 stall_min；续接同一会话、run_access 变化提示；同组范围重叠；超时、额度和输入看门狗 |
+| 16 opencode 执行 | opencode-run.test.mjs | run_access 校验和用户授权（项目 agents 被忽略，引用未授权执行候选时项目配置校验失败）；edit 和 shell 两档注入的权限、改动归属（工具事件为 agent、自报为 reported、其余 unknown）、报告和用量、watch；报告只修复一次且修复阶段没有工具；禁止 --no-snapshot、快照失败不启动；shell 档不判卡死、edit 档按 stall_min；续接同一会话、run_access 变化提示；同组范围重叠；超时、额度和输入看门狗 |
 | 17 拦截 opencode run | hooks.test.mjs | 拦下各种写法的 opencode run（含 npx），放行版本、模型、会话、认证、调试、服务、帮助和文字提及 |
 | 18 模型清单和总表 | catalog.test.mjs | models 列出 Codex、opencode 和 API 的清单并核对配置里的模型，读不到清单时如实报告；check 按 Codex 清单核对推理强度、不发执行请求，模型不在清单里或读不到清单时只提示；opencode 清单外的档位不发请求、修正提示列出支持的档位；模型提供方前缀和 modules 里的代号写错时提示最接近的写法；config 和 check 输出总表，含 required、统一的 modules.*[i] 位置、没用到的协作方、明文 key、shell 权限和失效的旧代号，档位不支持的格子写明原因 |
 | 19 实测补漏 | generalization.test.mjs、review.test.mjs、run.test.mjs、status-watch.test.mjs | 续接到 "claude code" 的等级时不沿用上一轮的协作方；opencode 审查和 check 总是带标题、被厂商限流时提示稍后再试、出错的回复没有 tokens 时照常统计用量；来源不明的改动落在同组其他任务的范围里时标出 group_run；组汇总把已续接的任务记作已续接 |
@@ -100,10 +100,10 @@
 | 23 出图素材 | assets.test.mjs | template 写出模板和按比例的格子坐标；cut 抠品红底、按名单命名、写出部件、manifest 和对照拼图；透明图清理光晕，soft 保留柔边；按格子命名并合并同格碎片；贴边和格外部件判失败、check 退出码为 1；diff 逐格比较；--vector 用自带描图转 SVG（透明的洞留空、轮廓和颜色对得上原图），自带描图的直边是直线、圆是曲线、对称水滴不被压没，两色之间的过渡带并掉、比两侧都深的细线保留、透明里的孤立小点去掉，只出现在细线上的颜色不丢、1 像素宽的线不被压没、相邻两个小块不互换颜色、大量小洞时不慢；参数错误；结果的 image_calls 和没传参考图的提示；名单重名和只差大小写；一个部件都没有时判失败；diff 发现被删掉的部件；出图参数按代码结构解析（字符串里的参数名、显式 null、带引号的键、变量传参、没执行的调用）；任务说明只提到参数名时不误报没传参考图；格子合并后按格子号命名；align 找回部件的缩放和偏移、写出对齐图和对照图、按区域算色差、区域写错时报错，不把部件缩小塞进同色区域、细线也能对齐、缩放上下限是硬约束；patch 只取成片的改动（去掉轮廓位移和外轮廓），--keep 限定区域；trace 分出描边、底色和阴影并写出 SVG，种子不对时报错；layers 从定稿图取出同画布的图层：背景板只写回主体范围并校色，部件按原位置裁出，下层部件穿过自己那段描边往上层下面延长、延长段不露在背景上，矢量部件的位置是整张画布，部件名不合法、重名、叫 static 或 extendUnder 指向不存在的部件时报错，主体占大半张画面时噪声只按背景估计、校色一直铺到主体中心；patch 和 layers 都留下测出的原始对齐；capture 的本地路径可以带 ?参数；capture 和 playback 用假浏览器截图、检查静止区域和首尾衔接、写出 APNG |
 | 10 共用文件同步 | sync.test.mjs | 中英文插件的共用文件、schema 结构和版本号一致 |
 | 24 第一期配置和迁移 | modules.test.mjs、structure-migration.test.mjs | 模块遍历顺序一致，单对象只在内存规范为列表；levels 迁移一次备份，顺序强度不变且不补格子或 required；已有备份加时间戳，校验失败的 levels 不改原文；用户和项目不能同时写 levels 和 modules；空列表、重复、能力、required 类型、缺少 agent、对象类型和执行格子多个必选校验，旧配置里的 max_seats 被忽略；未知模块或格子；旧单对象已写 agent 时也保留逐字段继承；图像引用参与旧类型改名、去重与 codex 保留判断；check 和 summary 覆盖仅用于图像的协作方、强度和 shell 提醒 |
-| 25 第一期项目收紧 | project-tightening.test.mjs | 项目保留用户顺序和必选，忽略模型及其他字段，解析旧代号；时长和席位取严（含 stall_min / busy_ask_min 的 0）；项目先校验 dispatch；只降低 Codex 和 pi 的有序强度，未写时不能加，opencode / api 不能改；不能只去掉必选；各模块过滤为空报错；用户关闭的格子不能打开；整格关闭记 closed_by_project，点名及续接均拒绝；用户自己的 Claude 格子可点名并标 outside_cell |
+| 25 项目配置覆盖 | project-config.test.mjs、submissions.test.mjs | 项目整格替换、候选顺序、必选、模型和强度覆盖，时长可延长；seats/gap 按等级覆盖且整级替换场景对象；允许字段过滤、项目文件前缀校验、levels 只读迁移、打开关闭格子和点名续接；废弃 projects 不校验、不生效，逐次提醒并保留原键；用户和项目配成 Claude Code 的格子均可建格子外计划并派出，计划、结果和元数据标 outside_cell |
 | 26 第一期选派和计划 | plan.test.mjs | 三模块单席必须选格子并遵守候选和必选；计划先校验格子、候选、必选、能力和参数，失败不落盘；保存同方多席、角色、理由、默认模型和启动命令，不占任务名额；启动参数配对及一致性；启动时按当前配置重验整份计划；同一席并发只启动一次；准入拒绝不消耗席位；旧代号席位；续接沿用计划席位角色且不查其他必选；四种适配器的模型覆盖规则及标记；status 的三种 state、missing_required、最新续接和有效结果判定；status / watch 不把 plans 当任务 |
 | 27 第一期并发和锁 | admission.test.mjs、run.test.mjs、structure-migration.test.mjs | 同组 discuss 和 review 不查写入范围，exec 仍检查；groupScopeOwner 只认 exec，而且只认运行时间有重叠的；协作方跨组跨会话及旧代号并发计数不变；活着的登记锁不按年龄被抢（旧 pid 和 pid/token）；死锁回收及一分钟等待上限；读不出持有者的旧锁放一会儿后清掉；登记锁和清理锁正被删除时短暂报 EPERM、EACCES、EBUSY 只是稍等再试，一直报错才抛出原错误，删除前每次重试都重新确认锁还是残留的或自己的；显式释放和退出清理只删自己的 token |
-| 28 第一期偏好来源 | hooks.test.mjs | 新旧位置的用户和项目偏好分开标注来源与硬规则；英文偏好来源标注与硬规则一致，plans 不算未完成任务 |
+| 28 第一期偏好来源 | hooks.test.mjs | 中英文偏好说明项目冲突优先、场景块替换和硬规则，新旧位置来源一致；plans 不算未完成任务 |
 | 29 续接换格子的必选 | plan.test.mjs | 无计划续接换格子重验必选，同格返工保留豁免且兼容旧 level；计划续接禁止换格子（包括 Claude 格子） |
 | 30 计划席位配置重验 | plan.test.mjs | 计划保存的模型和强度必须匹配当前格子，覆盖参数不能绕过重验；覆盖模型按当前提供方检查并标记 |
 | 31 残留锁串行回收 | admission.test.mjs | 活进程持有清理锁时不回收残留登记锁，释放后任务登记；清理锁的持有者退出后清掉清理锁并完成登记；读不出持有者的旧清理锁放一会儿后清掉并完成登记 |
@@ -113,15 +113,15 @@
 | 35 结构化审查报告和 API 审查 | review-targets.test.mjs、review.test.mjs | Codex 带说明或 --file 的审查用 --output-schema 并解析报告，只有无说明、无附件的 git diff 走原生审查；opencode、pi、API 的审查报告修复一次，仍不合格保留原文并警告；审查不收集中途和最终提问；API 审查的系统提示、材料、任务类型，非 Git 的 diff、材料超限和不能续接；visual 在单席、格外点名、建计划和席位启动都拒绝不能看图的协作方，Codex 逐图提示 |
 | 36 审查计划和材料指纹 | review-targets.test.mjs | 计划固定审查对象、文件、范围和指纹，其他模块不能写材料参数，空 diff 不写计划；席位启动拒绝材料参数和材料变化，旧计划按 diff 兼容；三种 diff 范围各自重算；结束时材料被改、被删或 git 出错不丢结果，stale 如实记录 |
 | 37 讨论和审查的只读三级 | readonly-review.test.mjs | opencode、pi、API 为 tools；Codex 按 foreman 配置和 config.toml 判断 sandbox 或 audited，续接的讨论沿用；audited 拒绝 --no-snapshot、快照失败不启动；有工具事件或自报的写入记为失败并列出 readonly_violation，sandbox 级别不拍快照时看事件；沙箱挡下的写入（failed）不算；只有归属未知的改动不算违规但标 stale；config 和 check 每方一条 readonly_audited 提醒；watch 显示审查结论、问题和拿不准的地方（中英文） |
-| 38 冒烟小修：取消和计划状态 | cancel-and-plans.test.mjs | 取消原因照实写（cancel 命令、实时查看里按 x、旧版标记）；取消时记下已完成请求的用量并说明进行中的那次没算，一次都没完成时 usage 为 null；cancel 等不到调度进程停下时强行结束并补写结果，带上 Codex 会话记录里的用量；组视图和 status --group 写出计划完整、进行中（必选还没启动）或不完整（缺哪个必选）；项目关掉的格子，建计划和启动席位都说明是项目配置关的；强行结束前先确认调度进程已经退出，它已经写好的结果不被覆盖，只写了一半的结果换成补写的最简结果；计划状态里没审完或格式不合格的审查不算有效，Codex 原生审查和旧记录的文字算 |
-| 39 图像计划和能力 | image.test.mjs | 路线必填、取值及格子匹配，generate 不带角色，审查参数仅供 review；候选、必选、上限、用户和项目关格、席位模型和强度重验；路线 4 不触发 generate 必选；generate 依赖完整 images 接口，draw 依赖 run 和 run_access |
+| 38 冒烟小修：取消和计划状态 | cancel-and-plans.test.mjs | 取消原因照实写（cancel 命令、实时查看里按 x、旧版标记）；取消时记下已完成请求的用量并说明进行中的那次没算，一次都没完成时 usage 为 null；cancel 等不到调度进程停下时强行结束并补写结果，带上 Codex 会话记录里的用量；组视图和 status --group 写出计划完整、进行中（必选还没启动）或不完整（缺哪个必选）；项目配成 Claude Code 后可建格子外计划并启动席位，执行计划仍拒绝空格；强行结束前先确认调度进程已经退出，它已经写好的结果不被覆盖，只写了一半的结果换成补写的最简结果；计划状态里没审完或格式不合格的审查不算有效，Codex 原生审查和旧记录的文字算 |
+| 39 图像计划和能力 | image.test.mjs | 路线必填、取值及格子匹配，generate 不带角色，审查参数仅供 review；候选、必选、上限、席位模型和强度重验，用户和项目空格均用通用拒绝提示；路线 4 不触发 generate 必选；generate 依赖完整 images 接口，draw 依赖 run 和 run_access |
 | 40 图像路线确认 | image.test.mjs | 当前会话最近一次路线弹窗：缺会话、没提问、未回答、取消、自由文字、多选及路线不一致拒绝；同一次回答支持两格、多交付物和重复计划，无标记弹窗不影响；先跑 Pre/Post 钩子再建计划；按 asked 顺序判断，迟到回答不覆盖新弹窗，漏记 asked 时认 answered；非法会话 ID 即使能指向有效回答也拒绝；漏记提问的旧弹窗再次回答不改顺序，没有 tool_use_id 的记录各算一次，同一弹窗只认最后一条回答，坏记录不报错 |
 | 41 路线回答钩子 | image.test.mjs | 只记录路线问题及其回答，不记其他弹窗或回答；非法会话、其他工具和坏 JSON 静默忽略；tool_response 优先、tool_input 回退、无回答记空对象；自定义及旧名配置目录，先记录再清理超过 30 天的 jsonl，旧条目删不掉、目录读不出来都不影响记录 |
-| 42 图像执行和续接 | image.test.mjs | image 必须带计划和 scope、不接受 level 或 agent；结果与 meta 的 module/cell/step/route/level、图片、快照、计划完整状态及 status/watch 标题；续接不查 run 等级、不重新确认、排除旧图片，候选移除和关格拒绝；执行并发和同组范围准入；启动和续接只把被 .gitignore 忽略的项目内 scope 并入 track（去重，工作目录本身、没被忽略的目录和项目外路径不并入）；续接沿用 scope 时自己的上一轮不算同组其他任务；会话记录读不出来时用量统计为空、结果照常落盘 |
+| 42 图像执行和续接 | image.test.mjs | image 必须带计划和 scope、不接受 level 或 agent；结果与 meta 的 module/cell/step/route/level、图片、快照、计划完整状态及 status/watch 标题；续接不查 run 等级、不重新确认、排除旧图片，候选移除拒绝，用户和项目空格均用通用拒绝提示；执行并发和同组范围准入；启动和续接只把被 .gitignore 忽略的项目内 scope 并入 track（去重，工作目录本身、没被忽略的目录和项目外路径不并入）；续接沿用 scope 时自己的上一轮不算同组其他任务；会话记录读不出来时用量统计为空、结果照常落盘 |
 | 43 图像路线告警 | image.test.mjs | 普通 run 及其续接出图告警；路线 4 draw 出位图告警；路线 3/4 的改动 SVG 嵌入位图告警，路线 2 允许混合；排除同组其他席位和范围外的 unknown，事件和报告合并去重，无快照仍检查并注明部分检查，scope 在工作目录外时也注明；超过 2 MB 的 SVG 分块检查且识别跨块标签 |
 | 44 冒烟修复：stale | image-smoke.test.mjs | status、status --group、watch 两种结束行与组汇总、计划行和席位显示 stale，计划仍完整；最新轮结果为准，stale 与未启动必选同时说明，中英文分隔符一致 |
 | 45 冒烟修复：看图步骤 | image-smoke.test.mjs | 代码和函数形式的 view_image、字面量及未知路径、成功失败未结束、since 过滤；运行中增量写事件及活动步骤，时间线和详细模式显示，续接只读本轮新增日志且不增加命令数；同一 call_id 合并调用并累计图片数，部分成功记未知，后续文字不抹掉成功；输出先到和末行无换行仍能配对；apply_patch 中的看图及出图代码不记调用；会话文件中途被删仍保留结果并正常结束；一次读不满时读到文件末尾，收尾时没写完的末行留到下次 |
-| 46 冒烟修复：费用和措辞 | image-smoke.test.mjs | opencode 费用接在 status/watch 用量行及组汇总后，只有费用也显示、零和小额格式；审查默认 uncommitted 为 true，旧 false 计划仍审未提交改动；项目关格仅在显式 agent 时提点名 |
+| 46 冒烟修复：费用和措辞 | image-smoke.test.mjs | opencode 费用接在 status/watch 用量行及组汇总后，只有费用也显示、零和小额格式；审查默认 uncommitted 为 true，旧 false 计划仍审未提交改动；项目配成 Claude Code 后未点名用通用提示，点名派出和续接标 outside_cell |
 | 47 显示统一：标签、状态词、用时、数字和分隔符（中英两个插件都用英文那一套，显示得一样） | display.test.mjs、status-watch.test.mjs | status 表：状态词和用时写英文，中英两个插件一样；模式和等级写原词，模型标签写成"模型 强度 · 接入方式"，各列按显示宽度对齐；开工那一行中英两个插件都写 <模式> started · <模型> <强度> · <接入方式> · <等级> · run dir，用" · "分隔；watch --run 非 TTY 的Codex 执行输出与期望一致；watch --group 非 TTY 的四类任务汇总与期望一致 |
 | 48 组视图实时面板 | display.test.mjs | 组视图实时面板按 100x30 和 64x18 的终端排版：每席顶上是最近说的话，下面是折叠后的动作；实时面板只给状态上色：任务行和模型行加粗，模型行跟着状态变色，动作和思考摘要用暗色，说的话用默认色；组视图窗口不够高时先把正文压到每席一行，还放不下就翻看，底部写下面还有多少行；组视图汇总最后写一行回看命令：记录目录带空格时给路径加引号，换上 run_id 就能运行 |
 | 49 时间线的实时画面 | display.test.mjs | 单任务的实时画面：顶部固定身份行和任务行，读文件和搜索照写，思考摘要在底部，失败的命令行尾标出 |
@@ -129,7 +129,7 @@
 | 51 目录归属和归同组任务 | run.test.mjs | 报告里写成目录的改动按前缀归属：目录下被追踪的文件都算自称改过的，前缀下没有被追踪的文件才提示没追踪到；来源不明的改动落在同组其他任务的范围里时，标出是哪个任务（group_total、时间线结束行和组汇总里的"N from other runs in the group"）；同组任务只有运行时间和这个任务重叠的才能认领它的改动：开始前就结束的不认领，有重叠的认领 |
 | 52 元数据读写竞态 | meta-writes.test.mjs | findRun 读到空文件或半份 JSON 时稍等再读，一直读不出才抛出原错误；meta.json 改名一直失败时退回直接覆盖写，不抛错也不留临时文件；cancel 等待时 meta.json 读不出不算已停下，调度进程退出后不再等满就补写记录；meta.json 一律先写临时文件再改名，并发读不会读到半份（执行、cancel 标记已处理、强行结束） |
 | 52 只读任务的根目录声明 | readonly-review.test.mjs | 只读任务的报告把工作目录本身（./）写进 files_changed 不算违规，没有快照时也一样；具体的文件照样算 |
-| 53 meta.json 被占用（不许写共享） | meta-writes.test.mjs、hooks.test.mjs | 改名和覆盖都被占用时返回 false 并清理临时文件，后续完整写入和结束重试可以补上；结果被占用或只写了一半时暂不采用，进程退出后完整结果的状态优先于旧元数据；会话 ID 写入被占用不影响 runner 完成，异常或直接退出也清理影子目录和监听；会话写入和收尾写入都放弃后，续接从结果取会话，cancel 不误标记为已处理；讨论父链中元数据仍为运行中但结果已完成的轮次计入上限；登记写入放弃就删除运行目录并释放锁，不启动协作方；cancel 等待期间进程退出而元数据未更新时采用结果状态；cancel 第一次读不出结果、再读才读到时，以再读的为准，不把完成的任务标记为已处理；强行结束前一刻调度进程自己收完了尾、结果正被占着时，cancel 照原样返回，不改成已取消；会话提醒以已退出任务的结果为准，没有结果仍提醒中断；Windows 真实只读共享占用 meta.json 时任务继续运行，释放后完整收尾（其他平台跳过）；cancel 的结束写入被占用时，标记已处理返回错误，强行结束仍返回成功并带警告 |
+| 53 meta.json 被占用（不许写共享） | meta-writes.test.mjs、hooks.test.mjs | 改名和覆盖都被占用时返回 false 并清理临时文件，后续完整写入和结束重试可以补上；结果被占用或只写了一半时暂不采用，进程退出后完整结果的状态优先于旧元数据；会话 ID 写入被占用不影响 runner 完成，异常或直接退出也清理影子目录和监听；会话写入和收尾写入都放弃后，续接从结果取会话，cancel 不误标记为已处理；讨论父链中元数据仍为运行中但结果已完成的轮次计入上限；废弃 projects 只提醒，续接按任务目录采用 .claude/foreman.json 的轮数上限；登记写入放弃就删除运行目录并释放锁，不启动协作方；cancel 等待期间进程退出而元数据未更新时采用结果状态；cancel 第一次读不出结果、再读才读到时，以再读的为准，不把完成的任务标记为已处理；强行结束前一刻调度进程自己收完了尾、结果正被占着时，cancel 照原样返回，不改成已取消；会话提醒以已退出任务的结果为准，没有结果仍提醒中断；Windows 真实只读共享占用 meta.json 时任务继续运行，释放后完整收尾（其他平台跳过）；cancel 的结束写入被占用时，标记已处理返回错误，强行结束仍返回成功并带警告 |
 | 54 窄窗口的席位身份行和汇总折行 | display.test.mjs | 40 列的四席身份行都保留状态词和时钟，API 排队和回答时也一样；64 列先保留状态词和时钟，再截模型标签，身份行不写计数；needs_input 的长状态在 40 列不越界，44 列能保留时钟；30 列和 22 列的 API 排队、回答及 Codex 运行身份行都不越界；最终汇总的用量按分隔符折行，长改动说明在 83 列和 40 列都写全，run_id 靠右 |
 | 55 搜索的写法和组汇总 | opencode-run.test.mjs、pi.test.mjs、status-watch.test.mjs | opencode 和 pi 的搜索都先写模式，再写 glob 过滤和路径，没有模式时写工具名；组视图汇总里每席写结论（不带 Report、Position 前缀）、用量和 run_id |
 | 56 judge 记录去留 | judge-stats.test.mjs | judge 写入规定字段、保留未修改条目，第二次调用覆盖去留并补齐 unjudged；judge 拒绝空调用、不合格或未知编号、冲突、运行中任务和执行任务；judge --same 校验语法、自指、同伴、两端编号、目标存在以及左侧去留；judge --same 合并同编号多条链接、去重、整体替换并保留其他编号的链接；judge 支持讨论自由编号、旧续接的根模块和原生审查，旧 verdict 损坏时重新记；judge 拒绝解析后为空的去留和 same，不写 verdict 或锁 |
@@ -148,9 +148,13 @@
 | 69 按代号递增的锁和跨会话组视图 | locks.test.mjs、judge-stats.test.mjs、resume-chain.test.mjs、admission.test.mjs | 两个进程同时接管死锁，暂停的旧读者不能删掉新持有者；活持有者不按年龄被抢，等待上限后 busy 收到当前文件和 pid；没权限探测（EPERM）时锁当成被占着，任务的 pidAlive 仍按进程不在算；进程号被别的程序复用时不按时间猜身份，等到上限报 busy、保留锁，删掉锁文件后可接着用；硬链接暂时报 EACCES 时短暂重试后照样拿到，不当成不支持硬链接；数字代号、done 清理和过时建锁复查，释放幂等且临时文件不残留；残缺或读失败的锁不按年龄接管，目录快照中的本体被删后仍递增代号；持有者 exit 后下一进程能接管；持有者 kill 后下一进程能接管；登记先等旧版活锁，持有者退出后接管并先释放旧路径；.start.lock 的 legacy 选项等待活锁和活清理锁，回收残留后退出按序释放；verdict.json.lock 的 legacy 选项等待活锁和活清理锁，回收残留后退出按序释放；超过上限后只做最后一轮，EEXIST 和更高代号都会报 busy，空锁仍可拿到；只剩 done 时仍沿最大代号递增，并清理死进程临时文件、保留活进程文件；八个进程同时抢锁，临界区读改写计数不丢失；硬链接不支持时退回 wx（EPERM 先重试几次），目录缓存避免第二次重试，失败也清掉临时文件；judge 两方同时回收死进程锁时不删新锁，并发写入不丢条目；judge 回收超过 30 秒的死进程锁，写完清理旧代和临时文件；另一个会话重启同席并续接任务链，watch 显示最新轮次且 status 将旧轮算已续接 |
 | 70 实时查看重构 | display.test.mjs、status-watch.test.mjs、submissions.test.mjs、image.test.mjs、image-smoke.test.mjs、cancel-and-plans.test.mjs、resume-chain.test.mjs、questions.test.mjs | 单任务顶部两行：模型行"模型 强度 · 接入方式"跟着状态上色、右边状态和时钟，任务行"模块 · 标题 · 等级"，执行和图像的续接按续接链写第几轮；组视图标题行写模块、模式（panel、roles、split）、标题和等级，右边是各状态的个数，计划只在有缺口时写一行（不写计划号）；Claude Code 席排在最前、和外部席一样写结论，单席查看照样显示报告；交回问题记作 ?，失败的命令和没搜到的搜索标在行尾 |
 | 71 实时查看实测修复 | display.test.mjs | 组视图里结束了的席位在结论下面写用量和 run_id，和单任务结尾一致；拍快照时写出来，不留一片空白；角色模式的分工行只写角色，标题里带着角色的旧写法去掉角色、不当成拆分；22 列下单任务时间线、长角色名和汇总的 run_id 行都不越界，回看命令单独一行；直接输出时没结束的命令不压着后面的内容 |
-| 71 setup 固定报告 | setup-report.test.mjs | config/check/models 的 Markdown、中英文字、格子与席位派法、项目关闭、协作方权限、检查和合并提醒；模型分组、档位、上下文、价格和非对话过滤；非法 --format、默认 JSON 和退出码 |
+| 71 setup 固定报告 | setup-report.test.mjs | config/check/models 的 Markdown、中英文字、格子与席位派法、项目覆盖、协作方权限、检查和合并提醒；模型分组、档位、上下文、价格和非对话过滤；非法 --format、默认 JSON 和退出码 |
 | 72 旧配置提醒 | setup-report.test.mjs | 四类旧配置提醒的触发和不触发、结构化字段、只读和读取失败跳过；旧代号对照表不算残留；自定义配置文件名的备份；格子单独指定的模型和 3 级审查的补漏席写法 |
 | 73 显式外部席位数 | seats.test.mjs、config.test.mjs、generalization.test.mjs、modules.test.mjs、setup-report.test.mjs | 有无 Codex 的初始配置都写满讨论和审查三级 seats；用户缺 seats、缺等级或整个模块时补写，不增加格子，保留已写值并考虑必选数；并发首次读取只备份和提示一次，与旧结构迁移共用一次写入且按改名去重后的必选数补齐；备份已有时加后缀，中英文提示只列本次补写的模块；只补 seats 不加 levels 说明并保留已有说明、max_seats 和其他字段；错误 seats 和项目配置不改写，写入失败时用 seats 专门的提示并在内存兜底、缓存结果和清理锁及临时文件；只补 seats 时配置本身有错不提示改写失败；空的残留锁过 2 秒清掉，活进程的锁等满 10 秒放弃；改写保留原文件权限（非 Windows）；报告展示补写后的显式数值 |
+
+| 74 席位场景与可配置补漏 | scenes.test.mjs、seats.test.mjs、migration.test.mjs | 场景块解析、项目替换和空块、标记与名称错误；seats/gap 格式与必选数；场景一致性五种情况和 warnings；场景参数、候选顺序、实际基础模型去重、visual 过滤与 count-why；补漏开关、唯一性、讨论拒绝、各级查重与启动时 Claude Code 模型查重；迁移补 gap、备份和写入失败内存补齐；Markdown 场景席位与补漏、项目覆盖说明 |
+
+| 75 场景统计与看板 | judge-stats.test.mjs、watch-group.test.mjs、scene-display.test.mjs | stats --by scene 及 effort/cell 组合、缺失或不可读计划记 null、中英文列名及非法维度提示；终端组标题按 M.list 显示多个场景；fplan 传递 scene/scene_why，网页组标题去重显示场景、悬停显示选择理由，兼容旧计划和未启动席位 |
 
 ## 说明
 

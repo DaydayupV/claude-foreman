@@ -219,13 +219,21 @@ test('讨论父链中元数据仍为运行中但结果已完成的轮次计入�
   assert.equal(h.calls().length, 0);
 });
 
-test('续接讨论的轮数上限按任务目录套用 projects 覆盖', async (t) => {
+test('续接讨论忽略废弃 projects，按任务目录采用项目配置的轮数上限', async (t) => {
   const h = sandbox(t), cfg = baseConfig(); cfg.dispatch.discuss_max_rounds = 4; cfg.projects = { [h.cwd]: { dispatch: { discuss_max_rounds: 1 } } }; h.config(cfg);
+  const config = await h.bridge(['config', '--cwd', h.cwd]), effective = output(config);
+  assert.equal(effective.effective.dispatch.discuss_max_rounds, 4); assert.equal(effective.project_config, null);
+  assert.equal(config.stderr, `foreman: ${M.obsoleteProjects(M.list([h.cwd]))}\n`);
+  const calls = h.calls();
+  h.write('.claude/foreman.json', { dispatch: { discuss_max_rounds: 2 } });
   const meta = { kind: 'discuss', mode: 'discuss', status: 'done', session_id: 'discussion-session' };
   const result = { status: 'done', session_id: 'discussion-session', duration_s: 1 };
   seedRun(h, 'round-root', meta, result);
-  failed(await h.bridge(['resume', '--run', 'round-root', '--brief', '-', '--level', 'complex']), M.discussRoundsExceeded('round-root', 1, 1));
-  assert.equal(h.calls().length, 0);
+  seedRun(h, 'round-next', { ...meta, parent: 'round-root' }, result);
+  const r = await h.bridge(['resume', '--run', 'round-next', '--brief', '-', '--level', 'complex'], { cwd: h.home });
+  failed(r, M.discussRoundsExceeded('round-root', 2, 2));
+  assert.ok(r.stderr.includes(M.obsoleteProjects(M.list([h.cwd]))));
+  assert.deepEqual(h.calls(), calls);
 });
 
 test('登记写入放弃就删除运行目录并释放锁，不启动协作方', async (t) => {
