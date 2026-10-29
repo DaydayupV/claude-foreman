@@ -88,6 +88,7 @@ function startRun(ctx, { started = Date.now(), track = [], modelShown = ctx.mode
     module: ctx.module ?? (kind === 'exec' ? 'run' : kind), cell: ctx.cell ?? level,
     ...(ctx.module === 'image' ? { step: ctx.step, route: ctx.route } : {}),
     plan: ctx.plan ?? null, seat: ctx.seat ?? null, role: ctx.role ?? null,
+    scene: ctx.scene ?? null, scene_why: ctx.scene_why ?? null,
     ...(ctx.outside_cell ? { outside_cell: true } : {}), ...(ctx.model_overridden ? { model_overridden: true } : {}),
     agent: agentName, agent_type: agent.type, sandbox, parent: ctx.parent || null,
     ...(kind === 'review' ? { review_target: ctx.reviewTarget } : {}),

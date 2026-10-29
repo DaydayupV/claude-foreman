@@ -21,7 +21,7 @@ const sessionFile = (h) => {
 };
 
 test('stale 在席位、计划行、status 和 watch 结束行显示，完整性判断不变', async (t) => {
-  const h = sandbox(t), c = baseConfig(); c.modules.review.complex[0].required = true; h.config(c); h.write('evidence.txt', 'before\n');
+  const h = sandbox(t), c = baseConfig(); c.modules.default.review.complex[0].required = true; h.config(c); h.write('evidence.txt', 'before\n');
   const p = output(await h.bridge(['plan', '--cwd', h.cwd, '--module', 'review', '--cell', 'complex', '--group', 'stale-group', '--seat', 'codex', '--target', 'files', '--file', 'evidence.txt']));
   const s = h.scenario({ files: { 'evidence.txt': 'changed by somebody else\n' } });
   const r = output(await h.bridge(['review', '--plan', p.plan_id, '--seat', 1, '--brief', '-', '--title', '材料审查'], { env: s.env }));
@@ -138,7 +138,7 @@ test('运行中增量采集 view_image，事件、活动步骤、时间线和续
 });
 
 test('opencode API 费用在 status、watch 和组汇总显示，已计价费用单独存在也显示', async (t) => {
-  const h = sandbox(t), c = baseConfig(); c.agents.oc = { ...opencodeAgent(), model: 'provider/gpt-6.1-sol' }; c.modules.discuss.complex = [{ agent: 'oc' }]; h.config(c);
+  const h = sandbox(t), c = baseConfig(); c.agents.oc = { ...opencodeAgent(), model: 'provider/gpt-6.1-sol' }; c.modules.default.discuss.complex = [{ agent: 'oc' }]; h.config(c);
   const s = h.scenario({ last_message: discussion, export_messages: [{ type: 'assistant', tokens: { input: 200, output: 100 }, cost: 0.125 }] });
   const r = output(await h.bridge(['discuss', '--cwd', h.cwd, '--level', 'complex', '--brief', '-', '--group', 'cost-group'], { env: s.env }));
   assert.equal(r.cost_usd, 0.0014); assert.equal(r.cost_source, 'api_price'); assert.equal(r.reported_cost_usd, 0.125);
@@ -167,7 +167,7 @@ test('审查计划保存实际默认未提交范围，旧 false 计划启动仍�
 });
 
 test('项目配成 Claude Code 后未点名用通用提示，点名派出和续接标为格子外', async (t) => {
-  const h = sandbox(t); h.write('.claude/foreman.json', { modules: { run: { complex: 'claude code' } } });
+  const h = sandbox(t); h.write('.claude/foreman.json', { modules: { default: { run: { complex: 'claude code' } } } });
   seedRun(h, 'parent', { module: 'run', cell: 'complex' });
   for (const args of [['run', '--cwd', h.cwd, '--level', 'complex', '--brief', '-'], ['resume', '--run', 'parent', '--level', 'complex', '--brief', '-', '--reason', 'rework']]) {
     for (const named of [false, true]) {

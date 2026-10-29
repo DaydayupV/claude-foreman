@@ -9,32 +9,34 @@ const configArgs = (h) => ['config', '--cwd', h.cwd];
 test('项目整格替换候选、顺序、必选、模型和强度，旧代号照常解析', async (t) => {
   const h = sandbox(t), c = baseConfig();
   c.agents.second = { ...c.agents.codex }; c.agents.pi = piAgent(); c.agents.oc = opencodeAgent(); c.agents.api = apiAgent('http://127.0.0.1:1');
-  c.modules.discuss.complex = [{ agent: 'codex', effort: 'low', required: true }]; h.config(c);
+  c.modules.default.discuss.complex = [{ agent: 'codex', effort: 'low', required: true }]; h.config(c);
   write(path.join(path.dirname(h.userConfig), 'agent-aliases.json'), { old: 'codex' });
   const entries = [{ agent: 'pi', effort: 'max', required: true }, { agent: 'old', model: 'project-model', effort: 'max' },
     { agent: 'oc', effort: 'high' }, { agent: 'api', effort: 'high' }, { agent: 'second', effort: 'medium' }];
-  const file = h.write('.claude/foreman.json', { modules: { discuss: { complex: entries } } }), before = read(file);
+  const file = h.write('.claude/foreman.json', { modules: { default: { discuss: { complex: entries } } } }), before = read(file);
   const runs = path.join(h.home, 'project-runs');
   const out = output(await h.bridge(configArgs(h), { env: { FOREMAN_RUNS_DIR: runs } }));
   assert.equal(out.runs_dir, runs); assert.equal(out.effective.dispatch.runs_dir, runs);
-  assert.deepEqual(out.effective.modules.discuss.complex, entries.map((item) => ({ ...item, agent: item.agent === 'old' ? 'codex' : item.agent })));
-  assert.deepEqual(out.project_config, { path: file, cells: ['discuss.complex'] });
+  assert.deepEqual(out.effective.modules.default.discuss.complex, entries.map((item) => ({ ...item, agent: item.agent === 'old' ? 'codex' : item.agent })));
+  assert.deepEqual(out.project_config, { path: file, cells: ['default.discuss.complex'] });
   assert.equal(Object.hasOwn(out, 'project_override'), false); assert.equal(Object.hasOwn(out, 'closed_by_project'), false);
   assert.equal(read(file), before); assert.equal(fs.existsSync(file + '.bak'), false);
 });
 
-test('项目按等级覆盖 seats/gap，整级替换场景对象并允许延长所有时长', async (t) => {
+test('项目按等级覆盖 default seats/gap，场景块只覆写不同的级，并允许延长所有时长', async (t) => {
   const h = sandbox(t), c = baseConfig();
-  c.modules.review.seats.complex = { old: 2 }; c.modules.review.gap = { simple: false, normal: false, complex: { old: false } }; h.config(c);
+  c.modules.default.review.seats.complex = 2; c.modules.default.review.gap = { simple: false, normal: false, complex: false }; h.config(c);
   h.write('.claude/foreman.md', '<!-- foreman:scenes -->\n- **code**: code\n- **research**: research\n<!-- /foreman:scenes -->');
-  const file = h.write('.claude/foreman.json', { modules: { review: { seats: { complex: { code: 3, research: 6 } }, gap: { complex: { code: false, research: true }, normal: true } } },
+  const file = h.write('.claude/foreman.json', { modules: { default: { review: { seats: { complex: 3 }, gap: { normal: true } } }, research: { review: { seats: { complex: 6 }, gap: { complex: true } } } },
     dispatch: { discuss_max_rounds: 5, timeout_min: 900, stall_min: 80, busy_ask_min: 10 } });
   const out = output(await h.bridge(configArgs(h)));
-  assert.deepEqual(out.effective.modules.review.seats, { simple: 1, normal: 2, complex: { code: 3, research: 6 } });
-  assert.deepEqual(out.resolved_modules.review.gap, { simple: false, normal: true, complex: { code: false, research: true } });
+  assert.deepEqual(out.effective.modules.default.review.seats, { simple: 1, normal: 2, complex: 3 });
+  assert.deepEqual(out.effective.modules.research.review.seats, { simple: 1, normal: 2, complex: 6 });
+  assert.deepEqual(out.resolved_modules.review.gap, { simple: false, normal: true, complex: false });
+  assert.deepEqual(out.resolved_scenes.research.review.gap, { complex: true });
   for (const [key, value] of Object.entries(json(file).dispatch)) assert.equal(out.effective.dispatch[key], value);
   assert.deepEqual(out.scenes.problems, []);
-  assert.deepEqual(out.project_config.cells, ['review.seats.complex', 'review.gap.complex', 'review.gap.normal', 'dispatch.discuss_max_rounds', 'dispatch.timeout_min', 'dispatch.stall_min', 'dispatch.busy_ask_min']);
+  assert.deepEqual(out.project_config.cells, ['default.review.seats.complex', 'default.review.gap.normal', 'research.review.seats.complex', 'research.review.gap.complex', 'dispatch.discuss_max_rounds', 'dispatch.timeout_min', 'dispatch.stall_min', 'dispatch.busy_ask_min']);
 });
 
 test('项目不允许的顶层字段和 dispatch 字段忽略并提示，max_seats 不生效', async (t) => {
@@ -53,8 +55,8 @@ test('旧结构、补 seats 和补 watch 迁移都原样保留废弃 projects，
   const h = sandbox(t), projects = { relative: { levels: { unknown: {} }, agents: null } };
   for (const kind of ['levels', 'seats', 'watch']) {
     const c = baseConfig(); c.projects = projects;
-    if (kind === 'levels') { c.levels = c.modules; delete c.modules; }
-    if (kind === 'seats') delete c.modules.review.seats;
+    if (kind === 'levels') { c.levels = c.modules.default; delete c.modules; }
+    if (kind === 'seats') delete c.modules.default.review.seats;
     if (kind === 'watch') c.dispatch.watch = 'off';
     h.config(c);
     const out = output(await h.bridge(configArgs(h)));
@@ -70,9 +72,11 @@ for (const lang of ['zh', 'en']) test('项目校验指出文件和具体字段�
     [{ dispatch: { stall_min: -1 } }, m.configInvalid('dispatch.stall_min', m.invalid.minutes)],
     [{ dispatch: { busy_ask_min: '2' } }, m.configInvalid('dispatch.busy_ask_min', m.invalid.minutes)],
     [{ dispatch: { discuss_max_rounds: 0 } }, m.configInvalid('dispatch.discuss_max_rounds', m.invalid.positiveInt)],
-    [{ modules: { review: { normal: [{ agent: 'missing' }] } } }, m.unknownAgent('modules.review.normal[0]', 'missing')],
-    [{ modules: { review: { normal: [] } } }, m.configInvalid('modules.review.normal', m.invalid.candidates)],
-    [{ modules: { unknown: {} } }, m.configInvalid('modules.unknown', m.invalid.module)],
+    [{ modules: { default: { review: { normal: [{ agent: 'missing' }] } } } }, m.unknownAgent('modules.default.review.normal[0]', 'missing')],
+    [{ modules: { default: { review: { normal: [] } } } }, m.configInvalid('modules.default.review.normal', m.invalid.candidates)],
+    [{ modules: { default: { unknown: {} } } }, m.configInvalid('modules.default.unknown', m.invalid.module)],
+    [{ modules: { default: {}, run: {} } }, m.modulesMixed('modules')],
+    [{ modules: { code: {} } }, m.modulesDefaultMissing('modules')],
   ]) {
     const file = h.write('.claude/foreman.json', entry), before = read(file);
     failed(await h.bridge(configArgs(h), { env: { FOREMAN_LANG: lang } }), m.projectConfigInvalid(file, message));
@@ -83,15 +87,15 @@ for (const lang of ['zh', 'en']) test('项目校验指出文件和具体字段�
 test('项目 levels 只在内存迁移，可以打开用户关掉的执行和图像格子', async (t) => {
   const h = sandbox(t), file = h.write('.claude/foreman.json', { levels: { run: { simple: { agent: 'codex', effort: 'high' } }, image: { generate: { agent: 'codex' } } } }), before = read(file);
   const r = await h.bridge(configArgs(h)), out = output(r);
-  assert.deepEqual(out.effective.modules.run.simple, [{ agent: 'codex', effort: 'high' }]);
-  assert.deepEqual(out.effective.modules.image.generate, [{ agent: 'codex' }]);
+  assert.deepEqual(out.effective.modules.default.run.simple, [{ agent: 'codex', effort: 'high' }]);
+  assert.deepEqual(out.effective.modules.default.image.generate, [{ agent: 'codex' }]);
   assert.ok(r.stderr.includes(M.projectOldFormat(file))); assert.equal(read(file), before);
   assert.equal(fs.existsSync(file + '.bak'), false);
 });
 
 test('项目配成 Claude Code 后仍可点名派出并续接', async (t) => {
   const h = sandbox(t);
-  h.write('.claude/foreman.json', { modules: { run: { complex: 'claude code' } } });
+  h.write('.claude/foreman.json', { modules: { default: { run: { complex: 'claude code' } } } });
   const first = output(await h.bridge(taskArgs(h, 'run', ['--agent', 'codex', '--no-snapshot'])));
   assert.equal(first.outside_cell, true);
   const again = output(await h.bridge(['resume', '--run', first.run_id, '--level', 'complex', '--brief', '-', '--reason', 'rework']));
@@ -101,7 +105,7 @@ test('项目配成 Claude Code 后仍可点名派出并续接', async (t) => {
 for (const lang of ['zh', 'en']) test('废弃 projects 不校验、不生效，每次读取提醒并保留原键：' + lang, async (t) => {
   const h = sandbox(t), c = baseConfig(), m = MESSAGES[lang];
   c.agents.idle = { ...c.agents.codex };
-  c.projects = { 'relative/project': { modules: { review: { normal: [{ agent: 'idle' }] } } }, '~/project/': null, [h.cwd]: { dispatch: { timeout_min: 900 } } };
+  c.projects = { 'relative/project': { modules: { default: { review: { normal: [{ agent: 'idle' }] } } } }, '~/project/': null, [h.cwd]: { dispatch: { timeout_min: 900 } } };
   h.config(c);
   for (let i = 0; i < 2; i++) {
     const r = await h.bridge(configArgs(h), { env: { FOREMAN_LANG: lang } }), out = output(r), keys = Object.keys(c.projects);

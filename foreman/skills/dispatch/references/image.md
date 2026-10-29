@@ -25,7 +25,7 @@
    - 不再问：同一个交付物的返工、局部重出、补丁、技术性重试。要重新问：换路线、加新的交付物、扩大范围、换协作方或厂商。
    - 同时还要确认角色分配时，两件事合成一次弹窗。
 3. **确认凭据**：插件的钩子把路线弹窗的问题和回答按 Claude 会话记在 `~/.claude/foreman/answers/<会话>.jsonl`。`plan --module image` 只看这个会话里最近一次路线弹窗：用户选的就是 `--route` 那条才建计划；用户取消了、还没选、选了 Other 写了别的话，或者选的和 `--route` 不一致，都不建计划，这时按用户的回答处理，需要时重新弹窗。一次回答可以支撑这个交付物的几份计划（比如路线 ② 的 generate 和 draw）。answers 文件只由钩子写，不要自己写、改或删：这份凭据防的是漏问，挡不住伪造，伪造就是违规。已经弹过窗、用户也选了，`plan` 还说没有回答时，多半是钩子没生效（比如插件的钩子被禁用）：如实告诉用户，不要改用 `run` 出图。钩子 2026-10-19 在桌面版实测过；命令行版没有实测。
-4. **建计划**：用到哪格建哪格的计划：`plan --module image --cell <generate|draw> --route <路线号> --group <组名> --seat <代号> --why "<理由>"`。路线 ① 只建 generate；路线 ② 先建 generate（定稿图、背景板、局部变体），取件之后再建 draw（会弯的部件）；路线 ③ 先建 generate（只出参考图），再建 draw（纯矢量成品）；路线 ④ 只建 draw。一个交付物用到两格时每格各建一份计划，凭的是同一次路线回答。
+4. **建计划**：用到哪格建哪格的计划：`plan --module image --cell <generate|draw> --route <路线号> --group <组名> --seat <代号> --why "<理由>"`（这一格按场景配了时再加 `--scene <场景> --scene-why "<依据>"`，见 `references/config.md` 的"场景"）。路线 ① 只建 generate；路线 ② 先建 generate（定稿图、背景板、局部变体），取件之后再建 draw（会弯的部件）；路线 ③ 先建 generate（只出参考图），再建 draw（纯矢量成品）；路线 ④ 只建 draw。一个交付物用到两格时每格各建一份计划，凭的是同一次路线回答。
    ```bash
    node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell generate --route 2 --group <组名> --seat <generate 格子里的代号> --why "<理由>"
    ```

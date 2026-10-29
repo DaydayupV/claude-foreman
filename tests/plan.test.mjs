@@ -16,8 +16,8 @@ const launch = (plan, module = plan.module, seat = 1) => [module, '--plan', plan
 
 for (const module of ['discuss', 'run', 'review']) test(`单席 ${module} 必须选格子并遵守候选和必选`, async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex }; c.agents.third = { ...c.agents.codex };
-  c.modules[module].complex = [{ agent: 'codex', effort: 'medium', required: true }, { agent: 'second' }];
-  if (module !== 'run') c.modules[module].seats = { complex: 1 };
+  c.modules.default[module].complex = [{ agent: 'codex', effort: 'medium', required: true }, { agent: 'second' }];
+  if (module !== 'run') c.modules.default[module].seats = { complex: 1 };
   h.config(c);
   const scenario = h.scenario({ last_message: discussion }), opts = module === 'discuss' ? { env: scenario.env } : {};
   const args = taskArgs(h, module, module === 'run' ? ['--no-snapshot'] : []);
@@ -27,17 +27,17 @@ for (const module of ['discuss', 'run', 'review']) test(`单席 ${module} 必须
   const selected = output(await h.bridge(args, opts)); assert.equal(selected.agent, 'codex'); assert.equal(selected.effort, 'medium');
   assert.equal(Object.hasOwn(selected, 'outside_cell'), false); assert.equal(Object.hasOwn(selected, 'model_overridden'), false);
   if (module !== 'review') failed(await h.bridge(['resume', '--run', selected.run_id, '--brief', '-', ...(module === 'run' ? ['--reason', 'rework'] : [])], opts), M.missingLevel('simple / normal / complex'));
-  c.modules[module].complex[0].required = false; h.config(c);
+  c.modules.default[module].complex[0].required = false; h.config(c);
   failed(await h.bridge(args, opts), module === 'run' ? M.agentRequired(`modules.${module}.complex`, 'codex、second') : M.discussReviewNeedsPlan(module));
   if (module !== 'run') {
-    c.modules[module].complex.forEach((entry) => { entry.required = true; }); c.modules[module].seats.complex = 2; h.config(c);
+    c.modules.default[module].complex.forEach((entry) => { entry.required = true; }); c.modules.default[module].seats.complex = 2; h.config(c);
     for (const extra of [[], ['--agent', 'codex'], ['--agent', 'second']]) failed(await h.bridge([...args, ...extra], opts), extra.length ? M.planMissingRequired(`modules.${module}.complex`, extra[1] === 'codex' ? 'second' : 'codex') : M.discussReviewNeedsPlan(module));
   }
 });
 
 test('计划先校验格子、候选、必选和参数，失败不落盘', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex };
-  c.modules.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second' }]; h.config(c);
+  c.modules.default.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second' }]; h.config(c);
   const base = planArgs(h);
   for (const [args, message] of [
     [planArgs(h, 'image'), M.planRouteRequired],
@@ -61,7 +61,7 @@ for (const lang of ['zh', 'en']) test(`diff 计划按每席预算汇总超限席
   c.agents.reader = { ...c.agents.codex }; c.agents.oc = opencodeAgent(); c.agents.pi = piAgent();
   c.agents['kimi-k2.6-api'] = apiAgent('http://127.0.0.1:1');
   const seats = ['reader', 'oc', 'pi', 'kimi-k2.6-api'];
-  c.modules.review.complex = seats.map((agent) => ({ agent })); c.modules.review.seats.complex = seats.length; h.config(c); h.initGit();
+  c.modules.default.review.complex = seats.map((agent) => ({ agent })); c.modules.default.review.seats.complex = seats.length; h.config(c); h.initGit();
   for (const [length, commit] of [[MAX_MATERIAL_CHARS + 1, false], [MAX_REVIEW_CHARS + 1, true], [MAX_MATERIAL_CHARS + 1, true]]) {
     h.write('source.txt', 'x'.repeat(length) + '\n');
     if (commit) { h.git(['add', 'source.txt']); h.git(['commit', '--quiet', '-m', 'synthetic oversized commit']); }
@@ -83,7 +83,7 @@ test('diff 计划保留工作区和 base 的行号降级、生成文件过滤及
   const h = sandbox(t), c = baseConfig();
   c.agents.reader = { ...c.agents.codex }; c.agents.oc = opencodeAgent(); c.agents.pi = piAgent(); c.agents.api = apiAgent('http://127.0.0.1:1');
   const seats = ['reader', 'oc', 'pi', 'api'];
-  c.modules.review.complex = seats.map((agent) => ({ agent })); c.modules.review.seats.complex = seats.length; h.config(c);
+  c.modules.default.review.complex = seats.map((agent) => ({ agent })); c.modules.default.review.seats.complex = seats.length; h.config(c);
   const base = h.initGit(); h.write('source.txt', 'x'.repeat(MAX_REVIEW_CHARS + 1) + '\n');
   for (const range of [[], ['--base', base]]) {
     const plan = output(await h.bridge([...planArgs(h, 'review', seats), ...range]));
@@ -169,13 +169,13 @@ test('无计划续接沿用上一轮实际强度，命令覆盖后下一轮继�
 test('启动重新校验整份计划，新增必选、移除候选和项目改成 Claude Code 均重验', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex }; h.config(c);
   const p = output(await h.bridge(planArgs(h))), args = launch(p);
-  c.modules.discuss.complex.push({ agent: 'second', required: true }); h.config(c);
+  c.modules.default.discuss.complex.push({ agent: 'second', required: true }); h.config(c);
   failed(await h.bridge(args), M.planMissingRequired('modules.discuss.complex', 'second'));
-  c.modules.discuss.complex = [{ agent: 'codex', effort: 'max', required: true }]; h.config(c);
+  c.modules.default.discuss.complex = [{ agent: 'codex', effort: 'max', required: true }]; h.config(c);
   failed(await h.bridge(args), M.planRequiredChanged(p.plan_id, 'modules.discuss.complex'));
-  c.modules.discuss.complex = [{ agent: 'second' }]; h.config(c);
+  c.modules.default.discuss.complex = [{ agent: 'second' }]; h.config(c);
   failed(await h.bridge(args), M.agentNotInLevel('codex', 'modules.discuss.complex', 'second'));
-  h.config(baseConfig()); h.write('.claude/foreman.json', { modules: { discuss: { complex: 'claude code' } } });
+  h.config(baseConfig()); h.write('.claude/foreman.json', { modules: { default: { discuss: { complex: 'claude code' } } } });
   failed(await h.bridge(args), M.levelIsClaude('modules.discuss.complex'));
   assert.equal(h.records().filter((m) => m.participant !== 'host').length, 0);
 });
@@ -183,7 +183,7 @@ test('启动重新校验整份计划，新增必选、移除候选和项目改�
 test('同一席并发只启动一次，续接沿用计划席位角色且不查其他必选', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex };
   c.dispatch.discuss_max_rounds = 4;
-  c.modules.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second', required: true }]; h.config(c);
+  c.modules.default.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second', required: true }]; h.config(c);
   const gate = path.join(h.home, 'release-seat');
   const p = output(await h.bridge(planArgs(h, 'discuss', ['codex=方案', 'second=质疑']))), scenario = h.scenario({ last_message: discussion, steps: [{ wait_for: gate }] });
   const handles = [h.startBridge(launch(p), { env: scenario.env }), h.startBridge(launch(p), { env: scenario.env })];
@@ -198,43 +198,43 @@ test('同一席并发只启动一次，续接沿用计划席位角色且不查�
   assert.equal(r.parent, first.run_id);
   const status = output(await h.bridge(['status', '--plan', p.plan_id]));
   assert.deepEqual(status.seats[0].runs, [first.run_id, r.run_id]);
-  c.modules.discuss.normal = [{ agent: 'codex' }]; h.config(c);
+  c.modules.default.discuss.normal = [{ agent: 'codex' }]; h.config(c);
   failed(await h.bridge(['resume', '--run', r.run_id, '--level', 'normal', '--brief', '-']), M.resumePlanCellChanged(p.plan_id, 'complex', 'normal'));
-  c.modules.discuss.simple = 'claude code'; h.config(c);
+  c.modules.default.discuss.simple = 'claude code'; h.config(c);
   failed(await h.bridge(['resume', '--run', r.run_id, '--level', 'simple', '--agent', 'codex', '--brief', '-']), M.resumePlanCellChanged(p.plan_id, 'complex', 'simple'));
 });
 
 test('无计划续接换格子重验必选，同格返工保留豁免且兼容旧 level', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex };
   c.dispatch.discuss_max_rounds = 4;
-  c.modules.discuss.complex = [{ agent: 'codex' }, { agent: 'second', required: true }]; h.config(c);
+  c.modules.default.discuss.complex = [{ agent: 'codex' }, { agent: 'second', required: true }]; h.config(c);
   seedRun(h, '20000101-plain', { kind: 'discuss', mode: 'discuss', level: 'simple', status: 'timeout' });
   const args = ['resume', '--run', '20000101-plain', '--level', 'complex', '--brief', '-'];
   failed(await h.bridge(args), M.resumeOtherRequired('modules.discuss.complex', 'codex', 'second'));
-  c.modules.discuss.complex[0].required = true; h.config(c);
+  c.modules.default.discuss.complex[0].required = true; h.config(c);
   failed(await h.bridge(args), M.severalRequired('modules.discuss.complex', 'codex、second'));
-  c.modules.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second' }]; h.config(c);
+  c.modules.default.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second' }]; h.config(c);
   const scenario = h.scenario({ last_message: discussion });
   const changed = output(await h.bridge(args, { env: scenario.env }));
   assert.equal(changed.cell, 'complex'); assert.equal(changed.agent, 'codex');
-  c.modules.discuss.complex[1].required = true; h.config(c);
+  c.modules.default.discuss.complex[1].required = true; h.config(c);
   const same = output(await h.bridge(['resume', '--run', changed.run_id, '--level', 'complex', '--brief', '-'], { env: scenario.env }));
   assert.equal(same.parent, changed.run_id);
-  c.modules.discuss.simple = [{ agent: 'second' }]; h.config(c);
+  c.modules.default.discuss.simple = [{ agent: 'second' }]; h.config(c);
   failed(await h.bridge(['resume', '--run', same.run_id, '--level', 'simple', '--brief', '-']), M.resumeAgentNotInCell('codex', 'modules.discuss.simple', 'second'));
 });
 
 test('计划保存的模型和强度必须匹配当前格子，覆盖参数不能绕过重验', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.pi = piAgent();
-  c.modules.discuss.complex = [{ agent: 'pi', effort: 'high' }]; h.config(c);
+  c.modules.default.discuss.complex = [{ agent: 'pi', effort: 'high' }]; h.config(c);
   const p = output(await h.bridge(planArgs(h, 'discuss', ['pi'])));
   const mismatch = M.planSeatChanged(p.plan_id, 1, 'modules.discuss.complex');
   c.agents.pi.model = 'newvendor/model'; h.config(c);
   failed(await h.bridge([...launch(p), '--model', 'fake/other']), mismatch);
-  c.agents.pi.model = 'fake/model'; c.modules.discuss.complex[0].model = 'entry/model'; h.config(c);
+  c.agents.pi.model = 'fake/model'; c.modules.default.discuss.complex[0].model = 'entry/model'; h.config(c);
   failed(await h.bridge(launch(p)), mismatch);
-  delete c.modules.discuss.complex[0].model; h.config(c);
-  h.write('.claude/foreman.json', { modules: { discuss: { complex: [{ agent: 'pi', effort: 'low' }] } } });
+  delete c.modules.default.discuss.complex[0].model; h.config(c);
+  h.write('.claude/foreman.json', { modules: { default: { discuss: { complex: [{ agent: 'pi', effort: 'low' }] } } } });
   failed(await h.bridge([...launch(p), '--effort', 'high']), mismatch);
   assert.equal(h.records().filter((m) => m.participant !== 'host').length, 0); assert.equal(h.calls().length, 0);
   c.agents.pi.model = 'newvendor/model'; h.config(c);
@@ -263,7 +263,7 @@ for (const type of ['codex cli', 'opencode cli', 'pi cli', 'api']) test(`模型�
   const agent = type === 'opencode cli' ? opencodeAgent() : type === 'pi cli' ? piAgent() : type === 'api' ? apiAgent(api.url) : c.agents.codex;
   c.agents.selected = agent;
   const restricted = ['opencode cli', 'pi cli'].includes(type), base = restricted ? 'entry/original' : agent.model;
-  c.modules.discuss.complex = [{ agent: 'selected', model: base }]; h.config(c);
+  c.modules.default.discuss.complex = [{ agent: 'selected', model: base }]; h.config(c);
   if (restricted) failed(await h.bridge(taskArgs(h, 'discuss', ['--model', 'different/model'])), M.modelVendorChanged('selected', 'different/model', base));
   const scenario = h.scenario({ last_message: discussion }), model = restricted ? 'entry/other' : 'different/model';
   const r = output(await h.bridge(taskArgs(h, 'discuss', ['--model', model]), { env: scenario.env }));
@@ -272,7 +272,7 @@ for (const type of ['codex cli', 'opencode cli', 'pi cli', 'api']) test(`模型�
 });
 
 test('必选计划的 pending complete incomplete 与最新续接的结果有效性', async (t) => {
-  const h = sandbox(t), c = baseConfig(); c.modules.discuss.complex[0].required = true; h.config(c);
+  const h = sandbox(t), c = baseConfig(); c.modules.default.discuss.complex[0].required = true; h.config(c);
   const p = output(await h.bridge(planArgs(h))), status = async () => output(await h.bridge(['status', '--plan', p.plan_id]));
   output(await h.bridge(hostArgs(h, p)));
   let out = await status(); assert.equal(out.state, 'pending');
@@ -306,7 +306,7 @@ test('无必选计划要每席结束且至少一席有效，review 允许非空�
 
 test('旧计划 status --plan 列出未启动的补漏和 gap 席，跑完后清空且不改变 state 算法', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex };
-  c.modules.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second' }]; h.config(c);
+  c.modules.default.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second' }]; h.config(c);
   const p = output(await h.bridge([...planArgs(h, 'discuss', ['codex', 'second=视角甲', 'second=视角乙', 'second=复核']), '--count-why', '四席分别验证主讨论与补漏状态']));
   output(await h.bridge(hostArgs(h, p)));
   const saved = json(p.file); saved.seats[1].role = ' 补漏 '; saved.seats[2].role = ' GaP '; write(p.file, saved);
@@ -331,7 +331,7 @@ test('旧计划 status --plan 列出未启动的补漏和 gap 席，跑完后清
 
 test('旧计划 status --group 计划行显示未启动及运行中的 gap seat not finished', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex };
-  c.modules.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second' }]; h.config(c);
+  c.modules.default.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second' }]; h.config(c);
   const p = output(await h.bridge([...planArgs(h, 'discuss', ['codex', 'second=视角甲', 'second=视角乙']), '--count-why', '只留一席主讨论，其余两席验证补漏状态']));
   const saved = json(p.file); saved.seats[1].role = '补漏'; saved.seats[2].role = 'gap'; write(p.file, saved);
   output(await h.bridge(hostArgs(h, p)));
@@ -358,7 +358,7 @@ test('旧计划 status --group 计划行显示未启动及运行中的 gap seat 
 test('3 级审查的补漏席不能和其他审查席是同一个基础模型（去掉提供方前缀比较）', async (t) => {
   const h = sandbox(t), c = baseConfig();
   c.agents.codex.model = 'gpt-a'; c.agents.second = { ...c.agents.codex, model: 'provider/GPT-A' }; c.agents.third = { ...c.agents.codex, model: 'gpt-b' };
-  c.modules.review.complex = [{ agent: 'codex', required: true }, { agent: 'second' }, { agent: 'third' }]; c.modules.review.seats = { complex: 1 };
+  c.modules.default.review.complex = [{ agent: 'codex', required: true }, { agent: 'second' }, { agent: 'third' }]; c.modules.default.review.seats = { complex: 1 };
   h.config(c); h.write('a.txt', 'x\n');
   const args = (gap) => [...planArgs(h, 'review', ['codex', `${gap}=补漏`]), '--target', 'files', '--file', 'a.txt'];
   failed(await h.bridge(args('second')), M.gapSeatSameModel(2, 'gpt-a'));

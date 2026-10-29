@@ -16,13 +16,13 @@ function legacy(h, meta = { status: 'done', pid: 0 }) {
 }
 
 test('旧配置和偏好复制到新位置后补写 gap，旧文件与备份保留原文', async (t) => {
-  const h = sandbox(t, { config: false }), c = baseConfig(); delete c.modules.review.gap;
+  const h = sandbox(t, { config: false }), c = baseConfig(); delete c.modules.default.review.gap; c.modules = c.modules.default;
   const oldConfig = write(path.join(h.home, '.claude/codex-bridge.json'), c);
   const oldPrefs = write(path.join(h.home, '.claude/codex-bridge.md'), '合成用户偏好\n');
   const configText = read(oldConfig), prefsText = read(oldPrefs);
   const r = await h.bridge(['config']);
   output(r);
-  assert.deepEqual(JSON.parse(read(h.userConfig)).modules.review.gap, { simple: false, normal: false, complex: true });
+  assert.deepEqual(JSON.parse(read(h.userConfig)).modules.default.review.gap, { simple: false, normal: false, complex: true });
   assert.equal(read(`${h.userConfig}.bak`), configText);
   assert.equal(read(path.join(h.home, '.claude/foreman/preferences.md')), prefsText);
   assert.equal(read(oldConfig), configText);
@@ -30,12 +30,19 @@ test('旧配置和偏好复制到新位置后补写 gap，旧文件与备份保�
   assert.ok(r.stderr.includes(M.legacyConfigCopied(oldConfig, h.userConfig)));
   assert.ok(r.stderr.includes(M.legacyPrefsCopied(oldPrefs, path.join(h.home, '.claude/foreman/preferences.md'))));
   assert.ok(r.stderr.includes(M.configGapWritten(h.userConfig, `${h.userConfig}.bak`)));
+  assert.ok(r.stderr.includes(M.configScenesWritten(h.userConfig, `${h.userConfig}.bak`)));
   assert.equal((await h.bridge(['config'])).stderr, '');
 });
 
-test('用户配置缺 gap 时只备份补写一次，改写失败在内存补齐并清理锁', async (t) => {
+test('平铺写法的旧配置缺 gap 时只备份补写一次，改写失败在内存补齐并清理锁；场景写法缺 gap 按全关、不改写', async (t) => {
+  {
+    const h = sandbox(t), c = baseConfig(); delete c.modules.default.review.gap; h.config(c);
+    const before = read(h.userConfig), r = await h.bridge(['config']);
+    assert.deepEqual(output(r).resolved_modules.review.gap, { simple: false, normal: false, complex: false });
+    assert.equal(r.stderr, ''); assert.equal(read(h.userConfig), before);
+  }
   for (const denied of [false, true]) {
-    const h = sandbox(t), c = baseConfig(); delete c.modules.review.gap; h.config(c);
+    const h = sandbox(t), c = baseConfig(); delete c.modules.default.review.gap; c.modules = c.modules.default; h.config(c);
     const original = read(h.userConfig);
     const file = h.write('gap-migrate.mjs', `import fs from 'node:fs';
 import { loadConfig } from ${JSON.stringify(url('config.mjs'))};
@@ -54,8 +61,9 @@ console.log(JSON.stringify([loadConfig(null, adapters), loadConfig(null, adapter
       assert.equal(read(h.userConfig), original);
       assert.equal(r.stderr, `foreman: ${M.configMigrateFailed(h.userConfig, 'EACCES')}\n`);
     } else {
-      assert.equal(r.stderr, `foreman: ${M.configGapWritten(h.userConfig, `${h.userConfig}.bak`)}\n`);
-      assert.deepEqual(JSON.parse(read(h.userConfig)).modules.review.gap, first.modules.review.gap);
+      assert.ok(r.stderr.includes(M.configGapWritten(h.userConfig, `${h.userConfig}.bak`)), r.stderr);
+      assert.ok(r.stderr.includes(M.configScenesWritten(h.userConfig, `${h.userConfig}.bak`)), r.stderr);
+      assert.deepEqual(JSON.parse(read(h.userConfig)).modules.default.review.gap, first.modules.review.gap);
       assert.equal((await h.bridge(['config'])).stderr, '');
     }
     assert.equal(fs.readdirSync(path.dirname(h.userConfig)).some((name) => name.endsWith('.lock') || name.endsWith('.tmp')), false);
@@ -194,7 +202,7 @@ test('项目里的旧配置和偏好文件名照常读取并提示改名', async
   const config = h.write('.claude/codex-bridge.json', { levels: { review: { normal: { agent: 'codex', effort: 'low' } } } });
   const prefs = h.write('.claude/codex-bridge.md', '合成项目偏好');
   const r = await h.bridge(['config', '--cwd', h.cwd]), c = output(r);
-  assert.equal(c.effective.modules.review.normal[0].effort, 'low');
+  assert.equal(c.effective.modules.default.review.normal[0].effort, 'low');
   assert.deepEqual(c.loaded_from, [h.userConfig, config]);
   assert.deepEqual(c.preferences[1], { file: prefs, exists: true });
   for (const [old, name] of [[config, 'foreman.json'], [prefs, 'foreman.md']]) {

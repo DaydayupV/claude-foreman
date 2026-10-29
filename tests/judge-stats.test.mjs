@@ -756,7 +756,7 @@ test('stats --by scene 从计划分行，组合 effort/cell 并将缺失或不�
   write(path.join(h.runs, 'plans', 'broken.json'), '{broken');
   for (const [i, [plan, effort]] of [['code', 'high'], ['code', 'low'], ['research', 'high'],
     [null, 'high'], ['old', 'high'], ['missing', 'high'], ['broken', 'high']].entries()) {
-    seedRun(h, `scene-${i}`, { ...review, model: 'alpha', session_id: null, plan, seat: i, effort, cell: 'complex', scene: 'ignored' }, report());
+    seedRun(h, `scene-${i}`, { ...review, model: 'alpha', session_id: null, plan, seat: i, effort, cell: 'complex' }, report());
   }
   const single = output(await h.bridge(['stats', '--by', 'scene']));
   assert.deepEqual(single.by, ['scene']);
@@ -768,6 +768,16 @@ test('stats --by scene 从计划分行，组合 effort/cell 并将缺失或不�
       [[null, 'high', 4], ['code', 'high', 1], ['research', 'high', 1], ['code', 'low', 1]]);
     if (by.includes('cell')) assert.ok(split.rows.every((row) => row.cell === 'complex'));
   }
+});
+
+test('stats --by scene 优先任务 meta，再取计划；没有计划的直派也能按场景统计', async (t) => {
+  const h = sandbox(t);
+  write(path.join(h.runs, 'plans', 'planned.json'), { plan_id: 'planned', scene: 'research' });
+  seedRun(h, 'meta-scene', { ...review, plan: 'planned', scene: 'code', seat: 1, session_id: null }, report());
+  seedRun(h, 'direct-scene', { ...review, plan: null, scene: 'code', session_id: null }, report());
+  seedRun(h, 'plan-scene', { ...review, plan: 'planned', scene: null, seat: 2, session_id: null }, report());
+  const out = output(await h.bridge(['stats', '--by', 'scene']));
+  assert.deepEqual(out.rows.map(({ scene, seats }) => [scene, seats]), [['code', 2], ['research', 1]]);
 });
 
 test('stats 拒绝非法 --by 值并输出中英文 statsBadBy', async (t) => {

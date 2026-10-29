@@ -258,7 +258,7 @@ test('另一个会话重启同席并续接任务链，watch 显示最新轮次�
 });
 
 test('审查席失败或无有效结果可以重启，有运行轮次或有效审查就拒绝', async (t) => {
-  const h = sandbox(t), c = baseConfig(); c.modules.review.complex[0].required = true; h.config(c);
+  const h = sandbox(t), c = baseConfig(); c.modules.default.review.complex[0].required = true; h.config(c);
   const plan = output(await h.bridge(['plan', '--cwd', h.cwd, '--module', 'review', '--cell', 'complex', '--group', 'restart', '--seat', 'codex']));
   const args = ['review', '--plan', plan.plan_id, '--seat', '1', '--brief', '-'];
   const dir = seedRun(h, '20000101-review-round', { module: 'review', kind: 'review', parent: '20000101-review-root',
@@ -301,7 +301,7 @@ test('快照外自报改动算只读违规，快照内无变化和工作目录�
 });
 
 test('路线三手画出位图告警，SVG 带命名空间并跨块仍识别，imageset 不误判', async (t) => {
-  const h = sandbox(t), c = baseConfig(); c.modules.image.draw = [{ agent: 'codex' }]; h.config(c);
+  const h = sandbox(t), c = baseConfig(); c.modules.default.image.draw = [{ agent: 'codex' }]; h.config(c);
   const question = '图像路线', answer = '③ 纯矢量';
   write(path.join(path.dirname(h.userConfig), 'answers/test-session.jsonl'), JSON.stringify({ event: 'answered', tool_use_id: 'route',
     questions: [{ question, options: [answer] }], answers: { [question]: answer } }) + '\n');
@@ -526,7 +526,7 @@ test('非审查席没有续接材料时可重启，有有效结果、会话或 A
 });
 
 test('旧续接缺 kind 和 module 时沿祖先识别讨论并继续计轮数', async (t) => {
-  const h = sandbox(t), c = baseConfig(); c.dispatch.discuss_max_rounds = 3; c.modules.run.complex = 'claude code'; h.config(c);
+  const h = sandbox(t), c = baseConfig(); c.dispatch.discuss_max_rounds = 3; c.modules.default.run.complex = 'claude code'; h.config(c);
   const root = '20000101-000000-aaaa', middle = '20000101-000001-aaaa', latest = '20000101-000002-aaaa';
   const legacy = { kind: undefined, module: undefined, group: 'legacy-discussion' };
   seedRun(h, root, { ...legacy, mode: 'discuss' });

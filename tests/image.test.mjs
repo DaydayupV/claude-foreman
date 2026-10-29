@@ -17,7 +17,7 @@ const answer = (h, route = 2, extra = {}) => savedAnswers(h, [{ event: 'answered
   questions: [question()], answers: { [question().question]: labels[route - 1] }, ...extra }]);
 const configure = (h) => {
   const c = baseConfig();
-  c.modules.image = { generate: [{ agent: 'codex', effort: 'medium', required: true }], draw: [{ agent: 'codex', effort: 'max' }] };
+  c.modules.default.image = { generate: [{ agent: 'codex', effort: 'medium', required: true }], draw: [{ agent: 'codex', effort: 'max' }] };
   h.config(c);
   return c;
 };
@@ -50,13 +50,13 @@ test('图像计划的路线、格子、角色及审查参数错误在确认前�
 
 test('图像计划重验候选、必选、模型和强度，用户和项目空格使用相同提示', async (t) => {
   const h = sandbox(t), c = configure(h); c.agents.second = { ...c.agents.codex };
-  c.modules.image.generate.push({ agent: 'second' }); h.config(c);
+  c.modules.default.image.generate.push({ agent: 'second' }); h.config(c);
   failed(await h.bridge(planArgs(h, 'generate', 2, ['second'])), M.planMissingRequired('modules.image.generate', 'codex'));
   failed(await h.bridge(planArgs(h, 'generate', 2, ['missing'])), M.agentNotInLevel('missing', 'modules.image.generate', 'codex、second'));
-  const entries = c.modules.image.generate; c.modules.image.generate = null; h.config(c);
+  const entries = c.modules.default.image.generate; c.modules.default.image.generate = null; h.config(c);
   failed(await h.bridge(planArgs(h)), M.planCellClosed('modules.image.generate'));
-  c.modules.image.generate = entries; h.config(c);
-  const project = h.write('.claude/foreman.json', { modules: { image: { generate: null } } });
+  c.modules.default.image.generate = entries; h.config(c);
+  const project = h.write('.claude/foreman.json', { modules: { default: { image: { generate: null } } } });
   failed(await h.bridge(planArgs(h)), M.planCellClosed('modules.image.generate'));
   fs.unlinkSync(project); noPlans(h); answer(h);
   const p = output(await h.bridge(planArgs(h))), saved = json(p.file);
@@ -64,7 +64,7 @@ test('图像计划重验候选、必选、模型和强度，用户和项目空�
   failed(await h.bridge(launch(p)), M.planRouteCell('④', 'generate', M.routeUses[4]));
   write(p.file, saved);
   for (const entry of [{ ...entries[0], effort: 'high' }, { ...entries[0], model: 'other-model' }]) {
-    c.modules.image.generate = [entry]; h.config(c);
+    c.modules.default.image.generate = [entry]; h.config(c);
     failed(await h.bridge(launch(p)), M.planSeatChanged(p.plan_id, 1, 'modules.image.generate'));
   }
   assert.equal(h.records().length, 0); assert.equal(h.calls().length, 0);
@@ -92,7 +92,7 @@ if (mode === 'draw' || mode === 'draw-api') {
   const agent = mode === 'draw' ? 'oc' : 'api'; cfg.modules.image.draw = [{ agent }];
   validatePlan(cfg, { module: 'image', cell: 'draw', route: 4, seats: [{ agent }] }, adapters);
 }`);
-  failed(await h.start(script, ['config']).done, M.configInvalid('modules.image.generate[0].agent', M.imagesNotSupported('codex', 'codex cli')));
+  failed(await h.start(script, ['config']).done, M.configInvalid('modules.default.image.generate[0].agent', M.imagesNotSupported('codex', 'codex cli')));
   for (const mode of ['plan', 'resume']) failed(await h.start(script, [mode]).done, M.imagesNotSupported('codex', 'codex cli'));
   assert.equal((await h.start(script, ['generate']).done).code, 0);
   failed(await h.start(script, ['draw']).done, M.runAccessRequired('oc', 'opencode cli'));
@@ -244,7 +244,7 @@ test('图像续接沿用格子、路线、计划及席位并排除旧图片，�
   const h = sandbox(t), c = configure(h); answer(h, 2);
   const p = output(await h.bridge(planArgs(h))), firstScenario = h.scenario({ images: ['old.png'] });
   const first = output(await h.bridge(launch(p, ['--scope', 'out']), { env: firstScenario.env }));
-  for (const level of ['simple', 'normal', 'complex']) c.modules.run[level] = 'claude code'; h.config(c);
+  for (const level of ['simple', 'normal', 'complex']) c.modules.default.run[level] = 'claude code'; h.config(c);
   fs.unlinkSync(answersFile(h));
   failed(await h.bridge(['resume', '--run', first.run_id, '--brief', '-', '--level', 'complex', '--reason', 'rework']), M.imageNoLevel);
   const secondScenario = h.scenario({ images: ['new.png'] }, 'resume');
@@ -257,12 +257,12 @@ test('图像续接沿用格子、路线、计划及席位并排除旧图片，�
   const watched = await h.bridge(['watch', '--run', second.run_id]);
   // 续接没有记轮次，按续接链数出第 2 轮
   assert.ok(watched.stdout.includes(`  ${D.dots(['image', second.run_id, 'generate', 'route ②', D.watchRound(2)])}\n`), watched.stdout);
-  c.agents.second = { ...c.agents.codex }; c.modules.image.generate = [{ agent: 'second' }]; h.config(c);
+  c.agents.second = { ...c.agents.codex }; c.modules.default.image.generate = [{ agent: 'second' }]; h.config(c);
   failed(await h.bridge(['resume', '--run', second.run_id, '--brief', '-', '--reason', 'rework']), M.resumeAgentNotInCell('codex', 'modules.image.generate', 'second'));
-  c.modules.image.generate = null; h.config(c);
+  c.modules.default.image.generate = null; h.config(c);
   failed(await h.bridge(['resume', '--run', second.run_id, '--brief', '-', '--reason', 'rework']), M.imageCellClosed('modules.image.generate'));
-  c.modules.image.generate = [{ agent: 'codex' }]; h.config(c);
-  h.write('.claude/foreman.json', { modules: { image: { generate: null } } });
+  c.modules.default.image.generate = [{ agent: 'codex' }]; h.config(c);
+  h.write('.claude/foreman.json', { modules: { default: { image: { generate: null } } } });
   failed(await h.bridge(['resume', '--run', second.run_id, '--brief', '-', '--reason', 'rework']), M.imageCellClosed('modules.image.generate'));
 });
 

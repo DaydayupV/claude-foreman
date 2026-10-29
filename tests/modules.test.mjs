@@ -7,25 +7,25 @@ import { sandbox, output, failed, baseConfig as oldBaseConfig, read, json, write
 const M = MESSAGES.zh;
 const baseConfig = () => {
   const c = oldBaseConfig();
-  c.modules.review.gap = { simple: false, normal: false, complex: true };
+  c.modules.default.review.gap = { simple: false, normal: false, complex: true };
   return c;
 };
 
 test('模块遍历顺序一致，单对象只在内存规范为列表', async (t) => {
   const h = sandbox(t), c = baseConfig();
-  c.modules.run.complex = { agent: 'codex', effort: 'max' };
-  c.modules.discuss.simple = { agent: 'codex' };
-  c.modules.image.generate = { agent: 'codex' };
+  c.modules.default.run.complex = { agent: 'codex', effort: 'max' };
+  c.modules.default.discuss.simple = { agent: 'codex' };
+  c.modules.default.image.generate = { agent: 'codex' };
   h.config(c);
   const before = read(h.userConfig), out = output(await h.bridge(['config']));
   assert.equal(out.image_configured, true);
-  assert.deepEqual(out.effective.modules.run.complex, [c.modules.run.complex]);
-  assert.deepEqual(out.effective.modules.discuss.simple, [c.modules.discuss.simple]);
+  assert.deepEqual(out.effective.modules.default.run.complex, [c.modules.default.run.complex]);
+  assert.deepEqual(out.effective.modules.default.discuss.simple, [c.modules.default.discuss.simple]);
   assert.deepEqual(out.resolved_modules.image.generate, [{ agent: 'codex', model: 'fake-codex', effort: null, required: false, tier: null }]);
   assert.equal(read(h.userConfig), before);
   const url = pathToFileURL(path.join(ROOT, 'foreman/skills/dispatch/scripts/config.mjs')).href;
   const script = h.write('cells.mjs', `import { MODULE_CELLS, cellList, eachCell, eachEntry, mapCells } from ${JSON.stringify(url)};
-const modules = ${JSON.stringify(out.effective.modules)};
+const modules = ${JSON.stringify(out.effective.modules.default)};
 const list = [{ agent: 'codex' }];
 console.log(JSON.stringify({ cells: eachCell(modules).map(({ module, cell, key }) => [module, cell, key]),
   entries: eachEntry(modules).map(({ at }) => at), same: cellList(list) === list,
@@ -35,8 +35,8 @@ console.log(JSON.stringify({ cells: eachCell(modules).map(({ module, cell, key }
   assert.deepEqual(cells.closed, [[], []]);
   assert.deepEqual(cells.cells.map(([module, cell]) => `${module}.${cell}`), ['discuss.simple', 'discuss.normal', 'discuss.complex', 'run.simple', 'run.normal', 'run.complex', 'review.simple', 'review.normal', 'review.complex', 'image.generate', 'image.draw']);
   assert.equal(cells.mapped.image.draw, 'modules.image.draw');
-  assert.deepEqual(cells.mapped.discuss.seats, out.effective.modules.discuss.seats);
-  assert.deepEqual(cells.mapped.review.seats, out.effective.modules.review.seats);
+  assert.deepEqual(cells.mapped.discuss.seats, out.effective.modules.default.discuss.seats);
+  assert.deepEqual(cells.mapped.review.seats, out.effective.modules.default.review.seats);
   assert.ok(cells.entries.every((at) => !at.includes('.seats')));
   assert.ok(cells.entries.includes('modules.image.generate[0]'));
 });
@@ -51,9 +51,9 @@ test('levels 迁移一次备份，顺序强度不变且不补格子或 required'
   assert.equal(results.filter((r) => r.stderr.includes(M.configModulesMigrated(h.userConfig, bak))).length, 1);
   assert.equal(results.filter((r) => r.stderr.includes('有一处行为变化')).length, 1);
   assert.equal(read(bak), before);
-  assert.deepEqual(json(h.userConfig), { agents: { ...c.agents, second: { ...c.agents.codex } }, dispatch: { watch: { terminal: true, web: false } }, levels: M.levelsNote, modules: {
+  assert.deepEqual(json(h.userConfig), { agents: { ...c.agents, second: { ...c.agents.codex } }, dispatch: { watch: { terminal: true, web: false } }, levels: M.levelsNote, modules: { default: {
     discuss: { ...levels.discuss, seats: DEFAULT_SEATS.discuss }, run: { complex: [levels.run.complex] }, review: { simple: [levels.review.simple], seats: DEFAULT_SEATS.review, gap: { simple: false, normal: false, complex: true } },
-  } });
+  } } });
   // 说明留在 modules 前面，打开文件先看到它
   assert.deepEqual(Object.keys(json(h.userConfig)), ['agents', 'dispatch', 'levels', 'modules']);
   assert.deepEqual(fs.readdirSync(path.dirname(h.userConfig)).filter((name) => name.includes('.bak')), ['config.json.bak']);
@@ -77,7 +77,7 @@ test('旧配置里的 dispatch.max_seats 不再使用：照常加载、不限制
   const h = sandbox(t), c = baseConfig();
   c.dispatch.max_seats = 1;
   c.agents.second = { ...c.agents.codex };
-  c.modules.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second', required: true }];
+  c.modules.default.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second', required: true }];
   h.config({ ...c, levels: M.levelsNote });
   const before = read(h.userConfig), r = await h.bridge(['config']);
   assert.equal(r.stderr, '');
@@ -91,7 +91,7 @@ test('读配置时：缺少 modules 补 seats 和 watch，不加 levels，项目
   const modules = Object.fromEntries(['discuss', 'review'].map((module) => [module, { seats: DEFAULT_SEATS[module], ...(module === 'review' ? { gap: { simple: false, normal: false, complex: true } } : {}) }]));
   h.config({ dispatch: { auto: false, runs_dir: null }, agents });
   output(await h.bridge(['config']));
-  assert.deepEqual(json(h.userConfig), { dispatch: { auto: false, runs_dir: null, watch: { terminal: true, web: false } }, agents, modules });
+  assert.deepEqual(json(h.userConfig), { dispatch: { auto: false, runs_dir: null, watch: { terminal: true, web: false } }, agents, modules: { default: modules } });
   const again = await h.bridge(['config']);
   assert.equal(again.stderr, '');
 
@@ -99,7 +99,7 @@ test('读配置时：缺少 modules 补 seats 和 watch，不加 levels，项目
   bare.config({ agents });
   const plain = read(bare.userConfig);
   output(await bare.bridge(['config']));
-  assert.deepEqual(json(bare.userConfig), { agents, dispatch: { watch: { terminal: true, web: false } }, modules });
+  assert.deepEqual(json(bare.userConfig), { agents, dispatch: { watch: { terminal: true, web: false } }, modules: { default: modules } });
   assert.equal(read(`${bare.userConfig}.bak`), plain);
 
   const p = sandbox(t);
@@ -146,26 +146,26 @@ for (const [name, config] of [
 
 test('项目配置里的 levels 说明和 modules 同时出现时照常覆盖', async (t) => {
   const h = sandbox(t);
-  const file = h.write('.claude/foreman.json', { levels: M.levelsNote, modules: { run: { complex: 'claude code' } } });
+  const file = h.write('.claude/foreman.json', { levels: M.levelsNote, modules: { default: { run: { complex: 'claude code' } } } });
   const before = read(file), r = await h.bridge(['config', '--cwd', h.cwd]), out = output(r);
-  assert.equal(out.effective.modules.run.complex, 'claude code');
-  assert.equal(out.effective.modules.run.complex, 'claude code');
-  assert.deepEqual(out.project_config.cells, ['run.complex']);
+  assert.equal(out.effective.modules.default.run.complex, 'claude code');
+  assert.equal(out.effective.modules.default.run.complex, 'claude code');
+  assert.deepEqual(out.project_config.cells, ['default.run.complex']);
   assert.ok(!r.stderr.includes(M.projectOldFormat(file)), r.stderr);
   assert.equal(read(file), before);
 });
 
 test('image_configured 看用户配置或项目配置有没有写图像块', async (t) => {
-  const h = sandbox(t), c = baseConfig(); delete c.modules.image; h.config(c);
-  h.write('.claude/foreman.json', { modules: { image: { generate: [{ agent: 'codex' }] } } });
+  const h = sandbox(t), c = baseConfig(); delete c.modules.default.image; h.config(c);
+  h.write('.claude/foreman.json', { modules: { default: { image: { generate: [{ agent: 'codex' }] } } } });
   let out = output(await h.bridge(['config', '--cwd', h.cwd]));
   assert.equal(out.image_configured, true);
   assert.equal(output(await h.bridge(['config'])).image_configured, false);
   assert.deepEqual(out.resolved_modules.image, { generate: [{ agent: 'codex', model: 'fake-codex', effort: null, required: false, tier: null }], draw: null });
-  c.modules.image = {}; h.config(c);
+  c.modules.default.image = {}; h.config(c);
   assert.equal(output(await h.bridge(['config', '--cwd', h.cwd])).image_configured, true);
-  c.modules.image = { generate: null, draw: null }; h.config(c);
-  h.write('.claude/foreman.json', { modules: { image: { generate: null } } });
+  c.modules.default.image = { generate: null, draw: null }; h.config(c);
+  h.write('.claude/foreman.json', { modules: { default: { image: { generate: null } } } });
   out = output(await h.bridge(['config', '--cwd', h.cwd]));
   assert.equal(out.image_configured, true);
   assert.deepEqual(out.resolved_modules.image, { generate: null, draw: null });
@@ -182,7 +182,7 @@ test('已有备份加时间戳，校验失败的 levels 不改原文', async (t)
   assert.equal(read(path.join(path.dirname(h.userConfig), backup)), before);
   h.config({ agents: c.agents, levels: { discuss: { normal: [] } } });
   const invalid = read(h.userConfig);
-  failed(await h.bridge(['config']), M.configInvalid('modules.discuss.normal', M.invalid.candidates));
+  failed(await h.bridge(['config']), M.configInvalid('modules.default.discuss.normal', M.invalid.candidates));
   assert.equal(read(h.userConfig), invalid);
 });
 
@@ -209,15 +209,15 @@ for (const [module, cell, value, reason, at = ''] of [
 ]) test(`模块校验 ${module}.${cell} ${JSON.stringify(value)}`, async (t) => {
   const h = sandbox(t), c = baseConfig();
   c.agents.oc = opencodeAgent(); c.agents.api = apiAgent('http://127.0.0.1:1');
-  c.modules[module][cell] = value; h.config(c);
-  failed(await h.bridge(['config']), M.configInvalid(`modules.${module}.${cell}${at}`, reason));
+  c.modules.default[module][cell] = value; h.config(c);
+  failed(await h.bridge(['config']), M.configInvalid(`modules.default.${module}.${cell}${at}`, reason));
   assert.equal(h.calls().length, 0);
 });
 
 test('agents 和 modules 的对象校验不绕过配置错误', async (t) => {
   const h = sandbox(t);
   for (const [config, key, reason] of [
-    [{ agents: null, modules: { run: { complex: [{ agent: 'codex' }] } } }, 'agents', M.invalid.object],
+    [{ agents: null, modules: { default: { run: { complex: [{ agent: 'codex' }] } } } }, 'agents', M.invalid.object],
     [{ modules: null }, 'modules', M.invalid.object],
   ]) { h.config(config); failed(await h.bridge(['config']), M.configInvalid(key, reason)); }
 });
@@ -225,23 +225,23 @@ test('agents 和 modules 的对象校验不绕过配置错误', async (t) => {
 for (const [module, cell] of [['run', 'complex'], ['image', 'generate'], ['image', 'draw']]) test(`${module}.${cell} 最多一个必选`, async (t) => {
   const h = sandbox(t), c = baseConfig();
   c.agents.second = { ...c.agents.codex };
-  c.modules[module][cell] = [{ agent: 'codex', required: true }, { agent: 'second', required: true }]; h.config(c);
-  failed(await h.bridge(['config']), M.configInvalid(`modules.${module}.${cell}`, M.invalid.oneRequired));
+  c.modules.default[module][cell] = [{ agent: 'codex', required: true }, { agent: 'second', required: true }]; h.config(c);
+  failed(await h.bridge(['config']), M.configInvalid(`modules.default.${module}.${cell}`, M.invalid.oneRequired));
 });
 
 for (const [module, cell, reason] of [['unknown', 'simple', M.invalid.module], ['image', 'complex', M.invalid.imageCell], ['run', 'draw', M.invalid.level]]) test(`拒绝未知模块或格子 ${module}.${cell}`, async (t) => {
-  const h = sandbox(t); h.config({ modules: { [module]: { [cell]: null } } });
-  failed(await h.bridge(['config']), M.configInvalid(module === 'unknown' ? 'modules.unknown' : `modules.${module}.${cell}`, reason));
+  const h = sandbox(t); h.config({ modules: { default: { [module]: { [cell]: null } } } });
+  failed(await h.bridge(['config']), M.configInvalid(module === 'unknown' ? 'modules.default.unknown' : `modules.default.${module}.${cell}`, reason));
 });
 
 test('图像引用参与旧类型改名、去重与 codex 保留判断', async (t) => {
   const h = sandbox(t);
   h.config({ agents: { codex: { type: 'codex', bin: CODEX, model: 'image-model' }, same: { type: 'codex', bin: CODEX, model: 'image-model' } },
-    modules: { image: { generate: [{ agent: 'codex' }, { agent: 'same' }], draw: { agent: 'codex', effort: 'high' } } } });
+    modules: { default: { image: { generate: [{ agent: 'codex' }, { agent: 'same' }], draw: { agent: 'codex', effort: 'high' } } } } });
   const out = output(await h.bridge(['config']));
   assert.deepEqual(Object.keys(out.effective.agents), ['image-model']);
-  assert.deepEqual(out.effective.modules.image.generate, [{ agent: 'image-model' }]);
-  assert.deepEqual(out.effective.modules.image.draw, [{ agent: 'image-model', effort: 'high' }]);
+  assert.deepEqual(out.effective.modules.default.image.generate, [{ agent: 'image-model' }]);
+  assert.deepEqual(out.effective.modules.default.image.draw, [{ agent: 'image-model', effort: 'high' }]);
   assert.deepEqual(json(path.join(path.dirname(h.userConfig), 'agent-aliases.json')), { codex: 'image-model', same: 'image-model' });
   assert.deepEqual(out.summary.agents['image-model'].used_at, ['modules.image.generate[0]', 'modules.image.draw[0]']);
 });
@@ -249,7 +249,7 @@ test('图像引用参与旧类型改名、去重与 codex 保留判断', async (
 test('check 和 summary 覆盖仅用于图像的协作方、强度和 shell 提醒', async (t) => {
   const h = sandbox(t);
   h.config({ agents: { codex: baseConfig().agents.codex, oc: { ...opencodeAgent(), run_access: 'shell' } },
-    modules: { image: { generate: [{ agent: 'codex', effort: 'high', required: true }], draw: [{ agent: 'oc', effort: 'low' }] } } });
+    modules: { default: { image: { generate: [{ agent: 'codex', effort: 'high', required: true }], draw: [{ agent: 'oc', effort: 'low' }] } } } });
   const out = output(await h.bridge(['check']));
   assert.equal(out.ok, true);
   assert.deepEqual(out.agents.oc.variants[0].used_at, ['modules.image.draw[0]']);

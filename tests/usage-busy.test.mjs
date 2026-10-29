@@ -10,7 +10,7 @@ import { apiServer } from './fake/api-server.mjs';
 const M = MESSAGES.zh;
 function configure(h, api) {
   const config = baseConfig(); config.agents.api = apiAgent(api.url);
-  for (const mode of ['discuss', 'review']) config.modules[mode].complex = [{ agent: 'api' }];
+  for (const mode of ['discuss', 'review']) config.modules.default[mode].complex = [{ agent: 'api' }];
   h.config(config);
 }
 function queued(h, id, cwd, minutes = 1) {

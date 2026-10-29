@@ -12,7 +12,7 @@ const D = { ...MESSAGES.en, ...displayText }; // 实时查看、status 和开工
 const configure = (h, access = 'edit') => {
   const c = baseConfig();
   c.agents.oc = { ...opencodeAgent(), ...(access === undefined ? {} : { run_access: access }) };
-  c.modules.run.complex = { agent: 'oc' };
+  c.modules.default.run.complex = { agent: 'oc' };
   h.config(c);
   return c;
 };
@@ -120,7 +120,7 @@ test('run_access 只校验 opencode，config 展示权限和执行能力', async
   c.agents.api = { ...apiAgent('http://127.0.0.1:1'), run_access: 'ignored' };
   for (const value of ['edit', 'shell', undefined]) {
     c.agents.oc.run_access = value;
-    c.modules.run.complex = value ? { agent: 'oc' } : 'claude code'; h.config(c);
+    c.modules.default.run.complex = value ? { agent: 'oc' } : 'claude code'; h.config(c);
     const r = output(await h.bridge(['config']));
     assert.equal(r.agents_status.oc.run_access, value ?? null);
     // 没写 run_access 时派不了执行任务，能力里也不列 run
@@ -133,16 +133,16 @@ test('opencode 执行和续接需要用户授权，项目 agents 被忽略后仍
   const h = sandbox(t), c = configure(h);
   delete c.agents.oc.run_access; h.config(c);
   failed(await h.bridge(['config']), M.runAccessRequired('oc', 'opencode cli'));
-  c.modules.run.complex = 'claude code'; h.config(c);
-  const project = h.write('.claude/foreman.json', { agents: { oc: { run_access: 'shell' } }, modules: { run: { complex: { agent: 'oc' } } } });
+  c.modules.default.run.complex = 'claude code'; h.config(c);
+  const project = h.write('.claude/foreman.json', { agents: { oc: { run_access: 'shell' } }, modules: { default: { run: { complex: { agent: 'oc' } } } } });
   const invalid = await h.bridge(['config', '--cwd', h.cwd]);
-  failed(invalid, M.projectConfigInvalid(project, M.configInvalid('modules.run.complex[0].agent', M.runAccessRequired('oc', 'opencode cli'))));
+  failed(invalid, M.projectConfigInvalid(project, M.configInvalid('modules.default.run.complex[0].agent', M.runAccessRequired('oc', 'opencode cli'))));
   assert.ok(invalid.stderr.includes(M.projectIgnored('agents')));
   h.write('.claude/foreman.json', { agents: { oc: { run_access: 'shell' } } });
   const config = await h.bridge(['config', '--cwd', h.cwd]), r = output(config);
   assert.equal(config.stderr, `foreman: ${M.projectIgnored('agents')}\n`);
   assert.equal(r.agents_status.oc.run_access, null);
-  assert.equal(r.effective.modules.run.complex, 'claude code');
+  assert.equal(r.effective.modules.default.run.complex, 'claude code');
   failed(await h.bridge(taskArgs(h, 'run', ['--agent', 'oc'])), M.runAccessRequired('oc', 'opencode cli'));
   seedRun(h, 'previous-exec', { agent: 'oc', agent_type: 'opencode cli', run_access: 'edit' });
   failed(await h.bridge(['resume', '--run', 'previous-exec', '--level', 'complex', '--brief', '-', '--reason', 'rework', '--agent', 'oc']), M.runAccessRequired('oc', 'opencode cli'));

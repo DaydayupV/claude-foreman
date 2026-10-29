@@ -16,7 +16,7 @@ function configure(h, agent, api) {
   const c = baseConfig();
   c.agents.oc = opencodeAgent(); c.agents.pi = piAgent();
   if (api) c.agents.api = apiAgent(api.url);
-  c.modules.review.normal = [{ agent }]; h.config(c);
+  c.modules.default.review.normal = [{ agent }]; h.config(c);
 }
 const scopeOf = (files, kind = 'uncommitted') => ({
   kind,

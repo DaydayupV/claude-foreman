@@ -50,8 +50,8 @@ test('run 计划没有 host，旧计划只数外部席，其他模块不能带 h
 for (const module of ['discuss', 'review']) test(`${module} 用户和项目配成 Claude Code 的格子均可建格子外计划并派出`, async (t) => {
   for (const project of [false, true]) {
     const h = sandbox(t), c = baseConfig();
-    if (project) h.write('.claude/foreman.json', { modules: { [module]: { complex: 'claude code' } } });
-    else c.modules[module].complex = 'claude code';
+    if (project) h.write('.claude/foreman.json', { modules: { default: { [module]: { complex: 'claude code' } } } });
+    else c.modules.default[module].complex = 'claude code';
     h.config(c);
     const p = output(await h.bridge(planArgs(h, module)));
     assert.equal(p.outside_cell, true); assert.deepEqual(p.required, []); assert.equal(p.seats[0].effort, 'max');
@@ -66,7 +66,7 @@ for (const module of ['discuss', 'review']) test(`${module} 用户和项目配�
 
 test('格子外计划仍检查协作方存在、模块能力和 visual 看图能力', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.api = apiAgent('http://127.0.0.1:1');
-  c.modules.review.complex = 'claude code'; h.config(c); h.write('shot.png', Buffer.from([1, 2]));
+  c.modules.default.review.complex = 'claude code'; h.config(c); h.write('shot.png', Buffer.from([1, 2]));
   const unknown = await h.bridge(planArgs(h, 'review', ['missing'])); assert.equal(unknown.code, 2); assert.ok(unknown.stderr.includes('missing'));
   failed(await h.bridge(planArgs(h, 'review', ['api'], ['--target', 'visual', '--file', 'shot.png'])), M.readsImagesRequired('api', 'api'));
   const script = h.write('capability.mjs', `import { loadConfig, validatePlan } from ${JSON.stringify(pathToFileURL(path.join(ROOT, 'foreman/skills/dispatch/scripts/config.mjs')).href)};
@@ -186,7 +186,7 @@ test('resume 和 cancel 明确拒绝 host，last 也拒绝；旧的无计划讨�
 });
 
 test('planStatus 缺报告不能 complete，host 不进入 missing_required，早于外部启动分别为 null/false', async (t) => {
-  const h = sandbox(t), c = baseConfig(); c.modules.discuss.complex[0].required = true; h.config(c);
+  const h = sandbox(t), c = baseConfig(); c.modules.default.discuss.complex[0].required = true; h.config(c);
   const p = output(await h.bridge(planArgs(h)));
   let state = await status(h, p);
   assert.deepEqual(state.host, { seat: 0, role: null, status: 'missing', rounds: [], before_external_start: null });

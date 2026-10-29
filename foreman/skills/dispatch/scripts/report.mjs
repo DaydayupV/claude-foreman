@@ -1,5 +1,5 @@
 // setup 的固定 Markdown：环境、总配置和本机模型清单，文字统一从 messages 取。
-import { CLAUDE_CODE, LEVELS, cellList, readRawConfig, isSplit, seatsFor, gapFor } from './config.mjs';
+import { CLAUDE_CODE, LEVELS, MODULE_CELLS, cellList, readRawConfig } from './config.mjs';
 import { M, isObject } from './util.mjs';
 
 const dash = '—';
@@ -8,8 +8,8 @@ const table = (headers, rows) => [headers, headers.map(() => '---'), ...rows]
   .map((row) => `| ${row.map(escape).join(' | ')} |`).join('\n');
 const report = (blocks) => blocks.join('\n\n') + '\n';
 const modules = ['discuss', 'review', 'run', 'image'];
-const entries = (summary) => modules.flatMap((module) => (module === 'image' ? ['generate', 'draw'] : LEVELS)
-  .flatMap((cell) => cellList(summary.modules[module][cell])));
+const entries = (summary) => Object.values(summary.scene_modules).flatMap((view) => modules.flatMap((module) => MODULE_CELLS[module]
+  .flatMap((cell) => cellList(view[module][cell]))));
 const checkMark = (ok, problem = false) => problem ? '⚠' : ok === true ? '✅' : ok === false ? '❌' : dash;
 
 export const environmentReport = (checks, environment, agents) => {
@@ -70,33 +70,42 @@ const seatsTable = (cfg, summary) => {
   const raw = cfg.sources.map((file) => readRawConfig(file));
   const rows = ['discuss', 'review'].flatMap((module) => LEVELS.map((cell) => {
     const label = `${M.reportModuleNames[module]} ${cell}`, value = summary.modules[module][cell];
-    const split = isSplit(cfg, module, cell);
-    // 场景和配置对不上时按配置里实际写的场景名列出，缺的值写 —，方便对照着改
-    const written = ['seats', 'gap'].flatMap((field) => isObject(cfg.modules[module][field]?.[cell]) ? Object.keys(cfg.modules[module][field][cell]) : []);
-    const scenes = [...cfg.scenes.names.filter((scene) => written.includes(scene)), ...new Set(written.filter((scene) => !cfg.scenes.names.includes(scene)))];
-    const byScene = (fn) => split ? scenes.map((scene) => `${scene} ${fn(scene) ?? dash}`).join(' · ') : fn();
-    const gapValue = module === 'review' ? byScene((scene) => { const on = gapFor(cfg, cell, scene); return on == null ? null : on ? M.reportGapOn : M.reportGapOff; }) : dash;
+    const gap = module === 'review' && cfg.modules.review.gap[cell];
+    const gapValue = module === 'review' ? gap ? M.reportGapOn : M.reportGapOff : dash;
     if (value === CLAUDE_CODE) return [label, dash, gapValue, dash, dash, M.reportNoOutside];
     const candidates = [...new Map(cellList(value).map((item) => [item.agent, item])).values()];
     const required = candidates.filter((item) => item.required), n = candidates.length, r = required.length;
     const names = M.list(required.map((item) => item.agent));
-    const practice = (scene) => {
-      const s = seatsFor(cfg, module, cell, scene), gap = module === 'review' && gapFor(cfg, cell, scene);
-      if (s == null) return dash;
+    const s = cfg.modules[module].seats[cell];
+    const practice = () => {
       let text = n <= s ? (n === s ? M.reportAllCandidates(n) : M.reportFewerCandidates(s, n))
         : r === s ? (gap ? M.reportOnlyRequiredGap : M.reportOnlyRequired)(names, n - r)
           : r ? M.reportRequiredPlus(names, n - r, s - r) : M.reportPickCandidates(n, s);
       if (gap) text += n <= s ? M.reportNoGap : r === s ? '' : M.reportGapLeft;
       return text;
     };
-    const explicit = raw.some((config) => Object.hasOwn(config?.modules?.[module]?.seats || {}, cell));
-    return [label, `${byScene((scene) => seatsFor(cfg, module, cell, scene))}${explicit ? '' : M.reportDefaultSeats}`, gapValue, n, r,
-      split ? scenes.map((scene) => `${scene}：${practice(scene)}`).join('；') : practice()];
+    const explicit = raw.some((config) => Object.hasOwn((config?.modules?.default || config?.modules)?.[module]?.seats || {}, cell));
+    return [label, `${s}${explicit ? '' : M.reportDefaultSeats}`, gapValue, n, r, practice()];
   }));
   return table(M.reportSeatsHeaders, rows);
 };
 
+const sceneTables = (cfg, summary) => Object.entries(cfg.scene_diff).flatMap(([scene, diff]) => {
+  const view = summary.scene_modules[scene];
+  const rows = Object.entries(diff).flatMap(([module, changed]) => MODULE_CELLS[module]
+    .filter((cell) => Object.hasOwn(changed, cell) || Object.hasOwn(changed.seats || {}, cell) || Object.hasOwn(changed.gap || {}, cell))
+    .map((cell) => {
+      const value = view[module][cell];
+      const candidates = value === CLAUDE_CODE ? CLAUDE_CODE : value === null ? M.reportOff : M.list(cellList(value).map((item) =>
+        `${item.agent} · ${item.effort ?? M.reportDefault}${item.model && item.model !== summary.agents[item.agent].model ? ` · ${item.model}` : ''}${item.required ? ' ★' : ''}`));
+      return [`${module}.${cell}`, candidates, view[module].seats?.[cell] ?? dash,
+        module === 'review' ? view.review.gap[cell] ? M.reportGapOn : M.reportGapOff : dash];
+    }));
+  return [M.reportSceneTable(scene), table([M.reportSeatsHeaders[0], M.reportCandidate, ...M.reportSeatsHeaders.slice(1, 3)], rows)];
+});
+
 const usedIn = (used) => {
+  used = used.map((at) => at.replace(/^modules\.[^.]+\.(?=discuss\.|review\.|run\.|image\.)/, 'modules.'));
   const labels = ['discuss', 'review', 'run'].flatMap((module) => {
     const levels = LEVELS.filter((cell) => used.some((at) => at.startsWith(`modules.${module}.${cell}[`)));
     return levels.length ? [`${M.reportModuleNames[module]} ${levels.map((cell) => cell[0].toUpperCase()).join('/')}`] : [];
@@ -139,7 +148,7 @@ export const configReport = (cfg, summary, checks = null) => {
   if (cfg.project_config) blocks.splice(1, 0, M.reportProjectConfig(cfg.project_config.path, M.list(cfg.project_config.cells)));
   for (const module of modules) blocks.push(M.reportModuleNames[module], module === 'image' && !cfg.image_configured
     ? M.reportImageUnconfigured : cellTable(cfg, summary, module, checks));
-  blocks.push(M.reportSeatsTitle, seatsTable(cfg, summary), M.reportSeatsNotes.map((text) => `- ${text}`).join('\n'), M.reportAgentsTitle);
+  blocks.push(M.reportSeatsTitle, seatsTable(cfg, summary), M.reportSeatsNotes.map((text) => `- ${text}`).join('\n'), ...sceneTables(cfg, summary), M.reportAgentsTitle);
   const problems = entries(summary).filter((item) => item.problem);
   blocks.push(table([...M.reportAgentsHeaders, ...(checks ? [M.reportCheck] : [])], Object.entries(summary.agents).map(([name, info]) => [
     name, info.type, info.model ?? dash, usedIn(info.used_at), runAccess(info),
@@ -164,7 +173,7 @@ export const modelsReport = (catalog) => {
   const counts = tools.map((type) => visible[type].length), apiCount = apiRows.length;
   const blocks = [M.reportModelsTitle, M.reportModelsTotal(counts.reduce((a, b) => a + b, apiCount), ...counts.slice(0, 3), api.length, apiCount, counts[3]) + M.reportModelsJoin + M.reportModelsIntro];
   const configured = (type, model) => M.list(Object.entries(catalog.agents).filter(([, agent]) => agent.type === type
-    && (agent.model === model.id || type === 'agy cli' && Object.values(model.ids).includes(agent.model))).map(([name]) => name));
+    && (agent.configured_models.includes(model.id) || type === 'agy cli' && Object.values(model.ids).some((id) => agent.configured_models.includes(id)))).map(([name]) => name));
   for (const type of tools) {
     const cat = catalog.tools[type], tool = type === 'codex cli' ? 'Codex' : type.split(' ')[0];
     if (!cat) continue;
@@ -189,7 +198,7 @@ export const modelsReport = (catalog) => {
         model.id.slice(provider.length + 1), efforts(model), context(model.context), price(model.cost), configured(type, model),
       ])));
   }
-  if (api.some(([, cat]) => cat.ok)) blocks.push(M.reportApiTitle, table(M.reportApiHeaders, apiRows.map(([name, model]) => [name, model.id, context(model.context), catalog.agents[name]?.model === model.id ? name : ''])));
+  if (api.some(([, cat]) => cat.ok)) blocks.push(M.reportApiTitle, table(M.reportApiHeaders, apiRows.map(([name, model]) => [name, model.id, context(model.context), catalog.agents[name]?.configured_models.includes(model.id) ? name : ''])));
   if (omitted) blocks.push(M.reportNonChat(omitted));
   for (const [name, cat] of api) if (!cat.ok) blocks.push(M.reportCatalogError(name, cat.error));
   blocks.push(M.reportModelsNext);

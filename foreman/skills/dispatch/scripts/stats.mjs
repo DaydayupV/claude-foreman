@@ -222,7 +222,7 @@ function cmdStats(o, statsOf) {
   const rows = new Map(), seatTimes = new Map(), groups = new Map();
   const rowFor = (meta, result, module) => {
     const host = meta.participant === 'host', model = host ? meta.model ?? 'claude-code' : baseModel(meta, result);
-    const dimensions = Object.fromEntries(by.map((dim) => [dim, dim === 'scene' ? planRecords.get(meta.plan)?.scene ?? null
+    const dimensions = Object.fromEntries(by.map((dim) => [dim, dim === 'scene' ? meta.scene ?? planRecords.get(meta.plan)?.scene ?? null
       : dim === 'effort' ? meta.effort ?? null : meta.cell ?? meta.level ?? null]));
     const key = JSON.stringify([host, model, module, ...Object.values(dimensions)]);
     if (!rows.has(key)) {

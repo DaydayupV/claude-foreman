@@ -10,7 +10,7 @@ const M = MESSAGES.zh;
 
 for (const agent of ['oc', 'pi', 'api']) for (const kind of ['discuss', 'review']) test(`${agent} 的${M.modeNames[kind]}只读等级为 tools`, async (t) => {
   const h = sandbox(t), api = await apiServer(t, [{ answer: kind === 'review' ? review : discussion }]), c = baseConfig();
-  Object.assign(c.agents, { oc: opencodeAgent(), pi: piAgent(), api: apiAgent(api.url) }); c.modules[kind].complex = [{ agent }]; h.config(c);
+  Object.assign(c.agents, { oc: opencodeAgent(), pi: piAgent(), api: apiAgent(api.url) }); c.modules.default[kind].complex = [{ agent }]; h.config(c);
   h.write('source.txt', 'evidence\n'); const s = h.scenario({ last_message: kind === 'review' ? review : discussion });
   const r = output(await h.bridge(taskArgs(h, kind, kind === 'review' ? ['--target', 'files', '--file', 'source.txt'] : []), { env: s.env }));
   assert.equal(r.readonly, 'tools'); assert.equal(r.changes.available, false);

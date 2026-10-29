@@ -40,8 +40,8 @@ const HELP = helpText(process.argv.slice(2));
 if (HELP) { process.stdout.write(`${HELP}\n`); process.exit(0); }
 
 // 其余模块在 --help 之后才加载：config.mjs 一加载就会迁移旧版的配置和偏好文件，--help 不该写任何文件。
-const { USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, agentMaxParallel, CLAUDE_CODE, cellList, eachEntry, mapCells, isSplit, resolveAgentAlias, detectEnvironment, projectFile, loadConfig, resolveProfile, validatePlan, unknownAgentError } = await import('./config.mjs');
-const { cmdPlan, readPlan } = await import('./plan.mjs');
+const { USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, agentMaxParallel, CLAUDE_CODE, cellList, eachEntry, mapCells, sceneView, selectScene, resolveAgentAlias, detectEnvironment, projectFile, loadConfig, resolveProfile, validatePlan, unknownAgentError } = await import('./config.mjs');
+const { cmdPlan, readPlan, loadPlan } = await import('./plan.mjs');
 const { buildSummary: summarize } = await import('./summary.mjs');
 const { modelIdentity } = await import('./models.mjs');
 const { configReport, environmentReport, modelsReport } = await import('./report.mjs');
@@ -65,10 +65,9 @@ const { RUNS_ROOT, CLAUDE_SESSION, findRun, isRunning } = records; // 记录目�
 // summary.mjs 保持只读，新增配置提醒在 config/check 共用的出口补齐。
 function buildSummary(cfg, adapters, checks = null) {
   const summary = summarize(cfg, adapters, checks);
-  if (cfg.scenes.problems.length) summary.warnings.push({ kind: 'scenes_mismatch', problems: cfg.scenes.problems, message: M.planScenesProblem(M.list(cfg.scenes.problems)) });
-  else if (cfg.scenes.names.length && !['discuss', 'review'].some((module) => ['simple', 'normal', 'complex'].some((cell) => isSplit(cfg, module, cell)))) {
-    summary.warnings.push({ kind: 'scenes_unused', message: M.scenesUnused(cfg.scenes.file, M.list(cfg.scenes.names)) });
-  }
+  if (cfg.scenes.problems.length) summary.warnings.push({ kind: 'scenes_mismatch', problems: cfg.scenes.problems, message: M.scenesProblem(M.list(cfg.scenes.problems)) });
+  const unused = cfg.scenes.names.filter((scene) => !Object.hasOwn(cfg.scene_modules, scene));
+  if (unused.length) summary.warnings.push({ kind: 'scenes_unused', message: M.scenesNoBlock(M.list(unused)) });
   return summary;
 }
 
@@ -105,6 +104,7 @@ function dispatchProfile(o, module) {
   let seat = { module, cell: o.level };
   let plan;
   if (o.plan) {
+    if (o.scene != null || o['scene-why'] != null) die(M.sceneFixedByPlan);
     plan = readPlan(o.plan);
     if (!/^\d+$/.test(o.seat) || Number(o.seat) < 1 || Number(o.seat) > plan.seats.length) die(M.planSeatChoices(o.plan, plan.seats.length));
     if (plan.module !== module) die(M.planModuleMismatch(o.plan, plan.module, module));
@@ -118,10 +118,15 @@ function dispatchProfile(o, module) {
     seat = { ...plan.seats[Number(o.seat) - 1], module, cell: plan.cell, plan: plan.plan_id, outside_cell: plan.outside_cell };
   }
   const cwd = resolveDir(need(o, 'cwd'));
-  const cfg = load(cwd);
+  const original = load(cwd);
+  if (plan && original.scenes.problems.length) die(M.scenesProblem(M.list(original.scenes.problems)));
+  // 计划记下的场景已经被删掉时不能悄悄换成 default 的安排
+  if (plan?.scene && plan.scene !== 'default' && !original.scenes.names.includes(plan.scene)) die(M.planSceneGone(plan.plan_id, plan.scene));
+  const cfg = plan ? sceneView(original, plan.scene) : selectScene(original, module, o.level, o);
   // 席位数只在建计划时检查，配置调整后已有计划仍能启动。
   if (plan) validatePlan(cfg, plan, adapters);
   const profile = resolveProfile(cfg, seat, o, adapters);
+  Object.assign(profile, { scene: plan?.scene ?? o.scene ?? null, scene_why: plan?.scene_why ?? o['scene-why'] ?? null });
   if (module === 'review' && ['补漏', 'gap'].includes(seat.role?.trim().toLowerCase())) {
     const host = records.listRuns().map((id) => records.readMeta(path.join(RUNS_ROOT, id)))
       .find((meta) => meta?.plan === plan.plan_id && meta.participant === 'host');
@@ -160,6 +165,7 @@ async function cmdDiscuss(o) {
 }
 
 async function cmdResume(o) {
+  if (o.scene != null || o['scene-why'] != null) die(M.sceneFixedByPlan);
   const parent = findRun(need(o, 'run'));
   if (parent.meta.participant === 'host') die(M.hostNoResume(parent.id));
   if (isRunning(parent.meta)) die(M.resumeParentRunning(parent.id));
@@ -188,7 +194,12 @@ async function cmdResume(o) {
   }
   if (o.group != null && !discuss && !o.scope.length) die(M.groupNeedsScope);
   let round = null;
-  const cfg = load(parent.meta.cwd);
+  const original = load(parent.meta.cwd), plan = parent.meta.plan ? loadPlan(parent.meta.plan) : null;
+  const scene = plan ? plan.scene ?? null : parent.meta.scene ?? null;
+  const scene_why = plan ? plan.scene_why ?? null : parent.meta.scene_why ?? null;
+  if (original.scenes.problems.length) die(M.scenesProblem(M.list(original.scenes.problems)));
+  if (scene && scene !== 'default' && !original.scenes.names.includes(scene)) die(M.resumeSceneGone(scene));
+  const cfg = sceneView(original, scene);
   if (discuss) {
     const max = cfg.dispatch.discuss_max_rounds;
     if (!Number.isInteger(max) || max < 1) die(M.badDiscussMaxRounds);
@@ -213,7 +224,7 @@ async function cmdResume(o) {
     // 不在计划里的任务、等级没变时沿用上一轮实际用的推理强度（首轮 --effort high 的，续接不掉回默认）；换了等级按新等级的规则
     ...(!parent.meta.plan && parent.meta.effort !== undefined && o.level === (parent.meta.cell ?? parent.meta.level) ? { effort: parent.meta.effort } : {}),
   }, o, adapters, parent.meta.model, parent.meta.agent || 'codex', parent.meta.cell ?? parent.meta.level);
-  return adapters[profile.agent.type].execute({ cfg, ...profile, mode: 'resume', kind, cwd: parent.meta.cwd, brief, addDirs,
+  return adapters[profile.agent.type].execute({ cfg, ...profile, scene, scene_why, mode: 'resume', kind, cwd: parent.meta.cwd, brief, addDirs,
     ...(image ? { step: parent.meta.step, route: parent.meta.route } : {}),
     title: o.title || parent.meta.title, parent: parent.id, parentDir: parent.dir, sessionId: parent.meta.session_id,
     previousRunAccess: parent.meta.run_access, round, resumeReason: o.reason, resumeNote, opts: o });
@@ -234,7 +245,7 @@ async function cmdReview(o) {
 
 function cmdConfig(o) {
   const cfg = load(o.cwd ? resolveDir(o.cwd) : null);
-  const { sources, image_configured, project_config, scenes, ...effective } = cfg;
+  const { sources, image_configured, project_config, scenes, scene_modules, scene_diff, ...effective } = cfg;
   // opencode、pi 没写 run_access 时派不了执行任务：列出的能力和派发时的检查保持一致，免得按 modes 挑人挑到派不出去的
   const capabilitiesOf = (agent) => {
     const c = adapters[agent.type].capabilities;
@@ -249,8 +260,11 @@ function cmdConfig(o) {
     return { agent: entry.agent, model, effort: entry.effort ?? null, required: !!entry.required, tier: tierOf(model).tier };
   };
   const resolved_modules = mapCells(effective.modules, (value) => value === CLAUDE_CODE || value === null ? value : cellList(value).map(resolved));
+  const resolved_scenes = Object.fromEntries(Object.entries(scene_diff).map(([scene, modules]) => [scene,
+    mapCells(modules, (value) => value === CLAUDE_CODE || value === null ? value : cellList(value).map(resolved))]));
   // 配置里写的 key 不打印出来。
   const shown = structuredClone(effective);
+  shown.modules = scene_modules;
   for (const agent of Object.values(shown.agents)) if (agent.api_key) agent.api_key = M.keyHidden;
   const result = {
     user_config: USER_CONFIG,
@@ -260,6 +274,7 @@ function cmdConfig(o) {
     effective: shown,
     agents_status,
     resolved_modules,
+    resolved_scenes,
     image_configured,
     runs_dir: RUNS_ROOT,
     watch_launcher: path.join(RUNS_ROOT, 'watch.mjs'),
@@ -448,7 +463,8 @@ async function cmdCheck(o) {
     agents: {},
   };
   const variants = new Map(), usedModes = new Map();
-  for (const { module, at, item } of eachEntry(cfg.modules)) {
+  for (const [scene, modules] of Object.entries(cfg.scene_modules)) for (const { module, at: flatAt, item } of eachEntry(modules)) {
+    const at = scene === 'default' ? flatAt : flatAt.replace('modules.', `modules.${scene}.`);
     const mode = module === 'image' ? 'run' : module;
     usedModes.set(item.agent, new Set([...(usedModes.get(item.agent) || []), mode]));
     // agy 格子不写 effort 也要核对：多档族必须指定，单档族可自动选择。
@@ -467,11 +483,11 @@ async function cmdCheck(o) {
     if (!o.agent || o.agent === name) result.agents[name] = { ...await adapters[agent.type].check(name, agent, variants.get(name) || [], () => readCatalog(agent), [...(usedModes.get(name) || [])], cwd,
       ...(agent.type === 'agy cli' ? [!!o.reprobe] : [])), type: agent.type };
   }
-  const referenced = new Set(eachEntry(cfg.modules).map(({ item }) => item.agent));
+  const referenced = new Set(Object.values(cfg.scene_modules).flatMap((modules) => eachEntry(modules).map(({ item }) => item.agent)));
   result.ok = nodeOk && !cfg.scenes.problems.length && Object.entries(result.agents).every(([name, agent]) => !referenced.has(name) || agent.ok);
   result.summary = buildSummary(cfg, adapters, result.agents);
   // 通用汇总跳过空 effort；agy 的未指定档位也可能是逐格错误。
-  for (const { item } of eachEntry(result.summary.modules)) {
+  for (const modules of Object.values(result.summary.scene_modules)) for (const { item } of eachEntry(modules)) {
     if (item.type !== 'agy cli' || item.effort != null) continue;
     const problem = result.agents[item.agent]?.efforts.find((e) => e.model === item.model && e.variant === 'default' && !e.ok)?.error;
     if (problem) Object.assign(item, { ok: false, problem });
@@ -502,11 +518,13 @@ async function cmdModels(o) {
   }
   for (const [name, agent] of Object.entries(cfg.agents)) if (agent.type === 'api') out.api[name] = await adapters.api.catalog(agent, name);
   // 配置里每个协作方的模型在不在它自己那个可执行文件的清单里，在的话支持哪些推理强度；不在的给出最接近的写法。
+  const entries = Object.values(cfg.scene_modules).flatMap(eachEntry);
   for (const [name, agent] of Object.entries(cfg.agents)) {
     const cat = agent.type === 'api' ? out.api[name] : readCatalog(agent);
     const model = agent.model ?? adapters[agent.type].status(agent).model ?? null;
     const found = cat.ok ? cat.models.find((m) => m.id === model || agent.type === 'agy cli' && Object.values(m.ids).includes(model)) : null;
-    out.agents[name] = { type: agent.type, model, listed: cat.ok && model ? !!found : null, efforts: found?.efforts ?? null,
+    out.agents[name] = { type: agent.type, model, configured_models: [...new Set([model, ...entries.filter(({ item }) => item.agent === name).map(({ item }) => item.model || model)].filter(Boolean))],
+      listed: cat.ok && model ? !!found : null, efforts: found?.efforts ?? null,
       closest: cat.ok && model && !found ? closestMatches(model, cat.models.map((m) => m.id)) : [] };
   }
   process.stdout.write(o.format === 'md' ? modelsReport(out) : JSON.stringify(out, null, 2) + '\n');
@@ -517,7 +535,7 @@ function cmdTiers(o) {
   const cfg = load(o.cwd ? resolveDir(o.cwd) : null);
   // 没写模型的协作方用它自己配置里的模型（比如 Codex 的 config.toml），和 config 输出一致
   const agentModel = (name) => cfg.agents[name].model || adapters[cfg.agents[name].type].status(cfg.agents[name]).model;
-  const configured = () => eachEntry(cfg.modules).map(({ item }) => item.model || agentModel(item.agent)).filter(Boolean);
+  const configured = () => Object.values(cfg.scene_modules).flatMap((modules) => eachEntry(modules).map(({ item }) => item.model || agentModel(item.agent))).filter(Boolean);
   const names = [...new Set([...(o.model ?? []), ...(o.all ? Object.keys(tiers?.models ?? {}) : o.model?.length ? [] : configured())])];
   const models = names.map((name) => ({ ...tierOf(name, { tiers }), name }));
   if (o.all) {

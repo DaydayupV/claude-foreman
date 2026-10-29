@@ -37,7 +37,7 @@ const policies = (file) => read(file).trim().split('\n').map((line) => JSON.pars
 
 test('pi 只为带 usage 的 assistant message_end 写运行中分段用量', async (t) => {
   const h = sandbox(t);
-  configure(h, {}, (c) => { c.modules.discuss.complex = [{ agent: 'pi' }]; });
+  configure(h, {}, (c) => { c.modules.default.discuss.complex = [{ agent: 'pi' }]; });
   const gate = path.join(h.cwd, 'release'), usage = { input: 3954, output: 37, cacheRead: 3, cacheWrite: 4, reasoning: 9, totalTokens: 3991 };
   const s = h.scenario({ steps: [
     { event: { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'working' }], usage, stopReason: 'toolUse' } } },
@@ -63,11 +63,11 @@ test('配置：pi cli 的模型写法、run_access、推理强度和执行授权
   failed(await h.bridge(['config']), M.configInvalid('agents.pi.model', M.invalid.piModel));
   c.agents.pi = { ...piAgent(), run_access: 'all' }; h.config(c);
   failed(await h.bridge(['config']), M.configInvalid('agents.pi.run_access', M.invalid.runAccess));
-  c.agents.pi = piAgent(); c.modules.run.complex = { agent: 'pi' }; h.config(c);
+  c.agents.pi = piAgent(); c.modules.default.run.complex = { agent: 'pi' }; h.config(c);
   failed(await h.bridge(['config']), M.runAccessRequired('pi', 'pi cli'));
-  c.modules.run.complex = { agent: 'pi', effort: 'turbo' }; c.agents.pi.run_access = 'edit'; h.config(c);
-  failed(await h.bridge(['config']), M.configInvalid('modules.run.complex[0].effort', M.invalid.effortValue('turbo', 'off / minimal / low / medium / high / xhigh / max')));
-  c.modules.run.complex = { agent: 'pi', effort: 'high' }; h.config(c);
+  c.modules.default.run.complex = { agent: 'pi', effort: 'turbo' }; c.agents.pi.run_access = 'edit'; h.config(c);
+  failed(await h.bridge(['config']), M.configInvalid('modules.default.run.complex[0].effort', M.invalid.effortValue('turbo', 'off / minimal / low / medium / high / xhigh / max')));
+  c.modules.default.run.complex = { agent: 'pi', effort: 'high' }; h.config(c);
   const r = output(await h.bridge(['config']));
   assert.deepEqual(r.agents_status.pi.capabilities.modes, ['run', 'review', 'discuss']);
   assert.equal(r.agents_status.pi.bin, PI);
@@ -76,7 +76,7 @@ test('配置：pi cli 的模型写法、run_access、推理强度和执行授权
 
 test('讨论：只读工具和守卫、隔离参数、事件翻译、用量和费用', async (t) => {
   const h = sandbox(t);
-  configure(h, {}, (c) => { c.modules.discuss.complex = [{ agent: 'pi', effort: 'high' }]; });
+  configure(h, {}, (c) => { c.modules.default.discuss.complex = [{ agent: 'pi', effort: 'high' }]; });
   const guardFile = path.join(h.home, 'guard.log');
   const s = h.scenario({ guard_file: guardFile, steps: [...tool('read', { path: path.join(h.cwd, 'src/file.mjs') }), ...tool('grep', { pattern: 'todo', path: 'src' })],
     calls: [{}, { pi_usage: { input: 10, output: 5, cacheRead: 3, cost: { total: 0.25 } } }] });
@@ -110,7 +110,7 @@ test('讨论：只读工具和守卫、隔离参数、事件翻译、用量和�
 
 test('审查：补丁材料、只读工具，审查不能续接', async (t) => {
   const h = sandbox(t);
-  configure(h, {}, (c) => { c.modules.review.normal = { agent: 'pi' }; });
+  configure(h, {}, (c) => { c.modules.default.review.normal = { agent: 'pi' }; });
   h.initGit(); h.write('source.txt', 'after\n');
   const s = h.scenario({ last_message: '未发现问题。' });
   const r = output(await h.bridge(['review', '--cwd', h.cwd, '--level', 'normal', '--brief', '-'], { env: s.env, input: '重点检查' }));
@@ -126,7 +126,7 @@ test('审查：补丁材料、只读工具，审查不能续接', async (t) => {
 
 for (const access of ['edit', 'shell']) test(`执行（${access}）：工具、守卫策略、改动归属、被挡的操作、命令计数和 watch`, async (t) => {
   const h = sandbox(t);
-  configure(h, { run_access: access }, (c) => { c.modules.run.complex = { agent: 'pi' }; });
+  configure(h, { run_access: access }, (c) => { c.modules.default.run.complex = { agent: 'pi' }; });
   h.initGit();
   const guardFile = path.join(h.home, 'guard.log');
   const s = h.scenario({ guard_file: guardFile, last_message: JSON.stringify(report), steps: [
@@ -161,7 +161,7 @@ for (const access of ['edit', 'shell']) test(`执行（${access}）：工具、�
 
 test('执行报告不合格时，同一会话、不开任何工具修复一次，用量累加', async (t) => {
   const h = sandbox(t);
-  configure(h, { run_access: 'edit' }, (c) => { c.modules.run.complex = { agent: 'pi' }; });
+  configure(h, { run_access: 'edit' }, (c) => { c.modules.default.run.complex = { agent: 'pi' }; });
   const guardFile = path.join(h.home, 'guard.log');
   const s = h.scenario({ guard_file: guardFile, calls: [{ last_message: 'not json' }, { last_message: JSON.stringify(report), pi_usage: { input: 10, output: 5, cacheRead: 3, cost: { total: 0.25 } } }] });
   const r = output(await h.bridge(taskArgs(h), { env: s.env, input: '任务' }));
@@ -178,7 +178,7 @@ test('执行报告不合格时，同一会话、不开任何工具修复一次�
 
 test('出错、限流、截断、自动重试和推理强度被 pi 改掉', async (t) => {
   const h = sandbox(t);
-  configure(h, {}, (c) => { c.modules.discuss.complex = [{ agent: 'pi', effort: 'high' }]; });
+  configure(h, {}, (c) => { c.modules.default.discuss.complex = [{ agent: 'pi', effort: 'high' }]; });
   const discuss = (scenario, code = 0) => h.bridge(taskArgs(h, 'discuss', ['--agent', 'pi']), { env: h.scenario(scenario).env, input: '议题' }).then((r) => output(r, code));
   const broken = await discuss({ stop_reason: 'error', error_message: 'synthetic broken' }, 1);
   assert.equal(broken.status, 'failed'); assert.ok(broken.errors.includes('synthetic broken'));
@@ -201,7 +201,7 @@ test('出错、限流、截断、自动重试和推理强度被 pi 改掉', asyn
 
 test('pi 自动重试覆盖带残片的错误回复，最后回复不合格时同会话修复一次', async (t) => {
   const h = sandbox(t);
-  configure(h, {}, (c) => { c.modules.discuss.complex = [{ agent: 'pi' }]; });
+  configure(h, {}, (c) => { c.modules.default.discuss.complex = [{ agent: 'pi' }]; });
   const fragment = '{"position":"出错前的残片';
   for (const [name, last, count] of [['valid', discussion, 1], ['invalid', '],"coverage":', 2]]) {
     const s = h.scenario({ calls: [{ last_message: last, steps: [
@@ -228,8 +228,8 @@ test('pi 自动重试覆盖带残片的错误回复，最后回复不合格时�
 
 test('check：版本、清单、最小请求；推理强度只按清单核对，写明会被改成哪一档', async (t) => {
   const h = sandbox(t), c = configure(h, {}, (cfg) => {
-    cfg.modules.discuss.simple = [{ agent: 'pi', effort: 'medium' }];
-    cfg.modules.discuss.normal = [{ agent: 'pi', effort: 'high' }];
+    cfg.modules.default.discuss.simple = [{ agent: 'pi', effort: 'medium' }];
+    cfg.modules.default.discuss.normal = [{ agent: 'pi', effort: 'high' }];
   });
   const s = h.scenario({ pi_catalog: catalog, last_message: 'OK' });
   const r = output(await h.bridge(['check', '--agent', 'pi'], { env: s.env }), 1), pi = r.agents.pi, list = M.list(supported);
@@ -242,8 +242,8 @@ test('check：版本、清单、最小请求；推理强度只按清单核对，
   const call = runs(s);
   assert.equal(call.length, 1);
   assert.ok(call[0].args.includes('--no-session') && call[0].args.includes('--no-tools') && !call[0].args.includes('--thinking'));
-  c.modules.discuss.simple = [{ agent: 'pi', model: 'fake/plain', effort: 'high' }];
-  c.modules.discuss.normal = [{ agent: 'pi', model: 'fake/none', effort: 'high' }];
+  c.modules.default.discuss.simple = [{ agent: 'pi', model: 'fake/plain', effort: 'high' }];
+  c.modules.default.discuss.normal = [{ agent: 'pi', model: 'fake/none', effort: 'high' }];
   h.config(c);
   const overridden = output(await h.bridge(['check', '--agent', 'pi'], { env: s.env }), 1).agents.pi;
   assert.deepEqual(overridden.efforts.map((e) => [e.model, e.ok, e.error]), [
@@ -264,7 +264,7 @@ test('models 列出 pi 的清单，推理强度按 pi 的规则算', async (t) =
     { id: 'fake/model', name: 'Fake Model', efforts: supported, default_effort: null, context: 1000, cost: { input: 1, output: 2 } },
     { id: 'fake/plain', name: 'plain', efforts: ['off'], default_effort: null, context: 500, cost: null },
   ]);
-  assert.deepEqual(r.agents.pi, { type: 'pi cli', model: 'fake/model', listed: true, efforts: supported, closest: [] });
+  assert.deepEqual(r.agents.pi, { type: 'pi cli', model: 'fake/model', configured_models: ['fake/model'], listed: true, efforts: supported, closest: [] });
 });
 
 test('守卫扩展：按档位放行工具，文件工具的路径不能出项目目录', async (t) => {
@@ -334,7 +334,7 @@ test('拦截钩子：拦下直接用 pi 跑任务，放行查询、管理子命�
 
 test('流式输出期间定期写进度，status 显示思考或回答了多少字，watch 照常', async (t) => {
   const h = sandbox(t);
-  configure(h, {}, (c) => { c.modules.discuss.complex = [{ agent: 'pi' }]; });
+  configure(h, {}, (c) => { c.modules.default.discuss.complex = [{ agent: 'pi' }]; });
   const delta = (type, text) => ({ delay_ms: 5, event: { type: 'message_update', assistantMessageEvent: { type, contentIndex: 0, delta: text } } });
   const s = h.scenario({ steps: [{ event: { type: 'message_start', message: { role: 'assistant' } } }, delta('thinking_delta', 'abcd'), delta('thinking_delta', 'efgh'), delta('text_delta', 'xyz')] });
   const r = output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'pi']), { env: { ...s.env, FOREMAN_TEST_PROGRESS_MS: '1' }, input: '议题' }));

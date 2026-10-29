@@ -272,10 +272,12 @@ flowchart TD
     "glm-5.3":     { "type": "opencode cli", "model": "opencode-go/glm-5.3" }
   },
   "modules": {
-    "discuss": { "simple": "claude code", "normal": [{ "agent": "gpt-6.1-sol", "effort": "high" }], "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "glm-5.3" }] },
-    "run":     { "simple": "claude code", "normal": "claude code", "complex": [{ "agent": "gpt-6.1-sol", "effort": "max" }] },
-    "review":  { "simple": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "normal": [{ "agent": "gpt-6.1-sol", "effort": "high" }], "complex": [{ "agent": "gpt-6-astra", "effort": "max" }] },
-    "image":   { "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "draw": [{ "agent": "gpt-6-astra", "effort": "max" }] }
+    "default": {
+      "discuss": { "simple": "claude code", "normal": [{ "agent": "gpt-6.1-sol", "effort": "high" }], "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "glm-5.3" }] },
+      "run":     { "simple": "claude code", "normal": "claude code", "complex": [{ "agent": "gpt-6.1-sol", "effort": "max" }] },
+      "review":  { "simple": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "normal": [{ "agent": "gpt-6.1-sol", "effort": "high" }], "complex": [{ "agent": "gpt-6-astra", "effort": "max" }] },
+      "image":   { "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "draw": [{ "agent": "gpt-6-astra", "effort": "max" }] }
+    }
   }
 }
 ```
@@ -287,7 +289,7 @@ flowchart TD
 - `effort` 是推理强度，不写就用默认值。Codex 是 `low` 到 `ultra`；opencode 是模型的 variant；pi 是 thinking 档位；agy 是 `low` / `medium` / `high` 这类档位（agy 把它写在模型 ID 的后缀里，插件派出时再拼回去）；API 原样作为 `reasoning_effort` 发出。
 - 图像任务开工前先弹窗让你选路线，路线决定用到哪几格：只用到手画的纯矢量路线不碰出图那一格，那一格里的必选也不会参加。
 
-旧的 `levels` 写法照常能读：第一次读到时，插件把它改写成 `modules`，每一格的协作方、推理强度和顺序都不变，原文件备份为 `config.json.bak`。注意一处变化：以前讨论一级里写的模型全部参加，改写后它们是候选、由 Claude Code 挑；想保留全员参加，就给它们都标上 `"required": true`，`/foreman:setup` 可以帮着标，也会帮你加上图像两格。
+以前平铺的 `modules`（下面直接是 `discuss`、`run` 等）照常能读：第一次读到时插件把它原样放进 `modules.default`，原文件先备份。旧的 `levels` 写法也照常能读：第一次读到时，插件把它改写成 `modules`，每一格的协作方、推理强度和顺序都不变，原文件备份为 `config.json.bak`。注意一处变化：以前讨论一级里写的模型全部参加，改写后它们是候选、由 Claude Code 挑；想保留全员参加，就给它们都标上 `"required": true`，`/foreman:setup` 可以帮着标，也会帮你加上图像两格。
 
 ### 五种协作方
 
@@ -325,7 +327,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 2. **填 key**，二选一：
    - 环境变量：写 `"api_key_env": "DEEPSEEK_API_KEY"`，再设置这个环境变量。Windows 上在"系统属性 → 环境变量"里加一个用户变量；macOS 和 Linux 写进 shell 的启动文件。设置后重启 Claude Code 才能读到。
    - 配置文件：写 `"api_key": "sk-..."`，立即生效，但是明文保存，这个文件不要提交或分享。两种都写时，以配置文件里的为准。
-3. **加进讨论或审查**：在 `modules.discuss` 或 `modules.review` 需要的格子里加上它。
+3. **加进讨论或审查**：在 `modules.default.discuss` 或 `modules.default.review`（或某个场景块）需要的格子里加上它。
 
 也可以交给 `/foreman:setup`，比如运行 `/foreman:setup 加 DeepSeek`；key 由你自己填，不用发到对话里。API 模型自己翻不了代码，Claude Code 会把相关文件随议题或审查说明附过去（审查改动时附的是补丁；每次上限约 30 万字符），并对照原文核实它对代码的说法。
 
@@ -363,7 +365,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 
 ### 让 opencode 或 pi 做执行任务
 
-在用户配置里给这个协作方写 `run_access`，再放进 `modules.run`（或者图像的 `draw`）的格子（项目配置开不了）：
+在用户配置里给这个协作方写 `run_access`，再放进 `modules.default.run`（或者图像的 `draw`）的格子（项目配置开不了）：
 
 - `"edit"`：只能读写项目目录里的文件，不能运行命令，测试由 Claude Code 事后跑。
 - `"shell"`：还能运行命令，比如跑测试。没有系统沙箱，命令以你的账户权限运行、能访问整台机器，只适合你信任的项目和模型。
@@ -395,40 +397,42 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
     "kimi-k2.6":          { "type": "api", "base_url": "https://api.moonshot.cn/v1", "api_key_env": "KIMI_API_KEY", "model": "kimi-k2.6" }
   },
   "modules": {
-    "discuss": {
-      "simple": [
-        { "agent": "gpt-6-astra", "effort": "medium" },
-        { "agent": "glm-5.3" }
-      ],
-      "normal": [
-        { "agent": "gpt-6-astra", "effort": "high" },
-        { "agent": "deepseek-flash", "effort": "high" },
-        { "agent": "glm-5.3" }
-      ],
-      "complex": [
-        { "agent": "gpt-6-astra", "effort": "max", "required": true },
-        { "agent": "deepseek-flash", "effort": "max" },
-        { "agent": "kimi-k2.6" },
-        { "agent": "mimo-v2.6-pro", "effort": "high" },
-        { "agent": "glm-5.3" }
-      ],
-      "seats": { "simple": 2, "normal": 4, "complex": 8 }
-    },
-    "run": {
-      "simple":  "claude code",
-      "normal":  "claude code",
-      "complex": [{ "agent": "gpt-6.1-sol", "effort": "max" }]
-    },
-    "review": {
-      "simple":  [{ "agent": "gpt-6-astra", "effort": "medium" }],
-      "normal":  [{ "agent": "gpt-6-astra", "effort": "high" }, { "agent": "deepseek-flash", "effort": "high" }],
-      "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "deepseek-flash", "effort": "max" }, { "agent": "glm-5.3" }],
-      "seats":   { "simple": 1, "normal": 2, "complex": 2 },
-      "gap":     { "simple": false, "normal": false, "complex": true }
-    },
-    "image": {
-      "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }],
-      "draw":     [{ "agent": "gpt-6-astra", "effort": "max" }]
+    "default": {
+      "discuss": {
+        "simple": [
+          { "agent": "gpt-6-astra", "effort": "medium" },
+          { "agent": "glm-5.3" }
+        ],
+        "normal": [
+          { "agent": "gpt-6-astra", "effort": "high" },
+          { "agent": "deepseek-flash", "effort": "high" },
+          { "agent": "glm-5.3" }
+        ],
+        "complex": [
+          { "agent": "gpt-6-astra", "effort": "max", "required": true },
+          { "agent": "deepseek-flash", "effort": "max" },
+          { "agent": "kimi-k2.6" },
+          { "agent": "mimo-v2.6-pro", "effort": "high" },
+          { "agent": "glm-5.3" }
+        ],
+        "seats": { "simple": 2, "normal": 4, "complex": 8 }
+      },
+      "run": {
+        "simple":  "claude code",
+        "normal":  "claude code",
+        "complex": [{ "agent": "gpt-6.1-sol", "effort": "max" }]
+      },
+      "review": {
+        "simple":  [{ "agent": "gpt-6-astra", "effort": "medium" }],
+        "normal":  [{ "agent": "gpt-6-astra", "effort": "high" }, { "agent": "deepseek-flash", "effort": "high" }],
+        "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "deepseek-flash", "effort": "max" }, { "agent": "glm-5.3" }],
+        "seats":   { "simple": 1, "normal": 2, "complex": 2 },
+        "gap":     { "simple": false, "normal": false, "complex": true }
+      },
+      "image": {
+        "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }],
+        "draw":     [{ "agent": "gpt-6-astra", "effort": "max" }]
+      }
     }
   }
 }
@@ -469,21 +473,23 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 {
   "dispatch": { "timeout_min": 600 },
   "modules": {
-    "review": {
-      "normal": [{ "agent": "gpt-6.1-sol", "required": true }, { "agent": "glm-5.3" }, { "agent": "kimi-k2.6" }],
-      "seats": { "normal": 3 }
+    "default": {
+      "review": {
+        "normal": [{ "agent": "gpt-6.1-sol", "required": true }, { "agent": "glm-5.3" }, { "agent": "kimi-k2.6" }],
+        "seats": { "normal": 3 }
+      }
     }
   }
 }
 ```
 
-- 只能写 `modules`（包括 `seats`、`gap`），以及 `dispatch` 的 `discuss_max_rounds`、`timeout_min`、`stall_min`、`busy_ask_min`；协作方要在用户配置的 `agents` 里定义，项目里不能新加。
+- 只能写 `modules`（包括场景块和 `seats`、`gap`），以及 `dispatch` 的 `discuss_max_rounds`、`timeout_min`、`stall_min`、`busy_ask_min`；协作方要在用户配置的 `agents` 里定义，项目里不能新加。
 - 写了的格子整格替换，没写的沿用用户配置；`seats`、`gap` 按等级覆盖。可以加候选、改必选、调高席位、延长时长。
 - 以前写在用户配置 `projects` 里的按项目覆盖已经不用了，`/foreman:setup` 可以帮你搬到各项目的 `.claude/foreman.json`。
 
-### 按场景分开席位
+### 按场景配置
 
-同一级的讨论或审查有时服务于不同的场合：研究证据的审查想"广"，多找几家、加补漏席；高风险代码的审查想"准"，只用最强的两家。这时可以按场景分开写席位数和补漏开关。不需要的话不用管，照常写数字就行。
+同一类任务有时服务于不同的场合：研究证据的审查想"广"，多找几家、加补漏席；高风险代码的审查想"准"，只用最强的两家、推理强度开满。这时可以在 `modules` 下按场景整套配置：`default` 是默认的一套，其余场景只写要改的部分。不需要的话不用管，配置里只有 `modules.default`。
 
 先在偏好文件里定义场景和怎么选（`/foreman:setup` 可以帮你写）：
 
@@ -492,21 +498,28 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 ## 场景路由
 - **code**：评判或决定代码、接口、配置、脚本、测试的改动；`--target diff` 的审查一律算 code。
 - **research**：研究结论和证据、研究方案、卡片、说明文档、研究方向构思；`--target claims` 的审查一律算 research。
-- 两类都有的拆成两个计划；拿不准时选席位多的场景。
+- 两类都有的拆成两个计划；没写到的情况用 default。
 <!-- /foreman:scenes -->
 ```
 
-再在配置里按场景写：
+再在 `modules` 下加场景块：
 
 ```json
-"review": {
-  "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "gpt-6.1-sol", "effort": "max" }, { "agent": "deepseek-flash" }, { "agent": "glm-5.3" }],
-  "seats": { "simple": 1, "normal": 2, "complex": { "code": 2, "research": 4 } },
-  "gap":   { "simple": false, "normal": false, "complex": { "code": false, "research": true } }
+"modules": {
+  "default": { "discuss": { … }, "run": { … }, "review": { … }, "image": { … } },
+  "code": {
+    "review": { "complex": [{ "agent": "gpt-6.1-sol", "effort": "max", "required": true }, { "agent": "gpt-6-astra", "effort": "max" }],
+                "seats": { "complex": 2 }, "gap": { "complex": false } }
+  },
+  "research": {
+    "review": { "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "gpt-6.1-sol", "effort": "high" },
+                            { "agent": "deepseek-flash" }, { "agent": "glm-5.3" }],
+                "seats": { "complex": 4 }, "gap": { "complex": true } }
+  }
 }
 ```
 
-按场景写了的那一级，候选的排列顺序就是优先级：必选先上，再按顺序往下补。上面的例子里，代码审查用 astra 和 sol 两席、不补漏；研究审查四家全上，候选用完了就不做补漏轮。Claude Code 建计划时按偏好里的路由选场景，写明依据。偏好里的场景和配置里的场景名对不上时，讨论和审查的计划建不了，`config` 会指出哪里不一致。详见 [`config.md` 的"场景"](foreman/skills/dispatch/references/config.md)。
+上面的例子里，代码审查用 sol 和 astra 两席、不补漏；研究审查四家全上、必选换成 astra。两个场景都只改了审查 complex，其余沿用 `default`。四个模块都能按场景配。Claude Code 派活和建计划时按偏好里的路由选场景，并写明依据。偏好里的场景和 `modules` 里的场景名对不上时，派活和建计划都会被拒绝，`config` 会指出哪里不一致。详见 [`config.md` 的"场景"](foreman/skills/dispatch/references/config.md)。
 
 ### 偏好文件
 

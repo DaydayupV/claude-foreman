@@ -189,6 +189,71 @@ function mergeConfig(base, extra) {
   return out;
 }
 
+function moduleScenes(modules, fail = die) {
+  if (!isObject(modules)) fail(M.configInvalid('modules', M.invalid.object));
+  const keys = Object.keys(modules), flat = keys.filter((key) => Object.hasOwn(MODULE_CELLS, key));
+  if (flat.length && flat.length !== keys.length) fail(M.modulesMixed('modules'));
+  // 空的 modules（项目配置里常见）等于什么都不覆盖
+  if (flat.length || !keys.length) return { default: modules };
+  if (!Object.hasOwn(modules, 'default')) fail(M.modulesDefaultMissing('modules'));
+  for (const scene of keys) if (!/^[a-z][a-z0-9-]*$/.test(scene)) fail(M.configInvalid(`modules.${scene}`, M.scenesBadName(scene)));
+  return modules;
+}
+
+function mergeScenes(cfg, extra, adapters, fail = die) {
+  const blocks = extra.modules || { default: {} }, previous = cfg.scene_modules || { default: cfg.modules };
+  for (const [scene, modules] of Object.entries(blocks)) validateModuleKeys(modules, (ok, key, reason) => {
+    if (!ok) fail(M.configInvalid(key, reason));
+  }, `modules.${scene}`);
+  const merged = mergeConfig(cfg, { ...extra, modules: blocks.default }), scene_modules = {}, scene_diff = {};
+  for (const scene of new Set([...Object.keys(previous), ...Object.keys(blocks)])) {
+    // 本层先合成视图再覆盖上一层，项目 default 才能盖过用户场景块。
+    // 场景名可能和对象原型上的属性同名（比如 constructor），一律只取自身属性
+    const own = (map, key) => Object.hasOwn(map, key) ? map[key] : undefined;
+    const layer = mergeConfig({ modules: blocks.default }, { modules: own(blocks, scene) || {} }).modules;
+    const view = normalizeModules(mergeConfig({ ...merged, modules: own(previous, scene) || previous.default }, { modules: layer }));
+    // 拼错字段的提醒只报在写了它的那一块里，不在每个场景视图里重复
+    const written = scene === 'default' ? null : new Set(eachCell(own(blocks, scene) || {}).map(({ module, cell }) => `${module}.${cell}`));
+    validateConfig(view, adapters, fail, `modules.${scene}`, written);
+    scene_modules[scene] = view.modules;
+  }
+  for (const [scene, modules] of Object.entries(scene_modules)) {
+    if (scene === 'default') continue;
+    const diff = {};
+    for (const [module, cells] of Object.entries(modules)) {
+      const changed = {};
+      for (const [cell, value] of Object.entries(cells)) {
+        const baseline = scene_modules.default[module][cell];
+        if (['seats', 'gap'].includes(cell)) {
+          const levels = Object.fromEntries(Object.entries(value).filter(([level, n]) => !isDeepStrictEqual(n, baseline[level])));
+          if (Object.keys(levels).length) changed[cell] = levels;
+        } else if (!isDeepStrictEqual(value, baseline)) changed[cell] = value;
+      }
+      if (Object.keys(changed).length) diff[module] = changed;
+    }
+    if (Object.keys(diff).length) scene_diff[scene] = diff;
+  }
+  return { ...merged, modules: scene_modules.default, scene_modules, scene_diff };
+}
+
+const sceneView = (cfg, scene) => ({ ...cfg, modules: (cfg.scene_modules && Object.hasOwn(cfg.scene_modules, scene ?? '') ? cfg.scene_modules[scene] : cfg.scene_modules?.default) || cfg.modules });
+const isScened = (cfg, module, cell) => Object.values(cfg.scene_diff).some((diff) => {
+  const values = diff[module];
+  return values && (Object.hasOwn(values, cell) || Object.hasOwn(values.seats || {}, cell) || Object.hasOwn(values.gap || {}, cell));
+});
+
+function selectScene(cfg, module, cell, o) {
+  if (cfg.scenes.problems.length) die(M.scenesProblem(M.list(cfg.scenes.problems)));
+  const names = ['default', ...cfg.scenes.names];
+  if (o.scene == null && o['scene-why'] != null || o.scene != null && !o['scene-why']?.trim()) die(M.planSceneWhyRequired);
+  if (o.scene != null && !names.includes(o.scene)) {
+    if (!cfg.scenes.names.length && Object.keys(cfg.scene_modules).length === 1) die(M.planSceneNoScenes);
+    die(M.planSceneUnknown(o.scene, M.list(names)));
+  }
+  if (o.scene == null && isScened(cfg, module, cell)) die(M.sceneRequired(`modules.${module}.${cell}`, M.list(names)));
+  return sceneView(cfg, o.scene);
+}
+
 function migrateConfig(config, file, base, project) {
   if (!isObject(config)) die(M.configInvalid(file, M.invalid.object));
   // 改写成 modules 时 levels 留成一行说明（见 migrateStructure），它和 modules 同时出现是正常的，读的时候跳过。
@@ -197,7 +262,10 @@ function migrateConfig(config, file, base, project) {
   if (hasLevels && Object.hasOwn(config, 'modules')) die(M.configBothFormats(file));
   if (hasLevels && !isObject(config.levels)) die(M.configInvalid('levels', M.invalid.object));
   const { levels, ...current } = config;
-  if (hasLevels) current.modules = levels;
+  const blocks = hasLevels ? { default: levels } : current.modules === undefined ? null
+    : moduleScenes(current.modules, (message) => die(project ? M.projectConfigInvalid(file, message) : message));
+  const scenes = !!blocks && !hasLevels && blocks !== current.modules, sceneFormat = !!blocks && !hasLevels && !scenes;
+  if (blocks) current.modules = blocks.default;
   const oldKeys = ['auto_dispatch', 'watch', 'discuss_max_rounds', 'codex_bin', 'model', 'max_parallel', 'sandbox', 'approval', 'timeout_min', 'stall_min', 'runs_dir'];
   const old = oldKeys.some((key) => Object.hasOwn(config, key))
     || Object.values(config.agents || {}).some((a) => Object.hasOwn(OLD_TYPES, a?.type))
@@ -256,9 +324,12 @@ function migrateConfig(config, file, base, project) {
       || isObject(cells.seats) && LEVELS.some((cell) => !Object.hasOwn(cells.seats, cell)));
   });
   const review = result.modules?.review;
-  const gap = !project && (result.modules === undefined || isObject(result.modules))
+  // 补漏开关按旧做法补成 complex 开，只给还没有场景写法的旧配置；新写法缺的值在内存里按默认值（全关）补齐
+  const gap = !project && !sceneFormat && (result.modules === undefined || isObject(result.modules))
     && (review === undefined || isObject(review) && !Object.hasOwn(review, 'gap'));
-  return { config: result, old, modules: hasLevels, seats, gap, note, watch };
+  if (blocks || seats.length || gap) result.modules = { ...blocks, default: result.modules === undefined ? {} : result.modules };
+  if (project && scenes) notice(M.projectModulesFlat(file));
+  return { config: result, old, modules: hasLevels, seats, gap, note, watch, scenes };
 }
 
 function renameAgentsByModel(config, adapters) {
@@ -291,8 +362,9 @@ function renameAgentsByModel(config, adapters) {
     const { model, ...rest } = item;
     return { ...rest, agent: model && original ? add(item.agent, { ...original, model }) : aliases[item.agent] || item.agent };
   };
-  config.modules = mapCells(config.modules, (value) => value === CLAUDE_CODE || value === null ? value
-    : cellList(value).map(convert).filter((item, i, list) => !list.slice(0, i).some((prev) => isDeepStrictEqual(prev, item))));
+  config.modules = Object.fromEntries(Object.entries(config.modules).map(([scene, modules]) => [scene,
+    mapCells(modules, (value) => value === CLAUDE_CODE || value === null ? value
+      : cellList(value).map(convert).filter((item, i, list) => !list.slice(0, i).some((prev) => isDeepStrictEqual(prev, item))))]));
   return { config: { ...config, agents }, aliases: Object.fromEntries(Object.entries(aliases).filter(([a, b]) => a !== b)) };
 }
 
@@ -300,12 +372,13 @@ function migrateStructure(config, file, base, project, adapters) {
   if (!project && migratedConfigs.has(file)) return migratedConfigs.get(file);
   const converted = migrateConfig(config, file, base, project);
   if (project) return converted.config;
-  if (!converted.old && !converted.modules && !converted.seats.length && !converted.gap && !converted.watch) return config;
-  let result = structuredClone(converted.old || converted.modules || converted.watch ? converted.config : config);
+  if (!converted.old && !converted.modules && !converted.seats.length && !converted.gap && !converted.watch && !converted.scenes) return config;
+  let result = structuredClone(converted.old || converted.modules || converted.watch ? converted.config
+    : { ...config, modules: moduleScenes(config.modules ?? { default: {} }) });
   // 废弃的 projects 保留原文，交给 setup 迁移，不参与生效配置。
   if (Object.hasOwn(config, 'projects')) result.projects = structuredClone(config.projects);
   if (converted.old && isObject(config.agents) && !Object.hasOwn(config.agents, 'codex')
-    && !eachEntry(result.modules).some(({ item }) => item?.agent === 'codex')) delete result.agents.codex;
+    && !Object.values(result.modules).some((modules) => eachEntry(modules).some(({ item }) => item?.agent === 'codex'))) delete result.agents.codex;
   for (const agent of Object.values(result.agents || {})) if (Object.hasOwn(OLD_TYPES, agent?.type)) agent.type = OLD_TYPES[agent.type];
   let renamed = { aliases: {} };
   const lock = `${file}.structure.lock`, tmp = `${file}.${process.pid}.tmp`, aliasTmp = `${aliasesFile}.${process.pid}.tmp`;
@@ -325,13 +398,12 @@ function migrateStructure(config, file, base, project, adapters) {
   try {
     if (converted.old) { renamed = renameAgentsByModel(result, adapters); result = renamed.config; }
     for (const module of converted.seats) {
-      const cells = result.modules?.[module] || {};
+      const cells = result.modules.default[module] || {};
       const seats = Object.fromEntries(LEVELS.map((cell) => [cell, Math.max(DEFAULT_SEATS[module][cell], requiredCount(cells[cell]))]));
-      result.modules = { ...result.modules, [module]: { ...cells, seats: { ...seats, ...cells.seats } } };
+      result.modules.default[module] = { ...cells, seats: { ...seats, ...cells.seats } };
     }
-    if (converted.gap) result.modules = { ...result.modules, review: { ...result.modules?.review,
-      gap: { ...DEFAULT_GAP.review, complex: true } } };
-    validateConfig(normalizeModules(mergeConfig(DEFAULT_CONFIG, result)), adapters, (msg) => { invalid = true; throw new Error(msg); });
+    if (converted.gap) result.modules.default.review = { ...result.modules.default.review, gap: { ...DEFAULT_GAP.review, complex: true } };
+    mergeScenes(DEFAULT_CONFIG, result, adapters, (msg) => { invalid = true; throw new Error(msg); });
     for (;;) {
       try { retryBusy(() => fs.writeFileSync(lock, String(process.pid), { flag: 'wx' })); locked = true; break; }
       catch (e) {
@@ -373,8 +445,9 @@ function migrateStructure(config, file, base, project, adapters) {
     // 两个实时查看开关写全了：说一句，旧版插件读不了这种写法
     if (converted.watch) notice(M.configWatchWritten(file, bak));
     if (converted.seats.length) notice(M.configSeatsWritten(file, bak, M.list(converted.seats.map((module) =>
-      `${M.reportModuleNames[module].toLowerCase()} ${LEVELS.map((cell) => result.modules[module].seats[cell]).join('/')}`))));
+      `${M.reportModuleNames[module].toLowerCase()} ${LEVELS.map((cell) => result.modules.default[module].seats[cell]).join('/')}`))));
     if (converted.gap) notice(M.configGapWritten(file, bak));
+    if (converted.scenes) notice(M.configScenesWritten(file, bak));
   } catch (e) {
     if (converted.old || converted.modules || converted.watch) notice(M.configMigrateFailed(file, e.message));
     else if (!invalid) notice(converted.seats.length ? M.configSeatsWriteFailed(file, e.message) : M.configMigrateFailed(file, e.message));
@@ -388,7 +461,7 @@ function migrateStructure(config, file, base, project, adapters) {
   return result;
 }
 
-function validateConfig(cfg, adapters, fail = die) {
+function validateConfig(cfg, adapters, fail = die, prefix = 'modules', own = null) {
   const why = M.invalid;
   const check = (ok, key, reason) => { if (!ok) fail(M.configInvalid(key, reason)); };
   const text = (v) => typeof v === 'string' && !!v.trim();
@@ -409,8 +482,9 @@ function validateConfig(cfg, adapters, fail = die) {
     check(agent.max_parallel === undefined || (Number.isInteger(agent.max_parallel) && agent.max_parallel >= 1), `${key}.max_parallel`, why.positiveInt);
     adapters[agent.type].validate(agent, key, check, text);
   }
-  validateModuleKeys(cfg.modules, check);
-  for (const { module, cell, key, value } of eachCell(cfg.modules)) {
+  validateModuleKeys(cfg.modules, check, prefix);
+  for (const { module, cell, key: flatKey, value } of eachCell(cfg.modules)) {
+    const key = flatKey.replace('modules', prefix);
     validateCell(value, module, key, check);
     const seen = new Set();
     for (const [i, item] of cellList(value).entries()) {
@@ -418,7 +492,7 @@ function validateConfig(cfg, adapters, fail = die) {
       check(isObject(item), at, M.levelEntryChoices);
       check(text(item.agent), `${at}.agent`, why.agentRef);
       // 条目只认这四项：拼错的键（比如 "requird"）不报错但会悄悄失效，提醒一句
-      for (const field of Object.keys(item)) if (!['agent', 'effort', 'required', 'model'].includes(field)) notice(M.unknownEntryField(`${at}.${field}`));
+      if (!own || own.has(`${module}.${cell}`)) for (const field of Object.keys(item)) if (!['agent', 'effort', 'required', 'model'].includes(field)) notice(M.unknownEntryField(`${at}.${field}`));
       if (!Object.hasOwn(cfg.agents, item.agent)) fail(unknownAgentError(at, item.agent, cfg));
       const agent = cfg.agents[item.agent], adapter = adapters[agent.type];
       check(!seen.has(item.agent), at, why.duplicate);
@@ -441,29 +515,26 @@ function validateConfig(cfg, adapters, fail = die) {
     const required = requiredCount(value);
     if (module === 'run' || module === 'image') check(required <= 1, key, why.oneRequired);
     if (['discuss', 'review'].includes(module)) {
-      const seats = cfg.modules[module].seats[cell], key = `modules.${module}.seats.${cell}`;
-      for (const [at, n] of isObject(seats) ? Object.entries(seats).map(([scene, n]) => [`${key}.${scene}`, n]) : [[key, seats]]) {
-        if (n < required) fail(M.seatsBelowRequired(at, n, required));
-      }
+      const seats = cfg.modules[module].seats[cell];
+      if (seats < required) fail(M.seatsBelowRequired(`${prefix}.${module}.seats.${cell}`, seats, required));
     }
   }
 }
 
-function validateModuleKeys(modules, check) {
-  check(isObject(modules), 'modules', M.invalid.object);
+function validateModuleKeys(modules, check, prefix = 'modules') {
+  check(isObject(modules), prefix, M.invalid.object);
   for (const [module, cells] of Object.entries(modules)) {
-    check(Object.hasOwn(MODULE_CELLS, module), `modules.${module}`, M.invalid.module);
-    check(isObject(cells), `modules.${module}`, M.invalid.object);
+    check(Object.hasOwn(MODULE_CELLS, module), `${prefix}.${module}`, M.invalid.module);
+    check(isObject(cells), `${prefix}.${module}`, M.invalid.object);
     for (const cell of Object.keys(cells)) {
       if (cell === 'seats' || cell === 'gap') {
-        const key = `modules.${module}.${cell}`;
+        const key = `${prefix}.${module}.${cell}`;
         check(cell === 'gap' ? module === 'review' : ['discuss', 'review'].includes(module), key,
           cell === 'gap' ? M.gapReviewOnly(key) : M.seatsModuleOnly);
         const valid = cell === 'gap' ? (n) => typeof n === 'boolean' : (n) => Number.isInteger(n) && n >= 1;
         check(isObject(cells[cell]) && Object.keys(cells[cell]).every((level) => LEVELS.includes(level)), key, M.invalid[cell]);
-        for (const [level, value] of Object.entries(cells[cell])) check(valid(value) || isObject(value) && Object.keys(value).length > 0
-          && Object.entries(value).every(([scene, n]) => /^[a-z][a-z0-9-]*$/.test(scene) && valid(n)), `${key}.${level}`, M.invalid[cell]);
-      } else check(MODULE_CELLS[module].includes(cell), `modules.${module}.${cell}`, module === 'image' ? M.invalid.imageCell : M.invalid.level);
+        for (const [level, value] of Object.entries(cells[cell])) check(valid(value), `${key}.${level}`, M.invalid[cell]);
+      } else check(MODULE_CELLS[module].includes(cell), `${prefix}.${module}.${cell}`, module === 'image' ? M.invalid.imageCell : M.invalid.level);
     }
   }
 }
@@ -486,10 +557,9 @@ function projectConfig(cfg, project, file, adapters) {
     else ignored.push(key);
   }
   if (ignored.length) notice(M.projectIgnored(M.list(ignored)));
-  const merged = normalizeModules(mergeConfig(cfg, allowed));
-  validateConfig(merged, adapters, (message) => die(M.projectConfigInvalid(file, message)));
-  const cells = Object.entries(allowed.modules || {}).flatMap(([module, values]) => Object.entries(values).flatMap(([cell, value]) =>
-    ['seats', 'gap'].includes(cell) ? Object.keys(value).map((level) => `${module}.${cell}.${level}`) : [`${module}.${cell}`]));
+  const merged = mergeScenes(cfg, allowed, adapters, (message) => die(M.projectConfigInvalid(file, message)));
+  const cells = Object.entries(allowed.modules || {}).flatMap(([scene, modules]) => Object.entries(modules).flatMap(([module, values]) => Object.entries(values).flatMap(([cell, value]) =>
+    ['seats', 'gap'].includes(cell) ? Object.keys(value).map((level) => `${scene}.${module}.${cell}.${level}`) : [`${scene}.${module}.${cell}`])));
   cells.push(...Object.keys(allowed.dispatch || {}).map((key) => `dispatch.${key}`));
   return { cfg: merged, cells };
 }
@@ -514,7 +584,8 @@ function readScenes(cwd) {
     if (!problems.length) for (const line of lines.slice(starts[0] + 1, ends[0])) {
       const name = /^\s*-\s+\*\*([^*]+)\*\*\s*[：:]/.exec(line)?.[1];
       if (!name) continue;
-      if (!/^[a-z][a-z0-9-]*$/.test(name)) problem(M.scenesBadName(name));
+      if (name === 'default' || Object.hasOwn(MODULE_CELLS, name)) problem(M.scenesReserved(name));
+      else if (!/^[a-z][a-z0-9-]*$/.test(name)) problem(M.scenesBadName(name));
       else if (names.includes(name)) problem(M.scenesDuplicate(name));
       else names.push(name);
     }
@@ -524,16 +595,6 @@ function readScenes(cwd) {
   const project = read(cwd && projectFile(cwd, PROJECT_PREFS, LEGACY_PROJECT_PREFS), 'project');
   return project || user || { names: [], source: null, file: null, problems: [] };
 }
-
-const isSplit = (cfg, module, cell) => isObject(cfg.modules[module].seats?.[cell]) || module === 'review' && isObject(cfg.modules.review.gap[cell]);
-const seatsFor = (cfg, module, cell, scene) => {
-  const value = cfg.modules[module].seats[cell];
-  return isObject(value) ? value[scene] : value;
-};
-const gapFor = (cfg, cell, scene) => {
-  const value = cfg.modules.review.gap[cell];
-  return isObject(value) ? value[scene] : value;
-};
 
 function detectEnvironment(adapters, agents = {}) {
   const commands = {}, started = {};
@@ -590,7 +651,7 @@ function buildStarterConfig(environment) {
   for (const module of ['discuss', 'review']) cfg.modules[module].seats = Object.fromEntries(LEVELS.map((cell) =>
     [cell, Math.max(DEFAULT_SEATS[module][cell], requiredCount(cfg.modules[module][cell]))]));
   cfg.modules.review.gap = { ...DEFAULT_GAP.review };
-  return cfg;
+  return { ...cfg, modules: { default: cfg.modules } };
 }
 
 function loadConfig(cwd, adapters) {
@@ -613,23 +674,21 @@ function loadConfig(cwd, adapters) {
   let imageConfigured = false;
   if (user) {
     const migrated = user = migrateStructure(user, USER_CONFIG, LEGACY_DEFAULT_CONFIG, false, adapters);
-    imageConfigured = isObject(migrated.modules?.image);
-    cfg = mergeConfig(cfg, migrated); sources.push(USER_CONFIG);
+    imageConfigured = Object.values(migrated.modules || {}).some((modules) => isObject(modules?.image));
+    cfg = mergeScenes(cfg, migrated, adapters); sources.push(USER_CONFIG);
   }
   // 旧版写进文件的 dispatch.max_seats 已经不用了：读进来时丢掉，不显示在 effective 里；文件不改，旧版读到时照常可用。
   if (Object.hasOwn(cfg.dispatch, 'max_seats')) {
     const { max_seats: _, ...dispatch } = cfg.dispatch;
     cfg = { ...cfg, dispatch };
   }
-  cfg = normalizeModules(cfg);
-  validateConfig(cfg, adapters);
   if (user && Object.hasOwn(user, 'projects')) notice(M.obsoleteProjects(M.list(Object.keys(user.projects || {}))));
   let project_config = null;
   if (cwd) {
     const file = projectFile(cwd, PROJECT_CONFIG, LEGACY_PROJECT_CONFIG), project = readJson(file);
     if (project) {
       const migrated = migrateStructure(project, file, cfg, true, adapters), merged = projectConfig(cfg, migrated, file, adapters);
-      imageConfigured ||= isObject(migrated.modules?.image);
+      imageConfigured ||= Object.values(migrated.modules || {}).some((modules) => isObject(modules?.image));
       cfg = merged.cfg;
       project_config = { path: file, cells: merged.cells };
       sources.push(file);
@@ -637,24 +696,14 @@ function loadConfig(cwd, adapters) {
   }
   const runsDir = envOf('FOREMAN_RUNS_DIR', 'CODEX_RUNS_DIR');
   if (runsDir) cfg = mergeConfig(cfg, { dispatch: { runs_dir: runsDir } });
-  validateConfig(cfg, adapters);
-  const scenes = readScenes(cwd), defined = scenes.names.length > 0 && !scenes.problems.length;
-  let split = false;
-  for (const module of ['discuss', 'review']) for (const field of module === 'review' ? ['seats', 'gap'] : ['seats']) {
-    for (const [cell, value] of Object.entries(cfg.modules[module][field])) {
-      if (!isObject(value)) continue;
-      split = true;
-      const key = `modules.${module}.${field}.${cell}`;
-      if (!defined) scenes.problems.push(M.scenesNotDefined(key));
-      else {
-        const missing = scenes.names.filter((name) => !Object.hasOwn(value, name)), extra = Object.keys(value).filter((name) => !scenes.names.includes(name));
-        if (missing.length || extra.length) scenes.problems.push(M.scenesMismatch(key, scenes.file, M.list(missing), M.list(extra)));
-      }
-    }
-  }
-  if (defined && !split) notice(M.scenesUnused(scenes.file, M.list(scenes.names)));
-  // 场景块写错而配置没有按场景写时，按普通模式派，只提醒，不拦计划。
-  if (!split && scenes.problems.length) { for (const problem of scenes.problems) notice(problem); scenes.problems = []; }
+  if (!cfg.scene_modules) cfg = mergeScenes(cfg, {}, adapters);
+  const scenes = readScenes(cwd), configured = Object.keys(cfg.scene_modules).filter((scene) => scene !== 'default');
+  // 只配 default 时，偏好块的格式问题仅作提醒。
+  if (!configured.length && scenes.problems.length) { for (const problem of scenes.problems) notice(problem); scenes.problems = []; }
+  const undefinedScenes = configured.filter((scene) => !scenes.names.includes(scene));
+  if (undefinedScenes.length) scenes.problems.push(M.scenesUndefined(M.list(undefinedScenes), scenes.file));
+  const unused = scenes.names.filter((scene) => !configured.includes(scene));
+  if (unused.length) notice(M.scenesNoBlock(M.list(unused)));
   return { ...cfg, sources, image_configured: imageConfigured, project_config, scenes };
 }
 
@@ -827,5 +876,5 @@ function resolveProfile(cfg, seat, o, adapters, fallbackModel = null, parentAgen
 }
 
 export { ENTRY, SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA, USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, DEFAULT_AGENT_PARALLEL, agentMaxParallel, foremanStateDir, DEFAULT_CONFIG, DEFAULT_SEATS, DEFAULT_GAP, CLAUDE_CODE, LEVELS,
-  MODULE_CELLS, ROUTE_CELLS, canGenerate, cellList, eachCell, eachEntry, mapCells, resolveCell, validatePlan, resolveProfile, projectFile, loadConfig, readScenes, isSplit, seatsFor, gapFor, defaultRunsRoot, runsMovedNow,
+  MODULE_CELLS, ROUTE_CELLS, canGenerate, cellList, eachCell, eachEntry, mapCells, resolveCell, validatePlan, resolveProfile, projectFile, loadConfig, readScenes, sceneView, isScened, selectScene, defaultRunsRoot, runsMovedNow,
   readAgentAliases, readRawConfig, readOldBackups, resolveAgentAlias, migrateStructure, renameAgentsByModel, detectEnvironment, buildStarterConfig, staleAliases, unknownAgentError };

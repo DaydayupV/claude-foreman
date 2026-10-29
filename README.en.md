@@ -272,10 +272,12 @@ A minimal example: Codex does complex hands-on work and every review, complex di
     "glm-5.3":     { "type": "opencode cli", "model": "opencode-go/glm-5.3" }
   },
   "modules": {
-    "discuss": { "simple": "claude code", "normal": [{ "agent": "gpt-6.1-sol", "effort": "high" }], "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "glm-5.3" }] },
-    "run":     { "simple": "claude code", "normal": "claude code", "complex": [{ "agent": "gpt-6.1-sol", "effort": "max" }] },
-    "review":  { "simple": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "normal": [{ "agent": "gpt-6.1-sol", "effort": "high" }], "complex": [{ "agent": "gpt-6-astra", "effort": "max" }] },
-    "image":   { "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "draw": [{ "agent": "gpt-6-astra", "effort": "max" }] }
+    "default": {
+      "discuss": { "simple": "claude code", "normal": [{ "agent": "gpt-6.1-sol", "effort": "high" }], "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "glm-5.3" }] },
+      "run":     { "simple": "claude code", "normal": "claude code", "complex": [{ "agent": "gpt-6.1-sol", "effort": "max" }] },
+      "review":  { "simple": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "normal": [{ "agent": "gpt-6.1-sol", "effort": "high" }], "complex": [{ "agent": "gpt-6-astra", "effort": "max" }] },
+      "image":   { "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "draw": [{ "agent": "gpt-6-astra", "effort": "max" }] }
+    }
   }
 }
 ```
@@ -287,7 +289,7 @@ A minimal example: Codex does complex hands-on work and every review, complex di
 - `effort` is the reasoning effort; leave it out for the default. For Codex it's `low` to `ultra`; for opencode, the model's variant; for pi, its thinking level; for agy, a level such as `low` / `medium` / `high` (agy puts it in the model ID suffix, and the plugin adds it back when dispatching); for API models it's sent as `reasoning_effort` as is.
 - Image tasks start with a pop-up where you choose the route, and the route decides which cells are used: a pure vector route that only draws never touches the generate cell, so that cell's required agents don't take part.
 
-The old `levels` form still works: the first time the plugin reads it, it rewrites it as `modules`, keeping every cell's agents, efforts and order, and backs up the original as `config.json.bak`. One thing changes: the models at a discussion level used to all take part, and after the rewrite they're candidates Claude Code picks from. To keep everyone taking part, mark them all `"required": true`; `/foreman-en:setup` can mark them, and it adds the two image cells too.
+A flat `modules` from before (with `discuss`, `run` and so on directly under it) still works: the first time the plugin reads it, it moves it unchanged into `modules.default`, backing up the original first. The old `levels` form still works too: the first time the plugin reads it, it rewrites it as `modules`, keeping every cell's agents, efforts and order, and backs up the original as `config.json.bak`. One thing changes: the models at a discussion level used to all take part, and after the rewrite they're candidates Claude Code picks from. To keep everyone taking part, mark them all `"required": true`; `/foreman-en:setup` can mark them, and it adds the two image cells too.
 
 ### The five kinds of agents
 
@@ -325,7 +327,7 @@ Level 0 is always done by Claude Code and isn't in the config; which candidates 
 2. **Fill in the key**, either way:
    - Environment variable: write `"api_key_env": "DEEPSEEK_API_KEY"`, then set that variable. On Windows, add a user variable under "System Properties → Environment Variables"; on macOS and Linux, put it in your shell's startup file. Restart Claude Code so it can see it.
    - Config file: write `"api_key": "sk-..."`. It takes effect immediately but is stored in plain text, so don't commit or share the file. If both are set, the one in the config file wins.
-3. **Add it to discussions or reviews**: list it in the cells you want under `modules.discuss` or `modules.review`.
+3. **Add it to discussions or reviews**: list it in the cells you want under `modules.default.discuss` or `modules.default.review` (or in a scene block).
 
 You can also leave this to `/foreman-en:setup`, for example `/foreman-en:setup add DeepSeek`; you fill in the key yourself, with no need to paste it into the chat. API models can't look through your code themselves, so Claude Code sends the relevant files along with the topic or review brief (the patch, when reviewing changes; up to about 300,000 characters each time) and checks what they say about the code against the source.
 
@@ -363,7 +365,7 @@ If Agy CLI (Google Antigravity CLI, command `agy`) is installed and signed in, i
 
 ### Letting opencode or pi do hands-on work
 
-Give the agent `run_access` in the user config, then put it in a `modules.run` cell (or the image `draw` cell); a project config can't turn this on:
+Give the agent `run_access` in the user config, then put it in a `modules.default.run` cell (or the image `draw` cell); a project config can't turn this on:
 
 - `"edit"`: reads and writes files in the project directory only, with no commands. Claude Code runs the tests afterwards.
 - `"shell"`: can also run commands, such as tests. There's no OS sandbox: its commands run with your account's permissions and can reach the whole machine, so use this only for projects and models you trust.
@@ -395,40 +397,42 @@ Both take a change snapshot first, and Claude Code reviews the diff file by file
     "kimi-k2.6":          { "type": "api", "base_url": "https://api.moonshot.cn/v1", "api_key_env": "KIMI_API_KEY", "model": "kimi-k2.6" }
   },
   "modules": {
-    "discuss": {
-      "simple": [
-        { "agent": "gpt-6-astra", "effort": "medium" },
-        { "agent": "glm-5.3" }
-      ],
-      "normal": [
-        { "agent": "gpt-6-astra", "effort": "high" },
-        { "agent": "deepseek-flash", "effort": "high" },
-        { "agent": "glm-5.3" }
-      ],
-      "complex": [
-        { "agent": "gpt-6-astra", "effort": "max", "required": true },
-        { "agent": "deepseek-flash", "effort": "max" },
-        { "agent": "kimi-k2.6" },
-        { "agent": "mimo-v2.6-pro", "effort": "high" },
-        { "agent": "glm-5.3" }
-      ],
-      "seats": { "simple": 2, "normal": 4, "complex": 8 }
-    },
-    "run": {
-      "simple":  "claude code",
-      "normal":  "claude code",
-      "complex": [{ "agent": "gpt-6.1-sol", "effort": "max" }]
-    },
-    "review": {
-      "simple":  [{ "agent": "gpt-6-astra", "effort": "medium" }],
-      "normal":  [{ "agent": "gpt-6-astra", "effort": "high" }, { "agent": "deepseek-flash", "effort": "high" }],
-      "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "deepseek-flash", "effort": "max" }, { "agent": "glm-5.3" }],
-      "seats":   { "simple": 1, "normal": 2, "complex": 2 },
-      "gap":     { "simple": false, "normal": false, "complex": true }
-    },
-    "image": {
-      "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }],
-      "draw":     [{ "agent": "gpt-6-astra", "effort": "max" }]
+    "default": {
+      "discuss": {
+        "simple": [
+          { "agent": "gpt-6-astra", "effort": "medium" },
+          { "agent": "glm-5.3" }
+        ],
+        "normal": [
+          { "agent": "gpt-6-astra", "effort": "high" },
+          { "agent": "deepseek-flash", "effort": "high" },
+          { "agent": "glm-5.3" }
+        ],
+        "complex": [
+          { "agent": "gpt-6-astra", "effort": "max", "required": true },
+          { "agent": "deepseek-flash", "effort": "max" },
+          { "agent": "kimi-k2.6" },
+          { "agent": "mimo-v2.6-pro", "effort": "high" },
+          { "agent": "glm-5.3" }
+        ],
+        "seats": { "simple": 2, "normal": 4, "complex": 8 }
+      },
+      "run": {
+        "simple":  "claude code",
+        "normal":  "claude code",
+        "complex": [{ "agent": "gpt-6.1-sol", "effort": "max" }]
+      },
+      "review": {
+        "simple":  [{ "agent": "gpt-6-astra", "effort": "medium" }],
+        "normal":  [{ "agent": "gpt-6-astra", "effort": "high" }, { "agent": "deepseek-flash", "effort": "high" }],
+        "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "deepseek-flash", "effort": "max" }, { "agent": "glm-5.3" }],
+        "seats":   { "simple": 1, "normal": 2, "complex": 2 },
+        "gap":     { "simple": false, "normal": false, "complex": true }
+      },
+      "image": {
+        "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }],
+        "draw":     [{ "agent": "gpt-6-astra", "effort": "max" }]
+      }
     }
   }
 }
@@ -469,21 +473,23 @@ When one project should use a different set of candidates, more or fewer models,
 {
   "dispatch": { "timeout_min": 600 },
   "modules": {
-    "review": {
-      "normal": [{ "agent": "gpt-6.1-sol", "required": true }, { "agent": "glm-5.3" }, { "agent": "kimi-k2.6" }],
-      "seats": { "normal": 3 }
+    "default": {
+      "review": {
+        "normal": [{ "agent": "gpt-6.1-sol", "required": true }, { "agent": "glm-5.3" }, { "agent": "kimi-k2.6" }],
+        "seats": { "normal": 3 }
+      }
     }
   }
 }
 ```
 
-- It can only set `modules` (including `seats` and `gap`) and `discuss_max_rounds`, `timeout_min`, `stall_min`, `busy_ask_min` under `dispatch`; agents must be defined in the user config's `agents`, and a project can't add new ones.
+- It can only set `modules` (including scene blocks, `seats` and `gap`) and `discuss_max_rounds`, `timeout_min`, `stall_min`, `busy_ask_min` under `dispatch`; agents must be defined in the user config's `agents`, and a project can't add new ones.
 - A cell it writes is replaced as a whole, and cells it doesn't write keep the user config's value; `seats` and `gap` override per level. It can add candidates, change who is required, raise seat counts and lengthen time limits.
 - The per-project overrides that used to go under `projects` in the user config are no longer used; `/foreman-en:setup` can move them to each project's `.claude/foreman.json`.
 
-### Seats per scene
+### Configuring by scene
 
-The same discussion or review level sometimes serves different occasions: a review of research evidence should be broad, with more providers and a gap seat; a review of high-risk code should be precise, using only the two strongest. In that case you can split the seat counts and the gap switch by scene. If you don't need this, skip it and keep writing numbers as usual.
+The same kind of task sometimes serves different occasions: a review of research evidence should be broad, with more providers and a gap seat; a review of high-risk code should be precise, using only the two strongest at full effort. In that case you can write a whole setup per scene under `modules`: `default` is the default setup, and other scenes list only what they change. If you don't need this, skip it; the config then has only `modules.default`.
 
 First define the scenes and how to choose between them in a preference file (`/foreman-en:setup` can write it for you):
 
@@ -492,21 +498,28 @@ First define the scenes and how to choose between them in a preference file (`/f
 ## Scene routing
 - **code**: judging or deciding changes to code, interfaces, configs, scripts and tests; reviews with `--target diff` always count as code.
 - **research**: research conclusions and evidence, research plans, cards, docs, research-direction ideas; reviews with `--target claims` always count as research.
-- Split work that has both into two plans; when unsure, pick the scene with more seats.
+- Split work that has both into two plans; use default where nothing here applies.
 <!-- /foreman:scenes -->
 ```
 
-Then write per-scene values in the config:
+Then add scene blocks under `modules`:
 
 ```json
-"review": {
-  "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "gpt-6.1-sol", "effort": "max" }, { "agent": "deepseek-flash" }, { "agent": "glm-5.3" }],
-  "seats": { "simple": 1, "normal": 2, "complex": { "code": 2, "research": 4 } },
-  "gap":   { "simple": false, "normal": false, "complex": { "code": false, "research": true } }
+"modules": {
+  "default": { "discuss": { … }, "run": { … }, "review": { … }, "image": { … } },
+  "code": {
+    "review": { "complex": [{ "agent": "gpt-6.1-sol", "effort": "max", "required": true }, { "agent": "gpt-6-astra", "effort": "max" }],
+                "seats": { "complex": 2 }, "gap": { "complex": false } }
+  },
+  "research": {
+    "review": { "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "gpt-6.1-sol", "effort": "high" },
+                            { "agent": "deepseek-flash" }, { "agent": "glm-5.3" }],
+                "seats": { "complex": 4 }, "gap": { "complex": true } }
+  }
 }
 ```
 
-At a level written per scene, the order of the candidates is their priority: required agents go first, then down the list. In the example above, code reviews use two seats, astra and sol, with no gap seat; research reviews use all four, and with no candidates left there is no gap pass. Claude Code picks the scene by the routing in the preferences when it creates a plan, and says which line it followed. When the scenes in the preferences don't match the scene names in the config, discussion and review plans can't be created, and `config` points out what doesn't match. Details are under ["Scenes" in `config.md`](foreman-en/skills/dispatch/references/config.md).
+In the example above, code reviews use two seats, sol and astra, with no gap seat; research reviews use all four, with astra as the required agent instead. Both scenes change only the complex review; everything else follows `default`. All four modules can be configured by scene. Claude Code picks the scene by the routing in the preferences when it hands out work and creates plans, and says which line it followed. When the scenes in the preferences don't match the scene names in `modules`, handing out work and creating plans are both refused, and `config` points out what doesn't match. Details are under ["Scenes" in `config.md`](foreman-en/skills/dispatch/references/config.md).
 
 ### Preference files
 

@@ -10,7 +10,7 @@
 
 ## 假工具与夹具
 
-- `helpers.mjs`：临时用户目录、配置、子进程、轮询、Git、记录读取、路径占位替换。`seedRun` 用测试进程自己的 pid 假装调度进程还在运行时，开始时间不早于测试进程启动（`liveStart`）：脚本会核对进程启动时间，晚于任务开始的进程算作复用了进程号。
+- `helpers.mjs`：临时用户目录、配置、子进程、轮询、Git、记录读取、路径占位替换。`baseConfig()` 写成 `modules.default`，普通用例直接修改这一块；平铺迁移用例显式把 default 取出，`loadConfig` 的返回值仍按平铺 `cfg.modules` 断言。`seedRun` 用测试进程自己的 pid 假装调度进程还在运行时，开始时间不早于测试进程启动（`liveStart`）：脚本会核对进程启动时间，晚于任务开始的进程算作复用了进程号。
 - `fake/codex.mjs`、`fake/opencode.mjs`：通过 `agents.<名字>.bin` 指定，`FAKE_SCENARIO` 指向合成 JSON 剧本。
 - 剧本的 `capture` 指定 JSONL 调用日志；记录工具、操作、argv、stdin、cwd、pid 及指定的环境变量。`calls` 按同一工具/操作的调用序号覆盖基础剧本，用于续接和报告修复。
 - `steps` 中每步支持 `event`、`delay_ms`、`wait_for`（临时放行文件）、`files`、`stderr`。根级支持 `files`、`last_message`、`exit_code`、`stderr` 和 `hold`。
@@ -100,7 +100,7 @@
 | 23 出图素材 | assets.test.mjs | template 写出模板和按比例的格子坐标；cut 抠品红底、按名单命名、写出部件、manifest 和对照拼图；透明图清理光晕，soft 保留柔边；按格子命名并合并同格碎片；贴边和格外部件判失败、check 退出码为 1；diff 逐格比较；--vector 用自带描图转 SVG（透明的洞留空、轮廓和颜色对得上原图），自带描图的直边是直线、圆是曲线、对称水滴不被压没，两色之间的过渡带并掉、比两侧都深的细线保留、透明里的孤立小点去掉，只出现在细线上的颜色不丢、1 像素宽的线不被压没、相邻两个小块不互换颜色、大量小洞时不慢；参数错误；结果的 image_calls 和没传参考图的提示；名单重名和只差大小写；一个部件都没有时判失败；diff 发现被删掉的部件；出图参数按代码结构解析（字符串里的参数名、显式 null、带引号的键、变量传参、没执行的调用）；任务说明只提到参数名时不误报没传参考图；格子合并后按格子号命名；align 找回部件的缩放和偏移、写出对齐图和对照图、按区域算色差、区域写错时报错，不把部件缩小塞进同色区域、细线也能对齐、缩放上下限是硬约束；patch 只取成片的改动（去掉轮廓位移和外轮廓），--keep 限定区域；trace 分出描边、底色和阴影并写出 SVG，种子不对时报错；layers 从定稿图取出同画布的图层：背景板只写回主体范围并校色，部件按原位置裁出，下层部件穿过自己那段描边往上层下面延长、延长段不露在背景上，矢量部件的位置是整张画布，部件名不合法、重名、叫 static 或 extendUnder 指向不存在的部件时报错，主体占大半张画面时噪声只按背景估计、校色一直铺到主体中心；patch 和 layers 都留下测出的原始对齐；capture 的本地路径可以带 ?参数；capture 和 playback 用假浏览器截图、检查静止区域和首尾衔接、写出 APNG |
 | 10 共用文件同步 | sync.test.mjs | 中英文插件的共用文件、schema 结构和版本号一致 |
 | 24 第一期配置和迁移 | modules.test.mjs、structure-migration.test.mjs | 模块遍历顺序一致，单对象只在内存规范为列表；levels 迁移一次备份，顺序强度不变且不补格子或 required；已有备份加时间戳，校验失败的 levels 不改原文；用户和项目不能同时写 levels 和 modules；空列表、重复、能力、required 类型、缺少 agent、对象类型和执行格子多个必选校验，旧配置里的 max_seats 被忽略；未知模块或格子；旧单对象已写 agent 时也保留逐字段继承；图像引用参与旧类型改名、去重与 codex 保留判断；check 和 summary 覆盖仅用于图像的协作方、强度和 shell 提醒 |
-| 25 项目配置覆盖 | project-config.test.mjs、submissions.test.mjs | 项目整格替换、候选顺序、必选、模型和强度覆盖，时长可延长；seats/gap 按等级覆盖且整级替换场景对象；允许字段过滤、项目文件前缀校验、levels 只读迁移、打开关闭格子和点名续接；废弃 projects 不校验、不生效，逐次提醒并保留原键；用户和项目配成 Claude Code 的格子均可建格子外计划并派出，计划、结果和元数据标 outside_cell |
+| 25 项目配置覆盖 | project-config.test.mjs、submissions.test.mjs | 项目整格替换、候选顺序、必选、模型和强度覆盖，时长可延长；每层先合成场景视图再覆盖用户层，seats/gap 按等级覆盖，项目路径含场景；允许字段过滤、项目文件前缀校验、levels 只读迁移、打开关闭格子和点名续接；废弃 projects 不校验、不生效，逐次提醒并保留原键；用户和项目配成 Claude Code 的格子均可建格子外计划并派出，计划、结果和元数据标 outside_cell |
 | 26 第一期选派和计划 | plan.test.mjs | 三模块单席必须选格子并遵守候选和必选；计划先校验格子、候选、必选、能力和参数，失败不落盘；保存同方多席、角色、理由、默认模型和启动命令，不占任务名额；启动参数配对及一致性；启动时按当前配置重验整份计划；同一席并发只启动一次；准入拒绝不消耗席位；旧代号席位；续接沿用计划席位角色且不查其他必选；四种适配器的模型覆盖规则及标记；status 的三种 state、missing_required、最新续接和有效结果判定；status / watch 不把 plans 当任务 |
 | 27 第一期并发和锁 | admission.test.mjs、run.test.mjs、structure-migration.test.mjs | 同组 discuss 和 review 不查写入范围，exec 仍检查；groupScopeOwner 只认 exec，而且只认运行时间有重叠的；协作方跨组跨会话及旧代号并发计数不变；活着的登记锁不按年龄被抢（旧 pid 和 pid/token）；死锁回收及一分钟等待上限；读不出持有者的旧锁放一会儿后清掉；登记锁和清理锁正被删除时短暂报 EPERM、EACCES、EBUSY 只是稍等再试，一直报错才抛出原错误，删除前每次重试都重新确认锁还是残留的或自己的；显式释放和退出清理只删自己的 token |
 | 28 第一期偏好来源 | hooks.test.mjs | 中英文偏好说明项目冲突优先、场景块替换和硬规则，新旧位置来源一致；plans 不算未完成任务 |
@@ -152,9 +152,9 @@
 | 72 旧配置提醒 | setup-report.test.mjs | 四类旧配置提醒的触发和不触发、结构化字段、只读和读取失败跳过；旧代号对照表不算残留；自定义配置文件名的备份；格子单独指定的模型和 3 级审查的补漏席写法 |
 | 73 显式外部席位数 | seats.test.mjs、config.test.mjs、generalization.test.mjs、modules.test.mjs、setup-report.test.mjs | 有无 Codex 的初始配置都写满讨论和审查三级 seats；用户缺 seats、缺等级或整个模块时补写，不增加格子，保留已写值并考虑必选数；并发首次读取只备份和提示一次，与旧结构迁移共用一次写入且按改名去重后的必选数补齐；备份已有时加后缀，中英文提示只列本次补写的模块；只补 seats 不加 levels 说明并保留已有说明、max_seats 和其他字段；错误 seats 和项目配置不改写，写入失败时用 seats 专门的提示并在内存兜底、缓存结果和清理锁及临时文件；只补 seats 时配置本身有错不提示改写失败；空的残留锁过 2 秒清掉，活进程的锁等满 10 秒放弃；改写保留原文件权限（非 Windows）；报告展示补写后的显式数值 |
 
-| 74 席位场景与可配置补漏 | scenes.test.mjs、seats.test.mjs、migration.test.mjs | 场景块解析、项目替换和空块、标记与名称错误；seats/gap 格式与必选数；场景一致性五种情况和 warnings；场景参数、候选顺序、实际基础模型去重、visual 过滤与 count-why；补漏开关、唯一性、讨论拒绝、各级查重与启动时 Claude Code 模型查重；迁移补 gap、备份和写入失败内存补齐；Markdown 场景席位与补漏、项目覆盖说明 |
+| 74 模块场景与可配置补漏 | scenes.test.mjs、seats.test.mjs、migration.test.mjs | 场景块解析、保留名 default、项目替换和空块；modules.default 迁移共用备份和锁、写入失败内存补齐、项目平铺只读迁移；混写和缺 default 拒绝，逐场景整体校验，旧 seats/gap 对象拒绝；sceneView/isScened、按层合并、resolved_scenes 和差异表；所有模块的场景参数、一致性阻断、不同场景的必选及提示；直派与计划启动、图像计划和续接沿用场景，换级不换场景；补漏任意候选、CLI 默认模型查重、submit 和启动时 Claude Code 模型查重；check/models 覆盖场景专用协作方和模型 |
 
-| 75 场景统计与看板 | judge-stats.test.mjs、watch-group.test.mjs、scene-display.test.mjs | stats --by scene 及 effort/cell 组合、缺失或不可读计划记 null、中英文列名及非法维度提示；终端组标题按 M.list 显示多个场景；fplan 传递 scene/scene_why，网页组标题去重显示场景、悬停显示选择理由，兼容旧计划和未启动席位 |
+| 75 场景统计与看板 | judge-stats.test.mjs、watch-group.test.mjs、scene-display.test.mjs | stats --by scene 优先 meta、再取计划，及 effort/cell 组合；缺失或不可读计划记 null、中英文列名及非法维度提示；终端组标题按 M.list 显示多个场景；fplan 和直派 meta 传递 scene/scene_why，组标题优先计划、无带场景计划时取任务，悬停显示选择理由；终端和网页 groupTask 源码一致，兼容旧计划和未启动席位 |
 
 ## 说明
 

@@ -49,7 +49,7 @@ test('旧部分等级先继承，模型覆盖拆分且清除覆盖字段', async
   for (const [mode, lv, model, effort] of [['run', 'normal', 'run-model', 'high'], ['run', 'complex', 'explicit-model', 'max'], ['review', 'complex', 'review-model', 'max'], ['discuss', 'normal', 'discussion-model', 'high']]) {
     assert.deepEqual(c.resolved_modules[mode][lv][0], { agent: model, model, effort, required: false, tier: null });
     assert.equal(c.effective.agents[model].bin, CODEX);
-    assert.equal(c.effective.modules[mode][lv][0].model, undefined);
+    assert.equal(c.effective.modules.default[mode][lv][0].model, undefined);
   }
   assert.deepEqual(c.resolved_modules.review.simple, [{ agent: 'base-model', model: 'base-model', effort: 'medium', required: false, tier: null }]);
   seedRun(h, '20000101-split', { agent: 'codex', agent_type: 'codex', model: 'run-model', status: 'timeout' });
@@ -74,7 +74,7 @@ test('同名配置合并，冲突按类型和序号区分，保留已按模型�
   assert.equal(a.codex, 'a-b-c');
   assert.equal(a.shared, undefined);
   assert.equal(Object.keys(c.effective.agents).length, 5);
-  assert.deepEqual(c.effective.modules.discuss.normal, [{ agent: 'shared', effort: 'high' }]);
+  assert.deepEqual(c.effective.modules.default.discuss.normal, [{ agent: 'shared', effort: 'high' }]);
 });
 
 for (const model of ['toml-model', null]) test(`Codex 未写模型时${model ? '使用 TOML 顶层模型命名' : '保留原代号'}`, async (t) => {

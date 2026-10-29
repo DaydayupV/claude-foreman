@@ -14,7 +14,7 @@ const runs = (s) => s.calls().filter((c) => c.operation === 'run');
 const configure = (h) => {
   const c = baseConfig();
   c.agents.oc = opencodeAgent();
-  c.modules.review.complex = { agent: 'oc' };
+  c.modules.default.review.complex = { agent: 'oc' };
   h.config(c);
   h.write('calc.js', 'module.exports = {};\n');
 };

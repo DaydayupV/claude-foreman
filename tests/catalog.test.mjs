@@ -42,9 +42,9 @@ test('models 列出 Codex、opencode 和 API 的清单，并核对配置里的�
   ]);
   assert.equal(r.api.api.ok, true);
   assert.deepEqual(r.api.api.models.map((m) => [m.id, m.efforts]), [['fake-api', null], ['other-api', null]]);
-  assert.deepEqual(r.agents.codex, { type: 'codex cli', model: 'fake-codex', listed: true, efforts: ['low', 'medium', 'high'], closest: [] });
-  assert.deepEqual(r.agents.oc, { type: 'opencode cli', model: 'wrong/thing', listed: false, efforts: null, closest: ['right/thing'] });
-  assert.deepEqual(r.agents.api, { type: 'api', model: 'fake-api', listed: true, efforts: null, closest: [] });
+  assert.deepEqual(r.agents.codex, { type: 'codex cli', model: 'fake-codex', configured_models: ['fake-codex'], listed: true, efforts: ['low', 'medium', 'high'], closest: [] });
+  assert.deepEqual(r.agents.oc, { type: 'opencode cli', model: 'wrong/thing', configured_models: ['wrong/thing'], listed: false, efforts: null, closest: ['right/thing'] });
+  assert.deepEqual(r.agents.api, { type: 'api', model: 'fake-api', configured_models: ['fake-api'], listed: true, efforts: null, closest: [] });
   assert.equal(api.requests.length, 0);
 });
 
@@ -57,7 +57,7 @@ test('models 读不到清单时如实报告，不影响其他工具', async (t) 
   assert.equal(r.tools['codex cli'].ok, false);
   assert.equal(r.tools['codex cli'].error, 'synthetic: no model catalog');
   assert.equal(r.tools['opencode cli'].ok, true);
-  assert.deepEqual(r.agents.codex, { type: 'codex cli', model: 'fake-codex', listed: null, efforts: null, closest: [] });
+  assert.deepEqual(r.agents.codex, { type: 'codex cli', model: 'fake-codex', configured_models: ['fake-codex'], listed: null, efforts: null, closest: [] });
   assert.equal(r.agents.oc.listed, true);
 });
 
@@ -93,11 +93,11 @@ test('check Codex 模型不在清单里或读不到清单时只提示，不判�
 test('check opencode 清单里没有的档位不发请求，修正提示列出支持的档位', async (t) => {
   const h = sandbox(t), c = baseConfig();
   c.agents.oc = opencodeAgent();
-  c.modules.review.simple = { agent: 'oc', effort: 'high' };
-  c.modules.review.normal = { agent: 'oc', effort: 'medium' };
-  c.modules.review.complex = { agent: 'oc', effort: 'default' };
+  c.modules.default.review.simple = { agent: 'oc', effort: 'high' };
+  c.modules.default.review.normal = { agent: 'oc', effort: 'medium' };
+  c.modules.default.review.complex = { agent: 'oc', effort: 'default' };
   c.agents.oc2 = { ...opencodeAgent(), model: 'right/thing' };
-  c.modules.discuss.simple = [{ agent: 'oc2', effort: 'default' }];
+  c.modules.default.discuss.simple = [{ agent: 'oc2', effort: 'default' }];
   h.config(c);
   const s = h.scenario({ opencode_catalog: opencodeCatalog, last_message: 'OK' });
   const r = output(await h.bridge(['check', '--agent', 'oc'], { env: s.env }), 1);
@@ -122,8 +122,8 @@ test('check opencode 清单里没有的档位不发请求，修正提示列出�
 test('check opencode 清单里有的档位请求失败时转告真实报错，不说档位不支持', async (t) => {
   const h = sandbox(t), c = baseConfig();
   c.agents.oc = opencodeAgent();
-  c.modules.review.simple = { agent: 'oc', effort: 'high' };
-  c.modules.review.normal = { agent: 'oc', effort: 'medium' };
+  c.modules.default.review.simple = { agent: 'oc', effort: 'high' };
+  c.modules.default.review.normal = { agent: 'oc', effort: 'medium' };
   h.config(c);
   const s = h.scenario({ opencode_catalog: opencodeCatalog, reject_variants: ['high'], last_message: 'OK' });
   const r = output(await h.bridge(['check', '--agent', 'oc'], { env: s.env }), 1);
@@ -148,12 +148,12 @@ test('check opencode 模型写错提供方前缀时提示最接近的写法', as
 
 test('levels 里代号写错时，报错带上最接近的代号', async (t) => {
   const h = sandbox(t), c = baseConfig();
-  c.modules.discuss.simple = [{ agent: 'codexx', effort: 'medium' }];
+  c.modules.default.discuss.simple = [{ agent: 'codexx', effort: 'medium' }];
   h.config(c);
-  failed(await h.bridge(['config']), M.unknownAgent('modules.discuss.simple[0]', 'codexx') + M.closestHint('codex'));
-  c.modules.discuss.simple = [{ agent: 'Codex', effort: 'medium' }];
+  failed(await h.bridge(['config']), M.unknownAgent('modules.default.discuss.simple[0]', 'codexx') + M.closestHint('codex'));
+  c.modules.default.discuss.simple = [{ agent: 'Codex', effort: 'medium' }];
   h.config(c);
-  failed(await h.bridge(['config']), M.unknownAgent('modules.discuss.simple[0]', 'Codex') + M.closestHint('codex'));
+  failed(await h.bridge(['config']), M.unknownAgent('modules.default.discuss.simple[0]', 'Codex') + M.closestHint('codex'));
 });
 
 test('--agent 写错时先提示最接近的代号，不报和等级不符', async (t) => {
@@ -166,7 +166,7 @@ test('config 输出总表：按等级、按协作方，以及没用到的协作�
   const h = sandbox(t), c = baseConfig();
   c.agents.api = apiAgent('http://127.0.0.1:9');
   c.agents.oc = { ...opencodeAgent(), run_access: 'shell' };
-  c.modules.run.normal = { agent: 'oc' };
+  c.modules.default.run.normal = { agent: 'oc' };
   h.config(c);
   fs.writeFileSync(path.join(h.home, '.claude/foreman/agent-aliases.json'), JSON.stringify({ old: 'gone', codex2: 'codex' }));
   const { summary } = output(await h.bridge(['config']));

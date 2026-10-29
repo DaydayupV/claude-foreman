@@ -12,7 +12,7 @@ import { MAX_REVIEW_CHARS } from '../foreman/skills/dispatch/scripts/review-scop
 
 for (const lang of ['zh', 'en']) test(`API 计划计入包装、附件和说明预留，边界内能启动（${lang}）`, async (t) => {
   const h = sandbox(t), api = await apiServer(t, [{ answer: review }]), c = baseConfig(), m = MESSAGES[lang];
-  h.env.FOREMAN_LANG = lang; c.agents.api = apiAgent(api.url); c.modules.review.normal = [{ agent: 'api' }]; h.config(c);
+  h.env.FOREMAN_LANG = lang; c.agents.api = apiAgent(api.url); c.modules.default.review.normal = [{ agent: 'api' }]; h.config(c);
   h.write('reference.txt', 'selected evidence\noutside selected lines\n'); h.initGit();
   const url = (name) => pathToFileURL(path.join(ROOT, 'foreman/skills/dispatch/scripts', name)).href;
   const source = `import fs from 'node:fs';

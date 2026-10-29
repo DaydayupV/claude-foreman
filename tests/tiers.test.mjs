@@ -83,9 +83,9 @@ test('tiers 支持重复 --model、--all 排序、当前配置去重和项目覆
   const { h, tiers, run } = setup(t, true), c = baseConfig();
   c.agents.codex.model = 'gpt-6-astra';
   c.agents.unset = { ...c.agents.codex }; delete c.agents.unset.model;
-  c.modules.discuss.complex = [{ agent: 'codex', model: 'opencode-go/deepseek-v4.1-flash-1017' }];
-  c.modules.run.normal = [{ agent: 'unset' }];
-  c.modules.image = { generate: [{ agent: 'codex', model: 'gpt-6.1-sol' }], draw: [{ agent: 'codex', model: 'qwen3.8-flash' }] };
+  c.modules.default.discuss.complex = [{ agent: 'codex', model: 'opencode-go/deepseek-v4.1-flash-1017' }];
+  c.modules.default.run.normal = [{ agent: 'unset' }];
+  c.modules.default.image = { generate: [{ agent: 'codex', model: 'gpt-6.1-sol' }], draw: [{ agent: 'codex', model: 'qwen3.8-flash' }] };
   h.config(c);
   write(path.join(h.home, '.codex/config.toml'), 'model = "native-only"\n');
   const queried = output(await run(['tiers', '--model', 'claude-opus-5-5', '--model', 'unknown', '--format', 'json']));
@@ -103,7 +103,7 @@ test('tiers 支持重复 --model、--all 排序、当前配置去重和项目覆
   assert.equal(config.resolved_modules.image.draw[0].tier, 'weak');
   // 没写模型的协作方用 Codex 自己配置里的模型，它不在价格表和档位表里
   for (const kind of ['unpriced_models', 'unrated_models']) assert.deepEqual(config.summary.warnings.find((w) => w.kind === kind).models.map(({ model }) => model), ['native-only']);
-  h.write('.claude/foreman.json', { modules: { image: { draw: null } } });
+  h.write('.claude/foreman.json', { modules: { default: { image: { draw: null } } } });
   assert.deepEqual(output(await run(['tiers', '--cwd', h.cwd])).models.map(({ name }) => name), current.models.slice(0, -1).map(({ name }) => name));
 });
 
@@ -111,10 +111,10 @@ test('tiers Markdown、帮助及覆盖告警使用插件语言，告警不改变
   const { h, run } = setup(t, true), c = baseConfig();
   c.agents.codex.model = 'gpt-6-astra';
   c.agents.unused = { ...c.agents.codex, model: 'unused-unknown' };
-  c.modules.discuss.simple = [{ agent: 'codex', model: 'unknown-a' }];
-  c.modules.review.normal = [{ agent: 'codex', model: 'unknown-a' }];
-  c.modules.review.complex = [{ agent: 'codex', model: 'unknown-b' }];
-  c.modules.image.draw = [{ agent: 'codex', model: 'gpt-5.5' }];
+  c.modules.default.discuss.simple = [{ agent: 'codex', model: 'unknown-a' }];
+  c.modules.default.review.normal = [{ agent: 'codex', model: 'unknown-a' }];
+  c.modules.default.review.complex = [{ agent: 'codex', model: 'unknown-b' }];
+  c.modules.default.image.draw = [{ agent: 'codex', model: 'gpt-5.5' }];
   h.config(c);
   const models = [
     { model: 'unknown-a', used_at: ['modules.discuss.simple[0]', 'modules.review.normal[0]'] },

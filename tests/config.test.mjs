@@ -6,7 +6,7 @@ import { sandbox, output, failed, read, json, write, baseConfig as oldBaseConfig
 const M = MESSAGES.zh;
 const baseConfig = () => {
   const c = oldBaseConfig();
-  c.modules.review.gap = { simple: false, normal: false, complex: true };
+  c.modules.default.review.gap = { simple: false, normal: false, complex: true };
   return c;
 };
 
@@ -16,8 +16,8 @@ test('没有用户配置时生成初始配置并提示首次使用', async (t) =
   const c = output(r);
   assert.equal(c.image_configured, true);
   assert.equal(c.user_config, h.userConfig);
-  assert.equal(c.effective.modules.run.simple, 'claude code');
-  assert.equal(c.effective.modules.run.normal, 'claude code');
+  assert.equal(c.effective.modules.default.run.simple, 'claude code');
+  assert.equal(c.effective.modules.default.run.normal, 'claude code');
   assert.deepEqual(c.effective.agents, {});
   const saved = json(h.userConfig);
   assert.deepEqual(c.effective.dispatch.watch, { terminal: true, web: false });
@@ -54,13 +54,13 @@ for (const [name, change, key, reason] of [
   ['未知协作方类型被拒绝', (c) => { c.agents.codex.type = 'unknown'; }, 'agents.codex.type', M.invalid.agentType],
   ['执行等级不能使用 API 协作方', (c) => {
     c.agents.api = apiAgent('http://127.0.0.1:1');
-    c.modules = { run: { complex: { agent: 'api', effort: 'high' } } };
-  }, 'modules.run.complex[0].agent', M.modeNotSupported('api', 'api', 'run', 'discuss')],
+    c.modules.default = { run: { complex: { agent: 'api', effort: 'high' } } };
+  }, 'modules.default.run.complex[0].agent', M.modeNotSupported('api', 'api', 'run', 'discuss')],
   ['opencode 模型必须带厂商斜杠', (c) => { c.agents.oc = { ...opencodeAgent(), model: 'bad-model' }; }, 'agents.oc.model', M.invalid.opencodeModel],
-  ['讨论等级不能为空', (c) => { c.modules = { discuss: { normal: [] } }; }, 'modules.discuss.normal', M.invalid.candidates],
+  ['讨论等级不能为空', (c) => { c.modules.default = { discuss: { normal: [] } }; }, 'modules.default.discuss.normal', M.invalid.candidates],
   ['同一讨论等级不能重复参与方', (c) => {
-    c.modules = { discuss: { normal: [{ agent: 'codex', effort: 'high' }, { agent: 'codex', effort: 'low' }] } };
-  }, 'modules.discuss.normal[1]', M.invalid.duplicate],
+    c.modules.default = { discuss: { normal: [{ agent: 'codex', effort: 'high' }, { agent: 'codex', effort: 'low' }] } };
+  }, 'modules.default.discuss.normal[1]', M.invalid.duplicate],
 ]) {
   test(name, async (t) => {
     const h = sandbox(t), c = baseConfig();
@@ -72,10 +72,10 @@ for (const [name, change, key, reason] of [
 }
 
 test('格子条目里拼错的字段照常加载，但提醒一句', async (t) => {
-  const h = sandbox(t), c = baseConfig(); c.modules.run.complex = [{ agent: 'codex', effort: 'high', requird: true }]; h.config(c);
+  const h = sandbox(t), c = baseConfig(); c.modules.default.run.complex = [{ agent: 'codex', effort: 'high', requird: true }]; h.config(c);
   const r = await h.bridge(['config']);
   assert.equal(r.code, 0, r.stderr);
-  assert.ok(r.stderr.includes(MESSAGES.zh.unknownEntryField('modules.run.complex[0].requird')), r.stderr);
+  assert.ok(r.stderr.includes(MESSAGES.zh.unknownEntryField('modules.default.run.complex[0].requird')), r.stderr);
 });
 
 test('项目配置忽略不允许的字段并保留允许的覆盖', async (t) => {
@@ -140,8 +140,8 @@ test('加载配置、补写席位和迁移 levels 都写全 watch 两项，重�
   for (const kind of ['current', 'seats', 'levels']) {
     const c = baseConfig();
     c.dispatch.watch = 'off';
-    if (kind === 'seats') for (const mode of ['discuss', 'review']) delete c.modules[mode].seats;
-    if (kind === 'levels') { c.levels = c.modules; delete c.modules; }
+    if (kind === 'seats') for (const mode of ['discuss', 'review']) delete c.modules.default[mode].seats;
+    if (kind === 'levels') { c.levels = c.modules.default; delete c.modules; }
     h.config(c);
     const original = read(h.userConfig);
     assert.deepEqual(output(await h.bridge(['config'])).effective.dispatch.watch, { terminal: false, web: false });
@@ -149,8 +149,8 @@ test('加载配置、补写席位和迁移 levels 都写全 watch 两项，重�
     assert.notEqual(read(h.userConfig), original);
     const savedConfig = json(h.userConfig);
     assert.deepEqual(savedConfig.dispatch.watch, { terminal: false, web: false });
-    assert.ok(savedConfig.modules.discuss.seats);
-    assert.ok(savedConfig.modules.review.seats);
+    assert.ok(savedConfig.modules.default.discuss.seats);
+    assert.ok(savedConfig.modules.default.review.seats);
     const saved = read(h.userConfig);
     assert.deepEqual(output(await h.bridge(['config'])).effective.dispatch.watch, { terminal: false, web: false });
     assert.equal(read(h.userConfig), saved);
@@ -161,7 +161,7 @@ test('旧 web 开启后迁移仍保留该值，新项目配置不能关闭它', 
   const h = sandbox(t), c = baseConfig();
   c.dispatch.watch = 'off';
   c.dispatch.web = true;
-  delete c.modules.discuss.seats;
+  delete c.modules.default.discuss.seats;
   h.config(c);
   const file = h.write('.claude/foreman.json', { dispatch: { watch: { terminal: false, web: false } } }), original = read(file);
   assert.deepEqual(output(await h.bridge(['config', '--cwd', h.cwd])).effective.dispatch.watch, { terminal: false, web: true });

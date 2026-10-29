@@ -11,7 +11,7 @@
 |---|---|
 | `dispatch` | 插件怎么派活：是否主动派、讨论轮数、超时等 |
 | `agents` | 有哪些协作方，怎么连接 |
-| `modules` | 每类任务的每一格有哪些候选、谁必选、用什么推理强度；讨论和审查每一级几席、审查要不要补漏席 |
+| `modules` | 按场景写：`default` 是默认的一套，其余场景只写要改的部分。每一套里，每类任务的每一格有哪些候选、谁必选、用什么推理强度；讨论和审查每一级几席、审查要不要补漏席 |
 
 连接方式只写在 `agents`，分派只写在 `modules`。
 
@@ -26,20 +26,24 @@
     "deepseek-v4-pro": { "type": "api", "base_url": "https://api.deepseek.com", "api_key_env": "DEEPSEEK_API_KEY", "model": "deepseek-v4-pro" }
   },
   "modules": {
-    "discuss": {
-      "simple":  "claude code",
-      "normal":  [{ "agent": "gpt-6.1-sol", "effort": "high" }, { "agent": "glm-5.3" }],
-      "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "glm-5.3" }, { "agent": "deepseek-v4-pro", "effort": "max" }],
-      "seats":   { "simple": 2, "normal": 4, "complex": 3 }
-    },
-    "run":    { "simple": "claude code", "normal": "claude code", "complex": [{ "agent": "gpt-6.1-sol", "effort": "max" }] },
-    "review": { "simple": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "normal": [{ "agent": "gpt-6.1-sol", "effort": "high" }], "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }],
-                "seats": { "simple": 1, "normal": 2, "complex": 2 },
-                "gap":   { "simple": false, "normal": false, "complex": false } },
-    "image":  { "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "draw": [{ "agent": "gpt-6-astra", "effort": "max" }] }
+    "default": {
+      "discuss": {
+        "simple":  "claude code",
+        "normal":  [{ "agent": "gpt-6.1-sol", "effort": "high" }, { "agent": "glm-5.3" }],
+        "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "glm-5.3" }, { "agent": "deepseek-v4-pro", "effort": "max" }],
+        "seats":   { "simple": 2, "normal": 4, "complex": 3 }
+      },
+      "run":    { "simple": "claude code", "normal": "claude code", "complex": [{ "agent": "gpt-6.1-sol", "effort": "max" }] },
+      "review": { "simple": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "normal": [{ "agent": "gpt-6.1-sol", "effort": "high" }], "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }],
+                  "seats": { "simple": 1, "normal": 2, "complex": 2 },
+                  "gap":   { "simple": false, "normal": false, "complex": false } },
+      "image":  { "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "draw": [{ "agent": "gpt-6-astra", "effort": "max" }] }
+    }
   }
 }
 ```
+
+下文说"某一格""`seats`""`gap`"时，指的是某个场景里的写法；没用场景时就是 `modules.default` 里的。
 
 ## dispatch
 
@@ -171,14 +175,14 @@
 - 候选列表：`[{ "agent": "<代号>", "effort": "<推理强度>", "required": true }, …]`。只有一项时也可以写成单个对象，效果一样。同一个协作方在一格里只能出现一次。
 - `null`（只限 image）：关掉这一格。generate 关掉就不出图；draw 关掉时，会弯的部件和纯矢量绘制由 Claude 自己画。Claude 不能出位图，所以 image 的格子不能写 `"claude code"`。
 
-`discuss` 和 `review` 另有一项 `seats`，写每一级找几个外部模型；`review` 还有一项 `gap`，写每一级要不要补漏席。三级都写在配置文件里，改直接改它们。新建的配置自带这两项；没写全的用户配置，第一次读的时候由脚本补全写进文件。默认值和规则见下文"候选和必选"，按场景写的方法见"场景"。
+`discuss` 和 `review` 另有一项 `seats`，写每一级找几个外部模型；`review` 还有一项 `gap`，写每一级要不要补漏席。三级都写在配置文件里，改直接改它们。新建的配置自带这两项；没写全的用户配置，第一次读的时候由脚本补全写进文件。默认值和规则见下文"候选和必选"，按场景整套配置见"场景"。
 
 能放进哪一格，按能力表校验：discuss 的候选要能讨论，review 的要能审查；run 的要能执行，opencode 和 pi 还要写了 `run_access`；generate 的要能出图（适配器声明了 `images`，并且实现了出图检测：这一轮新出了哪些图、每次调用传了什么参数；目前只有 codex cli）；draw 的要求和 run 相同。
 
 图像任务的派法：每个新的图形交付物开工前，Claude 先弹窗让用户选路线（① 位图、② 位图 + 矢量混合、③ 纯矢量先出参考图、④ 纯矢量 / 代码），再用 `plan --module image --cell <generate|draw> --route <路线号>` 建计划、`image --plan … --seat …` 启动；路线决定用到哪几格，只建用到的格子的计划，所以没用到的格子里的必选不会触发（比如选了路线 ④，generate 的必选不用到场）。脚本会核对这个会话里最近一次路线弹窗的回答，见 `references/cli.md` 的"plan、image 和 status --plan"。
 
 ### 候选和必选
-- 一格有几个候选时，由 Claude 按 `references/seats.md` 的规则挑（排除做不了的、必选全部加入、讨论和审查按不同的基础模型补到配置的席位数、执行每个工作包派一个执行方），每次派出时说一句选了谁、为什么。脚本只检查能机械判断的硬约束。场景模式下讨论和审查按候选的排列顺序挑，排在前面的先上，见"场景"。
+- 一格有几个候选时，由 Claude 按 `references/seats.md` 的规则挑（排除做不了的、必选全部加入、讨论和审查按不同的基础模型补到配置的席位数、执行每个工作包派一个执行方），每次派出时说一句选了谁、为什么。脚本只检查能机械判断的硬约束。按场景配了的格子，先选场景，再在这个场景的格子里照同样的规则挑，见"场景"。
 - `seats`（只限 `discuss` 和 `review`）：每一级的外部席位数，不含 Claude Code 席和补漏席。默认值如下（插件里写明默认数字的只有这一处，其他文档都引用这里）：
 
   | | simple | normal | complex |
@@ -186,9 +190,9 @@
   | `discuss` | 2 | 4 | 8 |
   | `review` | 1 | 2 | 2 |
 
-  必选算在这个数里，所以不能少于这一格的必选数，否则读配置时报错；可以多于候选数，表示候选全上。想让某一级固定用哪几家，就只放这几家、把席位数设成候选数，或者全部标必选。`plan` 建讨论或审查计划时检查外部席位数等于 `min(seats, 能用的候选数)`（`visual` 审查只算能看图的），不一致时要带 `--count-why "<理由>"`。能用的候选数按协作方代号算，同一个模型经两种方式接入算两个。每一级写一个正整数；按场景分开写成 `{ "<场景>": 正整数, … }`，见"场景"。
-- `gap`（只限 `review`）：每一级审查要不要补漏席，写 `true` 或 `false`，按场景分开写成 `{ "<场景>": true/false, … }`。默认三级都是 `false`。开着时，计划里要列一个补漏席（这一格还有合适的候选时），做法见 `references/review.md` 的"补漏轮"；关着时不做补漏轮。写在 `discuss` 里会报错。
-- 用户配置里 `seats`、`gap` 没写全时，第一次读配置会补写进文件：`seats` 缺的等级按默认值补（不少于这一格的必选数，照旧配置标了很多必选也能直接用）；`gap` 整项没写时补成 `{ "simple": false, "normal": false, "complex": true }`，和升级前"只有 3 级审查做补漏轮"的做法一样。已经写了的等级不动。原文件备份成 `<文件名>.bak`（已有同名备份时在后面加时间和进程号），改写后的文件保留原来的权限，并提示补写了什么；写不进去时（比如文件只读，或者别的进程占着改写锁超过 10 秒）只在内存里补，同时提示补写失败、文件没改。写错（格式不对、少于必选数）时不会自动改，照常报错。项目配置不改写，没写的等级沿用用户配置。不认识 `seats`、`gap` 的旧版插件读到它们会报错，所以每台电脑都要升级。实际用的值看 `config` 输出的 `resolved_modules.<discuss|review>.seats` 和 `resolved_modules.review.gap`。
+  必选算在这个数里，所以不能少于这一格的必选数，否则读配置时报错；可以多于候选数，表示候选全上。想让某一级固定用哪几家，就只放这几家、把席位数设成候选数，或者全部标必选。`plan` 建讨论或审查计划时检查外部席位数等于 `min(seats, 能用的候选数)`（`visual` 审查只算能看图的），不一致时要带 `--count-why "<理由>"`。能用的候选数按协作方代号算，同一个模型经两种方式接入算两个。每一级写一个正整数。
+- `gap`（只限 `review`）：每一级审查要不要补漏席，写 `true` 或 `false`。默认三级都是 `false`。开着时，计划里要列一个补漏席（这一格还有合适的候选时），做法见 `references/review.md` 的"补漏轮"；关着时不做补漏轮。写在 `discuss` 里会报错。
+- 用户配置里 `default` 的 `seats`、`gap` 没写全时，第一次读配置会补写进文件：`seats` 缺的等级按默认值补（不少于这一格的必选数，照旧配置标了很多必选也能直接用）；`gap` 整项没写、而且配置还是平铺写法的旧配置时，补成 `{ "simple": false, "normal": false, "complex": true }`，和升级前"只有 3 级审查做补漏轮"的做法一样；已经是场景写法的配置，`gap` 没写的等级按默认值（关）算，不改写文件。已经写了的等级不动。原文件备份成 `<文件名>.bak`（已有同名备份时在后面加时间和进程号），改写后的文件保留原来的权限，并提示补写了什么；写不进去时（比如文件只读，或者别的进程占着改写锁超过 10 秒）只在内存里补，同时提示补写失败、文件没改。写错（格式不对、少于必选数）时不会自动改，照常报错。项目配置不改写，没写的等级沿用用户配置。不认识 `seats`、`gap` 的旧版插件读到它们会报错，所以每台电脑都要升级。实际用的值看 `config` 输出的 `resolved_modules.<discuss|review>.seats` 和 `resolved_modules.review.gap`。
 - `required: true` 表示这一格被用到时，这个协作方必须在场；不写就是普通候选，由 Claude 决定加不加。同一个协作方可能在审查里必选、在讨论里只是候选，所以必选写在格子的条目上，不写在协作方定义上。
 - 一次派几个席位时，Claude 先建一份派发计划（`plan`），脚本检查必选是否都在、讨论和审查的外部席位数是否和 `seats` 一致，再逐席启动。执行单席派发时，这一格还有别的必选，脚本会拒绝。讨论和审查一律建计划：计划自带 Claude Code 席，它先用 `submit` 提交报告，外部席才能启动。
 - 必选方达到并发上限时，派发命令自动排队等名额（见下面"并发上限"）；必选方失败、额度用完或被取消时，这件事算不完整，不拿其他候选顶替。
@@ -218,7 +222,7 @@
 - 有没有 agy：能启动；
 - 常见 API key 的环境变量：`DEEPSEEK_API_KEY`、`KIMI_API_KEY` / `MOONSHOT_API_KEY`、`MIMO_API_KEY`。
 
-按检测结果生成（每一格都写成候选列表，不标必选）：
+按检测结果生成，都写在 `modules.default` 里（每一格都写成候选列表，不标必选）：
 
 | 检测到 | 生成的内容 |
 |---|---|
@@ -248,9 +252,10 @@
 - 同一个文件里同时写了 `levels`（对象）和 `modules` 时直接报错，不猜以哪个为准；`levels` 是上面那行说明文字时不算。项目配置里的 `levels` 不改写文件，只在内存里按 `modules` 读，并提示改成新写法。
 - 用户配置里的 `projects`（按项目目录写的覆盖）已经不用了：读到时不生效，每次都提示一次，`summary.warnings` 里有一条 `obsolete_projects`。改成在各项目里写 `.claude/foreman.json`（见文末），`/foreman:setup` 可以帮着搬过去，并从用户配置里删掉 `projects`。
 - 从 1.2 及更早的版本升级时，项目配置从"只能收紧"变成了"覆盖用户配置"：以前写了会被忽略的放宽项（加候选、调高席位、延长超时等），升级后会生效。
+- 第一次读到平铺的 `modules`（下面直接是 `discuss`、`run`、`review`、`image`）时，脚本把它整体放进 `modules.default`，原文件先备份，并提示改写了什么；格子的内容一点不变。项目配置里的平铺写法不改写文件，只在内存里按 `default` 读，并提示改成新写法。同一个 `modules` 里既有平铺的模块又有场景时直接报错。不认识场景写法的旧版插件读到 `modules.default` 会报错，所以每台电脑都要升级。
 
 ## 场景
-讨论和审查的同一级往往服务于不同的场合：比如研究证据的审查要"广"，多找几家、留补漏席；高风险代码的审查要"准"，只用最强的两家。这时可以按场景分开写席位数和补漏开关。不需要的话不用管这一节，`seats`、`gap` 照常写数字和 `true`/`false`。
+同一类任务往往服务于不同的场合：比如研究证据的审查要"广"，多找几家、留补漏席；高风险代码的审查要"准"，只用最强的两家，推理强度开满。这时可以在 `modules` 下按场景整套配置。不需要的话不用管这一节，配置里只有 `modules.default`。
 
 **1. 在偏好文件里定义场景**：用户偏好 `~/.claude/foreman/preferences.md`（和用户配置在同一个目录），或者项目偏好 `<项目目录>/.claude/foreman.md`，写一个场景块：
 
@@ -259,59 +264,77 @@
 ## 场景路由
 - **code**：评判或决定代码、接口、配置、脚本、测试的改动；`--target diff` 的审查一律算 code。
 - **research**：研究结论和证据、研究方案、卡片、说明文档、研究方向构思；`--target claims` 的审查一律算 research。
-- 两类都有的拆成两个计划；拿不准时选席位多的场景。
+- 两类都有的拆成两个计划；没写到的情况用 default。
 <!-- /foreman:scenes -->
 ```
 
-- 块里以 `- **<名字>**：` 开头的行定义一个场景。名字只能用小写字母、数字和连字符，以字母开头。
-- 其余文字是给 Claude Code 看的路由说明：什么样的讨论或审查算哪个场景。脚本不读它们，Claude Code 建计划时按它们选。
+- 块里以 `- **<名字>**：` 开头的行定义一个场景。名字只能用小写字母、数字和连字符，以字母开头；`default` 是保留名，不能用。
+- 其余文字是给 Claude Code 看的路由说明：什么样的任务算哪个场景。脚本不读它们，Claude Code 派活和建计划时按它们选。
 - 项目偏好里有场景块时，只用项目的场景；写一个空的场景块，表示这个项目不分场景。项目偏好里没有场景块时，用用户偏好的。
 - 一份文件只能有一个场景块；开始和结束标记要配对。
 
-**2. 在配置里按场景写**：
+**2. 在 `modules` 下写场景块**：
 
 ```json
-"review": {
-  "complex": [ { "agent": "gpt-6.1-sol", "effort": "max", "required": true }, { "agent": "gpt-6-astra", "effort": "max" }, { "agent": "deepseek-flash" }, { "agent": "glm-5.3" } ],
-  "seats": { "simple": 1, "normal": 2, "complex": { "code": 2, "research": 4 } },
-  "gap":   { "simple": false, "normal": false, "complex": { "code": false, "research": true } }
+"modules": {
+  "default": { "discuss": { … }, "run": { … }, "review": { … }, "image": { … } },
+  "code": {
+    "review": { "complex": [{ "agent": "gpt-6.1-sol", "effort": "max", "required": true }, { "agent": "gpt-6-astra", "effort": "max" }],
+                "seats": { "complex": 2 }, "gap": { "complex": false } }
+  },
+  "research": {
+    "review": { "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "gpt-6.1-sol", "effort": "high" },
+                            { "agent": "deepseek-flash" }, { "agent": "glm-5.3" }],
+                "seats": { "complex": 4 }, "gap": { "complex": true } }
+  }
 }
 ```
 
-- 某一级写成对象，就是按场景分开：每个场景都要写，名字要和场景块里定义的完全一致。写数字或 `true`/`false` 的等级，各场景都一样。
-- **候选顺序就是优先级**：按场景写了的那一级，讨论和审查的外部席按候选的排列顺序挑（没按场景写的等级照旧由 Claude 挑）：先上必选，再按顺序往下补，跳过做不了的和与已选同一个基础模型的。补漏席也按顺序取下一个。所以把强模型排在前面，"2 席"就是前两个强模型，"4 席"会再往后加上便宜的广度席。确实要跳过某个候选时（材料不能发给这一家、额度用完），建计划时写 `--count-why`。
-- 建计划时，按场景分开的那一级要写 `--scene <场景>` 和 `--scene-why "<依据偏好里的哪一条>"`。
+- 场景块只写要改的部分，其余沿用 `default`：写了的格子整格替换，`seats`、`gap` 按等级覆盖。上例的 `code` 只改了审查 complex，它的讨论、执行和图像都和 `default` 一样。
+- 每个场景合并后都按同样的规则整体校验（能力、必选数不超过席位数、执行和图像一格最多一个必选等），报错会写明是哪个场景。
+- 不同场景可以有不同的必选方。场景由 Claude Code 按偏好里的路由选，脚本没法核实选得对不对，所以选的场景少了 `default` 同一格的某个必选时，`plan` 的输出会提示一句。
+- 场景能改所有四个模块；`dispatch` 里的设置不按场景分。
+
+**3. 派活时选场景**：
+- 要用的这一格只要在任何一个场景里和 `default` 不同（格子本身，或者这一级的 `seats`、`gap`），就算"按场景配了"。按场景配了的格子，建计划（`plan`）和直接派执行（`run --level`）时要写 `--scene <场景>` 和 `--scene-why "<依据偏好里的哪一条>"`；偏好没写到的情况写 `--scene default`。没按场景配的格子不用写。
+- 计划里的席位启动时，用计划记下的场景；续接（`resume`）沿用原任务的场景。这两种情况都不能再写 `--scene`。
+- 选了场景以后，在这个场景的格子里怎么挑人、几席、补漏，都和没有场景时一样（见 `references/seats.md`）。
 
 **对不上时**：
-- 定义了场景，但 `seats`、`gap` 都没按场景写：照常按等级派，提示一句。
-- 按场景写了，但偏好里没有场景定义，或者场景名对不上：`config` 和 `check` 报出来，讨论和审查的计划建不了，要先修好。其他命令（执行、图像、`status`、看板）照常能用。
-- 实际生效的场景看 `config` 输出的 `scenes`：`names`（场景名）、`source`（`user` 或 `project`）、`file`、`problems`（对不上的地方）。
+- 偏好里定义了、`modules` 里没写的场景，等于 `default`，提示一句。
+- `modules` 里有偏好没定义的场景，或者场景块写错了而 `modules` 里还有别的场景：`config` 和 `check` 报出来，派活、建计划、续接都会被拒绝，要先修好。`status`、看板照常能用。
+- 实际生效的场景看 `config` 输出的 `scenes`：`names`（场景名）、`source`（`user` 或 `project`）、`file`、`problems`（对不上的地方）。每个场景和 `default` 不同的格子看 `resolved_scenes`。
 
 ## 项目配置：覆盖全局
-某个项目要换一套候选、多用或少用几家、改时长时，在项目里写 `<项目目录>/.claude/foreman.json`：
+某个项目要换一套候选、多用或少用几家、改时长时，在项目里写 `<项目目录>/.claude/foreman.json`，形状和用户配置一样：
 
 ```json
 {
   "dispatch": { "timeout_min": 600 },
   "modules": {
-    "review": { "normal": [{ "agent": "a" }, { "agent": "b" }], "seats": { "normal": 3 }, "gap": { "complex": true } },
-    "run": { "normal": "claude code" }
+    "default": {
+      "review": { "normal": [{ "agent": "a" }, { "agent": "b" }], "seats": { "normal": 3 }, "gap": { "complex": true } },
+      "run": { "normal": "claude code" }
+    },
+    "code": { "review": { "complex": [{ "agent": "a", "effort": "max", "required": true }] } }
   }
 }
 ```
 
-- 只能写 `modules`，以及 `dispatch` 的 `discuss_max_rounds`、`timeout_min`、`stall_min`、`busy_ask_min`。`agents`、`auto`、`watch`、`intro`、`runs_dir` 作用于整台机器或整个会话，写在项目配置里会提示并忽略。协作方只能引用用户配置 `agents` 里定义过的代号。
+- 只能写 `modules`（任意场景），以及 `dispatch` 的 `discuss_max_rounds`、`timeout_min`、`stall_min`、`busy_ask_min`。`agents`、`auto`、`watch`、`intro`、`runs_dir` 作用于整台机器或整个会话，写在项目配置里会提示并忽略。协作方只能引用用户配置 `agents` 里定义过的代号。
 - 合并方式和用户配置覆盖默认值一样：写了的格子整格替换（要在用户配置的候选上加几个，就把原来那几个也写上），没写的格子沿用用户配置；`seats`、`gap` 按等级覆盖。可以加候选、改必选、调高席位、打开补漏、换推理强度、延长时长。
-- 合并后整体校验，写错时报错会指出是项目配置文件。
+- 有场景时按层叠：先算用户配置里这个场景的结果（用户的 `default` 加用户的场景块），再用项目配置里这个场景的结果（项目的 `default` 加项目的场景块）覆盖。所以项目的 `default` 也会盖过用户配置的场景块。
+- 合并后整体校验，写错时报错会指出是项目配置文件。项目配置还是平铺写法时，按 `default` 读，并提示改成新写法。
 - 只认项目目录本身的 `.claude/foreman.json`：`--cwd` 是哪个目录就读哪个目录下的。
-- `config --cwd` 输出的 `project_config` 是 `{ "path": "<文件路径>", "cells": [<覆盖了哪些格子和时长>] }`，没有项目配置时为 `null`；`check` 的总配置里也会列出来。
+- `config --cwd` 输出的 `project_config` 是 `{ "path": "<文件路径>", "cells": [<覆盖了哪些场景的哪些格子和时长>] }`，没有项目配置时为 `null`；`check` 的总配置里也会列出来。
 
 ## 其他规则
 - 每个协作方的并发上限按它自己正在运行的任务算，不分任务组、不分会话；达到上限时派发命令默认按先来后到排队：在记录目录的 `.state/queue/<协作方>/` 下领一张票据，每秒检查一次，排到最前面并且有空名额时启动；stderr 写出排在第几位和最多还等几分钟。`--queue-timeout <分钟>` 改最长等待时间（默认 60，最多 1440），写 0 时不排队、名额满了立即拒绝，报错里列出占着名额的任务。排队的进程被结束时票据随之删掉；被强制结束留下的票据，由下一个检查者按进程是否还在、票据是否过期回收。`status` 列出排队中的票据。派发计划本身不占名额。
 - 同组任务的写入范围不能重叠，这条只查会写文件的任务（执行），讨论和审查不查。
 - 沙箱不是 `read-only` / `workspace-write` 时（比如 `danger-full-access`），Codex 能写任何目录，`--cwd` 只决定它从哪里开始工作，**不限制写入范围**。这时范围只能靠任务说明约束，再靠事后审查 diff 把关。
 - 用户改了配置，改完运行 `config` 确认：
-  - `resolved_modules` 列出每一格最终有哪些候选，每个候选的模型、推理强度和是否必选；
+  - `resolved_modules` 列出 `default` 里每一格最终有哪些候选，每个候选的模型、推理强度和是否必选；
+  - `resolved_scenes` 按场景列出和 `default` 不同的格子、`seats` 和 `gap`（没有场景时为空对象）；
   - `project_config` 是项目配置的路径和它覆盖了哪些格子（带 `--cwd` 时，没有项目配置为 `null`）；
   - `scenes` 是生效的场景定义和对不上的地方（见"场景"）；
   - `image_configured` 说明用户配置里写没写图像块：为 `false` 时图像两格显示的 `null` 是默认值，不是用户关掉的；
@@ -322,7 +345,8 @@
 - 脚本输出"首次使用，已生成配置文件"时，转告用户检测到了什么（Codex、opencode、pi、API key）、现在各类任务交给谁，并建议运行 `/foreman:setup` 选择要用的模型。
 - 脚本输出"已在配置文件 … 里写明审查每一级要不要补漏席"时，告诉用户：补漏席现在可以按等级开关，已经按原来的做法写进配置（只有 3 级审查做补漏轮），想关掉或在别的等级打开就改 `review.gap`；原文件备份在哪里。
 - 脚本输出"用户配置里的 projects 已经不用了"时，告诉用户哪几项不再生效，建议运行 `/foreman:setup` 把它们搬到各项目的 `.claude/foreman.json`。
-- 脚本输出"偏好文件 … 定义了场景，但配置里的 seats、gap 都没有按场景写"时，告诉用户场景没生效，想用就按"场景"一节把 `seats`、`gap` 按场景写；`config` 的 `scenes.problems` 不为空时，把每一条转告用户，讨论和审查要等修好才能建计划。
+- 脚本输出"已把配置文件 … 的 modules 改成按场景写"时，告诉用户：配置换成了按场景的写法，原来的内容原样放进了 `modules.default`，用起来和以前一样；想按场景配时在 `modules` 下加场景块（见"场景"）；原文件备份在哪里。
+- 脚本输出"偏好里定义的场景 … 在 modules 里没有场景块"时，告诉用户这些场景现在和 `default` 一样，想让它们不同就按"场景"一节在 `modules` 下加场景块。`config` 的 `scenes.problems` 不为空时，把每一条转告用户：修好之前派活、建计划和续接都会被拒绝。
 - 脚本输出"已把配置文件 … 改成新写法"时，告诉用户：配置换成了新写法（`type` 改为 `codex cli` / `opencode cli` / `api`，`"claude"` 改为 `"claude code"`），协作方代号改成了模型名（转告脚本列出的对照），实际用的模型和推理强度都没变，原文件备份在哪里。
 - 脚本输出"已把配置文件 … 里的 levels 改写成 modules"时，告诉用户：配置换成了 `modules` 写法，每一格的协作方、推理强度和顺序都没变；有一处行为变化，以前讨论一级里的协作方全员参加，现在是候选、由 Claude 挑，想保留全员参加就给它们标 `"required": true`；配置里还没有图像两格；文件里的 `levels` 留成了一行说明，旧版插件读到会报错，不会悄悄改成全由 Claude 做；原文件备份在哪里。建议运行 `/foreman:setup` 标必选、加图像两格。改配置时保留 `levels` 那行说明。
 - **Windows 上 Codex 的只读沙箱**：默认的 elevated 沙箱在 `read-only` 模式下可能连读文件的命令都启动不了。给讨论和审查设 `read-only` 之前先运行 `check`：起不来时按它的 `fix` 在 `~/.codex/config.toml` 的 `[windows]` 里改用 `sandbox = "unelevated"`。没设只读沙箱时（`readonly` 为 `audited`），只读靠规则约束和事后对比快照，发现写入就记为失败，见 `references/review.md` 的"只读"。

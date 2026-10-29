@@ -123,7 +123,7 @@ test('新增 Claude 模型按指定价格匹配，支持提供方和日期后缀
 test('API extra_body.model 覆盖后按实际发送模型计价', async (t) => {
   const h = plannedSandbox(t), c = baseConfig(), api = await apiServer(t);
   c.agents.api = { ...apiAgent(api.url), model: 'unpriced-alias', extra_body: { model: 'gpt-6.1-sol' } };
-  c.modules.discuss.complex = [{ agent: 'api' }]; c.modules.discuss.seats = { complex: 1 }; h.config(c);
+  c.modules.default.discuss.complex = [{ agent: 'api' }]; c.modules.default.discuss.seats = { complex: 1 }; h.config(c);
   const result = output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'api'])));
   assert.equal(api.requests[0].body.model, 'gpt-6.1-sol');
   assert.equal(result.model, 'unpriced-alias'); assert.equal(result.model_shown, 'gpt-6.1-sol');
@@ -139,7 +139,7 @@ test('API 两种缓存写入字段保留到事件和任务结果，并按写入�
   ];
   const api = await apiServer(t, variants.map((v) => ({ usage: { prompt_tokens: 1000000, completion_tokens: 100000, ...v } })));
   c.agents.api = { ...apiAgent(api.url), model: 'gpt-6.1-sol' };
-  c.modules.discuss.complex = [{ agent: 'api' }]; c.modules.discuss.seats = { complex: 1 }; h.config(c);
+  c.modules.default.discuss.complex = [{ agent: 'api' }]; c.modules.default.discuss.seats = { complex: 1 }; h.config(c);
   for (const name of ['prompt_tokens_details.cache_write_tokens', 'cache_creation_input_tokens']) await t.test(name, async () => {
     const result = output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'api'])));
     assert.equal(h.events(result.run_id).find((e) => e.type === 'api.usage').usage.cache_write_input_tokens, 100000);
@@ -166,7 +166,7 @@ test('runner 四类协作方统一写 API 费用，opencode、pi 自报仅留档
   const h = plannedSandbox(t), c = baseConfig(), api = await apiServer(t);
   c.agents.codex.model = 'gpt-6.1-sol'; c.agents.pi = { ...piAgent(), model: 'provider/gpt-6.1-sol' };
   c.agents.oc = { ...opencodeAgent(), model: 'opencode-go/gpt-6.1-sol' }; c.agents.api = { ...apiAgent(api.url), model: 'kimi-k2.6' };
-  c.modules.discuss.complex = [{ agent: 'pi' }, { agent: 'oc' }, { agent: 'api' }]; c.modules.discuss.seats = { complex: 1 }; h.config(c);
+  c.modules.default.discuss.complex = [{ agent: 'pi' }, { agent: 'oc' }, { agent: 'api' }]; c.modules.default.discuss.seats = { complex: 1 }; h.config(c);
   const scene = h.scenario({ usage, export_messages: [{ type: 'assistant', tokens: { input: 700000, cache: { read: 200000, write: 100000 }, output: 100000 }, cost: 0.125 }] });
   const codex = output(await h.bridge(taskArgs(h, 'run', ['--no-snapshot']), { env: scene.env }));
   const pi = output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'pi'])));

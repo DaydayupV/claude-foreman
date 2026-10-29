@@ -12,8 +12,8 @@ const question = (source, text, extra = {}) => ({ source, question: text, option
 const message = (tool, text) => tool === 'codex' ? { type: 'item.completed', item: { type: 'agent_message', text } } : { type: 'text', part: { text } };
 const configure = (h, extra = {}) => {
   const c = baseConfig(); c.agents.codex.sandbox = { discuss: 'read-only', review: 'read-only' }; Object.assign(c.agents, { oc: opencodeAgent(), ...extra });
-  c.modules.discuss.complex = Object.keys(c.agents).map((agent) => ({ agent, effort: 'high' }));
-  c.modules.discuss.seats = { complex: 1 };
+  c.modules.default.discuss.complex = Object.keys(c.agents).map((agent) => ({ agent, effort: 'high' }));
+  c.modules.default.discuss.seats = { complex: 1 };
   h.config(c);
 };
 const discussArgs = (h, agent) => taskArgs(h, 'discuss', ['--agent', agent, '--no-snapshot']);

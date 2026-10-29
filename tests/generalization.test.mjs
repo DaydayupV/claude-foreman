@@ -16,7 +16,7 @@ test('多个 Codex、无 Codex 和三类能力表，省略强度与缺失 gap �
   c.agents['second.1'] = { type: 'codex cli', bin: CODEX };
   c.agents.api = apiAgent('http://127.0.0.1:1');
   c.agents.oc = opencodeAgent();
-  c.modules = { run: { complex: { agent: 'second.1' } }, discuss: { normal: [{ agent: 'api' }, { agent: 'oc' }] } };
+  c.modules.default = { run: { complex: { agent: 'second.1' } }, discuss: { normal: [{ agent: 'api' }, { agent: 'oc' }] } };
   h.config(c);
   const out = output(await h.bridge(['config']));
   // oc 没写 run_access：派不了执行任务，能力里也不列 run
@@ -27,13 +27,13 @@ test('多个 Codex、无 Codex 和三类能力表，省略强度与缺失 gap �
   assert.equal(out.codex, undefined);
   assert.deepEqual(out.resolved_modules.run.complex, [{ agent: 'second.1', model: null, effort: null, required: false, tier: null }]);
   assert.equal(out.resolved_modules.review.normal, 'claude code');
-  h.config({ agents: { api: c.agents.api }, modules: self() });
+  h.config({ agents: { api: c.agents.api }, modules: { default: self() } });
   assert.deepEqual(Object.keys(output(await h.bridge(['config'])).effective.agents), ['api']);
   h.config({ agents: {} });
   const modules = self();
   for (const mode of ['discuss', 'review']) modules[mode].seats = DEFAULT_SEATS[mode];
   modules.review.gap = { simple: false, normal: false, complex: true };
-  assert.deepEqual(output(await h.bridge(['config'])).effective.modules, modules);
+  assert.deepEqual(output(await h.bridge(['config'])).effective.modules.default, modules);
 });
 
 test('协作方代号允许点号，拒绝保留字和非法首字符', async (t) => {
@@ -46,7 +46,7 @@ test('协作方代号允许点号，拒绝保留字和非法首字符', async (t
 
 for (const mode of modes) test(`${mode} 的 Claude 等级、点名分派与 effort 选择`, async (t) => {
   const h = sandbox(t), c = baseConfig();
-  c.modules = self();
+  c.modules = { default: self() };
   h.config(c);
   const opts = mode === 'discuss' ? { env: h.scenario({ last_message: discussion }).env } : {};
   failed(await h.bridge(args(h, mode, ['--level', 'simple']), opts), mode === 'run' ? M.levelForClaude('simple') : M.discussReviewNeedsPlan(mode));
@@ -62,7 +62,7 @@ for (const mode of modes) test(`${mode} 的 Claude 等级、点名分派与 effo
   failed(await h.bridge(args(h, mode, ['--effort', 'high']), opts), mode === 'run' ? M.missingLevel('simple / normal / complex') : M.discussReviewNeedsPlan(mode));
   failed(await h.bridge(args(h, mode, ['--level', 'simple', '--effort', 'high']), opts), mode === 'run' ? M.levelForClaude('simple') : M.discussReviewNeedsPlan(mode));
   const entry = { agent: 'second' };
-  c.modules[mode].normal = mode === 'discuss' ? [entry] : entry;
+  c.modules.default[mode].normal = mode === 'discuss' ? [entry] : entry;
   h.config(c);
   const r = output(await h.bridge(args(h, mode, ['--level', 'normal', '--effort', 'low']), opts));
   assert.equal(r.agent, 'second');
@@ -70,14 +70,14 @@ for (const mode of modes) test(`${mode} 的 Claude 等级、点名分派与 effo
   const omitted = output(await h.bridge(args(h, mode, ['--level', 'normal']), opts));
   assert.equal(omitted.effort, null);
   assert.ok(!h.calls().filter((call) => call.operation === 'exec').at(-1).args.some((arg) => arg.includes('model_reasoning_effort')));
-  h.config({ agents: {}, modules: self() });
+  h.config({ agents: {}, modules: { default: self() } });
   failed(await h.bridge(args(h, mode, ['--effort', 'high']), opts), mode === 'run' ? M.missingLevel('simple / normal / complex') : M.discussReviewNeedsPlan(mode));
 });
 
 test('opencode 未授权时不能执行、API 不能执行，Claude 等级点名时不传强度', async (t) => {
   const h = sandbox(t), api = await apiServer(t, [{ answer: discussion }, { answer: discussion }]), c = baseConfig();
   c.agents = { oc: opencodeAgent(), api: apiAgent(api.url) };
-  c.modules = self();
+  c.modules = { default: self() };
   for (const name of ['oc', 'api']) {
     h.config(c);
     const r = output(await h.bridge(args(h, 'discuss', ['--level', 'simple', '--agent', name])));
@@ -86,10 +86,10 @@ test('opencode 未授权时不能执行、API 不能执行，Claude 等级点名
       h.config(c);
       const error = name === 'oc' ? M.runAccessRequired(name, 'opencode cli') : M.modeNotSupported(name, c.agents[name].type, mode, M.list(['discuss', 'review']));
       failed(await h.bridge(args(h, mode, ['--level', 'simple', '--agent', name])), error);
-      h.config({ ...c, modules: { [mode]: { normal: { agent: name } } } });
+      h.config({ ...c, modules: { default: { [mode]: { normal: { agent: name } } } } });
       failed(await h.bridge(['config']), error);
     }
-    h.config({ ...c, modules: { discuss: { normal: [{ agent: name }] } } });
+    h.config({ ...c, modules: { default: { discuss: { normal: [{ agent: name }] } } } });
     assert.equal(output(await h.bridge(args(h, 'discuss', ['--level', 'normal']))).effort, null);
   }
   assert.ok(api.requests.every((r) => !Object.hasOwn(r.body, 'reasoning_effort')));
@@ -99,16 +99,16 @@ test('opencode 未授权时不能执行、API 不能执行，Claude 等级点名
 test('讨论多参与方需要选择，未知代号和非法 Codex 强度被拒绝', async (t) => {
   const h = sandbox(t), c = baseConfig();
   c.agents.second = { ...c.agents.codex };
-  c.modules.discuss.normal.push({ agent: 'second' });
+  c.modules.default.discuss.normal.push({ agent: 'second' });
   h.config(c);
   failed(await h.bridge(args(h, 'discuss', ['--level', 'normal'])), M.discussReviewNeedsPlan('discuss'));
   failed(await h.bridge(args(h, 'discuss', ['--level', 'normal', '--effort', 'low'])), M.discussReviewNeedsPlan('discuss'));
   failed(await h.bridge(args(h, 'run', ['--effort', 'high', '--agent', 'missing'])), M.unknownAgentFlag('missing'));
   failed(await h.bridge(args(h, 'run', ['--level', 'complex', '--effort', 'invalid', '--agent', 'codex'])), M.effortChoices('low / medium / high / xhigh / max / ultra'));
   for (const effort of [null, 'invalid']) {
-    c.modules.run.complex[0].effort = effort;
+    c.modules.default.run.complex[0].effort = effort;
     h.config(c);
-    failed(await h.bridge(['config']), M.configInvalid('modules.run.complex[0].effort', M.invalid.effortValue(effort, 'low / medium / high / xhigh / max / ultra')));
+    failed(await h.bridge(['config']), M.configInvalid('modules.default.run.complex[0].effort', M.invalid.effortValue(effort, 'low / medium / high / xhigh / max / ultra')));
   }
 });
 
@@ -128,7 +128,7 @@ test('check 无协作方、未引用失败和已引用失败，以及只检查�
   r = output(await h.bridge(['check', '--agent', 'api']));
   assert.deepEqual(Object.keys(r.agents), ['api']);
   assert.equal(h.calls().length, before);
-  c.modules.discuss.normal = [{ agent: 'api' }];
+  c.modules.default.discuss.normal = [{ agent: 'api' }];
   h.config(c);
   assert.equal(output(await h.bridge(['check']), 1).ok, false);
   assert.equal(output(await h.bridge(['check', '--agent', 'api']), 1).ok, false);
@@ -138,29 +138,29 @@ test('项目整格替换候选、必选、模型和强度，可以打开格子�
   const h = sandbox(t), c = baseConfig();
   c.agents.second = { ...c.agents.codex };
   c.agents.api = apiAgent('http://127.0.0.1:1');
-  c.modules.discuss.normal = [{ agent: 'codex', effort: 'high', required: true }, { agent: 'api', effort: null }];
+  c.modules.default.discuss.normal = [{ agent: 'codex', effort: 'high', required: true }, { agent: 'api', effort: null }];
   h.config(c);
-  h.write('.claude/foreman.json', { modules: { run: { complex: { agent: 'second' } } } });
+  h.write('.claude/foreman.json', { modules: { default: { run: { complex: { agent: 'second' } } } } });
   let replaced = await h.bridge(['config', '--cwd', h.cwd]);
-  assert.deepEqual(output(replaced).effective.modules.run.complex, [{ agent: 'second' }]);
+  assert.deepEqual(output(replaced).effective.modules.default.run.complex, [{ agent: 'second' }]);
   assert.equal(replaced.stderr, '');
-  h.write('.claude/foreman.json', { agents: { codex: { model: 'ignored-model' } }, dispatch: { discuss_max_rounds: 5, timeout_min: 2, stall_min: 3, busy_ask_min: 4, auto: false }, modules: {
+  h.write('.claude/foreman.json', { agents: { codex: { model: 'ignored-model' } }, dispatch: { discuss_max_rounds: 5, timeout_min: 2, stall_min: 3, busy_ask_min: 4, auto: false }, modules: { default: {
     run: { simple: { agent: 'codex' } }, review: { simple: 'claude code', normal: { agent: 'codex', effort: 'low', model: 'project-model' }, complex: { agent: 'codex' } },
     discuss: { simple: 'claude code', normal: [{ agent: 'api', effort: 'low', model: 'project-model' }, { agent: 'second', required: true }] },
-  } });
+  } } });
   const r = await h.bridge(['config', '--cwd', h.cwd]), out = output(r).effective;
   assert.equal(out.agents.codex.model, 'fake-codex');
   assert.equal(out.dispatch.auto, true);
   assert.deepEqual([out.dispatch.discuss_max_rounds, out.dispatch.timeout_min, out.dispatch.stall_min, out.dispatch.busy_ask_min], [5, 2, 3, 4]);
-  assert.deepEqual(out.modules.run, { ...c.modules.run, simple: [{ agent: 'codex' }] });
-  assert.equal(out.modules.review.simple, 'claude code');
-  assert.deepEqual(out.modules.review.normal, [{ agent: 'codex', effort: 'low', model: 'project-model' }]);
-  assert.deepEqual(out.modules.review.complex, [{ agent: 'codex' }]);
-  assert.deepEqual(out.modules.discuss.normal, [{ agent: 'api', effort: 'low', model: 'project-model' }, { agent: 'second', required: true }]);
+  assert.deepEqual(out.modules.default.run, { ...c.modules.default.run, simple: [{ agent: 'codex' }] });
+  assert.equal(out.modules.default.review.simple, 'claude code');
+  assert.deepEqual(out.modules.default.review.normal, [{ agent: 'codex', effort: 'low', model: 'project-model' }]);
+  assert.deepEqual(out.modules.default.review.complex, [{ agent: 'codex' }]);
+  assert.deepEqual(out.modules.default.discuss.normal, [{ agent: 'api', effort: 'low', model: 'project-model' }, { agent: 'second', required: true }]);
   assert.equal(r.stderr, `foreman: ${M.projectIgnored(M.list(['agents', 'dispatch.auto']))}\n`);
-  h.write('.claude/foreman.json', { modules: { discuss: { normal: [{ agent: 'second' }] } } });
+  h.write('.claude/foreman.json', { modules: { default: { discuss: { normal: [{ agent: 'second' }] } } } });
   replaced = await h.bridge(['config', '--cwd', h.cwd]);
-  assert.deepEqual(output(replaced).effective.modules.discuss.normal, [{ agent: 'second' }]);
+  assert.deepEqual(output(replaced).effective.modules.default.discuss.normal, [{ agent: 'second' }]);
   assert.equal(replaced.stderr, '');
 });
 
@@ -182,24 +182,24 @@ await import(${JSON.stringify(pathToFileURL(BRIDGE).href)});`);
   assert.equal(c.image_configured, true);
   assert.deepEqual(c.environment, { codex: { found: codex, logged_in: available }, opencode: { found: oc, models: oc && scenario !== 'empty-models' ? 2 : 0 }, pi: { found: pi, models: pi ? 3 : 0 }, agy: { found: false, models: 0 }, api_keys: keys });
   assert.deepEqual(Object.keys(cfg.agents), [...(available ? ['gpt-6.1-sol', 'gpt-6-astra'] : []), ...(keys.length ? ['deepseek-v4-pro', 'kimi-k2.6', 'mimo-v2.6-pro'] : [])]);
-  assert.equal(cfg.modules.run.simple, 'claude code');
-  assert.equal(cfg.modules.run.normal, 'claude code');
+  assert.equal(cfg.modules.default.run.simple, 'claude code');
+  assert.equal(cfg.modules.default.run.normal, 'claude code');
   if (available) {
-    assert.deepEqual(cfg.modules.run.complex, [{ agent: 'gpt-6.1-sol', effort: 'max' }]);
+    assert.deepEqual(cfg.modules.default.run.complex, [{ agent: 'gpt-6.1-sol', effort: 'max' }]);
     for (const [i, lv] of levels.entries()) {
       const item = { agent: i === 2 ? 'gpt-6-astra' : 'gpt-6.1-sol', effort: ['medium', 'high', 'max'][i] };
-      assert.deepEqual(cfg.modules.review[lv], [item]);
-      assert.deepEqual(cfg.modules.discuss[lv], [item]);
+      assert.deepEqual(cfg.modules.default.review[lv], [item]);
+      assert.deepEqual(cfg.modules.default.discuss[lv], [item]);
     }
-    assert.deepEqual(cfg.modules.image, { generate: [{ agent: 'gpt-6.1-sol', effort: 'medium' }], draw: [{ agent: 'gpt-6-astra', effort: 'max' }] });
+    assert.deepEqual(cfg.modules.default.image, { generate: [{ agent: 'gpt-6.1-sol', effort: 'medium' }], draw: [{ agent: 'gpt-6-astra', effort: 'max' }] });
   } else {
     const expected = self();
     for (const module of ['discuss', 'review']) expected[module].seats = DEFAULT_SEATS[module];
     expected.review.gap = { simple: false, normal: false, complex: false };
-    assert.deepEqual(cfg.modules, expected);
+    assert.deepEqual(cfg.modules.default, expected);
   }
-  for (const module of ['discuss', 'review']) assert.deepEqual(cfg.modules[module].seats, DEFAULT_SEATS[module]);
-  assert.deepEqual(cfg.modules.review.gap, { simple: false, normal: false, complex: false });
+  for (const module of ['discuss', 'review']) assert.deepEqual(cfg.modules.default[module].seats, DEFAULT_SEATS[module]);
+  assert.deepEqual(cfg.modules.default.review.gap, { simple: false, normal: false, complex: false });
   assert.equal(Object.hasOwn(cfg.dispatch, 'max_seats'), false);
   if (keys.length) assert.equal(cfg.agents['kimi-k2.6'].api_key_env, 'KIMI_API_KEY');
   let parts = available ? M.starterCodex('gpt-6.1-sol', 'gpt-6-astra') : M.starterNoCodex;
@@ -239,7 +239,7 @@ console.log(JSON.stringify(detectEnvironment(adapters)));`);
 test('无协作方的中英文会话提醒只建议 setup，并读取旧位置配置', async (t) => {
   for (const lang of ['foreman', 'foreman-en']) for (const old of [false, true]) {
     const h = sandbox(t, { config: false }), file = old ? path.join(h.home, '.claude/codex-bridge.json') : h.userConfig;
-    write(file, { agents: {}, modules: self() });
+    write(file, { agents: {}, modules: { default: self() } });
     const hook = path.join(ROOT, lang, 'hooks/session-reminder.mjs');
     const context = output(await h.start(hook, [], { input: JSON.stringify({ cwd: h.cwd }) }).done).hookSpecificOutput.additionalContext;
     assert.ok(context.includes(`/${lang}:setup`));

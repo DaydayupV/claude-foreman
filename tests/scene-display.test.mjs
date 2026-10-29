@@ -42,7 +42,7 @@ test('场景经 fplan 传到网页组标题和悬停，兼容旧计划与未启�
     currentRun: (lane) => data.runs.find((r) => r.id === lane.id), roundOf: () => 1, laneStatus: () => ({ running: false }),
     groupSeats: () => ({ history: [], blocks: runs.map((r) => ({ id: r.id, host: r })), all: runs, plans,
       numbers: { runs: new Map() }, queue: [], states: [] }),
-    setText: (el, text) => { el.textContent = text; }, seatShell: element, fillHostSeat() {}, document: { createElement: element }, B: { laneById: new Map() },
+    setText: (el, text) => { el.textContent = text; }, seatShell: element, fillHostSeat() {}, loneGroup: () => false, document: { createElement: element }, B: { laneById: new Map() },
   });
   vm.runInContext(shared + sourceOf('groupHead') + '\n' + sourceOf('fillGroup') + '\nglobalThis.api = { Display, groupHead, fillGroup };', context);
   const web = context.api;
@@ -64,4 +64,21 @@ test('场景经 fplan 传到网页组标题和悬停，兼容旧计划与未启�
   assert.equal(col.querySelector('header b').textContent, groupTask(runs).text);
   assert.equal(col.querySelector('header b').title, '');
   assert.equal(web.groupHead(ghosts.filter((g) => g.plan === plans[0].plan), now).title, 'review · planned · complex');
+});
+
+test('组里无带场景计划时，终端和网页从任务 meta 取场景及理由，并优先使用计划', (t) => {
+  const h = sandbox(t), why = '直派规则';
+  seedRun(h, '20000101-000000-scene', { scene: 'code', scene_why: why, group: 'direct-scenes' });
+  const data = createFeed(h.runs).read({ session: 'test-session' }, Date.now());
+  assert.equal(data.runs[0].scene, 'code'); assert.equal(data.runs[0].scene_why, why);
+  const context = vm.createContext(); vm.runInContext(shared + '\nglobalThis.Display = Display;', context);
+  const runs = data.runs.map((r) => context.Display.displayRun(r));
+  for (const plans of [[], [{ scene: null }], [{ scene: 'research', scene_why: '计划规则' }]]) {
+    const terminal = groupTask(runs, plans), web = context.Display.groupTask(runs, plans);
+    assert.equal(web.text, terminal.text); assert.equal(web.sceneWhy, terminal.sceneWhy);
+    assert.ok(terminal.text.endsWith(plans.some((p) => p.scene) ? 'research' : 'code'));
+  }
+  assert.equal(groupTask(runs).sceneWhy, `code: ${why}`);
+  const displaySource = fs.readFileSync(new URL('../foreman/skills/dispatch/scripts/display.mjs', import.meta.url), 'utf8');
+  assert.equal(sourceOf('groupTask'), displaySource.match(/function groupTask\([\s\S]*?\n\}/)[0]);
 });

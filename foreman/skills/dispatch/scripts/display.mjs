@@ -477,9 +477,10 @@ function groupTask(all, plans = [], queue = [], list = D.list) {
   const same = (key) => (new Set(metas.map((m) => m[key] ?? null)).size === 1 ? metas[0]?.[key] : null);
   const titles = [...new Set(metas.map((m) => withoutRole(oneLine(m.title || ''), m.role)).filter(Boolean))];
   const round = same('round');
-  const scenes = [...new Set(plans.map((p) => p.scene).filter(Boolean))];
+  const sceneSources = plans.some((p) => p.scene) ? plans : all.map((run) => run.meta);
+  const scenes = [...new Set(sceneSources.map((p) => p.scene).filter(Boolean))];
   return { split: module === 'run' && titles.length > 1, text: taskLine({ ...metas[0], level: same('level'), cell: same('cell') }, { mode, title: titles.join(' / '), round, scene: list(scenes) }),
-    sceneWhy: plans.filter((p) => p.scene && p.scene_why).map((p) => `${p.scene}: ${p.scene_why}`).join('\n'),
+    sceneWhy: [...new Set(sceneSources.filter((p) => p.scene && p.scene_why).map((p) => `${p.scene}: ${p.scene_why}`))].join('\n'),
     // 简短的组标题（网页用量表的组行）：只写类型和标题
     short: D.dots([moduleOf(metas[0]), titles.length && oneLine(titles.join(' / '))]) };
 }

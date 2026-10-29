@@ -12,8 +12,8 @@ for (const lang of ['zh', 'en']) {
     const h = sandbox(t), c = baseConfig(), messages = MESSAGES[lang];
     c.agents.oc = opencodeAgent();
     c.agents.oc.run_access = 'edit';
-    c.modules.run.complex = { agent: 'oc', effort: 'low' };
-    c.modules.review.normal = { agent: 'oc', effort: 'medium', model: 'fake/override' };
+    c.modules.default.run.complex = { agent: 'oc', effort: 'low' };
+    c.modules.default.review.normal = { agent: 'oc', effort: 'medium', model: 'fake/override' };
     h.config(c);
     const s = h.scenario({ reject_variants: ['medium'], last_message: 'OK' });
     const r = output(await h.bridge(['check', '--agent', 'oc'], { env: { ...s.env, FOREMAN_LANG: lang } }), 1);
@@ -40,11 +40,11 @@ test('check opencode 按模型和档位去重并保留所有等级位置', async
   for (const mode of ['discuss', 'run', 'review']) {
     for (const level of ['simple', 'normal', 'complex']) {
       const entry = { agent: 'oc', effort: 'high' };
-      c.modules[mode][level] = mode === 'discuss' ? [{ agent: 'codex' }, entry] : entry;
+      c.modules.default[mode][level] = mode === 'discuss' ? [{ agent: 'codex' }, entry] : entry;
       usedAt.push(`modules.${mode}.${level}${mode === 'discuss' ? '[1]' : '[0]'}`);
     }
   }
-  c.modules.discuss.complex[1].model = 'fake/other';
+  c.modules.default.discuss.complex[1].model = 'fake/other';
   const overrideAt = usedAt.splice(usedAt.indexOf('modules.discuss.complex[1]'), 1)[0];
   h.config(c);
   const r = output(await h.bridge(['check', '--agent', 'oc']));
@@ -60,8 +60,8 @@ test('check opencode 按模型和档位去重并保留所有等级位置', async
 test('check opencode 没有配置档位时只发默认请求', async (t) => {
   const h = sandbox(t), c = baseConfig();
   c.agents.oc = opencodeAgent();
-  c.modules.review.simple = { agent: 'oc', effort: null };
-  c.modules.discuss.normal = [{ agent: 'oc' }];
+  c.modules.default.review.simple = { agent: 'oc', effort: null };
+  c.modules.default.discuss.normal = [{ agent: 'oc' }];
   h.config(c);
   const r = output(await h.bridge(['check', '--agent', 'oc']));
   assert.deepEqual(r.agents.oc.variants, []);
@@ -71,7 +71,7 @@ test('check opencode 没有配置档位时只发默认请求', async (t) => {
 test('check opencode 默认请求失败时不发档位请求', async (t) => {
   const h = sandbox(t), c = baseConfig();
   c.agents.oc = opencodeAgent();
-  c.modules.review.normal = { agent: 'oc', effort: 'high' };
+  c.modules.default.review.normal = { agent: 'oc', effort: 'high' };
   h.config(c);
   const s = h.scenario({ exit_code: 1, steps: [{ event: { type: 'error', error: { message: 'default failed' } } }] });
   const r = output(await h.bridge(['check', '--agent', 'oc'], { env: s.env }), 1);

@@ -15,7 +15,7 @@ function configure(h, agent = 'codex', api) {
   const c = baseConfig(); c.agents.codex.sandbox = { discuss: 'read-only', review: 'read-only' };
   c.agents.oc = opencodeAgent(); c.agents.pi = piAgent();
   if (api) c.agents.api = apiAgent(api.url);
-  c.modules.review.normal = [{ agent }]; h.config(c); return c;
+  c.modules.default.review.normal = [{ agent }]; h.config(c); return c;
 }
 const digest = (v) => createHash('sha256').update(v).digest('hex');
 
@@ -146,11 +146,11 @@ for (const agent of ['oc', 'pi', 'api']) test(`visual 在单席、格外点名�
   const h = sandbox(t), api = await apiServer(t); const c = configure(h, agent, api); h.write('shot.PNG', Buffer.from([0, 1]));
   const material = ['--target', 'visual', '--file', 'shot.PNG'], message = M.readsImagesRequired(agent, c.agents[agent].type);
   failed(await h.bridge(args(h, material)), message); failed(await h.bridge(planArgs(h, material, agent)), message);
-  c.modules.review.normal = 'claude code'; h.config(c);
+  c.modules.default.review.normal = 'claude code'; h.config(c);
   failed(await h.bridge(args(h, [...material, '--agent', agent])), message);
   configure(h); const p = output(await h.bridge(planArgs(h, material)));
   const plan = json(p.file); plan.seats[0] = { ...plan.seats[0], agent, model: c.agents[agent].model, effort: null };
-  write(p.file, plan); c.modules.review.normal = [{ agent }]; h.config(c);
+  write(p.file, plan); c.modules.default.review.normal = [{ agent }]; h.config(c);
   failed(await h.bridge(launch(p)), message);
   assert.equal(h.records().filter((m) => m.participant !== 'host').length, 0); assert.equal(h.calls().length, 0); assert.equal(api.requests.length, 0);
 });
@@ -272,7 +272,7 @@ test('Codex 审查忽略中途和最终提问，格式不合格仍保留原文',
 
 test('项目目录外的审查文件：有 opencode 席时建计划就拒绝，只有 Codex 时照常；opencode 讨论带外部文件也拒绝', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.oc = opencodeAgent();
-  c.modules.review.normal = [{ agent: 'codex' }, { agent: 'oc' }]; c.modules.discuss.normal = [{ agent: 'oc' }]; h.config(c);
+  c.modules.default.review.normal = [{ agent: 'codex' }, { agent: 'oc' }]; c.modules.default.discuss.normal = [{ agent: 'oc' }]; h.config(c);
   const outside = write(path.join(h.home, 'outside', 'notes.patch'), 'diff\n'), inside = h.write('notes.md', '材料\n');
   const plan = (seats, file) => ['plan', '--cwd', h.cwd, '--module', 'review', '--cell', 'normal', '--group', 'outside', '--target', 'files', '--file', file,
     ...seats.flatMap((seat) => ['--seat', seat]), '--count-why', '测试'];

@@ -47,12 +47,12 @@ assert.ok(git, '测试需要已有的 Git');
 export const baseConfig = () => ({
   dispatch: { watch: { terminal: false, web: false }, timeout_min: 1, stall_min: 0, busy_ask_min: 0 },
   agents: { codex: { type: 'codex cli', bin: CODEX, model: 'fake-codex', max_parallel: 4 } },
-  modules: {
+  modules: { default: {
     run: { simple: 'claude code', normal: 'claude code', complex: [{ agent: 'codex', effort: 'max' }] },
     review: { simple: [{ agent: 'codex', effort: 'medium' }], normal: [{ agent: 'codex', effort: 'high' }], complex: [{ agent: 'codex', effort: 'max' }], seats: { ...DEFAULT_SEATS.review }, gap: { simple: false, normal: false, complex: true } },
     discuss: { simple: [{ agent: 'codex', effort: 'medium' }], normal: [{ agent: 'codex', effort: 'high' }], complex: [{ agent: 'codex', effort: 'max' }], seats: { ...DEFAULT_SEATS.discuss } },
     image: { generate: null, draw: null },
-  },
+  } },
 });
 
 // 讨论和审查每一级默认的外部席位数（产品默认值见 references/config.md），测试里只在这里写。

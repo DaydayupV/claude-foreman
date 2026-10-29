@@ -51,7 +51,7 @@ test('取消时记下已经产生的用量：有完成的请求就照记并说�
   }
   const api = await apiServer(t, [{ queued: true, gate: 'cancel' }]);
   const c = baseConfig(); c.agents.api = apiAgent(api.url);
-  c.modules.discuss.complex = [{ agent: 'api' }]; h.config(c);
+  c.modules.default.discuss.complex = [{ agent: 'api' }]; h.config(c);
   const running = h.startBridge(['discuss', '--cwd', h.cwd, '--level', 'complex', '--brief', '-']);
   const meta = await h.running();
   await poll(() => h.events(meta.id).some((e) => e.type === 'api.queued'), '请求排队');
@@ -84,7 +84,7 @@ test('调度进程没在时限内停下时，cancel 强行结束它并补写结�
 
 const planConfig = (h) => {
   const c = baseConfig(); c.agents.oc = opencodeAgent();
-  c.modules.discuss.complex = [{ agent: 'codex', effort: 'max', required: true }, { agent: 'oc' }];
+  c.modules.default.discuss.complex = [{ agent: 'codex', effort: 'max', required: true }, { agent: 'oc' }];
   h.config(c);
 };
 const makePlan = async (h, group) => {
@@ -121,7 +121,7 @@ test('组视图和 status --group 写出计划完不完整、缺了哪个必选'
 
 test('项目配成 Claude Code 后可建格子外计划并启动席位，执行计划仍拒绝空格', async (t) => {
   const h = sandbox(t); planConfig(h);
-  h.write('.claude/foreman.json', { modules: { discuss: { complex: 'claude code' } } });
+  h.write('.claude/foreman.json', { modules: { default: { discuss: { complex: 'claude code' } } } });
   const p = await makePlan(h, 'project-claude');
   assert.equal(p.outside_cell, true); assert.deepEqual(p.required, []);
   assert.equal(json(p.file).outside_cell, true);
@@ -357,7 +357,7 @@ test('强行结束时结果只写了一半，换成补写的最简结果，之�
 
 test('计划状态里的审查：没审完或格式不合格的不算有效，Codex 原生审查和旧记录的文字算', async (t) => {
   const h = sandbox(t); const c = baseConfig(); c.agents.oc = opencodeAgent();
-  c.modules.review.complex = [{ agent: 'codex', effort: 'max', required: true }, { agent: 'oc' }]; h.config(c);
+  c.modules.default.review.complex = [{ agent: 'codex', effort: 'max', required: true }, { agent: 'oc' }]; h.config(c);
   h.write('source.txt', 'evidence\n');
   const review = { verdict: 'no_issues', findings: [], coverage: { checked: ['source.txt'], not_checked: [] }, unverified: [] };
   const cases = [

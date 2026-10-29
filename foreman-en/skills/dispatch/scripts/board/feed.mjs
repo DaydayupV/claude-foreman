@@ -258,6 +258,7 @@ export function runMessage(run, lane, prices, byId, { display: includeDisplay = 
     // 正常结束、却没交回合格报告的（看板上的"no valid result"）：不带 display 的地方（星图）也要能按失败算
     ...(r?.status === 'done' && !o.blocked && o.valid === false && m.participant !== 'host' ? { no_result: true } : {}),
     model_name: clip(m.model_name), display_model: clip(m.model || m.model_name || m.model_shown), cell: clip(m.cell), route: m.route ?? null,
+    ...(m.scene ? { scene: clip(m.scene), scene_why: clip(m.scene_why) } : {}),
     usage, ...(r?.usage_scope != null ? { usage_scope } : {}), ...(usage_unattributed ? { usage_unattributed: true } : {}),
     ...costFields(cost.cost_usd, cost.cost_source), report_head: head ? String(head).slice(0, 160) : null,
     // 同组别的任务改的文件（group_run）不算这一席的，卡片的产出框不列

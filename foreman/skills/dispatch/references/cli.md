@@ -6,7 +6,7 @@ SKILL.md 里只留了决策流程和常用命令。查某个命令的完整参�
 唯一入口是 dispatch skill 目录下的 `scripts/cli.mjs`（下面写成 `<脚本路径>`）。
 
 ```bash
-node "<脚本路径>" run    --cwd "<项目目录>" --brief "<任务说明.md>" --title "<短标题>" --level <simple|normal|complex> [--agent <协作方>] [--add-dir "<目录>"] [--track "<路径>"] [--group <组名> --scope "<路径>"] [--timeout 分钟]
+node "<脚本路径>" run    --cwd "<项目目录>" --brief "<任务说明.md>" --title "<短标题>" --level <simple|normal|complex> [--agent <协作方>] [--scene <场景> --scene-why "<依据>"] [--add-dir "<目录>"] [--track "<路径>"] [--group <组名> --scope "<路径>"] [--timeout 分钟]
 node "<脚本路径>" resume --run <run_id|last> --brief "<返工说明.md>" --level <simple|normal|complex> --reason <rework|answer|recover> [--track "<路径>"] [--file "<路径>[:起始行-结束行]"]（续接图像任务时不写 --level；讨论的续接不写 --reason）
 node "<脚本路径>" plan   --cwd "<项目目录>" --module <discuss|run|review> --cell <simple|normal|complex> --group <组名> --seat "<代号>[=<角色名>]" [--seat …] [--why "<选择理由>"] [--host-role "<角色名>"] [--count-why "<理由>"]（这两项只用于讨论和审查计划） [--target diff|files|claims|visual --file "<路径>[:起始行-结束行]" --uncommitted | --base <分支> | --commit <sha>（只用于审查计划）]
 node "<脚本路径>" submit --plan <plan_id> --report "<报告.json>" [--model <Claude Code 当前的模型>] [--author]
@@ -61,9 +61,9 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
 ```
 
 - 校验都在发出任何请求之前做完：格子没关（不是 `"claude code"` 或 `null`）；每个席位都在这一格的候选里（旧代号会换成新代号）；必选都有席位；执行和手画（draw）席位能执行；`visual` 审查的席位能看图（`reads_images`）；出图（generate）席位能出图。
-- 审查计划还检查补漏席（角色为 `补漏` 或 `gap`）：一份计划最多一个；讨论计划不能有。补漏席的基础模型要和其余每一席都不同，否则拒绝；启动补漏席时还要和 Claude Code 席 `submit --model` 报的模型不同。这一级的 `gap` 开着、还有合适的候选（主席位以外、基础模型和各主席位都不同）却没列补漏席，或者 `gap` 关着却列了补漏席，场景模式下补漏席不是候选顺序上的下一个，都要带 `--count-why`，否则拒绝。同一个模型的各种写法算同一个：去掉 `提供方/` 前缀、Bedrock 的 `…anthropic.` 前缀，Claude 的小数版本号写成连字符（`claude-fable-5.1` 即 `claude-fable-5-1`），以及插件价格表 `prices.json` 的 `aliases` 里记下的官方别名（比如 `deepseek-v4.1-flash` 即 `deepseek-flash`）。`stats` 按同一套规则把同一个模型合成一行。
-- 讨论和审查计划另外检查外部席位数（审查不算补漏席，也就是角色为 `补漏` 或 `gap` 的席位；其他模块里这个角色名照常计数）：要等于 `min(这一级的 seats, 这一格能用的不同候选数)`（按场景写的取 `--scene` 这个场景的值），`visual` 审查只算能看图的候选。不一致时要带 `--count-why "<理由>"`，否则拒绝；`--count-why` 用在别的模块上也拒绝。计划里记 `seat_target`（上面算出的数，`outside_cell` 计划为 `null`，也不做这项检查）和 `count_why`（没写为 `null`）。
-- 场景：`--scene <场景>` 和 `--scene-why "<理由>"` 只用于讨论和审查，两个要一起写。这一级按场景写了 `seats` 或 `gap` 时必须写；场景名要在 `config` 输出的 `scenes.names` 里；没有场景定义时写了会被拒绝；`scenes.problems` 不为空时讨论和审查计划都建不了。场景模式下还检查外部席是不是按候选顺序取的：必选加上按顺序往下数的候选（跳过做不了的和与前面同一个基础模型的），按协作方去重后要和计划里的主席位一致，不一致要带 `--count-why`。计划里记 `scene`、`scene_why` 和 `gap`（这份计划生效的补漏开关）。这项检查只在建计划时做，启动席位时不再检查，配置改了以后已有的计划照样能启动。
+- 审查计划还检查补漏席（角色为 `补漏` 或 `gap`）：一份计划最多一个；讨论计划不能有。补漏席的基础模型要和其余每一席都不同，否则拒绝；启动补漏席时还要和 Claude Code 席 `submit --model` 报的模型不同。这一级的 `gap` 开着、还有合适的候选（主席位以外、基础模型和各主席位都不同）却没列补漏席，或者 `gap` 关着却列了补漏席，都要带 `--count-why`，否则拒绝。同一个模型的各种写法算同一个：去掉 `提供方/` 前缀、Bedrock 的 `…anthropic.` 前缀，Claude 的小数版本号写成连字符（`claude-fable-5.1` 即 `claude-fable-5-1`），以及插件价格表 `prices.json` 的 `aliases` 里记下的官方别名（比如 `deepseek-v4.1-flash` 即 `deepseek-flash`）。`stats` 按同一套规则把同一个模型合成一行。
+- 讨论和审查计划另外检查外部席位数（审查不算补漏席，也就是角色为 `补漏` 或 `gap` 的席位；其他模块里这个角色名照常计数）：要等于 `min(这一级的 seats, 这一格能用的不同候选数)`（按场景配了的格子取 `--scene` 这个场景的值），`visual` 审查只算能看图的候选。不一致时要带 `--count-why "<理由>"`，否则拒绝；`--count-why` 用在别的模块上也拒绝。计划里记 `seat_target`（上面算出的数，`outside_cell` 计划为 `null`，也不做这项检查）和 `count_why`（没写为 `null`）。
+- 场景：`--scene <场景>` 和 `--scene-why "<理由>"` 要一起写，所有模块都能用，`run --level` 直接派执行也能用。要用的这一格在某个场景里和 `default` 不同（格子本身，或者这一级的 `seats`、`gap`）时必须写；值是 `default` 或 `config` 输出的 `scenes.names` 里的一个；没有场景定义、`modules` 里也只有 `default` 时，只能写 `default`。`scenes.problems` 不为空时，建计划、直接派执行、启动计划席和续接都会被拒绝。计划和校验都按这个场景合并后的配置算；选的场景比 `default` 同一格少了某个必选时，输出的 `notes` 里有一句提示，不拦。计划里记 `scene`、`scene_why` 和 `gap`（这份计划生效的补漏开关）；直接派出的执行任务把 `scene`、`scene_why` 记在 meta 里。计划席启动时用计划的场景，`resume` 沿用原任务的场景，这两种情况再写 `--scene` 会被拒绝；原任务的场景已经不在配置里时，`resume` 拒绝。这项检查只在建计划时做，启动席位时不再检查，配置改了以后已有的计划照样能启动。
 - 讨论和审查计划自带 Claude Code 席：计划顶层的 `host`（`seat` 为 0，`role` 来自 `--host-role`，没写为 `null`），外部席位仍在 `seats` 里、从 1 编号。`--host-role` 写在别的模块上会被拒绝。讨论和审查不带 `--plan` 时 `discuss`、`review` 直接报错。用户配置里写成 `"claude code"` 的讨论或审查格子也能建计划（用户点名派出时用）：计划标 `outside_cell: true`，`required` 为空，每席的协作方要支持这个模块，推理强度用内置默认值。没有 `host` 的旧计划照旧只数 `seats`，启动时也不要求提交报告。
 - 图像计划另外检查：
   - `--route` 必须写，只能是 1–4，而且和格子对得上：① 位图只用 generate；② 位图 + 矢量混合用 generate 和 draw；③ 纯矢量、先出参考图用 generate（只出参考图）和 draw；④ 纯矢量 / 代码只用 draw。计划只管一格，所以路线 ④ 的 draw 计划不看 generate 格子里的必选。别的模块写 `--route` 会被拒绝。

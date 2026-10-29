@@ -8,7 +8,7 @@ import { sandbox, baseConfig as oldBaseConfig, apiAgent, opencodeAgent, piAgent,
 import { apiServer } from './fake/api-server.mjs';
 const M = MESSAGES.zh;
 const baseConfig = () => {
-  const c = oldBaseConfig(); c.modules.review.gap = { simple: false, normal: false, complex: true }; return c;
+  const c = oldBaseConfig(); c.modules.default.review.gap = { simple: false, normal: false, complex: true }; return c;
 };
 const entry = (agent, effort = null, required = false) => ({ agent, ...(effort == null ? {} : { effort }), required });
 const catalogs = {
@@ -31,10 +31,10 @@ const sampleConfig = (url) => {
   c.agents = { a: { ...c.agents.codex, sandbox: { discuss: 'read-only', review: 'read-only' } },
     b: { ...opencodeAgent(), model: 'beta/z', run_access: 'edit' }, c: { ...piAgent(), model: 'alpha/missing', run_access: 'shell' },
     d: apiAgent(url), e: apiAgent(url) };
-  c.modules.discuss = { simple: 'claude code', normal: [entry('a'), entry('b')], complex: [entry('b'), entry('a')], seats: { normal: 2 } };
-  c.modules.review = { simple: [entry('a', 'max', true), entry('b'), entry('c')], normal: [entry('b', null, true), entry('a'), entry('c')], complex: [entry('a'), entry('b'), entry('c')] };
-  c.modules.run = { simple: 'claude code', normal: [entry('b', null, true)], complex: [entry('c', 'high')] };
-  c.modules.image = { generate: [entry('a', 'low')], draw: null };
+  c.modules.default.discuss = { simple: 'claude code', normal: [entry('a'), entry('b')], complex: [entry('b'), entry('a')], seats: { normal: 2 } };
+  c.modules.default.review = { simple: [entry('a', 'max', true), entry('b'), entry('c')], normal: [entry('b', null, true), entry('a'), entry('c')], complex: [entry('a'), entry('b'), entry('c')], gap: { complex: true } };
+  c.modules.default.run = { simple: 'claude code', normal: [entry('b', null, true)], complex: [entry('c', 'high')] };
+  c.modules.default.image = { generate: [entry('a', 'low')], draw: null };
   return c;
 };
 const markdown = async (h, args, options, code = 0) => {
@@ -68,7 +68,7 @@ test('config/check md 固定四张格子表、六种派法、权限和合并提�
   assert.equal(check.includes('- ❌ d：'), false); assert.equal(check.includes('synthetic-test-key'), false);
   for (const cmd of ['config', 'models']) assert.equal((await h.bridge([cmd])).stdout, (await h.bridge([cmd, '--format', 'json'])).stdout);
   const cfg = output(await h.bridge(['config']));
-  assert.deepEqual(Object.keys(cfg), ['user_config', 'loaded_from', 'project_config', 'scenes', 'effective', 'agents_status', 'resolved_modules', 'image_configured', 'runs_dir', 'watch_launcher', 'watch_launcher_ascii', 'preferences', 'environment', 'summary']);
+  assert.deepEqual(Object.keys(cfg), ['user_config', 'loaded_from', 'project_config', 'scenes', 'effective', 'agents_status', 'resolved_modules', 'resolved_scenes', 'image_configured', 'runs_dir', 'watch_launcher', 'watch_launcher_ascii', 'preferences', 'environment', 'summary']);
   const before = output(await h.bridge(['check']), 1), after = output(await h.bridge(['check', '--format', 'json']), 1);
   for (const r of [before, after]) for (const agent of Object.values(r.agents)) delete agent.seconds;
   assert.deepEqual(before, after);
@@ -76,21 +76,21 @@ test('config/check md 固定四张格子表、六种派法、权限和合并提�
 
 test('项目关掉的格子、显式 seats 展示、补漏轮和未配置图像', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.codex.sandbox = { discuss: 'read-only', review: 'read-only' };
-  c.modules.run.normal = entry('codex'); h.config(c);
-  h.write('.claude/foreman.json', { modules: { discuss: { seats: { normal: 4 } }, run: { normal: 'claude code' }, image: { generate: null } } });
+  c.modules.default.run.normal = entry('codex'); h.config(c);
+  h.write('.claude/foreman.json', { modules: { default: { discuss: { seats: { normal: 4 } }, run: { normal: 'claude code' }, image: { generate: null } } } });
   const md = await markdown(h, ['config', '--cwd', h.cwd]);
   has(md, ['| 讨论 simple | 2 |', '| 讨论 normal | 4 |', '| 讨论 complex | 8 |', '自己做', '关掉',
     '候选不够 2 个，1 个全上；补漏轮没有剩余模型，不做', '这些在用的模型不在价格表里，费用会显示为算不出：fake-codex']);
-  delete c.modules.image; h.config(c);
+  delete c.modules.default.image; h.config(c);
   const noImage = await markdown(h, ['config']); has(noImage, ['图像\n\n图像两格还没配置。']); assert.equal(noImage.includes('出图 generate |'), false);
-  c.modules.review.complex = [entry('codex'), entry('other')]; c.agents.other = { ...c.agents.codex }; h.config(c);
+  c.modules.default.review.complex = [entry('codex'), entry('other')]; c.agents.other = { ...c.agents.codex }; h.config(c);
   has(await markdown(h, ['config']), ['2 个候选全上；补漏轮没有剩余模型，不做']);
 });
 
 test('格子单独指定的模型写在推理强度后面，3 级审查首轮没用上的候选可做补漏席', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.other = { ...c.agents.codex }; c.agents.third = { ...c.agents.codex };
-  c.modules.run.complex = [{ agent: 'codex', effort: 'max', model: 'cell-only-model' }];
-  c.modules.review.complex = [entry('codex', 'max', true), entry('other', null, true), entry('third')]; h.config(c);
+  c.modules.default.run.complex = [{ agent: 'codex', effort: 'max', model: 'cell-only-model' }];
+  c.modules.default.review.complex = [entry('codex', 'max', true), entry('other', null, true), entry('third')]; h.config(c);
   const md = await markdown(h, ['config']);
   has(md, ['| codex | — | — | max · cell-only-model |', '| 审查 complex | 2 | 开 | 3 | 2 | 只派必选的 codex、other，其余 1 个候选可以做补漏席 |']);
   assert.equal(md.includes('| codex | max ★ · '), false);
@@ -120,10 +120,10 @@ test('models md 分组排序、默认档、上下文、价格、过滤和类型�
     '| a | low | 1M | $0.1 / $2 |  |', '| z | — 只能不写 | 1.05M | 免费 | b |', '| pipe\\|model | — 只能不写 | 262K | — |  |',
     '### pi · alpha（1 个）', '| pi | off | 1M | $1 / $3 |  |', '| d | fake-api | — | d |', '| e | fake-api | — | e |', '另有 10 个语音、向量等非对话模型没列出。', M.reportModelsNext]);
   assert.ok(md.indexOf('| a | low') < md.indexOf('| z |')); assert.equal(/hidden|disabled|VOICE-TTS/.test(md), false);
-  const json = output(await h.bridge(['models'])); json.agents.same = { type: 'api', model: 'fake-codex' };
+  const json = output(await h.bridge(['models'])); json.agents.same = { type: 'api', model: 'fake-codex', configured_models: ['fake-codex'] };
   json.tools['pi cli'].ok = false; json.tools['pi cli'].error = 'synthetic|error';
   json.tools['agy cli'] = { ok: true, models: [{ id: 'synthetic', plain: 'synthetic', efforts: ['medium'], ids: { medium: 'synthetic-medium' }, default_effort: null }] };
-  json.agents.synthetic = { type: 'agy cli', model: 'synthetic' };
+  json.agents.synthetic = { type: 'agy cli', model: 'synthetic', configured_models: ['synthetic'] };
   const rendered = await isolated(h, `import { modelsReport } from ${JSON.stringify(urlOf('report.mjs'))}; console.log(modelsReport(${JSON.stringify(json)}));`);
   has(rendered.stdout, ['| fake-codex | low / **medium** / high | 272K | a |', 'pi：读不到模型清单（synthetic|error）', '| synthetic | — / medium | — | synthetic |']);
   assert.equal(rendered.stdout.includes('### pi ·'), false);
@@ -230,14 +230,14 @@ test('Codex 沙箱探测不了（ok 为 null）时，环境一节不说沙箱正
 
 test('没有在用的 Codex 协作方时，环境一节不说沙箱正常', async (t) => {
   const h = sandbox(t), c = baseConfig();
-  for (const module of ['discuss', 'run', 'review']) for (const cell of ['simple', 'normal', 'complex']) c.modules[module][cell] = 'claude code';
-  c.modules.image = { generate: null, draw: null }; h.config(c);
+  for (const module of ['discuss', 'run', 'review']) for (const cell of ['simple', 'normal', 'complex']) c.modules.default[module][cell] = 'claude code';
+  c.modules.default.image = { generate: null, draw: null }; h.config(c);
   const r = await h.bridge(['check', '--format', 'md'], { env: { FOREMAN_LANG: 'en', FOREMAN_TEST_MEMORY: '16,4' } }); assert.equal(r.code, 0, r.stderr);
   assert.ok(r.stdout.startsWith('## Environment\n\n' + MESSAGES.en.reportEnvironmentOkNoSandbox), r.stdout.slice(0, 200));
 });
 
 test('英文完整环境输出和非法 format；check 成功仍退出 0', async (t) => {
-  const h = sandbox(t), c = baseConfig(); c.modules.discuss.simple = 'claude code'; h.config(c);
+  const h = sandbox(t), c = baseConfig(); c.modules.default.discuss.simple = 'claude code'; h.config(c);
   const r = await h.bridge(['check', '--format', 'md'], { env: { FOREMAN_LANG: 'en', FOREMAN_TEST_MEMORY: '16,4' } }); assert.equal(r.code, 0, r.stderr);
   assert.equal(r.stdout.split('\n\n## Configuration')[0], '## Environment\n\n✅ Node.js, Git, the live view and the Codex sandbox all work.\n\n| Tool | Status |\n| --- | --- |\n| Codex | installed, logged in |\n| opencode | not installed |\n| pi | not installed |\n| agy | not installed |\n| API key variables | none found |\n| Memory | 16 GB in total, 4 GB available now |\n| Web board | off (enough memory to turn it on) |');
   has(r.stdout, ['**Cells**', '| Candidate | simple | normal | complex | Check |', '| Claude Code | no outside model', '**Seats and required agents**', '**Agents**', '**Notes**']);
