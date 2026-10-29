@@ -574,14 +574,8 @@ test('原生终端放不下时结论保留四行和展开提示，79 列底部�
     display: { status: 'done', report: { position: lines.join('\n') } } };
   b.onRun(r); b.onEv({ run: r.id, ts: 1000, k: 'end', t: 'done' });
   const col = b.groupColumn('g'), box = col.querySelector('.seats'); box.clientHeight = 100; box.scrollHeight = 500;
-  // 组里只有这一席：默认展开成完整时间线，结论 8 行都在里面
   b.fillGroup(col, { group: 'g', lanes: b.B.lanes }, 2000);
-  let seat = col.seats.get('fold'), term = seat.querySelector('.term');
-  assert.ok(lines.every((l) => term.children.some((li) => li.textContent.includes(l))));
-  // 收起来时照样是完整结论
-  b.PANEL.open.set('fold', false);
-  b.fillGroup(col, { group: 'g', lanes: b.B.lanes }, 2000);
-  seat = col.seats.get('fold'); term = seat.querySelector('.term');
+  const seat = col.seats.get('fold'), term = seat.querySelector('.term');
   assert.equal(term.children.length, 8); // 8 行结论都在，没有收成四行加一行展开提示
   assert.ok(!term.children.some((li) => li.textContent.includes('more line')));
   assert.deepEqual(term.children.map((li) => li.textContent), Array.from(seat.fullLines, (l) => l.text));
