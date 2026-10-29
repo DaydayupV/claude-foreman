@@ -292,8 +292,11 @@ function migrateStructure(config, file, base, project, adapters) {
   if (project) return converted.config;
   if (!converted.old && !converted.modules && !converted.seats.length && !converted.watch) return config;
   let result = structuredClone(converted.old || converted.modules || converted.watch ? converted.config : config);
+  // projects 不经旧结构迁移，避免项目覆盖被改写或随 mergeConfig 丢失。
+  if (Object.hasOwn(config, 'projects')) result.projects = structuredClone(config.projects);
   if (converted.old && isObject(config.agents) && !Object.hasOwn(config.agents, 'codex')
-    && !eachEntry(result.modules).some(({ item }) => item?.agent === 'codex')) delete result.agents.codex;
+    && ![result.modules, ...Object.values(isObject(config.projects) ? config.projects : {}).map((entry) => entry?.modules)]
+      .some((modules) => isObject(modules) && eachEntry(modules).some(({ item }) => item?.agent === 'codex'))) delete result.agents.codex;
   for (const agent of Object.values(result.agents || {})) if (Object.hasOwn(OLD_TYPES, agent?.type)) agent.type = OLD_TYPES[agent.type];
   let renamed = { aliases: {} };
   const lock = `${file}.structure.lock`, tmp = `${file}.${process.pid}.tmp`, aliasTmp = `${aliasesFile}.${process.pid}.tmp`;
@@ -450,6 +453,49 @@ function validateCell(value, module, key, check) {
   check((Array.isArray(value) || isObject(value)) && cellList(value).length > 0, key, module === 'image' ? M.invalid.imageCandidates : M.invalid.candidates);
 }
 
+function sameOrInside(dir, root) {
+  [dir, root] = [dir, root].map((value) => {
+    const resolved = path.resolve(value);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  });
+  const relative = path.relative(root, dir);
+  return relative === '' || relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+function projectOverride(cfg, raw, cwd, adapters) {
+  if (raw?.projects === undefined) return { cfg, path: null };
+  if (!isObject(raw.projects)) die(M.configInvalid('projects', M.invalid.object));
+  const dirs = [];
+  let matched = null, result = cfg;
+  for (const [key, entry] of Object.entries(raw.projects)) {
+    const expanded = /^~[\\/]/.test(key) ? path.join(os.homedir(), key.slice(2)) : key;
+    // Windows 上 \work 这种不带盘符的根路径随当前盘变，也不算绝对路径；UNC 要写全 \\server\share
+    if (!path.isAbsolute(expanded) || process.platform === 'win32' && !/^([A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+)/.test(expanded)) die(M.projectsKeyNotAbsolute(key));
+    const dir = path.resolve(expanded);
+    const same = dirs.find((prev) => sameOrInside(dir, prev.dir) && sameOrInside(prev.dir, dir));
+    if (same) die(M.projectsSameDir(same.key, key));
+    dirs.push({ key, dir });
+    const fail = (message) => die(M.projectsEntryInvalid(key, message));
+    if (!isObject(entry)) fail(M.invalid.object);
+    for (const [field, value] of Object.entries(entry)) {
+      if (!['modules', 'dispatch'].includes(field)) die(M.projectsFieldNotAllowed(key, field));
+      if (field === 'dispatch' && isObject(value)) {
+        for (const name of Object.keys(value)) {
+          if (!['discuss_max_rounds', 'timeout_min', 'stall_min', 'busy_ask_min'].includes(name)) die(M.projectsFieldNotAllowed(key, `dispatch.${name}`));
+        }
+      }
+    }
+    const next = normalizeModules(mergeConfig(cfg, entry));
+    validateConfig(next, adapters, fail);
+    // 按目录边界匹配子目录，只用最长的键，避免父子覆盖叠加。
+    if (cwd && sameOrInside(cwd, dir) && (!matched || dir.length > matched.dir.length)) {
+      matched = { key, dir };
+      result = next;
+    }
+  }
+  return { cfg: result, path: matched?.key ?? null };
+}
+
 function projectConfig(cfg, project, adapters) {
   const allowed = {}, ignored = [];
   const check = (ok, key, reason) => { if (!ok) die(M.configInvalid(key, reason)); };
@@ -596,10 +642,11 @@ function loadConfig(cwd, adapters) {
       notice(M.starterCreated(USER_CONFIG, parts + M.starterNext));
     } catch (e) { if (e.code !== 'EEXIST') notice(M.starterFailed(USER_CONFIG, e.message)); }
   }
-  const user = readJson(USER_CONFIG);
+  let user = readJson(USER_CONFIG);
   let imageConfigured = false;
   if (user) {
-    const migrated = migrateStructure(user, USER_CONFIG, LEGACY_DEFAULT_CONFIG, false, adapters);
+    // 迁移时文件被别的进程改过会按新内容重读，projects 也要用迁移返回的这一份
+    const migrated = user = migrateStructure(user, USER_CONFIG, LEGACY_DEFAULT_CONFIG, false, adapters);
     imageConfigured = isObject(migrated.modules?.image);
     cfg = mergeConfig(cfg, migrated); sources.push(USER_CONFIG);
   }
@@ -610,7 +657,9 @@ function loadConfig(cwd, adapters) {
   }
   cfg = normalizeModules(cfg);
   validateConfig(cfg, adapters);
-  cfg = { ...cfg, closed_by_project: [] };
+  const override = projectOverride(cfg, user, cwd, adapters);
+  imageConfigured ||= isObject(user?.projects?.[override.path]?.modules?.image);
+  cfg = { ...override.cfg, closed_by_project: [] };
   if (cwd) {
     const file = projectFile(cwd, PROJECT_CONFIG, LEGACY_PROJECT_CONFIG), project = readJson(file);
     if (project) { cfg = mergeConfig(cfg, projectConfig(cfg, migrateStructure(project, file, cfg, true, adapters), adapters)); sources.push(file); }
@@ -618,7 +667,7 @@ function loadConfig(cwd, adapters) {
   const runsDir = envOf('FOREMAN_RUNS_DIR', 'CODEX_RUNS_DIR');
   if (runsDir) cfg = mergeConfig(cfg, { dispatch: { runs_dir: runsDir } });
   validateConfig(cfg, adapters);
-  return { ...cfg, sources, image_configured: imageConfigured };
+  return { ...cfg, sources, image_configured: imageConfigured, project_override: override.path === null ? null : { path: override.path } };
 }
 
 

@@ -3,15 +3,17 @@
 配置文件是 JSON，按下面的顺序叠加，后面的覆盖前面的：
 1. 脚本内置默认值；
 2. 用户配置 `~/.claude/foreman/config.json`（可以用环境变量 `FOREMAN_CONFIG` 换路径）；
-3. 项目配置 `<项目目录>/.claude/foreman.json`（只能收紧，见文末）。
+3. 用户配置里 `projects` 按项目目录写的覆盖（可以放宽，见"按项目覆盖"）；
+4. 项目配置 `<项目目录>/.claude/foreman.json`（只能收紧，见文末）。
 
-配置分三块：
+配置分三块，另有一个可选的 `projects`：
 
 | 块 | 回答的问题 |
 |---|---|
 | `dispatch` | 插件怎么派活：是否主动派、讨论轮数、超时等 |
 | `agents` | 有哪些协作方，怎么连接 |
 | `modules` | 每类任务的每一格有哪些候选、谁必选、用什么推理强度 |
+| `projects`（可选） | 按项目目录覆盖 `modules` 和几个时长，见“按项目覆盖” |
 
 连接方式只写在 `agents`，分派只写在 `modules`。
 
@@ -244,6 +246,26 @@
 - 新旧代号的对照记在 `~/.claude/foreman/agent-aliases.json`：续接旧任务、`--agent` 写旧代号、项目配置里的旧代号，都会自动换成新代号。
 - 同一个文件里同时写了 `levels`（对象）和 `modules` 时直接报错，不猜以哪个为准；`levels` 是上面那行说明文字时不算。项目配置里的 `levels` 不改写文件，只在内存里按 `modules` 读，并提示改成新写法。旧版插件会忽略项目配置里的 `modules`，所以项目要同时约束还在用旧版插件的人时，项目配置可以继续用 `levels` 写法。
 
+## 按项目覆盖：写在用户配置里
+某个项目要比全局多用几个模型、换一套候选或者改时长时，在用户配置里加顶层 `projects`，按项目目录写：
+
+```json
+"projects": {
+  "O:/work/app": {
+    "dispatch": { "timeout_min": 600 },
+    "modules": { "review": { "normal": [{ "agent": "a" }, { "agent": "b" }], "seats": { "normal": 3 } } }
+  },
+  "~/code/lib": { "modules": { "run": { "normal": "claude code" } } }
+}
+```
+
+- 键写项目目录的绝对路径，可以用 `~` 开头；Windows 上要带盘符（`O:/work/app`）或写全 UNC（`//server/share/app`）。工作目录是这个目录或在它下面（子目录、仓库里的 worktree）都算；几条都对得上时只用最具体（路径最长）的一条，不叠加。Windows 上不分大小写。
+- 只能写 `modules`，以及 `dispatch` 的 `discuss_max_rounds`、`timeout_min`、`stall_min`、`busy_ask_min`。`agents`、`auto`、`watch`、`intro`、`runs_dir` 作用于整台机器或整个会话，只能写在顶层，写进 `projects` 会报错。协作方只能引用顶层 `agents` 里定义过的代号。
+- 合并方式和顶层覆盖默认值一样：写了的格子整格替换（要在全局候选的基础上加几个，就把全局那几个也写上），没写的格子沿用顶层；`seats` 按级覆盖。可以放宽也可以收紧。
+- 每次读配置都会校验 `projects` 里的所有条目，不只当前项目那条；写错时报错会指出是哪一条。
+- 它写在你自己的用户配置里，不随仓库走，所以可以放宽。仓库里的 `.claude/foreman.json` 仍然只能收紧，收紧的基准是套用了 `projects` 之后的配置。
+- `config --cwd` 输出的 `project_override` 是 `{ "path": "<用到的那条的键原文>" }`，没用到时为 `null`。
+
 ## 项目配置：只能收紧
 - 项目配置只认 `dispatch` 的 `timeout_min`、`stall_min`、`busy_ask_min`，以及 `modules`（包括 `discuss`、`review` 的 `seats`；旧写法 `levels` 也认）；其他字段都会被忽略并提示，包括 `agents` 整块。
 - 时长和席位取更严的值：`timeout_min` 和每一级的 `seats` 取两边较小的（`seats` 调到少于这一格的必选数时报错）；`stall_min`、`busy_ask_min` 的 0 表示不检测，是最宽松的，所以用户写了正数时项目写 0 不生效，两边都是正数时取较小的。
@@ -252,7 +274,7 @@
   - 从用户配置这一格已有的条目里删掉一部分可选条目（条目顺序沿用用户配置）；
   - 调低推理强度：只限有明确高低顺序的工具，Codex 是 low < medium < high < xhigh < max < ultra，pi 是 off < minimal < low < medium < high < xhigh < max，agy 是 minimal < low < medium < high < xhigh < max。opencode 的 variant 和 api 的推理强度没有统一的顺序，项目配置不能改；用户配置没写推理强度的条目，项目也不能加。
 - 不能加条目、换协作方或模型、改 `required`、打开用户关着的格子。这些写法会被忽略并提示。
-- 不能只去掉必选、留下其他条目继续外派：会报错，要么留着必选，要么整格关掉。删得一个候选都不剩也会报错。
+- 不能只去掉必选、留下其他条目继续外派：会报错，要么留着必选，要么整格关掉。写的条目一个都对不上用户配置（比如克隆来的仓库用的是别人的一套代号）时，提示一句，按项目关掉这一格。
 - 项目在某一格写了 `"claude code"`（或 `null`）以后，这个项目里这一格不能再用 `--agent` 点名派出，哪怕用户配置里它本来就是 `"claude code"`；项目没写、用户配置里是 `"claude code"` 的格子照常可以点名。这一格有必选时，那一步算"没做"，Claude 会如实告诉你，不会自己审一遍就当作已经满足。`config --cwd` 输出的 `closed_by_project` 列出被项目关掉的格子。
 - 这样别人的仓库没法借项目配置换掉执行方（比如从有沙箱的 Codex 换成没沙箱的工具）、把代码发给新的厂商、跳过必选的审查，或者延长超时、调高推理强度来多花你的额度。敏感项目可以删掉 api 候选，或者把讨论、审查整格写成 `"claude code"`。
 
@@ -262,6 +284,7 @@
 - 沙箱不是 `read-only` / `workspace-write` 时（比如 `danger-full-access`），Codex 能写任何目录，`--cwd` 只决定它从哪里开始工作，**不限制写入范围**。这时范围只能靠任务说明约束，再靠事后审查 diff 把关。
 - 用户改了配置，改完运行 `config` 确认：
   - `resolved_modules` 列出每一格最终有哪些候选，每个候选的模型、推理强度和是否必选；
+  - `project_override` 是 `{ "path": "<用到的那条 projects 的键>" }`（带 `--cwd` 时，没用到为 `null`）；
   - `closed_by_project` 列出被项目配置关掉的格子（带 `--cwd` 时）；
   - `image_configured` 说明用户配置里写没写图像块：为 `false` 时图像两格显示的 `null` 是默认值，不是用户关掉的；
   - `agents_status` 列出每个协作方的类型、能力、key 是否已设置、实际用的可执行文件；

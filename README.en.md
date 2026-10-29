@@ -254,13 +254,14 @@ Choices that cost money or affect safety are never made automatically; `/foreman
 
 ### How the config is laid out
 
-It has three parts:
+It has three parts, plus an optional `projects`:
 
 | Part | What it covers |
 |---|---|
 | `dispatch` | How the plugin hands off work: whether to do it on its own, the live view, the intro, discussion rounds, time limits, the run directory |
 | `agents` | Which agents there are and how to reach them |
 | `modules` | Which candidates each cell of each task type has, who is required, and with what effort |
+| `projects` (optional) | Per-project-directory overrides of `modules` and a few time limits; see "Per-project overrides" below |
 
 A minimal example: Codex does complex hands-on work and every review, complex discussions add one model from opencode, and Codex also generates images and hand-draws pieces. Anything left out uses its default.
 
@@ -459,6 +460,18 @@ Fields this config doesn't use but that are often adjusted:
 - `bin`: the full path to the executable, if the command can't be found.
 
 </details>
+
+### Per-project overrides
+
+When one project should use more models, a different set of candidates or other time limits, add `projects` to your user config, keyed by project directory; it applies when the working directory is inside that directory:
+
+```json
+"projects": {
+  "O:/work/app": { "modules": { "review": { "normal": [{ "agent": "gpt-6.1-sol", "required": true }, { "agent": "glm-5.3" }, { "agent": "kimi-k2.6" }] } } }
+}
+```
+
+A cell it writes is replaced as a whole, so it can loosen; it can only set `modules` and a few time limits, and agents must be defined in the top-level `agents`. It lives in your own config and doesn't travel with the repository, which is why it can loosen; a repository's project config still can only tighten.
 
 ### Project config
 

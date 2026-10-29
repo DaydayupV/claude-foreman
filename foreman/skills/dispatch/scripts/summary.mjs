@@ -32,8 +32,12 @@ export function buildSummary(cfg, adapters, checks = null) {
       return { agent: item.agent, type: info.type, model, effort, required: !!item.required, ok, ...(problem ? { problem } : {}) };
     });
   });
+  const raw = readRawConfig();
+  // 只在某个项目的 projects 覆盖里用到的协作方不算没用到
+  const inProjects = new Set(Object.values(raw?.projects || {}).flatMap((entry) => Object.values(entry?.modules || {})
+    .flatMap((cells) => Object.values(cells || {}).flatMap((value) => cellList(value).map((item) => item?.agent)))));
   for (const [name, info] of Object.entries(agents)) {
-    if (!info.used_at.length) warnings.push({ kind: 'unused_agent', agent: name, message: M.warnUnusedAgent(name) });
+    if (!info.used_at.length && !inProjects.has(name)) warnings.push({ kind: 'unused_agent', agent: name, message: M.warnUnusedAgent(name) });
     if (cfg.agents[name].api_key) warnings.push({ kind: 'plaintext_key', agent: name, message: M.warnPlaintextKey(name) });
     const modes = ['review', 'discuss'].filter((mode) => info.used_at.some((at) => at.startsWith(`modules.${mode}.`))
       && adapters[info.type].readonlyLevel(cfg.agents[name], mode) === 'audited');
@@ -49,7 +53,6 @@ export function buildSummary(cfg, adapters, checks = null) {
   const unrated = [...models.values()].filter(({ model }) => !tierOf(model).rated);
   if (unpriced.length) warnings.push({ kind: 'unpriced_models', models: unpriced, message: M.warnUnpricedModels(M.list(unpriced.map(({ model }) => model))) });
   if (unrated.length) warnings.push({ kind: 'unrated_models', models: unrated, message: M.warnUnratedModels(M.list(unrated.map(({ model }) => model))) });
-  const raw = readRawConfig();
   if (raw?.dispatch && Object.hasOwn(raw.dispatch, 'max_seats')) warnings.push({ kind: 'obsolete_max_seats', value: raw.dispatch.max_seats, message: M.reportObsoleteMaxSeats });
   for (const [agent, info] of Object.entries(cfg.agents)) if (info.type === 'api' && info.api_key && info.api_key_env) {
     warnings.push({ kind: 'obsolete_key_env', agent, api_key_env: info.api_key_env, env_set: !!process.env[info.api_key_env], message: M.reportObsoleteKeyEnv(agent, info.api_key_env) });
