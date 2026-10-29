@@ -172,6 +172,43 @@ test('环境故障逐项输出 fix，API 变量只显示名字，未使用 Codex
   has(r.stdout, ['❌ Node.js：node fix', '⚠ Git：git fix', '⚠ 实时查看：watch fix', '| Codex | 已安装，没登录 |', '| opencode | 没装 |', '检测到 KIMI_API_KEY、MIMO_API_KEY']); assert.equal(r.stdout.includes('unused sandbox'), false);
 });
 
+test('agy 环境表显示首个在用协作方的沙箱和各桶额度，中英报告都有修法', async (t) => {
+  const h = sandbox(t), ok = { ok: true }, first = { type: 'agy cli', sandbox: { available: false }, quota: { groups: [
+    { name: 'Gemini Models', buckets: [{ name: 'Weekly Limit Remaining', window: 'weekly', remaining_fraction: 0.96 },
+      { name: 'Five Hour Limit Remaining', window: '5h', remaining_fraction: 0.08 }] },
+    { name: 'Claude and GPT models', buckets: [{ name: 'Weekly Limit Remaining', window: 'weekly', remaining_fraction: 0.625 },
+      { name: 'Five Hour Limit Remaining', window: '5h', remaining_fraction: 0.77 }] },
+  ] } }, unused = { type: 'agy cli', sandbox: { available: false }, fix: 'unused fix' }, second = { ...first, fix: 'second fix', quota: { groups: [] } };
+  const checks = { node: ok, git: ok, watch: ok, memory: { total_gb: 16, available_gb: 4, enough: true, web: false },
+    agents: { unused, first, second }, summary: { agents: { unused: { used_at: [] }, first: { used_at: ['modules.discuss.complex[0]'] }, second: { used_at: ['modules.review.complex[0]'] } } } };
+  const env = { codex: { found: false }, opencode: { found: false }, pi: { found: false }, agy: { found: true, models: 4 }, api_keys: [] };
+  for (const locale of ['zh', 'en']) {
+    const text = MESSAGES[locale], windows = locale === 'zh' ? ['周', '5 小时'] : ['weekly', '5-hour'];
+    const md = await isolated(h, `import {environmentReport} from ${JSON.stringify(urlOf('report.mjs'))};const checks=${JSON.stringify(checks)};
+checks.agents.first.quota.groups[0].buckets.push(null, 'bad', [], {remaining_fraction:'0.3'}, {remaining_fraction:NaN}, {remaining_fraction:Infinity},
+  {name:'Monthly Limit',window:'monthly',remaining_fraction:0.5},{window:'daily',remaining_fraction:0.2});
+console.log(environmentReport(checks,${JSON.stringify(env)},{}));`, { env: { FOREMAN_LANG: locale } });
+    assert.equal(md.code, 0, md.stderr);
+    has(md.stdout, [`⚠ ${text.reportIssue(text.reportAgySandbox('first'), text.fixAgySandbox)}`, `⚠ ${text.reportIssue(text.reportAgySandbox('second'), 'second fix')}`,
+      `| agy | ${text.reportModelsInstalled(4)} · ${text.reportAgySandboxOff} · ${text.reportAgyQuota(text.list([
+        `Gemini Models ${windows[0]} 96%`, `Gemini Models ${windows[1]} 8%`, 'Gemini Models Monthly Limit 50%', 'Gemini Models daily 20%',
+        `Claude and GPT models ${windows[0]} 63%`, `Claude and GPT models ${windows[1]} 77%`]))} |`]);
+    assert.equal(md.stdout.includes('unused fix'), false);
+  }
+  checks.agents.first.sandbox.available = true;
+  const md = await isolated(h, `import {environmentReport} from ${JSON.stringify(urlOf('report.mjs'))};console.log(environmentReport(${JSON.stringify(checks)},${JSON.stringify(env)},{}));`);
+  has(md.stdout, [`| agy | ${M.reportModelsInstalled(4)} · ${M.reportAgySandboxOk} · ${M.reportAgyQuota(M.list(['Gemini Models 周 96%', 'Gemini Models 5 小时 8%', 'Claude and GPT models 周 63%', 'Claude and GPT models 5 小时 77%']))} |`]);
+  assert.equal(md.stdout.includes(M.reportAgySandbox('first')), false);
+  delete checks.agents.first.sandbox;
+  const absent = await isolated(h, `import {environmentReport} from ${JSON.stringify(urlOf('report.mjs'))};console.log(environmentReport(${JSON.stringify(checks)},${JSON.stringify(env)},{}));`);
+  assert.equal(absent.stdout.includes(M.reportAgySandbox('first')), false);
+  for (const status of [M.reportAgySandboxOk, M.reportAgySandboxOff]) assert.equal(absent.stdout.includes(status), false);
+  // 项目目录包住了主目录：重测改变不了结论，修法不能再写联网重测。
+  checks.agents.first.sandbox = { available: false, results: { layout: 'unavailable' } };
+  const layout = await isolated(h, `import {environmentReport} from ${JSON.stringify(urlOf('report.mjs'))};console.log(environmentReport(${JSON.stringify(checks)},${JSON.stringify(env)},{}));`);
+  has(layout.stdout, [`⚠ ${M.reportIssue(M.reportAgySandbox('first'), M.fixAgySandboxLayout)}`]);
+});
+
 test('models 里没装的工具写没装，不贴原始的启动报错', async () => {
   const { modelsReport } = await import(pathToFileURL(path.join(ROOT, 'foreman/skills/dispatch/scripts/report.mjs')).href);
   const missing = { ok: false, models: [], error: 'spawnSync codex.exe ENOENT' }, other = { ok: false, models: [], error: 'ENOENT: no such file or directory, open /tmp/catalog.json' };

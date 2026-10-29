@@ -10,11 +10,12 @@ import { isDeepStrictEqual } from 'node:util';
 import { acquireLock } from '../locks.mjs';
 import { foremanStateDir, readRawConfig, ENTRY } from '../config.mjs';
 import { RUNS_ROOT, readMeta, isRunning } from '../records.mjs';
-import { M, binCommand, pathCommand, replaceFile, pidExists, retryBusy } from '../util.mjs';
+import { M, binCommand, pathCommand, replaceFile, pidExists, retryBusy, processStartTimes, pathKey } from '../util.mjs';
 
 const SOURCE = new URL('./agy-guard.mjs', import.meta.url);
 const HASH = (s) => createHash('sha256').update(s).digest('hex');
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+let ownStartedAt;
 const cmd = () => `node "${ENTRY}"`;
 export const guardDir = () => path.join(os.homedir(), '.gemini', 'config');
 const markerDir = () => path.join(foremanStateDir(), 'agy-markers');
@@ -100,11 +101,13 @@ function writeFiles() {
 function activeRuns() {
   const markers = fs.existsSync(markerDir()) ? fs.readdirSync(markerDir()).filter((f) => f.endsWith('.json')).map((file) =>
     JSON.parse(fs.readFileSync(path.join(markerDir(), file), 'utf8'))).filter((m) => Date.parse(m.expires_at) > Date.now() && pidExists(m.pid)) : [];
+  const starts = processStartTimes(markers.filter((m) => m.started_at != null).map((m) => m.pid), { timeoutMs: 5000 });
+  const current = markers.filter((m) => !(Number.isFinite(m.started_at) && starts.get(m.pid) != null && starts.get(m.pid) - m.started_at > 2000));
   // status 是只读的：不调 defaultRunsRoot()，它在旧安装上会把旧记录目录搬过来。
   const root = RUNS_ROOT || process.env.FOREMAN_RUNS_DIR || process.env.CODEX_RUNS_DIR || readRawConfig()?.dispatch?.runs_dir || path.join(foremanStateDir(), 'runs');
   const runs = fs.existsSync(root) ? fs.readdirSync(root).map((id) => ({ ...readMeta(path.join(root, id)), run_dir: path.join(root, id) }))
     .filter((m) => m.agent_type === 'agy cli' && isRunning(m)) : [];
-  return [...new Map([...runs, ...markers].map((m) => [m.run_dir, m])).values()];
+  return [...new Map([...runs, ...current].map((m) => [m.run_dir, m])).values()];
 }
 function refuseActive(action, exceptDir) {
   const runs = activeRuns().filter((m) => m.run_dir !== exceptDir);
@@ -182,8 +185,11 @@ export function scanProject(cwd, addDirs = []) {
 }
 function createMarker(policy, deadline) {
   const file = path.join(markerDir(), `${policy.nonce}.json`);
+  // 查不到也缓存，避免每次查询和修复都重新启动系统工具。
+  // 查询受这一轮总时限约束、最多 5 秒；查不到就不写 started_at（守卫对没有它的标记照旧拦截），下次再查。
+  ownStartedAt ??= processStartTimes([process.pid], { timeoutMs: Math.max(1, Math.min(5000, deadline - Date.now())) }).get(process.pid) ?? undefined;
   atomic(file, JSON.stringify({ cwd: policy.root, workspaces: [policy.root, ...policy.add_dirs], expires_at: new Date(deadline).toISOString(),
-    pid: process.pid, run_dir: policy.run_dir }));
+    pid: process.pid, ...(ownStartedAt != null ? { started_at: ownStartedAt } : {}), run_dir: policy.run_dir }));
   const cleanup = () => {
     retryBusy(() => fs.rmSync(file, { force: true }));
     try { fs.rmSync(gitConfigFor(policy), { force: true }); } catch { /* 删不掉的留在临时目录，不影响下一轮（文件名带 nonce） */ }
@@ -341,11 +347,15 @@ export function networkControl(deadline) {
   });
 }
 
+function sameVolume(a, b) {
+  return pathKey(path.parse(fs.realpathSync(a)).root) === pathKey(path.parse(fs.realpathSync(b)).root) && fs.statSync(a).dev === fs.statSync(b).dev;
+}
 // 第 4 节：版本、系统版本和项目卷共同构成缓存身份，升级后重新测。
-export async function probeSandbox({ agent, cwd, addDirs = [], version, run, deadline = Date.now() + 120000 }) {
+export async function probeSandbox({ agent, cwd, addDirs = [], version, run, force = false, deadline = Date.now() + 120000 }) {
   timeLeft(deadline);
   const cacheFile = path.join(foremanStateDir(), 'agy-sandbox.json');
   const key = JSON.stringify([version, process.platform, os.release(), path.parse(fs.realpathSync(cwd)).root, fs.statSync(cwd).dev]);
+  if (addDirs.some((dir) => !sameVolume(cwd, dir))) return { key, available: false, results: { layout: 'cross_volume' }, at: new Date().toISOString() };
   const contains = (root, dir) => {
     const rel = path.relative(fs.realpathSync(root), fs.realpathSync(dir));
     return !rel || rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
@@ -358,9 +368,28 @@ export async function probeSandbox({ agent, cwd, addDirs = [], version, run, dea
     try { const data = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); return object(data.entries) ? data : { entries: {} }; }
     catch (e) { if (e.code !== 'ENOENT' && !(e instanceof SyntaxError)) throw e; return { entries: {} }; }
   };
-  let cache = readStore().entries[key];
+  // 缓存写不进去时一般只是少省一次探针；但留下的旧结论是"可用"、而这次要撤销它时，不能让下一轮继续借它放行命令。
+  const keepNoStalePositive = (e) => {
+    if (readStore().entries[key]?.available === true) throw new Error(M.agyCacheStale(cacheFile, e.message));
+  };
+  let cache;
+  if (force) {
+    try { await locked(() => {
+      const store = readStore();
+      if (store.entries[key]) {
+        delete store.entries[key];
+        atomic(cacheFile, JSON.stringify(store, null, 2) + '\n');
+      }
+    }, deadline); }
+    catch (e) { if (e.code === 'ETIMEDOUT') throw e; keepNoStalePositive(e); }
+  }
+  else cache = readStore().entries[key];
   // 旧缓存没有宿主网络对照，不能继续用来证明沙箱禁网。
-  if (cache?.results?.network_control) return cache;
+  if (cache?.results?.network_control && !(cache.available === false && Date.parse(cache.at) < Date.now() - 86400000)) return cache;
+  const before = await networkControl(deadline);
+  timeLeft(deadline);
+  if (!before.dns || !before.https) return { key, available: false,
+    results: { network: 'host_offline', network_control: { before } }, at: new Date().toISOString(), tested: true };
   const nonce = randomUUID(), dir = fs.mkdtempSync(path.join(foremanStateDir(), 'agy-probe-'));
   const inside = path.join(cwd, `.foreman-agy-probe-${nonce}`), outside = path.join(dir, 'outside'), home = path.join(os.homedir(), `.foreman-agy-probe-${nonce}`);
   const prefix = `FOREMAN_AGY_PROBE:${nonce}:`, canary = `foreman ${nonce}`;
@@ -376,8 +405,6 @@ export async function probeSandbox({ agent, cwd, addDirs = [], version, run, dea
     // 项目目录不可写（只读挂载、ACL）时放不了探针文件：按沙箱没确认处理，不给 shell、不写缓存，讨论照常走只读文件。
     try { for (const file of [inside, outside, home]) fs.writeFileSync(file, canary, { flag: 'wx' }); }
     catch (e) { return { key, available: false, results: { canary: `error:${e.code || e.message}` }, at: new Date().toISOString(), tested: true }; }
-    const before = await networkControl(deadline);
-    timeLeft(deadline);
     const out = await run({ access: 'probe', runDir: dir, sandbox: true, probeCommands: commands,
       prompt: M.agyProbePrompt(commands), timeoutMs: timeLeft(deadline, 120000), deadline });
     timeLeft(deadline);
@@ -403,14 +430,19 @@ export async function probeSandbox({ agent, cwd, addDirs = [], version, run, dea
     else if (networkError?.startsWith('error:')) results.network = 'unconfirmed';
     if (networkError) results.network_error = networkError;
     const unchanged = [inside, outside, home].every((file) => fs.existsSync(file) && fs.readFileSync(file, 'utf8') === canary);
+    // environment 只记录环境变量可见性，不参与可用判定；完整探针仍要求它返回。
     cache = { key, available: out.status === 'done' && unchanged && ['write_project', 'write_outside', 'read_home', 'network'].every((n) => results[n] === 'sandbox_denied'),
       results, at: new Date().toISOString() };
     // 探针这一轮没跑完（断流、钩子出错、模型没照做）时结论不可靠：这次按没有沙箱处理，但不写缓存，下次再测。
     const complete = out.status === 'done' && ['write_project', 'write_outside', 'read_home', 'network', 'environment'].every((n) => n in results);
     if (results.network !== 'unconfirmed' && (complete || !unchanged)) {
-      const store = readStore();
-      store.entries[key] = cache;
-      atomic(cacheFile, JSON.stringify(store, null, 2) + '\n');
+      // 缓存只是省下一次探针；锁忙不影响本次结论，但总时限仍要生效。
+      try { await locked(() => {
+        const store = readStore();
+        store.entries[key] = cache;
+        atomic(cacheFile, JSON.stringify(store, null, 2) + '\n');
+      }, deadline); }
+      catch (e) { if (e.code === 'ETIMEDOUT') throw e; if (!cache.available) keepNoStalePositive(e); }
     }
     return { ...cache, tested: true };
   } finally {

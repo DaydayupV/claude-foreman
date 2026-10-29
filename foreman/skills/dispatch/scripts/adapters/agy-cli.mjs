@@ -163,14 +163,14 @@ async function executeAgy(ctx) {
     promptFor = (shell) => [M.agyReviewPrompt(cwd, scope?.description || ctx.reviewTarget, shell), ...parts, M.reviewFooter, M.reviewSchemaFooter(schemaText)].join('\n\n');
   } else promptFor = (shell) => `${brief}${focusFiles(files)}\n\n${ctx.parent ? M.opencodeResumeFooter : M.agyDiscussFooter(cwd, schemaText, shell)}\n`;
   const { id, dir, release } = await newRunDir(ctx);
-  const run = startRun({ ...ctx, id, dir, release, readonly: 'tools' });
+  const run = startRun({ ...ctx, id, dir, release, readonly: 'tools' }, { sandbox: 'files-only' });
   const split = splitAgyModel(ctx.model);
   run.meta.model = run.meta.model_shown = run.meta.model_name = split.family;
   run.meta.effort = split.effort ?? (ctx.effort === 'default' ? null : ctx.effort);
   run.writeMeta();
   process.stderr.write(`foreman: ${D.started(ctx.mode, modelLabel(run.meta), ctx.level, dir)}\n`);
   announceBoard(ctx.cfg);
-  return finishDiscussion(run, { ...await agySession(run, schema, promptFor), files, changesNote: M.agyNoChanges });
+  return finishDiscussion(run, { ...await agySession(run, schema, promptFor), files, changesNote: M.agyNoChanges, sandbox: run.meta.sandbox });
 }
 async function agySession(run, schema, promptFor) {
   const { ctx, meta, writeMeta, started } = run, { dir, cwd, agent, model, effort, agentName, addDirs } = ctx;
@@ -253,10 +253,14 @@ async function agySession(run, schema, promptFor) {
     const probe = await probeSandbox({ agent, cwd, addDirs, version: version.stdout.trim(), run: lowLevel, deadline });
     timeLeft(deadline);
     sandbox = probe.available;
+    meta.sandbox = sandbox ? 'agy-sandbox' : 'files-only';
+    writeMeta();
     if (probe.tested) notes.push(M.agySandboxResult(probe.results));
     nextPrompt = promptFor(sandbox);
     if (!sandbox) {
       notes.push(M.agyNoSandbox);
+      if (probe.results.layout === 'cross_volume') notes.push(M.agyNoShellCrossVolume);
+      if (probe.results.network === 'host_offline') notes.push(M.agyNoShellOffline);
       const list = spawnSync('git', ['ls-files'], { cwd, encoding: 'utf8', windowsHide: true, timeout: timeLeft(deadline, 60000) });
       nextPrompt += `\n\n${M.agyFileList(list.status === 0 ? list.stdout.trim() : M.agyFileListUnavailable)}`;
     }
@@ -295,7 +299,7 @@ function agyCatalog(agent = {}, deadline) {
   return models.length && models.every(Boolean) ? { ok: true, source, models: agyFamilies(models).map((m) => ({ ...m, default_effort: null })), raw_ids: models, error: null }
     : { ok: false, source, models: [], error: M.agyCatalogInvalid };
 }
-async function checkAgy(name, agent, efforts = [], catalog = () => agyCatalog(agent), modes = [], cwd = process.cwd()) {
+async function checkAgy(name, agent, efforts = [], catalog = () => agyCatalog(agent), modes = [], cwd = process.cwd(), force = false) {
   const started = Date.now(), dir = workDir('check-');
   const out = { ok: false, type: 'agy cli', model: splitAgyModel(agent.model).family, version: null, model_listed: false, reply: null, error: null, fix: null, efforts: [], notes: [] };
   try {
@@ -317,7 +321,7 @@ async function checkAgy(name, agent, efforts = [], catalog = () => agyCatalog(ag
     const model = agyModelId(selected?.model || agent.model, selected?.variant, cat.models);
     out.notes.push(...await preflightAgy(policyFor({ cwd, runDir: dir }), Date.now() + 120000));
     const run = (options) => runAgy({ agent, model, cwd, ...options });
-    out.sandbox = await probeSandbox({ agent, cwd, version: out.version, run });
+    out.sandbox = await probeSandbox({ agent, cwd, version: out.version, run, force });
     if (!out.sandbox.available) out.notes.push(M.agyNoSandbox);
     // 随机文件和 read_file 放行记录一起确认读取边界，不能只靠模型声称工具可用。
     const token = randomUUID(), file = path.join(dir, 'guard-check.txt');

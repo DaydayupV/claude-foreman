@@ -18,7 +18,7 @@ node "<script path>" watch  [--run <run_id|last> | --group <name>]
 node "<script path>" board  [--replay <conversation id|run_id|group|all> [--speed <N>] [--maxgap <sec>]] (without --replay: the live board)
 node "<script path>" board --stop (shuts down the live board server)
 node "<script path>" config [--cwd "<project dir>"] [--format json|md]
-node "<script path>" check  [--agent <agent>] [--format json|md]
+node "<script path>" check  [--agent <agent>] [--format json|md] [--reprobe]
 node "<script path>" models [--format json|md]
 node "<script path>" agy-guard <install|uninstall|status> (agy's global guard; see check below)
 node "<script path>" tiers  [--model <name>]... [--all] [--cwd "<project dir>"] [--format json|md] (model tiers, overall scores, strengths and weaknesses; rules in references/model-tiers.md)

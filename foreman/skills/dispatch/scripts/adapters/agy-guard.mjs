@@ -1,9 +1,10 @@
-// foreman 1.2.0 的 agy 守卫；正文 sha256: 45f5c1e1e85519f005b92f6ce2235208df19cb8996a1a3cf28da24e58c923328
+// foreman 1.2.0 的 agy 守卫；正文 sha256: 5f03fb017cc9c6b998f12cc4d4165a5e565872e2fb8a5d23daba5171ec5f5518
 // 只依赖 Node 内置模块，复制到用户目录后仍可独立运行。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 
 // read_file 实测会带 StartLine / EndLine 只读一段；agy 1.4.9 起有时还带 ByteOffset（从第几个字节读起）。
 const READ_KEYS = ['Path', 'StartLine', 'EndLine', 'ByteOffset'];
@@ -47,29 +48,61 @@ function activeMarkers() {
   if (!fs.existsSync(dir)) return [];
   const active = [];
   for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.json'))) {
-    const full = path.join(dir, file), marker = JSON.parse(fs.readFileSync(full, 'utf8'));
+    const full = path.join(dir, file);
+    const marker = JSON.parse(fs.readFileSync(full, 'utf8'));
     // 第 3.2 节：强制结束后不必等最长时限；EPERM 仍按进程活着处理。
     if (marker.pid) try { process.kill(marker.pid, 0); } catch (e) {
       if (e.code === 'ESRCH') { try { fs.rmSync(full, { force: true }); } catch { /* 清理不影响判断 */ } continue; }
     }
-    if (Date.parse(marker.expires_at) > Date.now()) active.push(marker);
+    if (Date.parse(marker.expires_at) > Date.now()) active.push({ ...marker, file: full });
   }
   return active;
+}
+function processStartTimes(pids) {
+  const times = new Map(pids.filter((pid) => Number.isInteger(pid) && pid > 0).map((pid) => [pid, null]));
+  if (!times.size) return times;
+  const ids = [...times.keys()].join(',');
+  const powershell = path.join(process.env.SystemRoot || 'C:/Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  try {
+    const r = process.platform === 'win32'
+      ? spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', `Get-Process -Id ${ids} -ErrorAction SilentlyContinue | ForEach-Object { try { [Console]::WriteLine(('{0} {1}' -f $_.Id, $_.StartTime.ToUniversalTime().ToString('o'))) } catch {} }; exit 0`], { encoding: 'utf8', windowsHide: true, timeout: 5000 })
+      : spawnSync('ps', ['-o', 'pid=,lstart=', '-p', ids], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, timeout: 5000 });
+    if (r.error || r.signal) return times;
+    for (const line of (r.stdout || '').trim().split(/\r?\n/)) {
+      const match = /^\s*(\d+)\s+(.+)$/.exec(line);
+      if (!match) continue;
+      const pid = Number(match[1]), started = Date.parse(match[2]);
+      if (times.has(pid) && Number.isFinite(started)) times.set(pid, started);
+    }
+  } catch { /* 查询失败时保留 null */ }
+  return times;
+}
+// 只有即将拒绝时才核对身份；睡眠或挂起不影响标记，查询失败仍继续拦截。
+function currentMarkers(markers) {
+  const starts = processStartTimes(markers.filter((m) => m.started_at != null).map((m) => m.pid));
+  return markers.filter((m) => {
+    const started = starts.get(m.pid);
+    // 只有查到的启动时间明显晚于记录值才算 pid 被复用；字段不是数字、查不到或时间更早都继续拦截。
+    if (!Number.isFinite(m.started_at) || started == null || started - m.started_at <= 2000) return true;
+    try { fs.rmSync(m.file, { force: true }); } catch { /* 清理不影响判断 */ }
+    return false;
+  });
 }
 function decide(input, policy) {
   if (!policy) {
     const markers = activeMarkers();
     // 第 3.2 节：缺工作目录时不能用 ask 放过可能丢了策略的 foreman 进程。
     if (!Array.isArray(input.workspacePaths) || !input.workspacePaths.length || !input.workspacePaths.every((p) => typeof p === 'string' && p.trim())) {
-      matchedMarkers = markers;
-      return markers.length ? deny('a foreman run is active and this call has no workspace, so tools are blocked until it ends') : { decision: 'ask' };
+      matchedMarkers = currentMarkers(markers);
+      const marker = matchedMarkers[0];
+      return marker ? deny(`foreman is running agy (run ${path.basename(marker.run_dir || '') || 'unknown'}) and this call has no workspace, so tool calls are paused until that run ends (at the latest ${marker.expires_at})`) : { decision: 'ask' };
     }
     const workspaces = input.workspacePaths.map((p) => realPath(path.resolve(p)));
-    matchedMarkers = markers.filter((marker) => (marker.workspaces || [marker.cwd]).some((p) =>
-      workspaces.some((w) => inside(realPath(p), w) || inside(w, realPath(p)))));
+    matchedMarkers = currentMarkers(markers.filter((marker) => (marker.workspaces || [marker.cwd]).some((p) =>
+      workspaces.some((w) => inside(realPath(p), w) || inside(w, realPath(p))))));
     const marker = matchedMarkers[0];
     // 第 3.2 节：丢失环境变量时，跳过权限不能把 ask 变成放行。
-    return marker ? deny(`a foreman run in this folder has no policy (marker expires ${marker.expires_at}), so tools are blocked until it ends`) : { decision: 'ask' };
+    return marker ? deny(`foreman is running agy in this folder (run ${path.basename(marker.run_dir || '') || 'unknown'}), so tool calls here are paused until that run ends (at the latest ${marker.expires_at}); run "agy-guard status" in foreman to see it`) : { decision: 'ask' };
   }
   // 第 3.2 节：第一期只开放 none、read 和安装器专用的 probe 策略。
   if (!object(policy) || !['none', 'read', 'probe'].includes(policy.access) || !path.isAbsolute(policy.root || '')

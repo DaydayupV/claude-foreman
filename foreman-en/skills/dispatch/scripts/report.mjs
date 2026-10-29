@@ -1,6 +1,6 @@
 // setup 的固定 Markdown：环境、总配置和本机模型清单，文字统一从 messages 取。
 import { CLAUDE_CODE, LEVELS, cellList, readRawConfig } from './config.mjs';
-import { M } from './util.mjs';
+import { M, isObject } from './util.mjs';
 
 const dash = '—';
 const escape = (value) => String(value ?? '').replaceAll('|', '\\|').replace(/\r?\n/g, '<br>');
@@ -19,14 +19,19 @@ export const environmentReport = (checks, environment, agents) => {
   const { total_gb, available_gb, enough, web } = checks.memory;
   if (web && !enough) issues.push(`⚠ ${M.reportIssue(M.reportEnvironmentItems.web, M.fixWebLowMemory)}`);
   for (const [name, agent] of Object.entries(checks.agents)) {
-    if (agent.type !== 'codex cli' || !checks.summary.agents[name].used_at.length) continue;
-    if (agent.sandbox?.checked.some((item) => item.ok === false)) issues.push(`⚠ ${M.reportIssue(M.reportCodexSandbox(name), agent.fix)}`);
+    if (!checks.summary.agents[name].used_at.length) continue;
+    if (agent.type === 'codex cli' && agent.sandbox?.checked.some((item) => item.ok === false)) issues.push(`⚠ ${M.reportIssue(M.reportCodexSandbox(name), agent.fix)}`);
+    if (agent.type === 'agy cli' && agent.sandbox && !agent.sandbox.available) issues.push(`⚠ ${M.reportIssue(M.reportAgySandbox(name), agent.fix || (agent.sandbox.results?.layout === 'unavailable' ? M.fixAgySandboxLayout : M.fixAgySandbox))}`);
   }
   // 没有在用的 Codex 协作方、或者没查到沙箱（没装、没登录）时，不能说沙箱正常
   // 探测不了（这个版本的 Codex 不支持，ok 为 null）也不算测过
   const codexInUse = Object.entries(checks.agents).filter(([name, agent]) => agent.type === 'codex cli' && checks.summary.agents[name].used_at.length);
   const sandboxChecked = codexInUse.length > 0 && codexInUse.every(([, agent]) => agent.sandbox?.checked.length && agent.sandbox.checked.every((item) => item.ok === true));
   const { codex, opencode, pi, agy, api_keys } = environment;
+  const agyInUse = Object.entries(checks.agents).find(([name, agent]) => agent.type === 'agy cli' && checks.summary.agents[name].used_at.length)?.[1];
+  const quota = agyInUse?.quota?.groups.flatMap((g) => g.buckets.filter((b) => isObject(b) && Number.isFinite(b.remaining_fraction))
+    .map((b) => `${g.name} ${M.reportAgyWindow(b.window) || b.name || b.window} ${Math.round(b.remaining_fraction * 100)}%`));
+  const agyStatus = [agyInUse?.sandbox && (agyInUse.sandbox.available ? M.reportAgySandboxOk : M.reportAgySandboxOff), quota?.length && M.reportAgyQuota(M.list(quota))].filter(Boolean);
   const keys = Object.values(agents).filter((agent) => agent.type === 'api' && agent.api_key).length;
   return report([
     M.reportEnvironmentTitle, issues.length ? issues.join('\n\n') : sandboxChecked ? M.reportEnvironmentOk : M.reportEnvironmentOkNoSandbox,
@@ -34,7 +39,7 @@ export const environmentReport = (checks, environment, agents) => {
       ['Codex', codex.found ? M.reportCodexInstalled(codex.logged_in) : M.reportNotInstalled],
       ['opencode', opencode.found ? M.reportModelsInstalled(opencode.models) : M.reportNotInstalled],
       ['pi', pi.found ? M.reportModelsInstalled(pi.models) : M.reportNotInstalled],
-      ['agy', agy?.found ? M.reportModelsInstalled(agy.models) : M.reportNotInstalled],
+      ['agy', agy?.found ? [M.reportModelsInstalled(agy.models), ...agyStatus].join(' · ') : M.reportNotInstalled],
       [M.reportApiVariables, (api_keys.length ? M.reportVariablesFound(M.list(api_keys)) : M.reportNoVariables) + (keys ? M.reportConfigKeys(keys) : '')],
       [M.reportMemoryLabel, M.reportMemory(total_gb, available_gb)],
       [M.reportWebLabel, web ? enough ? M.reportWebOn : M.reportWebOnLow : enough ? M.reportWebOff : M.reportWebOffLow],

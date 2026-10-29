@@ -18,7 +18,7 @@ if (['status', 'stats', 'config', 'tiers'].includes(process.argv[2])) {
 }
 
 // 不带值的选项；其余选项都把下一个参数当作它的值。
-const FLAGS = new Set(['uncommitted', 'no-snapshot', 'verbose', 'no-intro', 'snap', 'vector', 'allow-edge', 'author', 'stop', 'all']);
+const FLAGS = new Set(['uncommitted', 'no-snapshot', 'verbose', 'no-intro', 'snap', 'vector', 'allow-edge', 'author', 'stop', 'all', 'reprobe']);
 
 // --help（或 -h）只打印这一条子命令的用法（assets 可以带动作），退出码 0。和 parseArgs 一样走一遍参数，
 // 写在某个选项的值里的（比如 --title --help、--title -h）不算。
@@ -442,7 +442,8 @@ async function cmdCheck(o) {
   // 只在要核对推理强度时才读清单。
   const readCatalog = catalogReader();
   for (const [name, agent] of Object.entries(cfg.agents)) {
-    if (!o.agent || o.agent === name) result.agents[name] = { ...await adapters[agent.type].check(name, agent, variants.get(name) || [], () => readCatalog(agent), [...(usedModes.get(name) || [])], cwd), type: agent.type };
+    if (!o.agent || o.agent === name) result.agents[name] = { ...await adapters[agent.type].check(name, agent, variants.get(name) || [], () => readCatalog(agent), [...(usedModes.get(name) || [])], cwd,
+      ...(agent.type === 'agy cli' ? [!!o.reprobe] : [])), type: agent.type };
   }
   const referenced = new Set(eachEntry(cfg.modules).map(({ item }) => item.agent));
   result.ok = nodeOk && Object.entries(result.agents).every(([name, agent]) => !referenced.has(name) || agent.ok);

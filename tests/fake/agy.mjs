@@ -143,10 +143,13 @@ else if (operation === 'catalog') {
   console.log(s.hooks_output ?? JSON.stringify({ conversation_id: '', status: 'SUCCESS', duration_seconds: 0, num_turns: 0, usage: {},
     response: hooks.flatMap((hook) => hook.actions.map((a) => [hook.name, hook.enabled ? 'enabled' : 'disabled', a.event, a.matcher || '', a.type, a.command].join('\t'))).join('\n') + '\n',
     command: { name: 'hooks', data: { hooks } } }));
-} else if (operation === 'quota') console.log(JSON.stringify(s.quota || { conversation_id: '', status: 'SUCCESS', response: 'Gemini\tweekly\t90%\n',
-  command: { name: 'usage', data: { groups: [{ name: 'Gemini', buckets: [
-    { name: 'Gemini', window: 'weekly', remaining_fraction: 0.9, reset_time: '2026-11-02T00:00:00Z' },
-    { name: 'Gemini', window: '5h', remaining_fraction: 0.8, reset_time: '2026-10-28T10:00:00Z' } ] }] } } }));
+} else if (operation === 'quota') console.log(JSON.stringify(s.quota || { conversation_id: '', status: 'SUCCESS', response: 'Gemini Models\tweekly\t96%\n',
+  command: { name: 'usage', data: { groups: [{ name: 'Gemini Models', buckets: [
+    { name: 'Weekly Limit Remaining', window: 'weekly', remaining_fraction: 0.96, reset_time: '2026-11-02T00:00:00Z' },
+    { name: 'Five Hour Limit Remaining', window: '5h', remaining_fraction: 0.8, reset_time: '2026-10-28T10:00:00Z' } ] },
+  { name: 'Claude and GPT models', buckets: [
+    { name: 'Weekly Limit Remaining', window: 'weekly', remaining_fraction: 0.7, reset_time: '2026-11-02T00:00:00Z' },
+    { name: 'Five Hour Limit Remaining', window: '5h', remaining_fraction: 0.6, reset_time: '2026-10-28T10:00:00Z' } ] }] } } }));
 else {
   if (s.invalid_model) {
     emit('result', { conversation_id: sid, status: 'ERROR', error: 'invalid model: synthetic-model', response: '' });

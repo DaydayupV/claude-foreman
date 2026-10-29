@@ -171,13 +171,13 @@ function finishRun(run, result, code = result.exit_code, observed = {}) {
   return result;
 }
 
-function finishDiscussion(run, { usage, cost, commands = 0, errors, notes, warnings, report, last, files, changesNote, observed = {} }) {
+function finishDiscussion(run, { usage, cost, commands = 0, errors, notes, warnings, report, last, files, changesNote, observed = {}, sandbox = null }) {
   const { ctx, meta, started } = run;
   const { id, dir, mode, cwd, agentName, agent, model, level, effort } = ctx;
   meta.ended_at = new Date().toISOString();
   return finishRun(run, {
     run_id: id, mode, kind: ctx.kind, status: meta.status, title: meta.title, cwd, track: [], group: meta.group, round: meta.round, scope: meta.scope,
-    agent: agentName, agent_type: agent.type, model, model_shown: meta.model_shown, level, effort, sandbox: null, parent: meta.parent, session_id: meta.session_id,
+    agent: agentName, agent_type: agent.type, model, model_shown: meta.model_shown, level, effort, sandbox, parent: meta.parent, session_id: meta.session_id,
     exit_code: meta.status === 'done' ? 0 : 1, duration_s: Math.round((Date.now() - started) / 1000), usage: usage ?? null, usage_scope: usage == null ? null : 'this_run',
     ...(cost !== undefined ? { reported_cost_usd: cost } : {}),
     last_request: null, rate_limit: null, quota_resets_at: null, commands_executed: commands, errors, notes, warnings, report,

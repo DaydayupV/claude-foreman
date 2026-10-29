@@ -18,7 +18,7 @@ node "<脚本路径>" watch  [--run <run_id|last> | --group <组名>]
 node "<脚本路径>" board  [--replay <对话 id|run_id|组名|all> [--speed <倍数>] [--maxgap <秒>]]（不带 --replay 是直播看板）
 node "<脚本路径>" board --stop（关掉直播看板服务）
 node "<脚本路径>" config [--cwd "<项目目录>"] [--format json|md]
-node "<脚本路径>" check  [--agent <协作方>] [--format json|md]
+node "<脚本路径>" check  [--agent <协作方>] [--format json|md] [--reprobe]
 node "<脚本路径>" models [--format json|md]
 node "<脚本路径>" agy-guard <install|uninstall|status>（agy 的全局守卫，见下面 check 一节）
 node "<脚本路径>" tiers  [--model <名字>]... [--all] [--cwd "<项目目录>"] [--format json|md]（模型档位、综合分和长短处，规则见 references/model-tiers.md）

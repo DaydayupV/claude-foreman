@@ -38,6 +38,7 @@
 - Claude 接手或用户决定放弃的任务，状态是 `interrupted`、`stalled`、`timeout`、`quota_exhausted` 或 `needs_input` 时，运行 `cancel --run <run_id>` 标记为已处理：会话开始时的提醒只列还没处理的执行任务。
 - 会话开始时的提醒如果列出了执行没有正常结束的任务，在合适的时候告诉用户一句，按用户的意思处理。
 - 派活或讨论因为环境问题失败（找不到命令、没登录、API 报 401 等）时，先跑 `check` 确认原因，把结果里的 `fix` 转告用户。
+- 排查 agy 时：记录目录里 `agy.log` 开头常有一串 "You are not logged into Antigravity"，运行成功时也有，不代表没登录。登录有没有问题看结果的 `errors` 和 `check`。
 
 ## 遇到沙箱问题时停下来
 Codex 因为沙箱无法启动命令或报错时（结果的 `notes` 会提示"Codex 的沙箱启动不了命令"，常见原文是 `windows sandbox failed`、`setup refresh had errors`），不要重试，也不要自己换沙箱、改配置文件、想办法绕开脚本。先运行 `check`，它会不调模型地测一遍沙箱，`fix` 里列出可选的修法；把错误原文、你的判断和这些选项告诉用户，由用户决定。不要建议改 `approval`：派出去的任务没人能批准，`never` 是对的，问题在沙箱。Windows 上 Codex 只读沙箱的具体情况见 `references/config.md`。
