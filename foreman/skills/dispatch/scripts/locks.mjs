@@ -21,6 +21,53 @@ const stat = (file) => {
   try { return retryBusy(() => fs.statSync(file)); }
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
 };
+
+export function acquireLockSync(base, { waitMs, busy }) {
+  const reap = `${base}.reap`, token = randomUUID(), deadline = Date.now() + waitMs;
+  const content = JSON.stringify({ pid: process.pid, token });
+  const pidOf = () => {
+    try { return Number(retryBusy(() => fs.readFileSync(base, 'utf8'))); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  };
+  const stale = (file) => {
+    const pid = file === base ? pidOf() : ownerOf(file)?.pid;
+    return Number.isInteger(pid) && pid > 0 ? !pidExists(pid)
+      : Date.now() - (stat(file)?.mtimeMs ?? Date.now()) > 2000;
+  };
+  const mine = () => ownerOf(reap)?.token === token;
+  for (;;) {
+    try { retryBusy(() => fs.writeFileSync(base, String(process.pid), { flag: 'wx' })); }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      if (Date.now() >= deadline) busy({ file: base, pid: pidOf() });
+      if (stale(base)) {
+        try { retryBusy(() => fs.writeFileSync(reap, content, { flag: 'wx' })); }
+        catch (error) {
+          if (error.code !== 'EEXIST') throw error;
+          retryBusy(() => fs.rmSync(reap, { force: true }), () => stale(reap));
+        }
+        // 独占 .reap 后再复查过期状态，同一时间只有一个回收者能删锁，
+        // 暂停的旧读者恢复后也不会删掉别人刚建的活锁。
+        if (mine()) {
+          try { retryBusy(() => fs.rmSync(base, { force: true }), () => mine() && stale(base)); }
+          finally { retryBusy(() => fs.rmSync(reap, { force: true }), mine); }
+        }
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+      continue;
+    }
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      process.removeListener('exit', release);
+      retryBusy(() => fs.rmSync(base, { force: true }), () => pidOf() === process.pid);
+    };
+    process.once('exit', release);
+    return { release };
+  }
+}
+
 // 旧路径仍按 HEAD 的清理锁协议回收，和旧版共用同一套互斥。
 async function acquireLegacy(base, token, deadline, busy) {
   const reap = `${base}.reap`, content = JSON.stringify({ pid: process.pid, token });
