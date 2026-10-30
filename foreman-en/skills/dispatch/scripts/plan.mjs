@@ -1,7 +1,7 @@
 // 派发计划固定席位和审查材料，真正启动时再检查当前配置并登记任务。
 import fs from 'node:fs';
 import path from 'node:path';
-import { ENTRY, USER_CONFIG, MODULE_CELLS, resolveAgentAlias, resolveProfile, resolveCell, validatePlan, selectScene } from './config.mjs';
+import { ENTRY, USER_CONFIG, MODULE_CELLS, resolveAgentAlias, resolveProfile, resolveCell, validatePlan, selectScene, isScened, fromProjectConfig } from './config.mjs';
 import { RUNS_ROOT, CLAUDE_SESSION, listRuns, readMeta, checkRunners, runOutcome } from './records.mjs';
 import { validateReviewMaterial, reviewPatchText, MAX_REVIEW_CHARS } from './review-scope.mjs';
 import { M, die, need, notice, resolveDir, readAttachments, filesOutside, MAX_MATERIAL_CHARS } from './util.mjs';
@@ -138,14 +138,14 @@ function cmdPlan(o, load, adapters) {
     if (!cell.outside_cell) {
       const configured = cfg.modules[o.module].seats[o.cell];
       plan.seat_target = Math.min(configured, usable.length);
-      if (main.length !== plan.seat_target && !plan.count_why?.trim()) die(M.planSeatCount(seatsKey, configured, plan.seat_target, main.length));
+      if (main.length !== plan.seat_target && !plan.count_why?.trim()) die(M.planSeatCount(seatsKey, configured, plan.seat_target, main.length) + fromProjectConfig(cfg, seatsKey));
     }
     if (o.module === 'review') {
       const gapKey = `modules.${o.scene || 'default'}.review.gap.${o.cell}`;
       const candidates = usable.filter((candidate) => !main.some((seat) => seat.agent === candidate.agent) && !used.has(base(candidate)));
       if (!plan.count_why?.trim()) {
-        if (!plan.gap && gap) die(M.planGapOff(gapKey));
-        if (plan.gap && candidates.length && !gap) die(M.planGapMissing(gapKey, M.list(candidates.map((seat) => seat.agent))));
+        if (!plan.gap && gap) die(M.planGapOff(gapKey) + fromProjectConfig(cfg, gapKey));
+        if (plan.gap && candidates.length && !gap) die(M.planGapMissing(gapKey, M.list(candidates.map((seat) => seat.agent))) + fromProjectConfig(cfg, gapKey));
       }
     }
   }
@@ -153,8 +153,10 @@ function cmdPlan(o, load, adapters) {
   Object.assign(plan, { created_at: new Date().toISOString(), claude_session: CLAUDE_SESSION, cwd,
     level: o.module === 'image' ? null : o.cell, group, required: cell.required, why: o.why ?? null });
   const dropped = resolveCell(original, o.module, o.cell).required.filter((agent) => !cell.required.includes(agent));
-  if (dropped.length) {
-    plan.notes = [M.sceneDropsRequired(plan.scene, cell.key, M.list(dropped))];
+  const notes = [o.scene != null && !isScened(original, o.module, o.cell) && M.sceneNotNeeded(`modules.${o.module}.${o.cell}`, o.scene),
+    dropped.length && M.sceneDropsRequired(plan.scene, cell.key, M.list(dropped))].filter(Boolean);
+  if (notes.length) {
+    plan.notes = notes;
     for (const note of plan.notes) notice(note);
   }
   const dir = path.join(RUNS_ROOT, 'plans');

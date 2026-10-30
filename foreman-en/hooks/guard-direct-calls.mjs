@@ -42,8 +42,20 @@ function piRunsModel(words) {
   return true;
 }
 
+// 重定向（2>&1、>out.txt、2> err.txt、<in.txt）是 shell 的，不算 agy 的参数；只写了符号的，后面那个词是文件名
+function dropRedirects(words) {
+  const out = [];
+  for (let i = 0; i < words.length; i++) {
+    const m = /^(?:\d*|&)(?:>>?|<)(.*)$/.exec(words[i]);
+    if (!m) out.push(words[i]);
+    else if (!m[1]) i++;
+  }
+  return out;
+}
+
 // agy 的查询白名单不能掩盖后面的模型参数，-- 之后也一律视为提示词。
-function agyRunsModel(words) {
+function agyRunsModel(all) {
+  const words = dropRedirects(all);
   if (words.length === 1 && words[0] === '--version') return false;
   return !new Set(['models', 'agents', 'changelog', 'help']).has(words[0])
     || words.slice(1).some((w) => w === '--' || /^-(?:p|i).*$/.test(w) || /^--(?:print|prompt|input-format)(?:=|$)/.test(w));

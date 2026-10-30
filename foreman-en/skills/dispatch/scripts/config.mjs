@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { agentMaxParallel, DEFAULT_AGENT_PARALLEL } from './adapters/parallel.mjs';
 import { AGY_EFFORTS, splitAgyModel } from './adapters/agy-models.mjs';
-import { HERE, M, notice, isObject, readJson, die, pidAlive, pidExists, retryBusy, replaceFile, closestMatches } from './util.mjs';
+import { HERE, M, notice, isObject, readJson, die, pidAlive, pidExists, retryBusy, replaceFile, closestMatches, pathKey } from './util.mjs';
 
 const ENTRY = path.join(HERE, 'cli.mjs');
 const SCHEMA = path.join(HERE, '..', 'schemas', 'report.schema.json');
@@ -127,10 +127,13 @@ const readRawConfig = (file = USER_CONFIG) => {
 };
 // keep 是 setup 这次刚建的备份（--keep-backup），它要留着，不算旧备份。
 const readOldBackups = (keep = null) => {
-  const dir = path.dirname(USER_CONFIG), kept = keep ? path.basename(keep) : null;
+  const dir = path.resolve(path.dirname(USER_CONFIG));
+  let kept = keep ? path.resolve(dir, keep) : null;
+  if (kept && !fs.existsSync(kept)) { notice(M.keepBackupMissing(kept)); kept = null; }
+  if (kept && pathKey(path.dirname(kept)) !== pathKey(dir)) { notice(M.keepBackupElsewhere(kept, dir)); kept = null; }
   try {
     const files = fs.readdirSync(dir, { withFileTypes: true }).filter((f) => f.isFile() && f.name.startsWith(`${path.basename(USER_CONFIG)}.`)
-      && (f.name.endsWith('.bak') || f.name.includes('.bak-')) && f.name !== kept)
+      && (f.name.endsWith('.bak') || f.name.includes('.bak-')) && pathKey(path.join(dir, f.name)) !== (kept && pathKey(kept)))
       .map((f) => ({ name: f.name, time: fs.statSync(path.join(dir, f.name)).mtimeMs }))
       .sort((a, b) => a.time - b.time || a.name.localeCompare(b.name)).map((f) => f.name);
     const contain_keys = files.map((f) => fs.readFileSync(path.join(dir, f), 'utf8').includes('"api_key"')).some(Boolean);
@@ -157,7 +160,13 @@ function staleAliases(cfg) {
 // 代号写错时，提示里带上最接近的代号。
 const unknownAgentError = (key, name, cfg) => {
   const near = closestMatches(name, Object.keys(cfg.agents));
-  return (key === '--agent' ? M.unknownAgentFlag(name) : M.unknownAgent(key, name)) + (near.length ? M.closestHint(M.list(near)) : '');
+  return (key === '--agent' ? M.unknownAgentFlag(name) : fromProjectConfig(cfg, key) ? M.unknownAgentProject(key, name, USER_CONFIG)
+    : M.unknownAgent(key, name)) + (near.length ? M.closestHint(M.list(near)) : '');
+};
+
+const fromProjectConfig = (cfg, key) => {
+  const cell = key.replace(/^modules\./, '').replace(/\[\d+\].*$/, '');
+  return cfg.project_config?.cells.some((at) => at === cell || at === cell.replace(/^[^.]+\./, 'default.')) ? M.fromProjectConfig(cfg.project_config.path) : '';
 };
 
 function mergeConfig(base, extra) {
@@ -237,7 +246,7 @@ function mergeScenes(cfg, extra, adapters, fail = die) {
   return { ...merged, modules: scene_modules.default, scene_modules, scene_diff };
 }
 
-const sceneView = (cfg, scene) => ({ ...cfg, modules: (cfg.scene_modules && Object.hasOwn(cfg.scene_modules, scene ?? '') ? cfg.scene_modules[scene] : cfg.scene_modules?.default) || cfg.modules });
+const sceneView = (cfg, scene) => ({ ...cfg, selected_scene: scene ?? null, modules: (cfg.scene_modules && Object.hasOwn(cfg.scene_modules, scene ?? '') ? cfg.scene_modules[scene] : cfg.scene_modules?.default) || cfg.modules });
 const isScened = (cfg, module, cell) => Object.values(cfg.scene_diff).some((diff) => {
   const values = diff[module];
   return values && (Object.hasOwn(values, cell) || Object.hasOwn(values.seats || {}, cell) || Object.hasOwn(values.gap || {}, cell));
@@ -246,12 +255,21 @@ const isScened = (cfg, module, cell) => Object.values(cfg.scene_diff).some((diff
 function selectScene(cfg, module, cell, o) {
   if (cfg.scenes.problems.length) die(M.scenesProblem(M.list(cfg.scenes.problems)));
   const names = ['default', ...cfg.scenes.names];
-  if (o.scene == null && o['scene-why'] != null || o.scene != null && !o['scene-why']?.trim()) die(M.planSceneWhyRequired);
+  if (o.scene == null && o['scene-why'] != null) die(M.planSceneMissing);
+  if (o.scene != null && !o['scene-why']?.trim()) die(M.planSceneWhyRequired);
+  if (cfg.scenes.inactive.includes(o.scene)) die(M.planSceneInactive(o.scene, cfg.scenes.file, M.list(names)));
   if (o.scene != null && !names.includes(o.scene)) {
     if (!cfg.scenes.names.length && Object.keys(cfg.scene_modules).length === 1) die(M.planSceneNoScenes);
     die(M.planSceneUnknown(o.scene, M.list(names)));
   }
-  if (o.scene == null && isScened(cfg, module, cell)) die(M.sceneRequired(`modules.${module}.${cell}`, M.list(names)));
+  if (o.scene == null && isScened(cfg, module, cell)) {
+    const diffs = Object.entries(cfg.scene_diff).flatMap(([scene, diff]) => {
+      const values = diff[module], items = values && [Object.hasOwn(values, cell) && M.reportCandidate.toLowerCase(),
+        ...['seats', 'gap'].filter((field) => Object.hasOwn(values[field] || {}, cell)).map((field) => `${field}.${cell}`)].filter(Boolean);
+      return items?.length ? [M.sceneDiff(scene, M.list(items))] : [];
+    });
+    die(M.sceneRequired(`modules.${module}.${cell}`, M.list(names), M.list(diffs)));
+  }
   return sceneView(cfg, o.scene);
 }
 
@@ -517,7 +535,10 @@ function validateConfig(cfg, adapters, fail = die, prefix = 'modules', own = nul
     if (module === 'run' || module === 'image') check(required <= 1, key, why.oneRequired);
     if (['discuss', 'review'].includes(module)) {
       const seats = cfg.modules[module].seats[cell];
-      if (seats < required) fail(M.seatsBelowRequired(`${prefix}.${module}.seats.${cell}`, seats, required));
+      if (seats < required) {
+        const key = `${prefix}.${module}.seats.${cell}`;
+        fail(M.seatsBelowRequired(key, seats, required) + fromProjectConfig(cfg, key));
+      }
     }
   }
 }
@@ -546,7 +567,7 @@ function validateCell(value, module, key, check) {
 }
 
 function projectConfig(cfg, project, file, adapters) {
-  const allowed = {}, ignored = [];
+  const allowed = {}, ignored = [], warnings = [];
   for (const [key, value] of Object.entries(project)) {
     if (key === 'dispatch' && isObject(value)) {
       allowed.dispatch = {};
@@ -557,12 +578,15 @@ function projectConfig(cfg, project, file, adapters) {
     } else if (['modules', 'dispatch'].includes(key)) allowed[key] = value;
     else ignored.push(key);
   }
-  if (ignored.length) notice(M.projectIgnored(M.list(ignored)));
-  const merged = mergeScenes(cfg, allowed, adapters, (message) => die(M.projectConfigInvalid(file, message)));
-  const cells = Object.entries(allowed.modules || {}).flatMap(([scene, modules]) => Object.entries(modules).flatMap(([module, values]) => Object.entries(values).flatMap(([cell, value]) =>
-    ['seats', 'gap'].includes(cell) ? Object.keys(value).map((level) => `${scene}.${module}.${cell}.${level}`) : [`${scene}.${module}.${cell}`])));
+  if (ignored.length) {
+    const message = M.projectIgnored(M.list(ignored));
+    notice(message); warnings.push({ kind: 'project_ignored_keys', file, keys: ignored, message });
+  }
+  const cells = Object.entries(allowed.modules || {}).flatMap(([scene, modules]) => Object.entries(modules || {}).flatMap(([module, values]) => Object.entries(values || {}).flatMap(([cell, value]) =>
+    ['seats', 'gap'].includes(cell) ? Object.keys(value || {}).map((level) => `${scene}.${module}.${cell}.${level}`) : [`${scene}.${module}.${cell}`])));
   cells.push(...Object.keys(allowed.dispatch || {}).map((key) => `dispatch.${key}`));
-  return { cfg: merged, cells };
+  const merged = mergeScenes({ ...cfg, project_config: { path: file, cells } }, allowed, adapters, (message) => die(M.projectConfigInvalid(file, message)));
+  return { cfg: merged, cells, warnings };
 }
 
 function readScenes(cwd) {
@@ -590,11 +614,11 @@ function readScenes(cwd) {
       else if (names.includes(name)) problem(M.scenesDuplicate(name));
       else names.push(name);
     }
-    return { names, source, file, problems };
+    return { names, source, file, problems, inactive: [] };
   };
   const user = read(USER_PREFS, 'user');
   const project = read(cwd && projectFile(cwd, PROJECT_PREFS, LEGACY_PROJECT_PREFS), 'project');
-  return project || user || { names: [], source: null, file: null, problems: [] };
+  return project || user || { names: [], source: null, file: null, problems: [], inactive: [] };
 }
 
 function detectEnvironment(adapters, agents = {}) {
@@ -684,11 +708,21 @@ function loadConfig(cwd, adapters) {
     cfg = { ...cfg, dispatch };
   }
   if (user && Object.hasOwn(user, 'projects')) notice(M.obsoleteProjects(M.list(Object.keys(user.projects || {}))));
-  let project_config = null;
+  const scenes = readScenes(cwd);
+  let project_config = null, projectScenes = [], project_warnings = [];
   if (cwd) {
     const file = projectFile(cwd, PROJECT_CONFIG, LEGACY_PROJECT_CONFIG), project = readJson(file);
     if (project) {
-      const migrated = migrateStructure(project, file, cfg, true, adapters), merged = projectConfig(cfg, migrated, file, adapters);
+      const migrated = migrateStructure(project, file, cfg, true, adapters);
+      projectScenes = Object.keys(migrated.modules || {});
+      // 项目 default 不应触发对已停用用户场景的合并校验。
+      if (scenes.source === 'project') for (const scene of Object.keys(cfg.scene_modules || {})) {
+        if (scene === 'default' || scenes.names.includes(scene) || projectScenes.includes(scene)) continue;
+        scenes.inactive.push(scene); delete cfg.scene_modules[scene]; delete cfg.scene_diff[scene];
+      }
+      const merged = projectConfig(cfg, migrated, file, adapters);
+      project_warnings = merged.warnings;
+      if (isObject(project.modules) && !Object.hasOwn(project.modules, 'default')) project_warnings.unshift({ kind: 'project_modules_flat', file, message: M.projectModulesFlat(file) });
       imageConfigured ||= Object.values(migrated.modules || {}).some((modules) => isObject(modules?.image));
       cfg = merged.cfg;
       project_config = { path: file, cells: merged.cells };
@@ -698,14 +732,23 @@ function loadConfig(cwd, adapters) {
   const runsDir = envOf('FOREMAN_RUNS_DIR', 'CODEX_RUNS_DIR');
   if (runsDir) cfg = mergeConfig(cfg, { dispatch: { runs_dir: runsDir } });
   if (!cfg.scene_modules) cfg = mergeScenes(cfg, {}, adapters);
-  const scenes = readScenes(cwd), configured = Object.keys(cfg.scene_modules).filter((scene) => scene !== 'default');
+  const configured = [...new Set([...Object.keys(cfg.scene_modules).filter((scene) => scene !== 'default'), ...scenes.inactive])];
   // 只配 default 时，偏好块的格式问题仅作提醒。
   if (!configured.length && scenes.problems.length) { for (const problem of scenes.problems) notice(problem); scenes.problems = []; }
   const undefinedScenes = configured.filter((scene) => !scenes.names.includes(scene));
-  if (undefinedScenes.length) scenes.problems.push(M.scenesUndefined(M.list(undefinedScenes), scenes.file));
+  scenes.inactive = scenes.source === 'project' ? undefinedScenes.filter((scene) => !projectScenes.includes(scene)) : [];
+  if (scenes.inactive.length) {
+    notice(M.scenesInactive(M.list(scenes.inactive), scenes.file));
+    for (const scene of scenes.inactive) { delete cfg.scene_modules[scene]; delete cfg.scene_diff[scene]; }
+  }
+  for (const file of sources) {
+    const names = undefinedScenes.filter((scene) => !scenes.inactive.includes(scene)
+      && file === (projectScenes.includes(scene) ? project_config.path : USER_CONFIG));
+    if (names.length) scenes.problems.push(M.scenesUndefined(M.list(names), scenes.file, file));
+  }
   const unused = scenes.names.filter((scene) => !configured.includes(scene));
   if (unused.length) notice(M.scenesNoBlock(M.list(unused)));
-  return { ...cfg, sources, image_configured: imageConfigured, project_config, scenes };
+  return { ...cfg, sources, image_configured: imageConfigured, project_config, project_warnings, scenes };
 }
 
 
@@ -759,7 +802,7 @@ function defaultRunsRoot() {
 function resolveCell(cfg, module, cell) {
   if (!Object.hasOwn(MODULE_CELLS, module)) die(M.planModuleChoices(M.list(Object.keys(MODULE_CELLS))));
   if (!MODULE_CELLS[module].includes(cell) || !Object.hasOwn(cfg.modules[module], cell)) die(M.planCellChoices(module, M.list(MODULE_CELLS[module])));
-  const key = `modules.${module}.${cell}`, value = cfg.modules[module][cell];
+  const key = `modules.${cfg.selected_scene ? `${cfg.selected_scene}.` : ''}${module}.${cell}`, value = cfg.modules[module][cell];
   const candidates = cellList(value).map((item) => ({ ...item, agent: resolveAgentAlias(item.agent, cfg), required: !!item.required }));
   return { module, cell, key, closed: value === CLAUDE_CODE || value === null,
     candidates,
@@ -878,4 +921,4 @@ function resolveProfile(cfg, seat, o, adapters, fallbackModel = null, parentAgen
 
 export { ENTRY, SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA, USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, DEFAULT_AGENT_PARALLEL, agentMaxParallel, foremanStateDir, DEFAULT_CONFIG, DEFAULT_SEATS, DEFAULT_GAP, CLAUDE_CODE, LEVELS,
   MODULE_CELLS, ROUTE_CELLS, canGenerate, cellList, eachCell, eachEntry, mapCells, resolveCell, validatePlan, resolveProfile, projectFile, loadConfig, readScenes, sceneView, isScened, selectScene, defaultRunsRoot, runsMovedNow,
-  readAgentAliases, readRawConfig, readOldBackups, resolveAgentAlias, migrateStructure, renameAgentsByModel, detectEnvironment, buildStarterConfig, staleAliases, unknownAgentError };
+  readAgentAliases, readRawConfig, readOldBackups, resolveAgentAlias, migrateStructure, renameAgentsByModel, detectEnvironment, buildStarterConfig, staleAliases, unknownAgentError, fromProjectConfig };

@@ -351,6 +351,16 @@ function sameVolume(a, b) {
   return pathKey(path.parse(fs.realpathSync(a)).root) === pathKey(path.parse(fs.realpathSync(b)).root) && fs.statSync(a).dev === fs.statSync(b).dev;
 }
 // 第 4 节：版本、系统版本和项目卷共同构成缓存身份，升级后重新测。
+export function agySandboxInfo(name, sandbox) {
+  const results = sandbox.results || {};
+  if (results.layout === 'unavailable') return { fix: M.fixAgySandboxLayout, reason: M.agySandboxUnconfirmedReason };
+  if (results.start_error) return { fix: M.fixAgySandboxStart(results.start_error), reason: M.agySandboxStartReason };
+  if (results.network === 'host_offline') return { fix: M.fixAgySandboxOffline(name), reason: M.agySandboxOfflineReason };
+  const items = M.list(Object.keys(M.agySandboxItems).filter((key) => results[key] === 'allowed').map((key) => M.agySandboxItems[key]));
+  if (items) return { fix: M.fixAgySandboxLeaky(name, items), reason: M.agySandboxLeakyReason(items), leaky: true };
+  return { fix: M.fixAgySandboxRetry(name), reason: M.agySandboxUnconfirmedReason };
+}
+
 export async function probeSandbox({ agent, cwd, addDirs = [], version, run, force = false, deadline = Date.now() + 120000 }) {
   timeLeft(deadline);
   const cacheFile = path.join(foremanStateDir(), 'agy-sandbox.json');
