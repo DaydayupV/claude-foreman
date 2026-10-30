@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { formatConfigText, isOneLine } from './config-layout.mjs';
-import { HERE, M, die, need, notice, resolveDir, readBrief, isGitRepo, isAscii, agentTypeOf, closestMatches, pathKey, pidExists, sleep, retryBusy, replaceFile } from './util.mjs';
+import { HERE, M, die, need, notice, resolveDir, readBrief, isGitRepo, isAscii, agentTypeOf, closestMatches, pathKey, pidExists, sleep, retryBusy } from './util.mjs';
 
 // 只输出结果的子命令接到 head 这类提前关掉管道的命令上时，写 stdout 会抛 EPIPE：读的一方已经够了，安静退出，
 // 不打 Node 的堆栈。会派活、会改记录的子命令不这样处理（中途退出会丢掉收尾）
@@ -263,10 +263,13 @@ function cmdLayout(o) {
   const user = process.env.FOREMAN_CONFIG || process.env.CODEX_BRIDGE_CONFIG || path.join(os.homedir(), '.claude', 'foreman', 'config.json');
   const files = [{ file: user, kind: 'user' }];
   if (o.cwd) {
-    const file = path.join(resolveDir(o.cwd), '.claude', 'foreman.json');
+    // 和 config.mjs 的 projectFile 一样：新文件名不存在时认旧文件名
+    const dir = resolveDir(o.cwd), current = path.join(dir, '.claude', 'foreman.json'), legacy = path.join(dir, '.claude', 'codex-bridge.json');
+    const file = fs.existsSync(current) || !fs.existsSync(legacy) ? current : legacy;
     if (fs.existsSync(file)) files.push({ file, kind: 'project' });
   }
   const readFiles = () => files.map((info) => {
+    if (!fs.existsSync(info.file)) throw new Error(M.layoutNoConfig(info.file));
     const text = fs.readFileSync(info.file, 'utf8');
     let value;
     try { value = JSON.parse(text.replace(/^\uFEFF/, '')); }
@@ -297,7 +300,7 @@ function cmdLayout(o) {
       items = readFiles();
       for (const item of items) {
         if (item.one_line) continue;
-        const { file, text, value } = item, mode = fs.statSync(file).mode & 0o777;
+        const { file, text, value } = item;
         if (!o['no-backup']) {
           // 本地时间，和任务 id、setup 的备份一样
           const d = new Date(), p = (n) => String(n).padStart(2, '0');
@@ -306,20 +309,18 @@ function cmdLayout(o) {
           if (fs.existsSync(item.backup)) item.backup += `-${Date.now()}-${process.pid}`;
           fs.copyFileSync(file, item.backup, fs.constants.COPYFILE_EXCL);
         }
-        const tmp = `${file}.${process.pid}.tmp`;
+        // \u5728\u539F\u6587\u4EF6\u4E0A\u76F4\u63A5\u5199\uFF0C\u4E0D\u6362\u6210\u65B0\u6587\u4EF6\uFF1A\u5355\u72EC\u8BBE\u8FC7\u7684\u8BBF\u95EE\u63A7\u5236\uFF08Windows ACL\uFF09\u3001\u5C5E\u4E3B\u548C\u6743\u9650\u90FD\u4FDD\u7559\uFF0C\u65B0\u6587\u4EF6\u53EA\u4F1A\u7EE7\u627F\u76EE\u5F55\u7684\u6743\u9650\u3002
+        // \u5199\u574F\u7684\u98CE\u9669\u7531\u524D\u9762\u7684\u5907\u4EFD\u3001\u4E0B\u9762\u7684\u8BFB\u56DE\u6BD4\u5BF9\u548C\u5199\u56DE\u539F\u6587\u515C\u4F4F
         const save = (content) => {
-          fs.writeFileSync(tmp, content, { flag: 'wx', mode });
-          fs.chmodSync(tmp, mode);
-          replaceFile(tmp, file);
+          const buf = Buffer.from(content, 'utf8'), fd = fs.openSync(file, 'r+');
+          try { fs.writeSync(fd, buf, 0, buf.length, 0); fs.ftruncateSync(fd, buf.length); fs.fsyncSync(fd); }
+          finally { fs.closeSync(fd); }
         };
-        fs.rmSync(tmp, { force: true });
-        try {
-          save(formatConfigText(value));
-          let matches = false;
-          try { matches = isDeepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')), value); } catch {}
-          if (!matches) { save(text); throw new Error(M.layoutMismatch(file)); }
-          item.changed = true;
-        } finally { fs.rmSync(tmp, { force: true }); }
+        save(formatConfigText(value));
+        let matches = false;
+        try { matches = isDeepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')), value); } catch {}
+        if (!matches) { save(text); throw new Error(M.layoutMismatch(file)); }
+        item.changed = true;
       }
     }
   } finally { if (locked) retryBusy(() => fs.rmSync(lock, { force: true }), () => ownerOf() === process.pid); }
