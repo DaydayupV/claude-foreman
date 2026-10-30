@@ -93,13 +93,14 @@ function* acquire(base, { waitMs, busy, legacy = false }) {
       continue;
     }
     const generation = g + 1n, file = `${base}.${generation}`;
-    let created = false, released = false, legacyHeld = false;
+    let created = false, released = false;
     const release = () => {
       if (released) return;
       released = true;
       process.removeListener('exit', release);
       try {
-        if (legacyHeld) retryBusy(() => fs.rmSync(legacyBase, { force: true }), () => {
+        // 旧锁按归属删，不看有没有正常拿到：写进去之后才报错（关闭文件时 EIO）的那把也是自己的，不能留着挡住后来的人
+        if (legacy) retryBusy(() => fs.rmSync(legacyBase, { force: true }), () => {
           const owner = ownerOf(legacyBase, format);
           return format === 'pid' ? owner?.pid === process.pid : owner?.token === token;
         });
@@ -141,7 +142,7 @@ function* acquire(base, { waitMs, busy, legacy = false }) {
         try { retryBusy(() => fs.rmSync(path.join(dir, entry.name), { force: true })); } catch { /* 留给下一次 */ }
       }
       // 编号锁把新版本的回收者串行化，持有它之后才碰旧锁和 .reap。
-      if (legacy) { yield* acquireLegacy(legacyBase, token, deadline, busy, { format }); legacyHeld = true; }
+      if (legacy) yield* acquireLegacy(legacyBase, token, deadline, busy, { format });
       return { release, file };
     } catch (error) { release(); throw error; }
   }

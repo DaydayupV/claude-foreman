@@ -320,3 +320,27 @@ test('无效 pid 的锁保留两秒宽限，过期后回收', (t) => {
   lock.release();
   assert.equal(fs.existsSync(base), false); assert.equal(fs.existsSync(`${base}.reap`), false);
 });
+
+test('旧锁写进去后才报错（关闭时 EIO），释放时照样按归属删掉，进程活着也能再拿到锁', (t) => {
+  const h = sandbox(t);
+  for (const format of ['pid', 'json']) {
+    const dir = path.join(h.home, `lock-eio-${format}`); fs.mkdirSync(dir, { recursive: true });
+    const base = path.join(dir, 'config.json.structure.lock'), legacy = format === 'pid' ? { base, format: 'pid' } : base;
+    const busy = () => { throw new Error('busy'); };
+    const write = fs.writeFileSync;
+    let failed = false;
+    fs.writeFileSync = (file, ...rest) => {
+      const out = write(file, ...rest);
+      if (file === base && !failed) { failed = true; throw Object.assign(new Error('EIO: i/o error, close'), { code: 'EIO' }); }
+      return out;
+    };
+    try { assert.throws(() => acquireLockSync(`${base}.gen`, { waitMs: 200, legacy, busy }), { code: 'EIO' }); }
+    finally { fs.writeFileSync = write; }
+    assert.equal(failed, true);
+    assert.equal(fs.existsSync(base), false, format);
+    const again = acquireLockSync(`${base}.gen`, { waitMs: 200, legacy, busy });
+    assert.equal(fs.existsSync(base), true);
+    again.release();
+    assert.equal(fs.existsSync(base), false);
+  }
+});
