@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { formatConfigText, isOneLine } from './config-layout.mjs';
-import { HERE, M, die, need, notice, resolveDir, readBrief, isGitRepo, isAscii, agentTypeOf, closestMatches, pathKey, pidExists, sleep, retryBusy } from './util.mjs';
+import { acquireLockSync } from './locks.mjs';
+import { HERE, M, die, need, notice, resolveDir, readBrief, isGitRepo, isAscii, agentTypeOf, closestMatches, pathKey, pidExists, sleep } from './util.mjs';
 
 // 只输出结果的子命令接到 head 这类提前关掉管道的命令上时，写 stdout 会抛 EPIPE：读的一方已经够了，安静退出，
 // 不打 Node 的堆栈。会派活、会改记录的子命令不这样处理（中途退出会丢掉收尾）
@@ -276,27 +277,11 @@ function cmdLayout(o) {
     catch (e) { throw new Error(M.configBadJson(info.file, e.message)); }
     return { ...info, text, value, one_line: isOneLine(text), changed: false, backup: null };
   });
-  let items = readFiles(), locked = false;
+  let items = readFiles(), held;
   const lock = `${user}.structure.lock`;
-  const ownerOf = () => {
-    try { return Number(retryBusy(() => fs.readFileSync(lock, 'utf8'))); }
-    catch (e) { if (e.code === 'ENOENT') return null; throw e; }
-  };
-  const lockAge = () => { try { return Date.now() - fs.statSync(lock).mtimeMs; } catch { return 0; } };
-  const stale = () => { const pid = ownerOf(); return pid !== null && (Number.isInteger(pid) && pid > 0 ? !pidExists(pid) : lockAge() > 2000); };
   try {
     if (!o.check && items.some((item) => !item.one_line)) {
-      const deadline = Date.now() + 10000;
-      for (;;) {
-        try { retryBusy(() => fs.writeFileSync(lock, String(process.pid), { flag: 'wx' })); locked = true; break; }
-        catch (e) {
-          if (e.code !== 'EEXIST') throw e;
-          if (ownerOf() === null) continue;
-          if (stale()) retryBusy(() => fs.rmSync(lock, { force: true }), stale);
-          else if (Date.now() > deadline) throw new Error(M.configLockTimeout(lock));
-          else Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
-        }
-      }
+      held = acquireLockSync(lock, { waitMs: 10000, busy: () => { throw new Error(M.configLockTimeout(lock)); } });
       items = readFiles();
       for (const item of items) {
         if (item.one_line) continue;
@@ -331,7 +316,7 @@ function cmdLayout(o) {
         item.changed = true;
       }
     }
-  } finally { if (locked) retryBusy(() => fs.rmSync(lock, { force: true }), () => ownerOf() === process.pid); }
+  } finally { held?.release(); }
   process.stdout.write(JSON.stringify({ files: items.map(({ file, kind, one_line, changed, backup }) => ({ file, kind, one_line, changed, backup })) }, null, 2) + '\n');
 }
 
