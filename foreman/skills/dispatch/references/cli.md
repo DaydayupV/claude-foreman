@@ -46,7 +46,7 @@ node "<脚本路径>" assets <template|cut|check|diff|layers|patch|trace|capture
 
 `agy-guard install` 在 `~/.gemini/config/` 下装守卫（先备份 `hooks.json`），`uninstall` 删掉条目和文件，`status` 只读、报告装没装、文件是否一致和正在运行的 agy 任务。装和卸会拿一把跨进程的锁，有 agy 任务在运行时拒绝。**只在用户同意后运行 `install`**（`/foreman:setup` 的弹窗，或者用户明确要求），它改的是用户目录里 agy 的全局配置。
 
-`layout` 把用户配置（和 `--cwd` 项目里的 `.claude/foreman.json`，有的话）的 `modules` 改成一项一行的写法（见 `references/config.md` 的"写法"），内容和键的顺序都不变：已经是这种写法的文件不动；其余的先备份成同目录下的 `<文件名>.layout-<年月日-时分秒>.bak`（`--no-backup` 不备份），写完读回来和原内容逐项比对，不一致就恢复原文件并报错。它不做配置迁移，也不改 `agent-aliases.json`。`--check` 只报告、不写文件。输出 JSON：`files` 里每个文件的 `file`、`kind`（`user` 或 `project`）、`one_line`（改之前是不是这种写法）、`changed`、`backup`。改的是用户自己的文件，**只在用户同意后运行**（`/foreman:setup` 的确认，或者用户明确要求）；`--check` 随时可以跑。
+`layout` 把用户配置（和 `--cwd` 项目里的 `.claude/foreman.json`，有的话）的 `modules` 改成一项一行的写法（见 `references/config.md` 的"写法"），内容和键的顺序都不变：已经是这种写法的文件不动；其余的先备份成同目录下的 `<文件名>.layout-<年月日-时分秒>.bak`（`--no-backup` 不备份），再在原文件上直接改写（文件本身不换，单独设过的访问控制、属主和权限都保留），写完读回来和原内容逐项比对，不一致就恢复原文件并报错。用户配置还不存在时报错，先运行 `config` 生成；项目里还是旧文件名 `.claude/codex-bridge.json` 时也认。它不做配置迁移，也不改 `agent-aliases.json`。`--check` 只报告、不写文件。输出 JSON：`files` 里每个文件的 `file`、`kind`（`user` 或 `project`）、`one_line`（改之前是不是这种写法）、`changed`、`backup`。改的是用户自己的文件，**只在用户同意后运行**（`/foreman:setup` 的确认，或者用户明确要求）；`--check` 随时可以跑。
 
 总体 `ok` 只看 Node.js 和被格子引用到的协作方（包括图像格子）；没被引用的不通过只是报告出来，不影响使用。每项不通过时，结果里的 `fix` 写明该怎么处理，转告用户即可。
 
