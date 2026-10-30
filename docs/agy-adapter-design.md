@@ -141,6 +141,7 @@
     - 附加目录和项目不在同一个卷上时不探测、不放行命令（探针只测项目所在的卷）。
     - 本机断网时不启动探针，这次不放行命令，也不写缓存。
     - "不可用"的结论 24 小时后过期，"可用"的不过期；`check --reprobe` 删掉本机这一条后重测。
+    - 探针没跑完的结论不写缓存，例外是命令没能启动：工具输出的状态行里有 `Command failed to run:`、一个探针结果都没收到时，把原文（最多 300 字符）记成 `start_error`，探针就此结束，按"不可用"写缓存（照样 24 小时后过期）。见第 12 节 agy 1.4.10 的实测。
     - 写缓存在锁内重读再合并；锁忙时这次不写。例外：缓存里留着"可用"、而这次要撤销它（强制重测或测出不可用）却写不进去时报错，不派 agy。
   - **每次运行再核对日志**：守卫第一次放行 `run_command` 前，确认 `log_file` 里有 `enabling terminal sandbox`，而且没有关闭沙箱或退回询问一类的行。退回时的日志措辞还没见过，所以以探针结果为主，日志只作补充；探针没通过的系统，read 档一律不放行命令。
   - **环境变量**：沙箱里的命令看得到 agy 进程的全部环境变量（第 0b 期实测）。所以启动 agy 时去掉已知的密钥类环境变量（各家 API key、云厂商凭据、`SSH_AUTH_SOCK` 等），只保留 agy 登录要用的（比如用 `GEMINI_API_KEY` 登录时保留这一个）。
@@ -326,3 +327,5 @@ stream-json 输入下，模型名无效时退出码是 1（不是 3），`result
 - **命令输出的编码**：PowerShell 的输出按系统代码页编码，里面有中文（比如项目路径）时，agy 会把非 UTF-8 的字节原样发给模型接口，整轮报 `INVALID_ARGUMENT (code 400)`。守卫在 Windows 上放行 `run_command` 时用 `overwrite` 在命令前面加 `[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;`（agy 会告诉模型参数被钩子改过）。
 - **沙箱里的 git**：沙箱读不到 `~/.gitconfig`，git 直接报错退出；沙箱运行时 foreman 把 `GIT_CONFIG_GLOBAL` 指向临时目录里的一个空文件。
 - **回复之后的报错**：实测有一次模型已经交回完整回复，agy 之后的一次请求被接口以 400 拒绝，result 记为 ERROR。回复还在时照常采用，错误记进 notes，回复合不合格交给报告校验。
+- **命令输出的格式**：`run_command` 的 `tool_info.output` 开头常有一行 `A pre-tool hook changed the arguments of this tool call before it ran. Changed: CommandLine.`（守卫每次都改写命令行），然后是状态行 `Command exited with code N.`，`Command output:` 之后才是命令自己打印的内容。退出码和"没能启动"都只在 `Command output:` 之前找。
+- **agy 1.4.10 的沙箱起不来**（2026-10-29 自动升级后，Windows 11）：`--sandbox` 下每条命令都没能启动，步骤仍是 `DONE`，状态行是 `Command failed to run: exebox: creating sandbox: CreateProcessSecurityEnvironment: The system cannot find the path specified..`，换 ASCII 路径的目录也一样，1.4.9 上同一台机器正常。模型每次失败后要想 10–50 秒再换写法重试（还会试 `run_command` 的新参数 `BypassSandbox`，被守卫按不认识的参数拒绝），探针会拖过 120 秒时限，所以探针遇到第一条没能启动的命令就结束（见第 4 节缓存规则）。

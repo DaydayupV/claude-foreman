@@ -20,7 +20,8 @@ export const environmentReport = (checks, environment, agents) => {
   for (const [name, agent] of Object.entries(checks.agents)) {
     if (!checks.summary.agents[name].used_at.length) continue;
     if (agent.type === 'codex cli' && agent.sandbox?.checked.some((item) => item.ok === false)) issues.push(`⚠ ${M.reportIssue(M.reportCodexSandbox(name), agent.fix)}`);
-    if (agent.type === 'agy cli' && agent.sandbox && !agent.sandbox.available) issues.push(`⚠ ${M.reportIssue(M.reportAgySandbox(name), agent.fix || (agent.sandbox.results?.layout === 'unavailable' ? M.fixAgySandboxLayout : M.fixAgySandbox))}`);
+    if (agent.type === 'agy cli' && agent.sandbox && !agent.sandbox.available) issues.push(`⚠ ${M.reportIssue(M.reportAgySandbox(name), agent.fix || (agent.sandbox.results?.layout === 'unavailable' ? M.fixAgySandboxLayout
+      : agent.sandbox.results?.start_error ? M.fixAgySandboxStart(agent.sandbox.results.start_error) : M.fixAgySandbox))}`);
   }
   // 没有在用的 Codex 协作方、或者没查到沙箱（没装、没登录）时，不能说沙箱正常
   // 探测不了（这个版本的 Codex 不支持，ok 为 null）也不算测过
@@ -30,7 +31,8 @@ export const environmentReport = (checks, environment, agents) => {
   const agyInUse = Object.entries(checks.agents).find(([name, agent]) => agent.type === 'agy cli' && checks.summary.agents[name].used_at.length)?.[1];
   const quota = agyInUse?.quota?.groups.flatMap((g) => g.buckets.filter((b) => isObject(b) && Number.isFinite(b.remaining_fraction))
     .map((b) => `${g.name} ${M.reportAgyWindow(b.window) || b.name || b.window} ${Math.round(b.remaining_fraction * 100)}%`));
-  const agyStatus = [agyInUse?.sandbox && (agyInUse.sandbox.available ? M.reportAgySandboxOk : M.reportAgySandboxOff), quota?.length && M.reportAgyQuota(M.list(quota))].filter(Boolean);
+  const agyStatus = [agyInUse?.sandbox && (agyInUse.sandbox.results?.start_error ? M.reportAgySandboxBroken
+    : agyInUse.sandbox.available ? M.reportAgySandboxOk : M.reportAgySandboxOff), quota?.length && M.reportAgyQuota(M.list(quota))].filter(Boolean);
   const keys = Object.values(agents).filter((agent) => agent.type === 'api' && agent.api_key).length;
   return report([
     M.reportEnvironmentTitle, issues.length ? issues.join('\n\n') : sandboxChecked ? M.reportEnvironmentOk : M.reportEnvironmentOkNoSandbox,
