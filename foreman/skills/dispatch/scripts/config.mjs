@@ -416,7 +416,7 @@ function migrateStructure(config, file, base, project, adapters) {
     }
     if (converted.gap) result.modules.default.review = { ...result.modules.default.review, gap: { ...DEFAULT_GAP.review, complex: true } };
     mergeScenes(DEFAULT_CONFIG, result, adapters, (msg) => { invalid = true; throw new Error(msg); });
-    held = acquireLockSync(lock, { waitMs: 10000, busy: () => { throw new Error(M.configLockTimeout(lock)); } });
+    held = acquireLockSync(`${lock}.gen`, { waitMs: 10000, legacy: { base: lock, format: 'pid' }, busy: ({ file }) => { throw new Error(M.configLockTimeout(file)); } });
     const current = readJson(file);
     if (!isDeepStrictEqual(current, config)) {
       held.release();

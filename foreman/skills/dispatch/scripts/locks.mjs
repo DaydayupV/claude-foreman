@@ -9,8 +9,11 @@ const noHardLinks = new Set();
 // 文件系统确实不支持硬链接时报的错；EPERM / EACCES / EBUSY 在 Windows 上也可能只是目标正被删除，先当作暂时的。
 const LINK_UNSUPPORTED = ['ENOTSUP', 'EOPNOTSUPP', 'EXDEV', 'ENOSYS'], LINK_BUSY = ['EPERM', 'EACCES', 'EBUSY'];
 
-const ownerOf = (file) => {
-  try { return JSON.parse(retryBusy(() => fs.readFileSync(file, 'utf8'))); }
+const ownerOf = (file, format) => {
+  try {
+    const text = retryBusy(() => fs.readFileSync(file, 'utf8'));
+    return format === 'pid' ? { pid: Number(text) } : JSON.parse(text);
+  }
   catch (error) {
     if (error.code === 'ENOENT') return undefined;
     if (error instanceof SyntaxError) return null;
@@ -22,84 +25,41 @@ const stat = (file) => {
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
 };
 
-export function acquireLockSync(base, { waitMs, busy }) {
-  const reap = `${base}.reap`, token = randomUUID(), deadline = Date.now() + waitMs;
-  const content = JSON.stringify({ pid: process.pid, token });
-  const pidOf = () => {
-    try { return Number(retryBusy(() => fs.readFileSync(base, 'utf8'))); }
-    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-  };
-  const stale = (file) => {
-    const pid = file === base ? pidOf() : ownerOf(file)?.pid;
-    return Number.isInteger(pid) && pid > 0 ? !pidExists(pid)
-      : Date.now() - (stat(file)?.mtimeMs ?? Date.now()) > 2000;
-  };
-  const mine = () => ownerOf(reap)?.token === token;
-  for (;;) {
-    try { retryBusy(() => fs.writeFileSync(base, String(process.pid), { flag: 'wx' })); }
-    catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      if (Date.now() >= deadline) busy({ file: base, pid: pidOf() });
-      if (stale(base)) {
-        try { retryBusy(() => fs.writeFileSync(reap, content, { flag: 'wx' })); }
-        catch (error) {
-          if (error.code !== 'EEXIST') throw error;
-          retryBusy(() => fs.rmSync(reap, { force: true }), () => stale(reap));
-        }
-        // 独占 .reap 后再复查过期状态，同一时间只有一个回收者能删锁，
-        // 暂停的旧读者恢复后也不会删掉别人刚建的活锁。
-        if (mine()) {
-          try { retryBusy(() => fs.rmSync(base, { force: true }), () => mine() && stale(base)); }
-          finally { retryBusy(() => fs.rmSync(reap, { force: true }), mine); }
-        }
-      }
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
-      continue;
-    }
-    let released = false;
-    const release = () => {
-      if (released) return;
-      released = true;
-      process.removeListener('exit', release);
-      retryBusy(() => fs.rmSync(base, { force: true }), () => pidOf() === process.pid);
-    };
-    process.once('exit', release);
-    return { release };
-  }
-}
-
-// 旧路径仍按 HEAD 的清理锁协议回收，和旧版共用同一套互斥。
-async function acquireLegacy(base, token, deadline, busy) {
+function* acquireLegacy(base, token, deadline, busy, { format } = {}) {
   const reap = `${base}.reap`, content = JSON.stringify({ pid: process.pid, token });
-  const legacyOwner = (file) => { const value = ownerOf(file); return typeof value === 'number' ? { pid: value } : value; };
+  const legacyOwner = (file) => { const value = ownerOf(file, file === base ? format : undefined); return typeof value === 'number' ? { pid: value } : value; };
   const stale = (file) => {
-    const owner = legacyOwner(file);
-    return owner?.pid ? !pidExists(owner.pid) : Date.now() - (stat(file)?.mtimeMs ?? Date.now()) > 10000;
+    const pid = legacyOwner(file)?.pid;
+    return (format === 'pid' ? Number.isInteger(pid) && pid > 0 : pid) ? !pidExists(pid)
+      : Date.now() - (stat(file)?.mtimeMs ?? Date.now()) > (format === 'pid' ? 2000 : 10000);
   };
   const mine = (file) => ownerOf(file)?.token === token;
   let delay = 25;
   for (;;) {
     const final = Date.now() >= deadline;
-    try { retryBusy(() => fs.writeFileSync(base, content, { flag: 'wx' })); return; }
+    // 旧版用 Number(内容) 判断持有者，配置旧锁必须写纯 pid。
+    try { retryBusy(() => fs.writeFileSync(base, format === 'pid' ? String(process.pid) : content, { flag: 'wx' })); return; }
     catch (error) {
       if (error.code !== 'EEXIST') throw error;
       if (final) busy({ file: base, pid: legacyOwner(base)?.pid ?? null });
       if (stale(base)) {
-        try { retryBusy(() => fs.writeFileSync(reap, content, { flag: 'wx' })); }
-        catch (error) { if (error.code !== 'EEXIST') throw error; retryBusy(() => fs.rmSync(reap, { force: true }), () => stale(reap)); }
-        if (mine(reap)) {
-          try { retryBusy(() => fs.rmSync(base, { force: true }), () => stale(base) && mine(reap)); }
-          finally { retryBusy(() => fs.rmSync(reap, { force: true }), () => mine(reap)); }
-        }
+        let created = false;
+        try {
+          try { retryBusy(() => fs.writeFileSync(reap, content, { flag: 'wx' })); created = true; }
+          catch (error) { if (error.code !== 'EEXIST') throw error; retryBusy(() => fs.rmSync(reap, { force: true }), () => stale(reap)); }
+          if (mine(reap)) retryBusy(() => fs.rmSync(base, { force: true }), () => stale(base) && mine(reap));
+          if (created) retryBusy(() => fs.rmSync(reap, { force: true }), () => mine(reap));
+        } catch (error) { if (created) retryBusy(() => fs.rmSync(reap, { force: true })); throw error; }
       }
-      await sleep(delay); delay = Math.min(200, delay * 2);
+      yield delay; delay = Math.min(200, delay * 2);
     }
   }
 }
 
-export async function acquireLock(base, { waitMs, busy, legacy = false }) {
+function* acquire(base, { waitMs, busy, legacy = false }) {
   const dir = path.dirname(base), prefix = `${path.basename(base)}.`;
-  const legacyBase = typeof legacy === 'string' ? legacy : base;
+  const legacyBase = typeof legacy === 'object' ? legacy.base : typeof legacy === 'string' ? legacy : base;
+  const format = legacy.format;
   const linkDir = path.resolve(dir);
   const token = randomUUID(), deadline = Date.now() + waitMs;
   const content = JSON.stringify({ pid: process.pid, token, at: new Date().toISOString() });
@@ -129,53 +89,74 @@ export async function acquireLock(base, { waitMs, busy, legacy = false }) {
       || owner === null && !writing && Date.now() - (stat(current)?.mtimeMs ?? Date.now()) > 10000;
     if (!vacant) {
       if (final) blocked(current, owner);
-      await sleep(delay); delay = Math.min(200, delay * 2);
+      yield delay; delay = Math.min(200, delay * 2);
       continue;
     }
     const generation = g + 1n, file = `${base}.${generation}`;
-    let created = false;
-    try {
-      retryBusy(() => fs.writeFileSync(tmp, content, { flag: 'wx' }));
-      // 暂时的错误短暂重试几次：EPERM 一直不消失才当作不支持硬链接，EACCES / EBUSY 一直不消失就算这一轮没抢到。
-      for (let attempt = 0; !created && !noHardLinks.has(linkDir); attempt++) {
-        try { fs.linkSync(tmp, file); created = true; }
-        catch (error) {
-          if (LINK_UNSUPPORTED.includes(error.code) || error.code === 'EPERM' && attempt >= 3) { noHardLinks.add(linkDir); break; }
-          if (!LINK_BUSY.includes(error.code) || attempt >= 3) throw error;
-          await sleep(25);
-        }
-      }
-      if (!created) retryBusy(() => fs.writeFileSync(file, content, { flag: 'wx' }));
-      created = true;
-    } catch (error) {
-      if (error.code !== 'EEXIST' && !LINK_BUSY.includes(error.code)) throw error;
-    } finally { retryBusy(() => fs.rmSync(tmp, { force: true })); }
-    if (!created) { if (final) blocked(file); await sleep(delay); delay = Math.min(200, delay * 2); continue; }
-    const after = entries();
-    if (latest(after) > generation) {
-      retryBusy(() => fs.rmSync(file, { force: true }));
-      if (final) blocked(`${base}.${latest(after)}`);
-      continue;
-    }
-    let released = false;
+    let created = false, released = false, legacyHeld = false;
     const release = () => {
       if (released) return;
       released = true;
       process.removeListener('exit', release);
-      try { if (legacy) retryBusy(() => fs.rmSync(legacyBase, { force: true }), () => ownerOf(legacyBase)?.token === token); }
-      finally {
-        try { retryBusy(() => fs.writeFileSync(`${file}.done`, '', { flag: 'wx' })); }
-        catch (error) { if (error.code !== 'EEXIST') throw error; }
+      try {
+        if (legacyHeld) retryBusy(() => fs.rmSync(legacyBase, { force: true }), () => {
+          const owner = ownerOf(legacyBase, format);
+          return format === 'pid' ? owner?.pid === process.pid : owner?.token === token;
+        });
+      } finally {
+        if (created) {
+          try { retryBusy(() => fs.writeFileSync(`${file}.done`, '', { flag: 'wx' })); }
+          catch (error) { if (error.code !== 'EEXIST') throw error; }
+        }
       }
     };
-    process.once('exit', release);
     try {
+      try {
+        retryBusy(() => fs.writeFileSync(tmp, content, { flag: 'wx' }));
+        // 暂时的错误短暂重试几次：EPERM 一直不消失才当作不支持硬链接，EACCES / EBUSY 一直不消失就算这一轮没抢到。
+        for (let attempt = 0; !created && !noHardLinks.has(linkDir); attempt++) {
+          try { fs.linkSync(tmp, file); created = true; }
+          catch (error) {
+            if (LINK_UNSUPPORTED.includes(error.code) || error.code === 'EPERM' && attempt >= 3) { noHardLinks.add(linkDir); break; }
+            if (!LINK_BUSY.includes(error.code) || attempt >= 3) throw error;
+            yield 25;
+          }
+        }
+        if (!created) retryBusy(() => fs.writeFileSync(file, content, { flag: 'wx' }));
+        created = true;
+      } catch (error) {
+        if (error.code !== 'EEXIST' && !LINK_BUSY.includes(error.code)) throw error;
+      } finally { retryBusy(() => fs.rmSync(tmp, { force: true })); }
+      if (!created) { if (final) blocked(file); yield delay; delay = Math.min(200, delay * 2); continue; }
+      const after = entries();
+      if (latest(after) > generation) {
+        retryBusy(() => fs.rmSync(file, { force: true }));
+        created = false;
+        if (final) blocked(`${base}.${latest(after)}`);
+        continue;
+      }
+      process.once('exit', release);
       // 清理旧代号和死进程的临时文件只是顺手做的：删不掉（Windows 上正被占用）就留给下一个拿锁的，不能让这次拿锁失败
       for (const entry of after) if (entry.generation < generation || entry.pid && !pidExists(entry.pid)) {
         try { retryBusy(() => fs.rmSync(path.join(dir, entry.name), { force: true })); } catch { /* 留给下一次 */ }
       }
-      if (legacy) await acquireLegacy(legacyBase, token, deadline, busy);
+      // 编号锁把新版本的回收者串行化，持有它之后才碰旧锁和 .reap。
+      if (legacy) { yield* acquireLegacy(legacyBase, token, deadline, busy, { format }); legacyHeld = true; }
       return { release, file };
     } catch (error) { release(); throw error; }
   }
+}
+
+export async function acquireLock(base, options) {
+  const steps = acquire(base, options);
+  let step = steps.next();
+  while (!step.done) { await sleep(step.value); step = steps.next(); }
+  return step.value;
+}
+
+export function acquireLockSync(base, options) {
+  const steps = acquire(base, options), pause = new Int32Array(new SharedArrayBuffer(4));
+  let step = steps.next();
+  while (!step.done) { Atomics.wait(pause, 0, 0, step.value); step = steps.next(); }
+  return { release: step.value.release };
 }

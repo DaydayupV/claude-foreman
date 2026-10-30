@@ -17,23 +17,23 @@ const wait = `const wait = (file) => {
 test('两个进程同时回收死锁，暂停的旧读者不会删除新持有者的锁', async (t) => {
   const h = sandbox(t), base = `${h.userConfig}.structure.lock`;
   write(base, String(dead));
-  const markers = Object.fromEntries(['deleting', 'contending', 'read', 'resume', 'resumeRead', 'waiting', 'first', 'second', 'release'].map((name) => [name, path.join(h.cwd, name)]));
+  write(`${base}.reap`, { pid: dead, token: 'dead-reaper' });
+  write(`${base}.gen.1`, { pid: dead, token: 'dead-generation' });
+  const markers = Object.fromEntries(['deleting', 'read', 'resume', 'resumeRead', 'waiting', 'first', 'second', 'release'].map((name) => [name, path.join(h.cwd, name)]));
   const script = h.write('config-lock-race.mjs', `import fs from 'node:fs';
 import { acquireLockSync } from ${url('locks.mjs')};
 const base = ${JSON.stringify(base)}, markers = ${JSON.stringify(markers)}, role = process.argv[2];
 ${wait}
-const read = fs.readFileSync, write = fs.writeFileSync, remove = fs.rmSync, removed = []; let paused = false, reads = 0;
+const read = fs.readFileSync, write = fs.writeFileSync, remove = fs.rmSync, removed = []; let paused = false, legacyReads = 0;
 fs.readFileSync = (file, ...args) => {
   const value = read(file, ...args);
-  if (role === 'second' && file === base && value === '${dead}' && ++reads === 2) {
+  if (role === 'second' && file === base + '.gen.1' && !paused) {
+    paused = true;
     write(markers.read, ''); wait(markers.resumeRead);
   }
-  if (role === 'second' && file === base && value !== '${dead}' && value !== String(process.pid)) write(markers.waiting, value);
+  if (role === 'second' && file === base + '.gen.2') write(markers.waiting, JSON.stringify({ legacyReads }));
+  if (file === base || file === base + '.reap') legacyReads++;
   return value;
-};
-fs.writeFileSync = (file, ...args) => {
-  try { return write(file, ...args); }
-  catch (error) { if (role === 'second' && file === base + '.reap' && error.code === 'EEXIST') write(markers.contending, ''); throw error; }
 };
 fs.rmSync = (file, ...args) => {
   if (file === base) {
@@ -42,24 +42,28 @@ fs.rmSync = (file, ...args) => {
   }
   return remove(file, ...args);
 };
-const lock = acquireLockSync(base, { waitMs: 8000, busy: () => { throw new Error('busy'); } });
+const lock = acquireLockSync(base + '.gen', { waitMs: 8000, legacy: { base, format: 'pid' }, busy: () => { throw new Error('busy'); } });
+fs.writeFileSync(base + '.critical', '', { flag: 'wx' });
 fs.writeFileSync(markers[role], String(process.pid));
 if (role === 'first') wait(markers.release);
+fs.rmSync(base + '.critical');
 lock.release(); console.log(JSON.stringify({ pid: process.pid, removed }));`);
+  const second = h.start(script, ['second']);
+  await poll(() => fs.existsSync(markers.read), 'B 读到死进程的编号锁后暂停');
   const first = h.start(script, ['first']);
   await poll(() => fs.existsSync(markers.deleting), 'A 确认过期后在删除前暂停');
-  assert.equal(json(`${base}.reap`).pid, first.child.pid);
-  assert.equal(typeof json(`${base}.reap`).token, 'string');
-  const second = h.start(script, ['second']);
-  await poll(() => fs.existsSync(markers.read), 'B 被回收锁挡住，再次读到死锁后暂停');
-  assert.equal(fs.existsSync(markers.contending), true);
+  const reaper = json(`${base}.reap`);
+  assert.equal(reaper.pid, first.child.pid);
+  assert.equal(typeof reaper.token, 'string');
   assert.equal(fs.existsSync(markers.second), false);
   assert.equal(read(base), String(dead));
+  write(markers.resumeRead, '');
+  await poll(() => fs.existsSync(markers.waiting), 'B 带着旧读数恢复后被 A 的编号锁挡住');
+  assert.deepEqual(json(markers.waiting), { legacyReads: 0 });
+  assert.deepEqual(json(`${base}.reap`), reaper);
   write(markers.resume, '');
   await poll(() => fs.existsSync(markers.first), 'A 删掉死锁并持有新锁');
   assert.equal(read(base), String(first.child.pid));
-  write(markers.resumeRead, '');
-  await poll(() => fs.existsSync(markers.waiting), 'B 带着旧读数恢复后等待 A 的活锁');
   assert.equal(fs.existsSync(markers.second), false);
   assert.equal(read(base), String(first.child.pid));
   write(markers.release, '');
@@ -68,6 +72,134 @@ lock.release(); console.log(JSON.stringify({ pid: process.pid, removed }));`);
   assert.deepEqual(b.removed, [b.pid]);
   assert.equal(fs.existsSync(base), false);
   assert.equal(fs.existsSync(`${base}.reap`), false);
+});
+
+test('主锁和 .reap 都已过期，暂停的回收者始终由编号锁挡住另一个回收者', async (t) => {
+  const h = sandbox(t), base = `${h.userConfig}.structure.lock`;
+  write(base, String(dead)); write(`${base}.reap`, { pid: dead, token: 'dead-reaper' });
+  const markers = Object.fromEntries(['stale', 'resume', 'waiting', 'first', 'second', 'release'].map((name) => [name, path.join(h.cwd, name)]));
+  const script = h.write('dead-reap-race.mjs', `import fs from 'node:fs';
+import { acquireLockSync } from ${url('locks.mjs')};
+const base = ${JSON.stringify(base)}, markers = ${JSON.stringify(markers)}, role = process.argv[2];
+${wait}
+const read = fs.readFileSync, remove = fs.rmSync; let paused = false, legacyReads = 0;
+fs.readFileSync = (file, ...args) => {
+  const value = read(file, ...args);
+  if (file === base || file === base + '.reap') legacyReads++;
+  if (role === 'second' && file === base + '.gen.1') fs.writeFileSync(markers.waiting, JSON.stringify({ legacyReads }));
+  return value;
+};
+fs.rmSync = (file, ...args) => {
+  if (role === 'first' && file === base + '.reap' && !paused) {
+    paused = true; fs.writeFileSync(markers.stale, ''); wait(markers.resume);
+  }
+  return remove(file, ...args);
+};
+const lock = acquireLockSync(base + '.gen', { waitMs: 8000, legacy: { base, format: 'pid' }, busy: () => { throw new Error('busy'); } });
+fs.writeFileSync(base + '.critical', '', { flag: 'wx' });
+fs.writeFileSync(markers[role], String(process.pid));
+if (role === 'first') wait(markers.release);
+fs.rmSync(base + '.critical');
+lock.release(); console.log(JSON.stringify(true));`);
+  const first = h.start(script, ['first']);
+  await poll(() => fs.existsSync(markers.stale), 'A 已判断旧 .reap 过期，在删除前暂停');
+  const second = h.start(script, ['second']);
+  await poll(() => fs.existsSync(markers.waiting), 'B 被 A 的编号锁挡住');
+  assert.deepEqual(json(markers.waiting), { legacyReads: 0 });
+  assert.deepEqual(json(`${base}.reap`), { pid: dead, token: 'dead-reaper' });
+  assert.equal(read(base), String(dead));
+  assert.equal(fs.existsSync(markers.second), false);
+  write(markers.resume, '');
+  await poll(() => fs.existsSync(markers.first), 'A 回收两个死锁后拿到主锁');
+  assert.equal(read(base), String(first.child.pid));
+  assert.equal(fs.existsSync(markers.second), false);
+  write(markers.release, '');
+  for (const result of await Promise.all([first.done, second.done])) assert.equal(output(result), true);
+  assert.equal(fs.existsSync(base), false); assert.equal(fs.existsSync(`${base}.reap`), false);
+});
+
+test('.reap 建成后归属读取持续 EPERM，两个入口都清理残留并允许活进程外的下一进程拿锁', async (t) => {
+  const h = sandbox(t);
+  for (const mode of ['sync', 'async']) {
+    const base = `${h.userConfig}.${mode}.structure.lock`, ready = path.join(h.cwd, `${mode}-failed`), finish = path.join(h.cwd, `${mode}-finish`);
+    write(base, String(dead));
+    const script = h.write(`${mode}-reap-eperm.mjs`, `import fs from 'node:fs';
+import assert from 'node:assert/strict';
+import { acquireLock, acquireLockSync } from ${url('locks.mjs')};
+const base = ${JSON.stringify(base)}, read = fs.readFileSync, write = fs.writeFileSync;
+let created = false, reads = 0;
+fs.writeFileSync = (file, ...args) => { const value = write(file, ...args); if (file === base + '.reap') created = true; return value; };
+fs.readFileSync = (file, ...args) => {
+  if (file === base + '.reap' && created) { reads++; throw Object.assign(new Error('denied'), { code: 'EPERM' }); }
+  return read(file, ...args);
+};
+const listeners = process.listenerCount('exit'), options = { waitMs: 5000, legacy: { base, format: 'pid' }, busy: () => { throw new Error('busy'); } };
+try {
+  if (${JSON.stringify(mode)} === 'sync') acquireLockSync(base + '.gen', options);
+  else await acquireLock(base + '.gen', options);
+  assert.fail('应抛出归属读取错误');
+} catch (error) { assert.equal(error.code, 'EPERM'); }
+assert.ok(reads >= 81); assert.equal(fs.existsSync(base + '.reap'), false);
+assert.equal(fs.existsSync(base + '.gen.1.done'), true);
+assert.equal(process.listenerCount('exit'), listeners);
+fs.writeFileSync(${JSON.stringify(ready)}, '');
+${wait}
+wait(${JSON.stringify(finish)}); console.log(JSON.stringify(true));`);
+    const failed = h.start(script);
+    await poll(() => fs.existsSync(ready), `${mode} 入口清理失败的 .reap`);
+    assert.equal(failed.child.exitCode, null);
+    assert.equal(fs.existsSync(`${base}.reap`), false);
+    const next = h.write(`${mode}-after-eperm.mjs`, `import { acquireLockSync } from ${url('locks.mjs')};
+const base = ${JSON.stringify(base)};
+const lock = acquireLockSync(base + '.gen', { waitMs: 1000, legacy: { base, format: 'pid' }, busy: () => { throw new Error('busy'); } });
+lock.release(); console.log(JSON.stringify(true));`);
+    assert.equal(output(await h.start(next).done), true);
+    assert.equal(fs.existsSync(`${base}.gen.2.done`), true);
+    assert.equal(fs.existsSync(base), false);
+    assert.equal(failed.child.exitCode, null);
+    write(finish, ''); assert.equal(output(await failed.done), true);
+  }
+});
+
+test('纯 pid 的旧协议进程与新版双向互斥，旧进程能识别新版的活持有者', async (t) => {
+  const h = sandbox(t), base = `${h.userConfig}.structure.lock`;
+  const markers = Object.fromEntries(['old', 'oldRelease', 'waiting', 'new', 'newRelease'].map((name) => [name, path.join(h.cwd, name)]));
+  const oldScript = h.write('old-config-lock.mjs', `import fs from 'node:fs';
+import assert from 'node:assert/strict';
+const base = ${JSON.stringify(base)}, markers = ${JSON.stringify(markers)};
+${wait}
+if (process.argv[2] === 'probe') {
+  assert.throws(() => fs.writeFileSync(base, String(process.pid), { flag: 'wx' }), { code: 'EEXIST' });
+  const text = fs.readFileSync(base, 'utf8'), pid = Number(text);
+  assert.match(text, /^[1-9][0-9]*$/); process.kill(pid, 0);
+  console.log(JSON.stringify({ pid, text }));
+} else {
+  fs.writeFileSync(base, String(process.pid), { flag: 'wx' });
+  fs.writeFileSync(markers.old, ''); wait(markers.oldRelease);
+  if (Number(fs.readFileSync(base, 'utf8')) === process.pid) fs.rmSync(base);
+  console.log(JSON.stringify(true));
+}`);
+  const newScript = h.write('new-config-lock.mjs', `import fs from 'node:fs';
+import { acquireLockSync } from ${url('locks.mjs')};
+const base = ${JSON.stringify(base)}, markers = ${JSON.stringify(markers)}, read = fs.readFileSync;
+${wait}
+fs.readFileSync = (file, ...args) => { const value = read(file, ...args); if (file === base) fs.writeFileSync(markers.waiting, ''); return value; };
+const lock = acquireLockSync(base + '.gen', { waitMs: 8000, legacy: { base, format: 'pid' }, busy: () => { throw new Error('busy'); } });
+fs.writeFileSync(markers.new, ''); wait(markers.newRelease);
+lock.release(); console.log(JSON.stringify(true));`);
+  const old = h.start(oldScript);
+  await poll(() => fs.existsSync(markers.old), '旧协议用 wx 拿到纯 pid 锁');
+  const pending = h.start(newScript);
+  await poll(() => fs.existsSync(markers.waiting), '新版等待旧协议持有者');
+  assert.equal(read(base), String(old.child.pid));
+  assert.equal(fs.existsSync(markers.new), false);
+  write(markers.oldRelease, ''); assert.equal(output(await old.done), true);
+  await poll(() => fs.existsSync(markers.new), '旧进程释放后新版拿到锁');
+  const before = read(base), ancient = new Date('2000-01-01'); fs.utimesSync(base, ancient, ancient);
+  assert.deepEqual(output(await h.start(oldScript, ['probe']).done), { pid: pending.child.pid, text: String(pending.child.pid) });
+  assert.equal(read(base), before);
+  write(markers.newRelease, ''); assert.equal(output(await pending.done), true);
+  assert.equal(fs.existsSync(base), false);
 });
 
 test('活持有者即使锁很旧也会等待，超时保留锁并报 configLockTimeout', async (t) => {
@@ -85,7 +217,7 @@ fs.readFileSync = (file, ...args) => {
   return value;
 };
 try {
-  const lock = acquireLockSync(base, { waitMs: mode === 'wait' ? 3000 : 150, busy: (owner) => { blocked = owner; throw new Error(M.configLockTimeout(base)); } });
+  const lock = acquireLockSync(base + '.gen', { waitMs: mode === 'wait' ? 3000 : 150, legacy: { base, format: 'pid' }, busy: (owner) => { blocked = owner; throw new Error(M.configLockTimeout(base)); } });
   lock.release(); console.log(JSON.stringify({ acquired: true }));
 } catch (error) { console.log(JSON.stringify({ message: error.message, ...blocked, elapsed: Date.now() - started })); }`);
   const timed = output(await h.start(script, ['timeout']).done);
@@ -124,7 +256,7 @@ fs.rmSync = (file, ...args) => {
   return remove(file, ...args);
 };
 try {
-  const lock = acquireLockSync(base, { waitMs: mode === 'stale-replaced' ? 150 : 4000, busy: () => { throw new Error('busy'); } });
+  const lock = acquireLockSync(base + '.gen', { waitMs: mode === 'stale-replaced' ? 150 : 4000, legacy: { base, format: 'pid' }, busy: () => { throw new Error('busy'); } });
   lock.release(); console.log(JSON.stringify({ acquired: true }));
 } catch (error) { console.log(JSON.stringify({ message: error.message })); }`);
   const child = h.start(script, ['recover']);
@@ -148,8 +280,8 @@ try {
 
 test('锁内容兼容旧版纯 pid 判断，释放只删自己的锁且异常退出会清理', async (t) => {
   const h = sandbox(t), base = `${h.userConfig}.structure.lock`, listeners = process.listenerCount('exit');
-  const options = { waitMs: 1000, busy: () => { throw new Error('busy'); } };
-  const first = acquireLockSync(base, options);
+  const options = { waitMs: 1000, legacy: { base, format: 'pid' }, busy: () => { throw new Error('busy'); } };
+  const first = acquireLockSync(`${base}.gen`, options);
   assert.equal(read(base), String(process.pid));
   assert.match(read(base), /^[1-9][0-9]*$/);
   assert.equal(Number(read(base)), process.pid);
@@ -157,7 +289,7 @@ test('锁内容兼容旧版纯 pid 判断，释放只删自己的锁且异常退
   write(base, String(dead)); first.release(); first.release();
   assert.equal(read(base), String(dead));
   assert.equal(process.listenerCount('exit'), listeners);
-  const second = acquireLockSync(base, options);
+  const second = acquireLockSync(`${base}.gen`, options);
   first.release(); assert.equal(read(base), String(process.pid));
   second.release(); second.release();
   assert.equal(fs.existsSync(base), false);
@@ -165,7 +297,7 @@ test('锁内容兼容旧版纯 pid 判断，释放只删自己的锁且异常退
   const script = h.write('config-lock-exit.mjs', `import fs from 'node:fs';
 import { acquireLockSync } from ${url('locks.mjs')};
 const base = ${JSON.stringify(base)};
-acquireLockSync(base, { waitMs: 1000, busy: () => { throw new Error('busy'); } });
+acquireLockSync(base + '.gen', { waitMs: 1000, legacy: { base, format: 'pid' }, busy: () => { throw new Error('busy'); } });
 if (process.argv[2] === 'taken') fs.writeFileSync(base, String(process.ppid));
 throw new Error('synthetic exit');`);
   for (const mode of ['own', 'taken']) {
@@ -179,11 +311,11 @@ throw new Error('synthetic exit');`);
 test('无效 pid 的锁保留两秒宽限，过期后回收', (t) => {
   const h = sandbox(t), base = `${h.userConfig}.structure.lock`;
   write(base, 'broken');
-  const options = { waitMs: 75, busy: () => { throw new Error(MESSAGES.zh.configLockTimeout(base)); } };
-  assert.throws(() => acquireLockSync(base, options), { message: MESSAGES.zh.configLockTimeout(base) });
+  const options = { waitMs: 75, legacy: { base, format: 'pid' }, busy: () => { throw new Error(MESSAGES.zh.configLockTimeout(base)); } };
+  assert.throws(() => acquireLockSync(`${base}.gen`, options), { message: MESSAGES.zh.configLockTimeout(base) });
   assert.equal(read(base), 'broken');
   const old = new Date(Date.now() - 2100); fs.utimesSync(base, old, old);
-  const lock = acquireLockSync(base, options);
+  const lock = acquireLockSync(`${base}.gen`, options);
   assert.equal(read(base), String(process.pid));
   lock.release();
   assert.equal(fs.existsSync(base), false); assert.equal(fs.existsSync(`${base}.reap`), false);

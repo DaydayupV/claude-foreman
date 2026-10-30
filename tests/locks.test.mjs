@@ -51,6 +51,63 @@ lock.release(); console.log(JSON.stringify(lock.file));`);
   assert.deepEqual(fs.readdirSync(h.cwd).filter((name) => name.startsWith('shared.lock.')), ['shared.lock.3', 'shared.lock.3.done']);
 });
 
+test('同步和异步入口对同一个 base 双向互斥', async (t) => {
+  const h = sandbox(t);
+  for (const mode of ['sync', 'async']) {
+    const base = path.join(h.cwd, `${mode}.lock`);
+    const markers = Object.fromEntries(['holder', 'contender', 'waiting', 'release'].map((name) => [name, path.join(h.cwd, `${mode}-${name}`)]));
+    const script = h.write(`${mode}-mixed.mjs`, `import fs from 'node:fs';
+import assert from 'node:assert/strict';
+import { acquireLock, acquireLockSync } from ${url('locks.mjs')};
+const base = ${JSON.stringify(base)}, markers = ${JSON.stringify(markers)}, mode = process.argv[2], role = process.argv[3];
+const read = fs.readFileSync;
+fs.readFileSync = (file, ...args) => { const value = read(file, ...args); if (role === 'contender' && file === base + '.1') fs.writeFileSync(markers.waiting, ''); return value; };
+const options = { waitMs: 8000, busy: () => { throw new Error('busy'); } };
+const lock = mode === 'sync' ? acquireLockSync(base, options) : await acquireLock(base, options);
+const file = base + (role === 'holder' ? '.1' : '.2');
+assert.equal(JSON.parse(read(file, 'utf8')).pid, process.pid);
+fs.writeFileSync(base + '.critical', role, { flag: 'wx' });
+fs.writeFileSync(markers[role], file);
+${wait}
+if (role === 'holder') await wait(markers.release);
+fs.rmSync(base + '.critical'); lock.release(); console.log(JSON.stringify(file));`);
+    const holder = h.start(script, [mode, 'holder']);
+    await poll(() => fs.existsSync(markers.holder), `${mode} 持有者拿到锁`);
+    const contender = h.start(script, [mode === 'sync' ? 'async' : 'sync', 'contender']);
+    await poll(() => fs.existsSync(markers.waiting), '另一个入口读到活持有者');
+    assert.equal(fs.readFileSync(`${base}.critical`, 'utf8'), 'holder');
+    assert.equal(fs.existsSync(markers.contender), false);
+    assert.equal(fs.existsSync(`${base}.2`), false);
+    write(markers.release, '');
+    assert.deepEqual((await Promise.all([holder.done, contender.done])).map((result) => output(result)), [`${base}.1`, `${base}.2`]);
+    assert.equal(fs.existsSync(`${base}.critical`), false);
+  }
+});
+
+test('编号锁建成后的第一次目录复查抛错，两个入口都释放本代且不残留退出监听器', async (t) => {
+  const h = sandbox(t);
+  const script = h.write('published-error.mjs', `import fs from 'node:fs';
+import assert from 'node:assert/strict';
+import { acquireLock, acquireLockSync } from ${url('locks.mjs')};
+const mode = process.argv[2], base = process.argv[3], list = fs.readdirSync;
+let injected = false;
+fs.readdirSync = (...args) => {
+  if (!injected && fs.existsSync(base + '.1')) { injected = true; throw Object.assign(new Error('scan failed'), { code: 'EIO' }); }
+  return list(...args);
+};
+const listeners = process.listenerCount('exit'), options = { waitMs: 1000, busy: () => { throw new Error('busy'); } };
+const acquire = () => mode === 'sync' ? acquireLockSync(base, options) : acquireLock(base, options);
+try { await acquire(); assert.fail('应抛出目录读取错误'); } catch (error) { assert.equal(error.code, 'EIO'); }
+assert.equal(fs.existsSync(base + '.1.done'), true);
+assert.equal(process.listenerCount('exit'), listeners);
+assert.deepEqual(list(${JSON.stringify(h.cwd)}).filter((name) => name.endsWith('.tmp')), []);
+const next = await acquire();
+assert.deepEqual(Object.keys(next), mode === 'sync' ? ['release'] : ['release', 'file']);
+assert.equal(JSON.parse(fs.readFileSync(base + '.2', 'utf8')).pid, process.pid); next.release();
+assert.equal(process.listenerCount('exit'), listeners); console.log(JSON.stringify(true));`);
+  for (const mode of ['sync', 'async']) assert.equal(output(await h.start(script, [mode, path.join(h.cwd, `${mode}-error.lock`)]).done), true);
+});
+
 test('活持有者不按年龄被抢，等待上限后 busy 收到当前文件和 pid', async (t) => {
   const h = sandbox(t), base = path.join(h.cwd, 'live.lock'), ready = path.join(h.cwd, 'ready');
   const holder = h.write('holder.mjs', `import fs from 'node:fs';

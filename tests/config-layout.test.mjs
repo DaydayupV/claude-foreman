@@ -138,7 +138,9 @@ test('layout --no-backup 使用 FOREMAN_CONFIG，缺少项目配置时跳过，�
     files: [{ file: custom, kind: 'user', one_line: false, changed: true, backup: null }],
   });
   assert.deepEqual(json(custom), value);
-  assert.deepEqual(fs.readdirSync(path.dirname(custom)), ['foreman.json']);
+  // 没有备份；写锁的编号锁释放后留下它的代号文件和完成标记（和启动登记锁一样），旧锁文件已删
+  assert.deepEqual(fs.readdirSync(path.dirname(custom)).sort(),
+    ['foreman.json', 'foreman.json.structure.lock.gen.1', 'foreman.json.structure.lock.gen.1.done']);
   assert.equal(read(h.userConfig), original);
 });
 
