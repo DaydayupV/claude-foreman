@@ -299,7 +299,9 @@ function cmdLayout(o) {
         if (item.one_line) continue;
         const { file, text, value } = item, mode = fs.statSync(file).mode & 0o777;
         if (!o['no-backup']) {
-          const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+          // 本地时间，和任务 id、setup 的备份一样
+          const d = new Date(), p = (n) => String(n).padStart(2, '0');
+          const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
           item.backup = `${file}.layout-${stamp}.bak`;
           if (fs.existsSync(item.backup)) item.backup += `-${Date.now()}-${process.pid}`;
           fs.copyFileSync(file, item.backup, fs.constants.COPYFILE_EXCL);

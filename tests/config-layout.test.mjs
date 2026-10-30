@@ -154,6 +154,7 @@ test('任一配置解析失败，都不改写或备份任何配置', async (t) =
 
 test('layout 使用迁移的写锁，备份重名时保留旧备份并追加时间和 pid', async (t) => {
   const h = sandbox(t), original = read(h.userConfig), lock = `${h.userConfig}.structure.lock`;
+  // 备份名用本地时间；测试的子进程时区是 UTC（helpers.mjs 的 TZ），所以固定的那一刻就是 03:04:05
   const collision = write(`${h.userConfig}.layout-20000102-030405.bak`, '已有备份');
   write(lock, String(process.pid));
   const script = h.write('layout-lock.mjs', `import fs from 'node:fs';
