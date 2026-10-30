@@ -716,7 +716,8 @@ function loadConfig(cwd, adapters) {
     if (project) {
       const migrated = migrateStructure(project, file, cfg, true, adapters);
       projectScenes = Object.keys(migrated.modules || {});
-      // 项目 default 不应触发对已停用用户场景的合并校验。
+      // 项目 default 不应触发对已停用用户场景的合并校验。cfg.scene_modules、scene_diff 每次 loadConfig 都由 mergeScenes 新建，
+      // 所以这里原地删除不会影响别的项目；以后要缓存配置，就得改成复制后再删。
       if (scenes.source === 'project') for (const scene of Object.keys(cfg.scene_modules || {})) {
         if (scene === 'default' || scenes.names.includes(scene) || projectScenes.includes(scene)) continue;
         scenes.inactive.push(scene); delete cfg.scene_modules[scene]; delete cfg.scene_diff[scene];

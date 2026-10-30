@@ -500,7 +500,8 @@ export function concurrentExecRuns(meta, previous = []) {
 // 准入检查（在登记锁内）：同一协作方正在运行的任务不超过它的 max_parallel，所有组和会话都算，
 // 因为服务商的限流和额度是按账号的；同组的执行任务写入范围不能重叠。
 // 历史计划和续接关系留索引，避免结束任务移出活动集合后，席位与最新轮次的检查丢失。
-function readRunsLocked(exceptId, context = registrationContext) {
+// save 为 false 时只读：选哪些记录和锁内一样，但不写回活动索引（锁外的预检用）
+function readRunsLocked(exceptId, context = registrationContext, { save = true } = {}) {
   const cached = context ? activeState() : null;
   const names = cached ? fs.readdirSync(RUNS_ROOT).filter((id) => !id.startsWith('.') && !['plans', 'watch.mjs'].includes(id)) : listRuns();
   const state = cached ?? { version: 2, high_water: '', seen: [], active: [], plans: {}, children: {} };
@@ -529,7 +530,7 @@ function readRunsLocked(exceptId, context = registrationContext) {
       }
     }
   }
-  if (context && !unreadable.length) {
+  if (context && save && !unreadable.length) {
     const active = new Set(state.active);
     for (const { id, meta } of runs) {
       remember(state, id, meta);
@@ -554,9 +555,10 @@ function checkAdmission(meta, cfg) {
 }
 
 // 锁外的预检：启动计划席位前先报准入问题（Claude Code 席没提交、这一席已经跑过等），再去读说明文件。
+// 读的记录和锁内一样（活动索引里的、新目录、这份计划和父任务链的），和这次启动无关的旧记录坏了不挡；
 // 先一次查完运行中任务的进程身份，免得逐个起 PowerShell；名额满了不在这里拒绝，交给登记时排队
 function precheckAdmission(meta, cfg) {
-  const read = readRunsLocked(meta.id, null);
+  const read = readRunsLocked(meta.id, { plan: meta.plan, seat: meta.seat, parent: meta.parent, cfg }, { save: false });
   checkRunners(read.runs.map((run) => run.meta));
   return admission(meta, cfg, read, true);
 }
