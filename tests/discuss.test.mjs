@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { plannedSandbox as sandbox, taskArgs, output, failed, poll, json, read, write, baseConfig, apiAgent, opencodeAgent, piAgent, MESSAGES } from './helpers.mjs';
+import { plannedSandbox as sandbox, taskArgs, output, failed, poll, json, read, write, baseConfig, apiAgent, opencodeAgent, piAgent, seedRun, MESSAGES } from './helpers.mjs';
 import { discussion } from './fixtures/reports.mjs';
 import { apiServer } from './fake/api-server.mjs';
 const M = MESSAGES.zh;
@@ -42,6 +42,30 @@ test('Codex 讨论解析报告并传递只读规则和附件范围', async (t) =
   assert.ok(call.args[call.args.indexOf('--output-schema') + 1].endsWith('discuss.schema.json'));
   assert.ok(call.stdin.includes('source.txt（第 2–2 行）'));
   assert.ok(call.stdin.includes(M.discussFooter(h.cwd)));
+});
+
+test('讨论记录写下项目覆盖后的实际时长，命令行覆盖含 stall 为 0', async (t) => {
+  const h = sandbox(t), api = await apiServer(t); configure(h, { api: apiAgent(api.url) });
+  h.write('.claude/foreman.json', { dispatch: { timeout_min: 9, stall_min: 3 } }); h.scenario({ last_message: discussion });
+  for (const [agent, extra, limits] of [['codex', [], [9, 3]], ['api', ['--timeout', '7', '--stall', '0'], [7, 0]]]) {
+    const r = output(await h.bridge(discussArgs(h, agent, extra))), meta = json(path.join(r.run_dir, 'meta.json'));
+    assert.deepEqual([meta.timeout_min, meta.stall_min], limits);
+  }
+});
+
+test('讨论轮数超限的中英提示同时指向用户和项目配置，启动帮助列出 add-dir', async (t) => {
+  const h = sandbox(t), c = baseConfig(); c.dispatch.discuss_max_rounds = 1; h.config(c);
+  seedRun(h, 'round29-cap', { mode: 'discuss', kind: 'discuss', module: 'discuss', cell: 'complex' });
+  for (const lang of ['zh', 'en']) {
+    const m = MESSAGES[lang], opts = { env: { FOREMAN_LANG: lang } };
+    const r = await h.bridge(['resume', '--run', 'round29-cap', '--level', 'complex', '--brief', '-'], opts);
+    failed(r, m.discussRoundsExceeded('round29-cap', 1, 1));
+    assert.ok(r.stderr.includes('~/.claude/foreman/config.json')); assert.ok(r.stderr.includes('/.claude/foreman.json'));
+    for (const module of ['discuss', 'review']) {
+      const help = await h.bridge([module, '--help'], opts); assert.equal(help.code, 0);
+      assert.ok(help.stdout.includes(`--add-dir "<${lang === 'zh' ? '目录' : 'dir'}>"`));
+    }
+  }
 });
 
 test('API 讨论发送附件行范围和项目清单，保存流式事件与用量', async (t) => {

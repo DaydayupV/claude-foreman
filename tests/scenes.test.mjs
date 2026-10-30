@@ -18,13 +18,13 @@ test('场景只读独占行标记中的名称，项目块替换用户块，空�
   const h = sandbox(t), user = prefs(h, '- **outside**: 忽略\n' + block() + '\n- **tail**: 忽略');
   const url = pathToFileURL(path.join(ROOT, 'foreman/skills/dispatch/scripts/config.mjs')).href;
   const script = h.write('read-scenes.mjs', `import { readScenes } from ${JSON.stringify(url)}; console.log(JSON.stringify(readScenes(process.cwd())));`);
-  assert.deepEqual(output(await h.start(script).done), { names: ['code', 'research'], source: 'user', file: user, problems: [] });
+  assert.deepEqual(output(await h.start(script).done), { names: ['code', 'research'], source: 'user', file: user, problems: [], inactive: [] });
   const project = h.write('.claude/foreman.md', '普通项目偏好');
   assert.equal(output(await h.start(script).done).source, 'user');
   write(project, '  <!-- foreman:scenes -->  \n- **local-2**: 规则\n  <!-- /foreman:scenes -->  ');
-  assert.deepEqual(output(await h.start(script).done), { names: ['local-2'], source: 'project', file: project, problems: [] });
+  assert.deepEqual(output(await h.start(script).done), { names: ['local-2'], source: 'project', file: project, problems: [], inactive: [] });
   write(project, block([]));
-  assert.deepEqual(output(await h.start(script).done), { names: [], source: 'project', file: project, problems: [] });
+  assert.deepEqual(output(await h.start(script).done), { names: [], source: 'project', file: project, problems: [], inactive: [] });
   write(project, '<!-- foreman:scenes -->');
   const invalid = output(await h.start(script).done);
   assert.equal(invalid.source, 'project'); assert.deepEqual(invalid.problems, [M.scenesBlockInvalid(project, M.scenesBlockUnpaired)]);
@@ -142,7 +142,7 @@ test('一致性问题阻止所有 plan、直派、计划席启动与续接，con
   const id = '20000101-000000-scene'; seedRun(h, id, { scene: 'code', session_id: 'fake-session' });
   c.modules.unknown = { review: { seats: { complex: 1 } } }; h.config(c);
   const out = output(await h.bridge(['config'])), message = M.scenesProblem(M.list(out.scenes.problems));
-  assert.deepEqual(out.scenes.problems, [M.scenesUndefined('unknown', path.join(path.dirname(h.userConfig), 'preferences.md'))]);
+  assert.deepEqual(out.scenes.problems, [M.scenesUndefined('unknown', path.join(path.dirname(h.userConfig), 'preferences.md'), h.userConfig)]);
   for (const module of ['discuss', 'review', 'run', 'image']) {
     const args = module === 'image' ? [...planArgs(h, module, 'draw'), '--route', '4'] : planArgs(h, module);
     failed(await h.bridge(args), message);
@@ -159,7 +159,10 @@ test('偏好未配块的场景提醒并按 default 使用；坏块只有 default
   let r = await h.bridge(['config']), out = output(r);
   assert.ok(r.stderr.includes(M.scenesNoBlock(M.list(['code', 'research']))));
   assert.ok(out.summary.warnings.some((w) => w.kind === 'scenes_unused'));
-  output(await h.bridge([...planArgs(h, 'run'), ...sceneArgs]));
+  const planned = await h.bridge([...planArgs(h, 'run'), ...sceneArgs]), note = M.sceneNotNeeded('modules.run.complex', 'code');
+  assert.deepEqual(output(planned).notes, [note]); assert.ok(planned.stderr.includes(note));
+  const direct = await h.bridge(['run', '--cwd', h.cwd, '--level', 'complex', '--brief', '-', '--no-snapshot', ...sceneArgs]);
+  output(direct); assert.ok(direct.stderr.includes(note));
   write(file, block(['default'])); r = await h.bridge(['config']); out = output(r);
   assert.deepEqual(out.scenes.problems, []); assert.ok(r.stderr.includes(M.scenesReserved('default')));
   output(await h.bridge(planArgs(h, 'run')));
@@ -173,8 +176,9 @@ test('--scene 对所有模块有效，default 可兜底，场景不同的格子�
   failed(await h.bridge([...planArgs(h, 'run'), ...sceneArgs]), M.planSceneNoScenes);
   prefs(h); c.modules.code = { run: { complex: [{ agent: 'codex', effort: 'high' }] }, review: { seats: { complex: 1 } } }; h.config(c);
   for (const module of ['run', 'review']) {
-    failed(await h.bridge(planArgs(h, module)), M.sceneRequired(`modules.${module}.complex`, M.list(['default', 'code', 'research'])));
-    for (const args of [['--scene', 'code'], ['--scene', 'code', '--scene-why', '  '], ['--scene-why', '理由']]) failed(await h.bridge([...planArgs(h, module), ...args]), M.planSceneWhyRequired);
+    failed(await h.bridge(planArgs(h, module)), M.sceneRequired(`modules.${module}.complex`, M.list(['default', 'code', 'research']), M.sceneDiff('code', module === 'run' ? M.reportCandidate : 'seats.complex')));
+    for (const args of [['--scene', 'code'], ['--scene', 'code', '--scene-why', '  ']]) failed(await h.bridge([...planArgs(h, module), ...args]), M.planSceneWhyRequired);
+    failed(await h.bridge([...planArgs(h, module), '--scene-why', '理由']), M.planSceneMissing);
     failed(await h.bridge([...planArgs(h, module), '--scene', 'gone', '--scene-why', '理由']), M.planSceneUnknown('gone', M.list(['default', 'code', 'research'])));
     const p = output(await h.bridge([...planArgs(h, module), ...sceneArgs])); assert.equal(p.scene, 'code');
     assert.equal(p.seats[0].effort, module === 'run' ? 'high' : 'max');
@@ -186,11 +190,12 @@ test('场景必选名单可不同，少于 default 时输出 notes、stderr，st
   c.modules.default.discuss.complex[0].required = true;
   c.modules.code = { discuss: { complex: [{ agent: 'second', effort: 'high', required: true }] } }; h.config(c);
   const r = await h.bridge([...planArgs(h, 'discuss', 'complex', ['second']), ...sceneArgs]), p = output(r);
-  const note = M.sceneDropsRequired('code', 'modules.discuss.complex', 'codex');
+  const note = M.sceneDropsRequired('code', 'modules.code.discuss.complex', 'codex');
   assert.deepEqual(p.required, ['second']); assert.deepEqual(p.notes, [note]); assert.ok(r.stderr.includes(note));
   assert.deepEqual(output(await h.bridge(['status', '--plan', p.plan_id])).required, ['second']);
   output(await h.bridge(hostArgs(h, p)));
   failed(await h.bridge(['discuss', '--plan', p.plan_id, '--seat', '1', '--scene', 'code', '--brief', '-']), M.sceneFixedByPlan);
+  failed(await h.bridge(['discuss', '--plan', p.plan_id, '--seat', '1', '--scene-why', '理由', '--brief', '-']), M.sceneFixedByPlan);
   c.modules.default.discuss.complex[0].effort = 'low'; h.config(c);
   const { discussion } = await import('./fixtures/reports.mjs'); h.scenario({ last_message: discussion });
   const started = output(await h.bridge(['discuss', '--plan', p.plan_id, '--seat', '1', '--brief', '-']));
@@ -201,11 +206,14 @@ test('直派和续接保留场景及理由，换级仍取同一场景；场景�
   const h = sandbox(t), c = config(); prefs(h); c.agents.second = { ...c.agents.codex, model: 'second' };
   c.modules.code = { run: { complex: [{ agent: 'second', effort: 'high' }], normal: [{ agent: 'second', effort: 'low' }] } }; h.config(c);
   const args = ['run', '--cwd', h.cwd, '--level', 'complex', '--brief', '-', '--no-snapshot'];
-  failed(await h.bridge(args), M.sceneRequired('modules.run.complex', M.list(['default', 'code', 'research'])));
-  failed(await h.bridge([...args, ...sceneArgs, '--agent', 'codex']), M.agentNotInLevel('codex', 'modules.run.complex', 'second'));
+  failed(await h.bridge(args), M.sceneRequired('modules.run.complex', M.list(['default', 'code', 'research']), M.sceneDiff('code', M.reportCandidate)));
+  failed(await h.bridge([...args, '--scene-why', '理由']), M.planSceneMissing);
+  failed(await h.bridge([...args, ...sceneArgs, '--agent', 'codex']), M.agentNotInLevel('codex', 'modules.code.run.complex', 'second'));
+  failed(await h.bridge([...args, '--scene', 'default', '--scene-why', '理由', '--agent', 'second']), M.agentNotInLevel('second', 'modules.default.run.complex', 'codex'));
   const first = output(await h.bridge([...args, ...sceneArgs]));
   const resume = ['resume', '--run', first.run_id, '--level', 'normal', '--reason', 'rework', '--brief', '-'];
   failed(await h.bridge([...resume, ...sceneArgs]), M.sceneFixedByPlan);
+  failed(await h.bridge([...resume, '--scene-why', '理由']), M.sceneFixedByPlan);
   const again = output(await h.bridge(resume)), meta = h.records().find((m) => m.id === again.run_id);
   assert.equal(meta.scene, 'code'); assert.equal(meta.scene_why, sceneArgs[3]); assert.equal(meta.effort, 'low'); assert.equal(meta.agent, 'second');
   delete c.modules.code; h.config(c); prefs(h, block(['research']));
@@ -247,7 +255,7 @@ test('Markdown 默认表保持数字，差异场景单列表格含必选和推�
   for (const lang of ['zh', 'en']) {
     const r = await h.bridge(['config', '--format', 'md'], { env: { FOREMAN_LANG: lang } }); assert.equal(r.code, 0, r.stderr);
     assert.ok(r.stdout.includes(MESSAGES[lang].reportSceneTable('code')));
-    assert.ok(r.stdout.includes('| review.complex | second · high ★ | 1 |'));
+    assert.ok(r.stdout.includes(`| ${MESSAGES[lang].reportModuleNames.review} complex | second · high ★ | 1 |`));
     assert.ok(!r.stdout.includes('| review.normal |'));
   }
   h.scenario({ codex_catalog: { models: ['fake-codex', 'second'].map((slug) => ({ slug, supported_reasoning_levels: ['medium', 'high', 'max'].map((effort) => ({ effort })) })) } });
@@ -264,7 +272,7 @@ test('图像计划也要求场景，启动与计划内续接从计划恢复场�
   c.modules.default.image.draw = [{ agent: 'codex', effort: 'max' }];
   c.modules.code = { image: { draw: [{ agent: 'codex', effort: 'high', required: true }] } }; h.config(c);
   const args = [...planArgs(h, 'image', 'draw'), '--route', '4'];
-  failed(await h.bridge(args), M.sceneRequired('modules.image.draw', M.list(['default', 'code', 'research'])));
+  failed(await h.bridge(args), M.sceneRequired('modules.image.draw', M.list(['default', 'code', 'research']), M.sceneDiff('code', M.reportCandidate)));
   const question = { question: '图像路线', options: ['④ 纯矢量 / 代码'] };
   write(path.join(path.dirname(h.userConfig), 'answers/test-session.jsonl'), JSON.stringify({ event: 'answered', questions: [question], answers: { [question.question]: question.options[0] } }) + '\n');
   const p = output(await h.bridge([...args, ...sceneArgs]));
@@ -307,4 +315,62 @@ test('场景名 constructor 不会碰到对象原型：没写块时等于 defaul
   const out = output(await h.bridge(['config', '--cwd', h.cwd]));
   assert.deepEqual(out.resolved_scenes.constructor.review.seats, { complex: 1 });
   output(await h.bridge([...planArgs(h), '--scene', 'constructor', '--scene-why', '规则']));
+});
+
+test('项目偏好只启用定义过的用户场景，空块不阻止建计划、直派或续接', async (t) => {
+  const h = sandbox(t), c = config(); prefs(h);
+  c.agents.second = { ...c.agents.codex, model: 'second' };
+  c.modules.code = { review: { seats: { complex: 1 } } };
+  c.modules.research = { run: { complex: [{ agent: 'codex', effort: 'low' }] },
+    review: { complex: [{ agent: 'codex', required: true }, { agent: 'second', required: true }] } }; h.config(c);
+  const file = h.write('.claude/foreman.md', block(['code']));
+  h.write('.claude/foreman.json', { modules: { default: { review: { seats: { complex: 1 } } } } });
+  for (const lang of ['zh', 'en']) {
+    const m = MESSAGES[lang], opts = { env: { FOREMAN_LANG: lang } }, r = await h.bridge(['config', '--cwd', h.cwd], opts), out = output(r);
+    assert.deepEqual(out.scenes, { names: ['code'], source: 'project', file, problems: [], inactive: ['research'] });
+    assert.deepEqual(Object.keys(out.effective.modules), ['default', 'code']); assert.equal(out.resolved_scenes.research, undefined);
+    assert.equal(r.stderr.split(m.scenesInactive('research', file)).length - 1, 1);
+    failed(await h.bridge([...planArgs(h, 'run'), '--scene', 'research', '--scene-why', '规则'], opts), m.planSceneInactive('research', file, m.list(['default', 'code'])));
+  }
+  output(await h.bridge(planArgs(h, 'run')));
+  const first = output(await h.bridge(['run', '--cwd', h.cwd, '--level', 'complex', '--brief', '-', '--no-snapshot']));
+  write(file, block([]));
+  const out = output(await h.bridge(['config', '--cwd', h.cwd]));
+  assert.deepEqual(out.scenes.inactive, ['code', 'research']); assert.deepEqual(out.scenes.problems, []);
+  output(await h.bridge(planArgs(h))); output(await h.bridge(['resume', '--run', first.run_id, '--level', 'complex', '--reason', 'rework', '--brief', '-']));
+  h.config(null); output(await h.bridge(['config', '--cwd', h.cwd]));
+});
+
+test('项目自己写的未定义场景仍报 problem，指出配置文件；没有偏好块也照旧报错', async (t) => {
+  const h = sandbox(t), c = config(); c.modules.research = {}; h.config(c); const user = prefs(h);
+  const file = h.write('.claude/foreman.md', block(['code'])), project = h.write('.claude/foreman.json', { modules: { default: {}, research: {} } });
+  let out = output(await h.bridge(['config', '--cwd', h.cwd]));
+  assert.deepEqual(out.scenes.inactive, []); assert.deepEqual(out.scenes.problems, [M.scenesUndefined('research', file, project)]);
+  failed(await h.bridge(planArgs(h, 'run')), M.scenesProblem(M.list(out.scenes.problems)));
+  write(file, '普通项目偏好'); write(user, '普通用户偏好');
+  out = output(await h.bridge(['config', '--cwd', h.cwd]));
+  assert.deepEqual(out.scenes.problems, [M.scenesUndefined('research', null, project)]);
+});
+
+test('场景要求只列当前格子的候选、seats 和 gap 差异，中英都指出所属场景', async (t) => {
+  const h = sandbox(t), c = config(); prefs(h); c.agents.second = { ...c.agents.codex };
+  c.modules.code = { review: { normal: [{ agent: 'second' }], seats: { normal: 1, complex: 1 } } };
+  c.modules.research = { review: { gap: { normal: true } } }; h.config(c);
+  for (const lang of ['zh', 'en']) {
+    const m = MESSAGES[lang], diffs = m.list([m.sceneDiff('code', m.list([m.reportCandidate.toLowerCase(), 'seats.normal'])), m.sceneDiff('research', 'gap.normal')]);
+    failed(await h.bridge(planArgs(h, 'review', 'normal'), { env: { FOREMAN_LANG: lang } }), m.sceneRequired('modules.review.normal', m.list(['default', 'code', 'research']), diffs));
+  }
+});
+
+test('模型位置只列实际写入的格子，default 带名称，项目覆盖带文件，继承不重复', async (t) => {
+  const h = sandbox(t), c = config(), model = 'round29-unrated'; prefs(h);
+  c.modules.default.run.complex = [{ agent: 'codex', model }];
+  c.modules.code = { review: { normal: [{ agent: 'codex', model }] } };
+  c.modules.research = { review: { seats: { complex: 1 } } }; h.config(c);
+  const project = h.write('.claude/foreman.json', { modules: { default: { discuss: { normal: [{ agent: 'codex', model }] } },
+    code: { review: { complex: [{ agent: 'codex', model }] } } } });
+  const out = output(await h.bridge(['config', '--cwd', h.cwd]));
+  const expected = [`${project}: modules.default.discuss.normal[0]`, 'modules.default.run.complex[0]', 'modules.code.review.normal[0]', `${project}: modules.code.review.complex[0]`];
+  for (const kind of ['unrated_models', 'unpriced_models']) assert.deepEqual(out.summary.warnings.find((w) => w.kind === kind).models.find((m) => m.model === model).used_at, expected);
+  assert.equal(out.summary.agents.codex.used_at.some((at) => at.includes('modules.research.')), false);
 });

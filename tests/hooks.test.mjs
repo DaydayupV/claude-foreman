@@ -187,6 +187,14 @@ for (const [label, command] of [
   });
 }
 
+test('agy 的查询带上 shell 重定向照样放行，重定向不掩盖模型参数', async (t) => {
+  const h = sandbox(t);
+  for (const command of ['agy --version 2>&1', 'agy --version 2>&1 | head -2', 'agy --version > v.txt', 'agy --version 2> err.txt', 'agy models >models.txt 2>&1'])
+    assert.equal((await h.hook('guard-direct-calls.mjs', { tool_input: { command } })).code, 0, command);
+  for (const command of ['agy --version 2>&1 -p hi', 'agy -p hi 2>&1', 'agy > out.txt', 'agy models > m.txt -p hi'])
+    assert.equal((await h.hook('guard-direct-calls.mjs', { tool_input: { command } })).code, 2, command);
+});
+
 test('会话提醒核对期间任务写好结果时以结果为准，不误报中断', async (t) => {
   const h = sandbox(t), sleeper = h.start('-e', ['setInterval(() => {}, 1000)']);
   await once(sleeper.child, 'spawn');

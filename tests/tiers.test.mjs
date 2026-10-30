@@ -117,8 +117,8 @@ test('tiers Markdown、帮助及覆盖告警使用插件语言，告警不改变
   c.modules.default.image.draw = [{ agent: 'codex', model: 'gpt-5.5' }];
   h.config(c);
   const models = [
-    { model: 'unknown-a', used_at: ['modules.discuss.simple[0]', 'modules.review.normal[0]'] },
-    { model: 'unknown-b', used_at: ['modules.review.complex[0]'] },
+    { model: 'unknown-a', used_at: ['modules.default.discuss.simple[0]', 'modules.default.review.normal[0]'] },
+    { model: 'unknown-b', used_at: ['modules.default.review.complex[0]'] },
   ];
   for (const lang of ['zh', 'en']) {
     const M = MESSAGES[lang], options = { env: { FOREMAN_LANG: lang } };
@@ -133,7 +133,7 @@ test('tiers Markdown、帮助及覆盖告警使用插件语言，告警不改变
     const config = output(await run(['config'], options)), check = output(await run(['check', '--agent', 'codex'], options));
     assert.equal(check.ok, true);
     const unpriced = { kind: 'unpriced_models', models, message: M.warnUnpricedModels(M.list(models.map(({ model }) => model))) };
-    const unratedModels = [...models, { model: 'gpt-5.5', used_at: ['modules.image.draw[0]'] }];
+    const unratedModels = [...models, { model: 'gpt-5.5', used_at: ['modules.default.image.draw[0]'] }];
     const unrated = { kind: 'unrated_models', models: unratedModels, message: M.warnUnratedModels(M.list(unratedModels.map(({ model }) => model))) };
     for (const result of [config, check]) assert.deepEqual(result.summary.warnings.filter(({ kind }) => ['unpriced_models', 'unrated_models'].includes(kind)), [unpriced, unrated]);
   }

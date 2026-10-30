@@ -46,7 +46,9 @@ function readBrief(o, required = true) {
     if (required) die(M.missingOpt('brief'));
     return '';
   }
-  const text = o.brief === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(path.resolve(o.brief), 'utf8');
+  const file = o.brief === '-' ? null : path.resolve(o.brief);
+  if (file && !fs.existsSync(file)) die(M.briefNotFound(file));
+  const text = file ? fs.readFileSync(file, 'utf8') : fs.readFileSync(0, 'utf8');
   if (required && !text.trim()) die(M.emptyBrief);
   return text.replace(/^﻿/, '').trim();
 }

@@ -173,9 +173,9 @@ test('config 输出总表：按等级、按协作方，以及没用到的协作�
   assert.equal(summary.modules.run.simple, 'claude code');
   assert.deepEqual(summary.modules.run.normal, [{ agent: 'oc', type: 'opencode cli', model: 'fake/model', effort: null, required: false, ok: null }]);
   assert.deepEqual(summary.modules.review.simple, [{ agent: 'codex', type: 'codex cli', model: 'fake-codex', effort: 'medium', required: false, ok: null }]);
-  assert.deepEqual(summary.agents.codex.used_at, ['modules.discuss.simple[0]', 'modules.discuss.normal[0]', 'modules.discuss.complex[0]',
-    'modules.run.complex[0]', 'modules.review.simple[0]', 'modules.review.normal[0]', 'modules.review.complex[0]']);
-  assert.deepEqual(summary.agents.oc, { type: 'opencode cli', model: 'fake/model', used_at: ['modules.run.normal[0]'], run_access: 'shell', ok: null });
+  assert.deepEqual(summary.agents.codex.used_at, ['modules.default.discuss.simple[0]', 'modules.default.discuss.normal[0]', 'modules.default.discuss.complex[0]',
+    'modules.default.run.complex[0]', 'modules.default.review.simple[0]', 'modules.default.review.normal[0]', 'modules.default.review.complex[0]']);
+  assert.deepEqual(summary.agents.oc, { type: 'opencode cli', model: 'fake/model', used_at: ['modules.default.run.normal[0]'], run_access: 'shell', ok: null });
   assert.deepEqual(summary.agents.api.used_at, []);
   // 测试用的假模型不在价格表和档位表里，这两条告警由 tiers.test.mjs 单独检查
   assert.deepEqual(summary.warnings.filter(({ kind }) => !['unpriced_models', 'unrated_models'].includes(kind)), [

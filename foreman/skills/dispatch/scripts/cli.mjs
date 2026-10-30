@@ -4,7 +4,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { HERE, M, die, need, resolveDir, readBrief, isGitRepo, isAscii, agentTypeOf, closestMatches, pathKey, pidExists, sleep } from './util.mjs';
+import { HERE, M, die, need, notice, resolveDir, readBrief, isGitRepo, isAscii, agentTypeOf, closestMatches, pathKey, pidExists, sleep } from './util.mjs';
 
 // 只输出结果的子命令接到 head 这类提前关掉管道的命令上时，写 stdout 会抛 EPIPE：读的一方已经够了，安静退出，
 // 不打 Node 的堆栈。会派活、会改记录的子命令不这样处理（中途退出会丢掉收尾）
@@ -40,7 +40,7 @@ const HELP = helpText(process.argv.slice(2));
 if (HELP) { process.stdout.write(`${HELP}\n`); process.exit(0); }
 
 // 其余模块在 --help 之后才加载：config.mjs 一加载就会迁移旧版的配置和偏好文件，--help 不该写任何文件。
-const { USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, agentMaxParallel, CLAUDE_CODE, cellList, eachEntry, mapCells, sceneView, selectScene, resolveAgentAlias, detectEnvironment, projectFile, loadConfig, resolveProfile, validatePlan, unknownAgentError } = await import('./config.mjs');
+const { USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, agentMaxParallel, CLAUDE_CODE, cellList, eachEntry, mapCells, sceneView, selectScene, isScened, resolveAgentAlias, detectEnvironment, projectFile, loadConfig, resolveProfile, validatePlan, unknownAgentError } = await import('./config.mjs');
 const { cmdPlan, readPlan, loadPlan } = await import('./plan.mjs');
 const { buildSummary: summarize } = await import('./summary.mjs');
 const { modelIdentity } = await import('./models.mjs');
@@ -127,6 +127,12 @@ function dispatchProfile(o, module) {
   if (plan) validatePlan(cfg, plan, adapters);
   const profile = resolveProfile(cfg, seat, o, adapters);
   Object.assign(profile, { scene: plan?.scene ?? o.scene ?? null, scene_why: plan?.scene_why ?? o['scene-why'] ?? null });
+  if (plan && module !== 'review') {
+    // 先报准入问题；并发排队仍交给登记锁内的检查处理。
+    const rejection = records.precheckAdmission({ ...profile, cwd, agent: profile.agentName, agent_type: profile.agent.type,
+      kind: ['run', 'image'].includes(module) ? 'exec' : module, group: o.group ?? null, scope: o.scope, round: 1 }, cfg);
+    if (typeof rejection === 'string') die(rejection);
+  } else if (o.scene != null && !isScened(original, module, o.level)) notice(M.sceneNotNeeded(`modules.${module}.${o.level}`, o.scene));
   if (module === 'review' && ['补漏', 'gap'].includes(seat.role?.trim().toLowerCase())) {
     const host = records.listRuns().map((id) => records.readMeta(path.join(RUNS_ROOT, id)))
       .find((meta) => meta?.plan === plan.plan_id && meta.participant === 'host');
@@ -239,13 +245,16 @@ async function cmdReview(o) {
   const reviewScope = validateReviewMaterial({ ...o, cwd }, plan);
   if (target === 'visual' && !adapters[profile.agent.type].capabilities.reads_images) die(M.readsImagesRequired(profile.agentName, profile.agent.type));
   const git = isGitRepo(cwd);
+  const rejection = records.precheckAdmission({ ...profile, cwd, agent: profile.agentName, agent_type: profile.agent.type,
+    kind: 'review', group: o.group ?? null, scope: o.scope, round: 1 }, cfg);
+  if (typeof rejection === 'string') die(rejection);
   const brief = readBrief(o, target !== 'diff' || !git);
   return adapters[profile.agent.type].execute({ cfg, ...profile, mode: 'review', kind: 'review', cwd, brief, git, reviewTarget: target, reviewScope, title: o.title, opts: o });
 }
 
 function cmdConfig(o) {
   const cfg = load(o.cwd ? resolveDir(o.cwd) : null);
-  const { sources, image_configured, project_config, scenes, scene_modules, scene_diff, ...effective } = cfg;
+  const { sources, image_configured, project_config, project_warnings, scenes, scene_modules, scene_diff, ...effective } = cfg;
   // opencode、pi 没写 run_access 时派不了执行任务：列出的能力和派发时的检查保持一致，免得按 modes 挑人挑到派不出去的
   const capabilitiesOf = (agent) => {
     const c = adapters[agent.type].capabilities;

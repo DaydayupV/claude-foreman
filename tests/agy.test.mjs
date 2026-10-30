@@ -599,7 +599,11 @@ test('agy 沙箱探针失败不给 shell、附文件清单，缓存按版本失�
   const h = sandbox(t); configure(h); await install(h); h.initGit();
   h.scenario({ sandbox: false }); const first = output(await run(h));
   assert.equal(first.sandbox, 'files-only'); assert.equal(JSON.parse(read(path.join(first.run_dir, 'meta.json'))).sandbox, first.sandbox);
-  assert.ok(first.notes.includes(M.agyNoSandbox)); assert.match(read(path.join(first.run_dir, 'brief.md')), /source.txt/);
+  assert.ok(first.notes.includes(M.agyNoSandbox(M.agySandboxLeakyReason(M.list(Object.values(M.agySandboxItems)))))); assert.match(read(path.join(first.run_dir, 'brief.md')), /source.txt/);
+  const checked = output(await h.bridge(['check', '--agent', 'agy'])).agents.agy, items = M.list(Object.values(M.agySandboxItems));
+  assert.equal(checked.fix, M.fixAgySandboxLeaky('agy', items));
+  assert.ok(checked.notes.includes(M.agyNoShellCheck(M.agySandboxLeakyReason(items))));
+  assert.equal(checked.notes.includes(M.agyNoSandbox(M.agySandboxLeakyReason(items))), false);
   assert.equal(h.calls().filter((c) => c.operation === 'run').at(-1).args.includes('--sandbox'), false);
   const probes = h.calls().filter((c) => c.operation === 'probe').length;
   const cached = output(await run(h)); assert.equal(h.calls().filter((c) => c.operation === 'probe').length, probes);
@@ -613,6 +617,25 @@ test('agy 沙箱探针失败不给 shell、附文件清单，缓存按版本失�
   assert.equal(fs.readdirSync(stateDir(h)).some((f) => f.startsWith('agy-probe-')), false);
   const layout = moduleCall(h, 'adapters/agy-setup.mjs', `console.log(JSON.stringify(await x.probeSandbox({agent:{},cwd:${JSON.stringify(h.home)},version:'1.4.9',run:()=>{throw new Error('probe must not start')}})));`);
   assert.equal(layout.available, false); assert.equal(layout.results.layout, 'unavailable');
+  h.scenario({ sandbox: false, version: '1.4.8', quota: { response: 'invalid quota' } });
+  const unavailable = output(await h.bridge(['check', '--agent', 'agy']), 1).agents.agy;
+  assert.equal(unavailable.error, M.agyQuotaInvalid); assert.equal(unavailable.fix, M.fixAgySandboxLeaky('agy', items));
+});
+
+test('agy 沙箱的原因和修法共用 results 分类，中英覆盖布局、启动、离线、不隔离和未完成', (t) => {
+  const h = sandbox(t), results = [{ layout: 'unavailable' }, { start_error: 'synthetic-start' }, { network: 'host_offline', read_home: 'allowed' },
+    { write_project: 'allowed', write_outside: 'allowed', read_home: 'allowed', network: 'allowed' }, { network: 'unconfirmed' }];
+  for (const lang of ['zh', 'en']) {
+    const m = MESSAGES[lang], items = m.list(Object.values(m.agySandboxItems));
+    const out = moduleCall({ ...h, env: { ...h.env, FOREMAN_LANG: lang } }, 'adapters/agy-setup.mjs',
+      `console.log(JSON.stringify(${JSON.stringify(results)}.map(results=>x.agySandboxInfo('chosen', {available:false,results}))));`);
+    assert.deepEqual(out, [
+      { fix: m.fixAgySandboxLayout, reason: m.agySandboxUnconfirmedReason }, { fix: m.fixAgySandboxStart('synthetic-start'), reason: m.agySandboxStartReason },
+      { fix: m.fixAgySandboxOffline('chosen'), reason: m.agySandboxOfflineReason },
+      { fix: m.fixAgySandboxLeaky('chosen', items), reason: m.agySandboxLeakyReason(items), leaky: true },
+      { fix: m.fixAgySandboxRetry('chosen'), reason: m.agySandboxUnconfirmedReason },
+    ]);
+  }
 });
 
 test('agy 沙箱启动失败缓存原文且再次派出不重测，DONE 命令退出码为 1，中英 check 显示故障', async (t) => {
@@ -622,6 +645,7 @@ test('agy 沙箱启动失败缓存原文且再次派出不重测，DONE 命令�
     { tool: { name: 'run_command', args: { CommandLine: 'synthetic start failure' } }, files: { 'not-started.txt': 'changed' } },
   ] });
   const first = output(await run(h)); assert.equal(first.sandbox, 'files-only');
+  assert.ok(first.notes.includes(M.agyNoSandbox(M.agySandboxStartReason)));
   assert.ok(first.notes.includes(M.agySandboxStartResult(error))); assert.equal(first.notes.some((n) => n.startsWith(M.agySandboxResult({}).split('{')[0])), false);
   const completed = h.events(first.run_id).find((e) => e.type === 'item.completed' && e.item?.tool === 'run_command').item;
   assert.equal(completed.exit_code, 1); assert.equal(completed.aggregated_output, `Command failed to run: ${error}`);
@@ -635,7 +659,7 @@ test('agy 沙箱启动失败缓存原文且再次派出不重测，DONE 命令�
   for (const locale of ['zh', 'en']) {
     const text = MESSAGES[locale], checked = await h.bridge(['check', '--agent', 'agy', '--format', 'md'], { env: { FOREMAN_LANG: locale } });
     assert.equal(checked.code, 0, checked.stderr);
-    assert.ok(checked.stdout.includes(`⚠ ${text.reportIssue(text.reportAgySandbox('agy'), text.fixAgySandboxStart(error))}`), checked.stdout);
+    assert.ok(checked.stdout.includes(`⚠ ${text.reportAgySandbox('agy')}${locale === 'en' ? '. ' : '：'}${text.fixAgySandboxStart(error)}`), checked.stdout);
     assert.ok(checked.stdout.includes(text.reportAgySandboxBroken), checked.stdout);
   }
   assert.equal(h.calls().filter((c) => c.operation === 'probe').length, probes);
@@ -748,6 +772,7 @@ console.log(JSON.stringify(await x.probeSandbox({cwd:${JSON.stringify(h.cwd)},ve
     assert.equal(result.results.network_control.after, undefined); assert.equal(fs.existsSync(cache), false);
     h.scenario({ network_controls: [control] });
     const dispatched = output(await run(h)); assert.equal(dispatched.sandbox, 'files-only'); assert.ok(dispatched.notes.includes(M.agyNoShellOffline));
+    assert.ok(dispatched.notes.includes(M.agyNoSandbox(M.agySandboxOfflineReason)));
     assert.equal(h.calls().some((c) => c.operation === 'probe'), false); assert.equal(fs.existsSync(cache), false);
     assert.equal(h.calls().filter((c) => c.operation === 'run').at(-1).args.includes('--sandbox'), false);
   }

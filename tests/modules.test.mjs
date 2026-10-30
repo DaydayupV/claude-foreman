@@ -243,7 +243,7 @@ test('图像引用参与旧类型改名、去重与 codex 保留判断', async (
   assert.deepEqual(out.effective.modules.default.image.generate, [{ agent: 'image-model' }]);
   assert.deepEqual(out.effective.modules.default.image.draw, [{ agent: 'image-model', effort: 'high' }]);
   assert.deepEqual(json(path.join(path.dirname(h.userConfig), 'agent-aliases.json')), { codex: 'image-model', same: 'image-model' });
-  assert.deepEqual(out.summary.agents['image-model'].used_at, ['modules.image.generate[0]', 'modules.image.draw[0]']);
+  assert.deepEqual(out.summary.agents['image-model'].used_at, ['modules.default.image.generate[0]', 'modules.default.image.draw[0]']);
 });
 
 test('check 和 summary 覆盖仅用于图像的协作方、强度和 shell 提醒', async (t) => {

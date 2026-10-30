@@ -83,12 +83,14 @@ function collectQuestions({ mode, kind, agent_type, report, last = '', messages 
 
 function startRun(ctx, { started = Date.now(), track = [], modelShown = ctx.model, modelName = modelShown, sandbox = null } = {}) {
   const { id, dir, cwd, model, mode, kind, level, effort, agentName, agent, opts } = ctx;
+  const { timeoutMin, stallMin } = runLimits(ctx, started);
   const meta = {
     id, mode, kind, title: ctx.title || null, cwd, model, model_shown: modelShown, model_name: modelName, level, effort,
     module: ctx.module ?? (kind === 'exec' ? 'run' : kind), cell: ctx.cell ?? level,
     ...(ctx.module === 'image' ? { step: ctx.step, route: ctx.route } : {}),
     plan: ctx.plan ?? null, seat: ctx.seat ?? null, role: ctx.role ?? null,
     scene: ctx.scene ?? null, scene_why: ctx.scene_why ?? null,
+    timeout_min: timeoutMin, stall_min: stallMin,
     ...(ctx.outside_cell ? { outside_cell: true } : {}), ...(ctx.model_overridden ? { model_overridden: true } : {}),
     agent: agentName, agent_type: agent.type, sandbox, parent: ctx.parent || null,
     ...(kind === 'review' ? { review_target: ctx.reviewTarget } : {}),

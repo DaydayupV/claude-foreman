@@ -90,9 +90,11 @@ test('项目关掉的格子、显式 seats 展示、补漏轮和未配置图像'
 test('格子单独指定的模型写在推理强度后面，3 级审查首轮没用上的候选可做补漏席', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.other = { ...c.agents.codex }; c.agents.third = { ...c.agents.codex };
   c.modules.default.run.complex = [{ agent: 'codex', effort: 'max', model: 'cell-only-model' }];
+  c.modules.default.image = { generate: entry('codex'), draw: entry('codex') };
   c.modules.default.review.complex = [entry('codex', 'max', true), entry('other', null, true), entry('third')]; h.config(c);
   const md = await markdown(h, ['config']);
   has(md, ['| codex | — | — | max · cell-only-model |', '| 审查 complex | 2 | 开 | 3 | 2 | 只派必选的 codex、other，其余 1 个候选可以做补漏席 |']);
+  has(md, ['、出图、手画 |']);
   assert.equal(md.includes('| codex | max ★ · '), false);
 });
 
@@ -108,13 +110,47 @@ test('--keep-backup 指定的备份不算旧备份，只剩它时不提醒', asy
   write(path.join(dir, 'config.json.bak'), '{}'); write(path.join(dir, 'config.json.setup-2.bak'), '{"api_key":"synthetic-backup-secret"}');
   const backups = (r) => output(r).summary.warnings.find((w) => w.kind === 'old_backups');
   // 写完整路径和只写文件名都认；它的 key 不算进 contain_keys。
-  for (const keep of [path.join(dir, 'config.json.setup-2.bak'), 'config.json.setup-2.bak']) {
+  for (const keep of [path.join(dir, 'config.json.setup-2.bak'), 'config.json.setup-2.bak', ...(process.platform === 'win32' ? [path.join(dir, 'config.json.setup-2.bak').toUpperCase()] : [])]) {
     assert.deepEqual(backups(await h.bridge(['config', '--keep-backup', keep])), { kind: 'old_backups', files: ['config.json.bak'], contain_keys: false, message: M.reportOldBackups(dir, 1, false) });
   }
   assert.deepEqual(backups(await h.bridge(['check', '--keep-backup', 'config.json.setup-2.bak'])).files, ['config.json.bak']);
   fs.rmSync(path.join(dir, 'config.json.bak'));
   assert.equal(backups(await h.bridge(['config', '--keep-backup', 'config.json.setup-2.bak'])), undefined);
   assert.deepEqual(backups(await h.bridge(['config'])).files, ['config.json.setup-2.bak']);
+});
+
+test('keep-backup 的文件不存在或同名文件在别处时提示一次，旧备份仍全列出', async (t) => {
+  const h = sandbox(t), dir = path.dirname(h.userConfig), name = 'config.json.setup-29.bak';
+  write(path.join(dir, name), '{}'); const elsewhere = h.write(name, '{}'), missing = path.join(dir, 'missing.bak');
+  for (const lang of ['zh', 'en']) for (const [cmd, file, message] of [
+    ['config', missing, MESSAGES[lang].keepBackupMissing(missing)], ['check', elsewhere, MESSAGES[lang].keepBackupElsewhere(elsewhere, dir)],
+  ]) {
+    const r = await h.bridge([cmd, '--keep-backup', file], { env: { FOREMAN_LANG: lang } });
+    assert.deepEqual(output(r).summary.warnings.find((w) => w.kind === 'old_backups').files, [name]);
+    assert.equal(r.stderr.split(message).length - 1, 1);
+  }
+});
+
+test('项目迁移提醒进入 JSON 和 config/check md，主表标 default，场景来源、状态和用在位置可读', async (t) => {
+  const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex, model: 'second' };
+  c.modules.code = { review: { normal: [entry('second', 'high')], complex: [entry('second', 'high')], seats: { complex: 1 } } };
+  c.modules.research = { run: { complex: [entry('codex', 'low')] } }; h.config(c);
+  write(path.join(path.dirname(h.userConfig), 'preferences.md'), '<!-- foreman:scenes -->\n- **code**: 代码\n- **research**: 研究\n<!-- /foreman:scenes -->');
+  const prefs = h.write('.claude/foreman.md', '<!-- foreman:scenes -->\n- **code**: 代码\n<!-- /foreman:scenes -->');
+  const file = h.write('.claude/foreman.json', { modules: { review: { seats: { simple: 1 } } }, agents: {}, dispatch: { auto: false } });
+  h.scenario({ codex_catalog: { models: ['fake-codex', 'second'].map((slug) => ({ slug, supported_reasoning_levels: ['medium', 'high', 'max'].map((effort) => ({ effort })) })) } });
+  const warnings = output(await h.bridge(['config', '--cwd', h.cwd])).summary.warnings;
+  assert.deepEqual(warnings.find((w) => w.kind === 'project_modules_flat'), { kind: 'project_modules_flat', file, message: M.projectModulesFlat(file) });
+  for (const lang of ['zh', 'en']) for (const cmd of ['config', 'check']) {
+    const m = MESSAGES[lang], md = await markdown(h, [cmd, '--cwd', h.cwd], { env: { FOREMAN_LANG: lang } });
+    has(md, ['discuss', 'review', 'run', 'image'].map((module) => m.reportModuleNames[module] + m.reportDefaultScene));
+    has(md, [m.reportSeatsTitle.split('**').slice(0, 2).join('**') + '**' + m.reportDefaultScene, m.sceneSource(prefs, 'project'), m.scenesInactive('research', prefs),
+      `| ${m.reportModuleNames.review} complex | second · high`, m.reportSceneUse(`${m.reportModuleNames.review} N/C`, 'code'),
+      `- ℹ ${m.projectModulesFlat(file)}`, `- ℹ ${m.projectIgnored(m.list(['agents', 'dispatch.auto']))}`]);
+    assert.equal(md.includes('review.complex |'), false);
+  }
+  write(file, { modules: {} });
+  assert.ok(output(await h.bridge(['config', '--cwd', h.cwd])).summary.warnings.some((w) => w.kind === 'project_modules_flat'));
 });
 
 test('协作方没开执行权限、只读审计和旧代号提醒按图标呈现', async (t) => {
@@ -206,7 +242,8 @@ checks.agents.first.quota.groups[0].buckets.push(null, 'bad', [], {remaining_fra
   {name:'Monthly Limit',window:'monthly',remaining_fraction:0.5},{window:'daily',remaining_fraction:0.2});
 console.log(environmentReport(checks,${JSON.stringify(env)},{}));`, { env: { FOREMAN_LANG: locale } });
     assert.equal(md.code, 0, md.stderr);
-    has(md.stdout, [`⚠ ${text.reportIssue(text.reportAgySandbox('first'), text.fixAgySandbox)}`, `⚠ ${text.reportIssue(text.reportAgySandbox('second'), 'second fix')}`,
+    const issue = (name, fix) => `⚠ ${text.reportAgySandbox(name)}${locale === 'en' ? '. ' : '：'}${fix}`;
+    has(md.stdout, [issue('first', text.fixAgySandboxRetry('first')), issue('second', 'second fix'),
       `| agy | ${text.reportModelsInstalled(4)} · ${text.reportAgySandboxOff} · ${text.reportAgyQuota(text.list([
         `Gemini Models ${windows[0]} 96%`, `Gemini Models ${windows[1]} 8%`, 'Gemini Models Monthly Limit 50%', 'Gemini Models daily 20%',
         `Claude and GPT models ${windows[0]} 63%`, `Claude and GPT models ${windows[1]} 77%`]))} |`]);
@@ -215,9 +252,11 @@ console.log(environmentReport(checks,${JSON.stringify(env)},{}));`, { env: { FOR
     checks.agents.first.sandbox.results = { start_error: error };
     const broken = await isolated(h, `import {environmentReport} from ${JSON.stringify(urlOf('report.mjs'))};console.log(environmentReport(${JSON.stringify(checks)},${JSON.stringify(env)},{}));`, { env: { FOREMAN_LANG: locale } });
     assert.equal(broken.code, 0, broken.stderr);
-    has(broken.stdout, [`⚠ ${text.reportIssue(text.reportAgySandbox('first'), text.fixAgySandboxStart(error))}`,
-      `⚠ ${text.reportIssue(text.reportAgySandbox('second'), 'second fix')}`, ` · ${text.reportAgySandboxBroken} · `]);
-    assert.equal(broken.stdout.includes(text.fixAgySandbox), false);
+    has(broken.stdout, [issue('first', text.fixAgySandboxStart(error)), issue('second', 'second fix'), ` · ${text.reportAgySandboxBroken} · `]);
+    assert.equal(broken.stdout.includes(text.fixAgySandboxRetry('first')), false);
+    checks.agents.first.sandbox.results = { write_outside: 'allowed', read_home: 'allowed' };
+    const leaky = await isolated(h, `import {environmentReport} from ${JSON.stringify(urlOf('report.mjs'))};console.log(environmentReport(${JSON.stringify(checks)},${JSON.stringify(env)},{}));`, { env: { FOREMAN_LANG: locale } });
+    has(leaky.stdout, [issue('first', text.fixAgySandboxLeaky('first', text.list([text.agySandboxItems.write_outside, text.agySandboxItems.read_home]))), text.reportAgySandboxLeaky]);
     delete checks.agents.first.sandbox.results;
   }
   checks.agents.first.sandbox.available = true;
@@ -262,7 +301,8 @@ test('英文完整环境输出和非法 format；check 成功仍退出 0', async
   const h = sandbox(t), c = baseConfig(); c.modules.default.discuss.simple = 'claude code'; h.config(c);
   const r = await h.bridge(['check', '--format', 'md'], { env: { FOREMAN_LANG: 'en', FOREMAN_TEST_MEMORY: '16,4' } }); assert.equal(r.code, 0, r.stderr);
   assert.equal(r.stdout.split('\n\n## Configuration')[0], '## Environment\n\n✅ Node.js, Git, the live view and the Codex sandbox all work.\n\n| Tool | Status |\n| --- | --- |\n| Codex | installed, logged in |\n| opencode | not installed |\n| pi | not installed |\n| agy | not installed |\n| API key variables | none found |\n| Memory | 16 GB in total, 4 GB available now |\n| Web board | off (enough memory to turn it on) |');
-  has(r.stdout, ['**Cells**', '| Candidate | simple | normal | complex | Check |', '| Claude Code | no outside model', '**Seats and required agents**', '**Agents**', '**Notes**']);
+  has(r.stdout, ['**Cells** ', '| Candidates | simple | normal | complex | Check |', '| Claude Code | no outside model', '**Seats and required agents**', '**Agents**', '**Notes**', 'the only candidate']);
+  assert.equal(r.stdout.includes('　'), false); assert.equal(r.stdout.includes('all 1 candidates'), false);
   for (const cmd of ['config', 'check', 'models']) failed(await h.bridge([cmd, '--format', 'yaml']), M.reportFormatInvalid);
   failed(await h.bridge(['models', '--format', 'xml'], { env: { FOREMAN_LANG: 'en' } }), MESSAGES.en.reportFormatInvalid);
 });

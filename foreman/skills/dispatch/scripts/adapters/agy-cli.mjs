@@ -10,7 +10,7 @@ import { M, die, killTree, readAttachments, filesOutside, focusFiles, relativePa
 import { D, modelLabel, toolLabel } from '../format.mjs';
 import { defaultMaxParallel } from './parallel.mjs';
 import { AGY_EFFORTS, splitAgyModel, agyFamilies, agyModelId } from './agy-models.mjs';
-import { agyCommand, guardEnvironment, policyFor, prepareAgyRun, preflightAgy, scanProject, queryAgy, probeSandbox, workDir, removeWorkDir, timeLeft } from './agy-setup.mjs';
+import { agyCommand, guardEnvironment, policyFor, prepareAgyRun, preflightAgy, scanProject, queryAgy, probeSandbox, agySandboxInfo, workDir, removeWorkDir, timeLeft } from './agy-setup.mjs';
 import { spawnSync } from 'node:child_process';
 
 const capabilities = { modes: ['discuss', 'review'], isolation: 'tools', reads_code: true, reads_images: false, native_schema: false,
@@ -266,7 +266,7 @@ async function agySession(run, schema, promptFor) {
     if (probe.tested) notes.push(probe.results.start_error ? M.agySandboxStartResult(probe.results.start_error) : M.agySandboxResult(probe.results));
     nextPrompt = promptFor(sandbox);
     if (!sandbox) {
-      notes.push(M.agyNoSandbox);
+      notes.push(M.agyNoSandbox(agySandboxInfo(agentName, probe).reason));
       if (probe.results.layout === 'cross_volume') notes.push(M.agyNoShellCrossVolume);
       if (probe.results.network === 'host_offline') notes.push(M.agyNoShellOffline);
       const list = spawnSync('git', ['ls-files'], { cwd, encoding: 'utf8', windowsHide: true, timeout: timeLeft(deadline, 60000) });
@@ -330,7 +330,10 @@ async function checkAgy(name, agent, efforts = [], catalog = () => agyCatalog(ag
     out.notes.push(...await preflightAgy(policyFor({ cwd, runDir: dir }), Date.now() + 120000));
     const run = (options) => runAgy({ agent, model, cwd, ...options });
     out.sandbox = await probeSandbox({ agent, cwd, version: out.version, run, force });
-    if (!out.sandbox.available) out.notes.push(M.agyNoSandbox);
+    if (!out.sandbox.available) {
+      const { fix, reason } = agySandboxInfo(name, out.sandbox);
+      out.fix = fix; out.notes.push(M.agyNoShellCheck(reason));
+    }
     // 随机文件和 read_file 放行记录一起确认读取边界，不能只靠模型声称工具可用。
     const token = randomUUID(), file = path.join(dir, 'guard-check.txt');
     fs.writeFileSync(file, token);
@@ -352,7 +355,7 @@ async function checkAgy(name, agent, efforts = [], catalog = () => agyCatalog(ag
     out.quota = body.command.data;
     if (out.quota.groups.some((g) => g.buckets.some((b) => b.remaining_fraction < 0.1))) out.notes.push(M.agyQuotaLow);
     out.ok = out.efforts.every((e) => e.ok);
-  } catch (e) { out.error = modelProblem(e); out.fix = M.agyCheckFix(name); }
+  } catch (e) { out.error = modelProblem(e); out.fix ||= M.agyCheckFix(name); }
   finally { removeWorkDir(dir); }
   return { ...out, seconds: Number(((Date.now() - started) / 1000).toFixed(1)) };
 }

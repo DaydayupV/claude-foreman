@@ -243,7 +243,8 @@ test('费用摘要只汇总 API 价格，旧来源重新计价，缺基线的累
 test('名额面板只列四个模块里用到的协作方，别的协作方只在正在跑时出现；没有 modules 的老配置照旧全列', (t) => {
   const f = temp(t);
   f.write(f.options.config, { agents: { codex: { type: 'codex cli', max_parallel: 2 }, spare: { type: 'api' }, named: { type: 'opencode cli' } },
-    modules: { default: { discuss: { simple: [{ agent: 'codex', required: true }], normal: 'claude code' }, run: { simple: 'claude code' }, review: {}, image: { generate: null, draw: null } } } });
+    modules: { default: { discuss: { simple: [{ agent: 'codex', required: true }], normal: 'claude code' }, run: { simple: 'claude code' }, review: {}, image: { generate: null, draw: null } } },
+    projects: { obsolete: { modules: { default: { discuss: { simple: [{ agent: 'spare' }] } } } } } });
   assert.deepEqual(createUniverse(f.options).read().agents.map((a) => a.id), ['codex']);
   f.run('named-run', { agent: 'named', status: 'running', ended_at: null });
   assert.deepEqual(createUniverse(f.options).read().agents.map((a) => a.id), ['codex', 'named']);

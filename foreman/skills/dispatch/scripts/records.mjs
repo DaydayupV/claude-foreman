@@ -553,6 +553,14 @@ function checkAdmission(meta, cfg) {
   finally { if (PROFILE) profile('locked-admission', began); }
 }
 
+// 锁外的预检：启动计划席位前先报准入问题（Claude Code 席没提交、这一席已经跑过等），再去读说明文件。
+// 先一次查完运行中任务的进程身份，免得逐个起 PowerShell；名额满了不在这里拒绝，交给登记时排队
+function precheckAdmission(meta, cfg) {
+  const read = readRunsLocked(meta.id, null);
+  checkRunners(read.runs.map((run) => run.meta));
+  return admission(meta, cfg, read, true);
+}
+
 function admission(meta, cfg, { runs, unreadable } = readRunsLocked(meta.id), queue = false) {
   if (unreadable.length) return M.admissionUnreadable(M.list(unreadable));
   if (['discuss', 'review'].includes(meta.kind) && meta.plan && meta.participant !== 'host') {
@@ -739,4 +747,4 @@ function isRunning(m, { query = true } = {}) {
 }
 const UNVERIFIED_LIMIT_MS = 25 * 3600000;
 
-export { RUNS_ROOT, boardUrl, liveBoardUrl, announceBoard, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, saveMeta, metaWriteWarning, settleMeta, findRun, describeActivity, groupRuns, checkAdmission, readRunsLocked, runEnd, runOutcome, resumeVerdict, resultValid, resumedRuns, groupTally, groupSummary, groupScopeOwner, absolute, readMeta, checkRunners, isRunning, writesFiles };
+export { RUNS_ROOT, boardUrl, liveBoardUrl, announceBoard, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, saveMeta, metaWriteWarning, settleMeta, findRun, describeActivity, groupRuns, checkAdmission, precheckAdmission, readRunsLocked, runEnd, runOutcome, resumeVerdict, resultValid, resumedRuns, groupTally, groupSummary, groupScopeOwner, absolute, readMeta, checkRunners, isRunning, writesFiles };

@@ -148,9 +148,12 @@ test('审查只能交一次，材料指纹变动拒绝，外部失败后重启�
 
 for (const module of ['discuss', 'review']) test(`${module} 首轮准入拒绝未提交报告的计划，提交后启动`, async (t) => {
   const h = sandbox(t), p = output(await h.bridge(planArgs(h, module))), s = h.scenario({ last_message: module === 'discuss' ? discussion : review });
-  failed(await h.bridge(launch(p), { env: s.env }), M.hostAnswerRequired(p.plan_id, 1));
+  const missing = [...launch(p).slice(0, -1), 'missing-brief.md'];
+  failed(await h.bridge(missing, { env: s.env }), M.hostAnswerRequired(p.plan_id, 1));
   assert.equal(h.calls().length, 0); assert.equal(h.records().length, 0);
   const answer = output(await h.bridge(submitArgs(h, p)));
+  failed(await h.bridge(missing, { env: s.env }), M.briefNotFound(path.join(h.cwd, 'missing-brief.md')));
+  assert.equal(h.calls().length, 0);
   const r = output(await h.bridge(launch(p), { env: s.env })); assert.equal(r.seat, 1);
   const state = await status(h, p); assert.equal(state.host.before_external_start, true); assert.equal(state.state, 'complete');
   assert.deepEqual(state.host.rounds.map((r) => r.run_id), [answer.run_id]);

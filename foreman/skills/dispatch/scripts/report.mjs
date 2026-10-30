@@ -1,6 +1,7 @@
 // setup 的固定 Markdown：环境、总配置和本机模型清单，文字统一从 messages 取。
 import { CLAUDE_CODE, LEVELS, MODULE_CELLS, cellList, readRawConfig } from './config.mjs';
-import { M, isObject } from './util.mjs';
+import { M, LANGUAGE, isObject } from './util.mjs';
+import { agySandboxInfo } from './adapters/agy-setup.mjs';
 
 const dash = '—';
 const escape = (value) => String(value ?? '').replaceAll('|', '\\|').replace(/\r?\n/g, '<br>');
@@ -20,8 +21,7 @@ export const environmentReport = (checks, environment, agents) => {
   for (const [name, agent] of Object.entries(checks.agents)) {
     if (!checks.summary.agents[name].used_at.length) continue;
     if (agent.type === 'codex cli' && agent.sandbox?.checked.some((item) => item.ok === false)) issues.push(`⚠ ${M.reportIssue(M.reportCodexSandbox(name), agent.fix)}`);
-    if (agent.type === 'agy cli' && agent.sandbox && !agent.sandbox.available) issues.push(`⚠ ${M.reportIssue(M.reportAgySandbox(name), agent.fix || (agent.sandbox.results?.layout === 'unavailable' ? M.fixAgySandboxLayout
-      : agent.sandbox.results?.start_error ? M.fixAgySandboxStart(agent.sandbox.results.start_error) : M.fixAgySandbox))}`);
+    if (agent.type === 'agy cli' && agent.sandbox && !agent.sandbox.available) issues.push(`⚠ ${M.reportAgySandbox(name)}${LANGUAGE === 'en' ? '. ' : '：'}${agent.fix || agySandboxInfo(name, agent.sandbox).fix}`);
   }
   // 没有在用的 Codex 协作方、或者没查到沙箱（没装、没登录）时，不能说沙箱正常
   // 探测不了（这个版本的 Codex 不支持，ok 为 null）也不算测过
@@ -32,7 +32,7 @@ export const environmentReport = (checks, environment, agents) => {
   const quota = agyInUse?.quota?.groups.flatMap((g) => g.buckets.filter((b) => isObject(b) && Number.isFinite(b.remaining_fraction))
     .map((b) => `${g.name} ${M.reportAgyWindow(b.window) || b.name || b.window} ${Math.round(b.remaining_fraction * 100)}%`));
   const agyStatus = [agyInUse?.sandbox && (agyInUse.sandbox.results?.start_error ? M.reportAgySandboxBroken
-    : agyInUse.sandbox.available ? M.reportAgySandboxOk : M.reportAgySandboxOff), quota?.length && M.reportAgyQuota(M.list(quota))].filter(Boolean);
+    : agyInUse.sandbox.available ? M.reportAgySandboxOk : agySandboxInfo('', agyInUse.sandbox).leaky ? M.reportAgySandboxLeaky : M.reportAgySandboxOff), quota?.length && M.reportAgyQuota(M.list(quota))].filter(Boolean);
   const keys = Object.values(agents).filter((agent) => agent.type === 'api' && agent.api_key).length;
   return report([
     M.reportEnvironmentTitle, issues.length ? issues.join('\n\n') : sandboxChecked ? M.reportEnvironmentOk : M.reportEnvironmentOkNoSandbox,
@@ -100,19 +100,31 @@ const sceneTables = (cfg, summary) => Object.entries(cfg.scene_diff).flatMap(([s
       const value = view[module][cell];
       const candidates = value === CLAUDE_CODE ? CLAUDE_CODE : value === null ? M.reportOff : M.list(cellList(value).map((item) =>
         `${item.agent} · ${item.effort ?? M.reportDefault}${item.model && item.model !== summary.agents[item.agent].model ? ` · ${item.model}` : ''}${item.required ? ' ★' : ''}`));
-      return [`${module}.${cell}`, candidates, view[module].seats?.[cell] ?? dash,
+      return [`${M.reportModuleNames[module]} ${cell}`, candidates, view[module].seats?.[cell] ?? dash,
         module === 'review' ? view.review.gap[cell] ? M.reportGapOn : M.reportGapOff : dash];
     }));
   return [M.reportSceneTable(scene), table([M.reportSeatsHeaders[0], M.reportCandidate, ...M.reportSeatsHeaders.slice(1, 3)], rows)];
 });
 
 const usedIn = (used) => {
-  used = used.map((at) => at.replace(/^modules\.[^.]+\.(?=discuss\.|review\.|run\.|image\.)/, 'modules.'));
-  const labels = ['discuss', 'review', 'run'].flatMap((module) => {
-    const levels = LEVELS.filter((cell) => used.some((at) => at.startsWith(`modules.${module}.${cell}[`)));
-    return levels.length ? [`${M.reportModuleNames[module]} ${levels.map((cell) => cell[0].toUpperCase()).join('/')}`] : [];
-  });
-  for (const cell of ['generate', 'draw']) if (used.some((at) => at.startsWith(`modules.image.${cell}[`))) labels.push(M.reportModuleNames[cell]);
+  const locations = used.map((at) => at.slice(at.lastIndexOf('modules.')).replace(/\[\d+\]$/, '').split('.').slice(1))
+    .map((parts) => parts.length === 2 ? ['default', ...parts] : parts);
+  const labels = [];
+  for (const module of modules) {
+    const matches = locations.filter(([, m]) => m === module), cells = MODULE_CELLS[module];
+    const base = cells.filter((cell) => matches.some(([scene, , c]) => scene === 'default' && c === cell));
+    const label = (levels) => module === 'image' ? M.list(levels.map((cell) => M.reportModuleNames[cell]))
+      : `${M.reportModuleNames[module]} ${levels.map((cell) => cell[0].toUpperCase()).join('/')}`;
+    if (base.length) labels.push(label(base));
+    const grouped = new Map();
+    for (const scene of new Set(matches.map(([scene]) => scene).filter((scene) => scene !== 'default'))) {
+      const levels = cells.filter((cell) => !base.includes(cell) && matches.some(([s, , c]) => s === scene && c === cell));
+      if (!levels.length) continue;
+      const key = label(levels);
+      grouped.set(key, [...(grouped.get(key) || []), scene]);
+    }
+    for (const [key, scenes] of grouped) labels.push(M.reportSceneUse(key, M.list(scenes)));
+  }
   return labels.length ? M.list(labels) : M.reportUnused;
 };
 const runAccess = (agent) => agent.type === 'api' ? dash : agent.type === 'agy cli' ? M.agyReadOnly : agent.type === 'codex cli' ? M.reportAccessCodex
@@ -146,11 +158,15 @@ const notes = (summary, checks) => {
 };
 
 export const configReport = (cfg, summary, checks = null) => {
-  const blocks = [M.reportConfigTitle, `${M.reportCellsTitle}　${M.reportCellsIntro}`];
+  const blocks = [M.reportConfigTitle, `${M.reportCellsTitle}${M.reportHeadingGap}${M.reportCellsIntro}`];
+  const suffix = cfg.scenes.names.length ? M.reportDefaultScene : '';
   if (cfg.project_config) blocks.splice(1, 0, M.reportProjectConfig(cfg.project_config.path, M.list(cfg.project_config.cells)));
-  for (const module of modules) blocks.push(M.reportModuleNames[module], module === 'image' && !cfg.image_configured
+  for (const module of modules) blocks.push(M.reportModuleNames[module] + suffix, module === 'image' && !cfg.image_configured
     ? M.reportImageUnconfigured : cellTable(cfg, summary, module, checks));
-  blocks.push(M.reportSeatsTitle, seatsTable(cfg, summary), M.reportSeatsNotes.map((text) => `- ${text}`).join('\n'), ...sceneTables(cfg, summary), M.reportAgentsTitle);
+  blocks.push(M.reportSeatsTitle.replace(/\*\*(?=[　 ])/, `**${suffix}`), seatsTable(cfg, summary), M.reportSeatsNotes.map((text) => `- ${text}`).join('\n'));
+  if (cfg.scenes.source) blocks.push(M.sceneSource(cfg.scenes.file, cfg.scenes.source));
+  if (cfg.scenes.inactive.length) blocks.push(M.scenesInactive(M.list(cfg.scenes.inactive), cfg.scenes.file));
+  blocks.push(...sceneTables(cfg, summary), M.reportAgentsTitle);
   const problems = entries(summary).filter((item) => item.problem);
   blocks.push(table([...M.reportAgentsHeaders, ...(checks ? [M.reportCheck] : [])], Object.entries(summary.agents).map(([name, info]) => [
     name, info.type, info.model ?? dash, usedIn(info.used_at), runAccess(info),

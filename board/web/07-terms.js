@@ -42,16 +42,30 @@ function showTerms(on, snap = false) {
   if (on && snap) for (const ol of sec.querySelectorAll('.tcol:not(.tgroup) > .term')) if (ol.stick) ol.scrollTop = ol.scrollHeight;
 }
 $('more').addEventListener('click', () => $('termsec').scrollIntoView({ behavior: 'smooth' }));
+// 展开的席位在正文里单击也收起，但选文字、拖滚动条、双击选词时不收：记下按下的位置和是否按在滚动条上，
+// 松开时挪动超过 4 px 算拖动；正文单击等 250 ms 再收，这期间来了第二下（双击）或者选中了文字就不收
+const PRESS = { x: 0, y: 0, bar: false, timer: null };
+$('termsec').addEventListener('pointerdown', (e) => {
+  const ol = e.target.closest?.('.term');
+  PRESS.x = e.clientX; PRESS.y = e.clientY;
+  // clientWidth 不含滚动条：按在正文框右边缘以外就是按在滚动条上
+  PRESS.bar = !!ol && e.clientX > ol.getBoundingClientRect().left + ol.clientLeft + ol.clientWidth;
+});
+const selectedIn = (el) => { const s = typeof getSelection === 'function' ? getSelection() : null; return !!s && !s.isCollapsed && !!s.toString().trim() && el.contains(s.anchorNode); };
 $('termsec').addEventListener('click', (e) => {
   // 已结束的组：点折起来的那一行展开成栏；点展开的栏头收回成一行
   const line = e.target.closest('#termdone .dline'), head = e.target.closest('#termdone .tcol > header');
   if (line || head) { PANEL.fold.set((line || head.parentNode).dataset.lane, !!line); UI.ver++; wake(); return; }
   const seat = e.target.closest('.seat');
   if (!seat) return;
-  // 展开的席位只在身份行、分工行上点才收起：在正文里点（选文字、拖滚动条）不收
-  if (seat.classList.contains('open') && e.target.closest('.term, .use')) return;
-  const id = seat.dataset.lane;
-  PANEL.open.set(id, !seat.classList.contains('open'));
+  const id = seat.dataset.lane, open = seat.classList.contains('open');
+  clearTimeout(PRESS.timer); PRESS.timer = null;
+  if (open && e.target.closest('.term, .use')) {
+    if (e.detail > 1 || PRESS.bar || Math.hypot(e.clientX - PRESS.x, e.clientY - PRESS.y) > 4 || selectedIn(seat)) return;
+    PRESS.timer = setTimeout(() => { PRESS.timer = null; if (selectedIn(seat)) return; PANEL.open.set(id, false); UI.ver++; wake(); }, 250);
+    return;
+  }
+  PANEL.open.set(id, !open);
   UI.ver++; wake();
 });
 
