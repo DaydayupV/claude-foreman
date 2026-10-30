@@ -35,7 +35,9 @@ $ARGUMENTS
    - 两条命令里任何一条打印过"已在配置文件 … 里写明审查每一级要不要补漏席"时，在 ① 后面用一句话转告：补漏席现在可以按等级开关，已按原来的做法写入（只有 3 级审查做补漏轮），备份在哪里。
    - 两条命令里任何一条打印过"已在配置文件 … 里写明讨论和审查每一级的外部席位数"时，在 ① 后面用一句话转告补写了什么、备份在哪里。
    - 两条命令里任何一条打印过"已把 … levels 改写成 modules"时，在 ① 后面用一句话说明，并按下面"推荐原则"里的旧名单规则放进 ④。
-   - 两条命令里任何一条打印过"已把配置文件 … 的 modules 改成按场景写"时，在 ① 后面用一句话转告：原来的内容原样放进了 `modules.default`，用起来和以前一样；想按场景配时在 `modules` 下加场景块；原文件备份在哪里。这份备份会出现在旧备份的提醒里，按第 5 步的旧备份规则处理。
+   - 两条命令里任何一条打印过"已把配置文件 … 的 modules 改成按场景写"时，在 ① 后面用一句话转告：原来的内容原样放进了 `modules.default`，用起来和以前一样；想按场景配时在 `modules` 下加场景块；原文件备份在哪里。这份备份会出现在旧备份的提醒里，按第 5 步的旧备份规则处理。补漏和按场景写这两条同时出现、备份是同一个文件时，合成一句转告。
+   - `summary.warnings` 里有 `project_modules_flat` 或 `project_ignored_keys` 时（这次 `--cwd` 的项目配置有问题），在 ① 后面用一句话转告是哪个文件、什么问题，并按第 5 步放进 ④。
+   - 两条命令里任何一条打印过"这个项目的偏好 … 没有定义场景 …"时，在 ① 后面用一句话转告：这些场景在这个项目里不生效，是项目偏好的场景块决定的。
 
 2. **读模型清单**：运行 `node "<脚本路径>" models --format md`，贴成 ②。再运行一次不带 `--format` 的 `models`（JSON），从 `agents.<代号>` 读出配置里的模型在不在清单里：`listed` 为 `false` 说明模型名写错了或已经下线，`closest` 是最接近的写法，放进 ④。
    - 用户要的 opencode 或 pi 模型不在 ② 里：② 末尾已经写了怎么登录，不用再说。
@@ -51,12 +53,14 @@ $ARGUMENTS
 
 5. **修改建议**：写成 ④。先一句话概括（比如"现在的安排基本不用动，有 3 项建议"），然后是两张表，编号从 1 起连续编，方便用户说"第 3 项改成 …"。没有内容的表不出，写一句"没有"。
    - **格子和协作方**：列是"# | 对象 | 现在 | 推荐 | 理由"。对象写格子（"讨论 complex"）或协作方代号；推荐写候选（协作方、模型、推理强度）和是否必选；理由一句话，用到新模型时写出它能选的推理强度和来源（② 的哪张表，或文档链接）。新加协作方、改模型名、没用上的协作方（问放进哪一格还是删掉，用户不在意就保留）、新加 API 时 key 怎么放，都写在这张表里。表后写"其余格子不变"。
-   - **旧版本留下的配置**：来自第 1 步 config 输出的 `summary.warnings` 里 kind 为 `obsolete_max_seats`、`obsolete_key_env`、`old_backups`、`legacy_levels_note`、`stale_alias`、`obsolete_projects` 的条目（文件名等细节在这些条目的字段里，③ 只有提醒的文字）。列是"# | 位置 | 内容 | 推荐 | 理由"。推荐：
+   - **旧版本留下的配置**：来自第 1 步 config 输出的 `summary.warnings` 里 kind 为 `obsolete_max_seats`、`obsolete_key_env`、`old_backups`、`legacy_levels_note`、`stale_alias`、`obsolete_projects`、`project_modules_flat`、`project_ignored_keys` 的条目（文件名等细节在这些条目的字段里，③ 只有提醒的文字）。列是"# | 位置 | 内容 | 推荐 | 理由"。推荐：
      - `dispatch.max_seats`：删除。
      - `api_key_env`（和 `api_key` 同时写了）：删除；用户想改用环境变量时，删的是 `api_key`。
      - 旧备份：删除，只留这次新建的备份；`contain_keys` 为 `true` 时在理由里说明备份里有明文 key。
      - `levels` 说明行：保留。理由：旧版插件读到它会报错停下，而不是悄悄改成全由 Claude Code 做；确认每台电脑都升级以后才可以删。
-     - 用户配置里的 `projects`（`obsolete_projects`）：每一项列一条，推荐"搬到 `<目录>/.claude/foreman.json`"。目录不存在的推荐删除；目标文件已经存在的，在推荐里写出合并后的内容（`projects` 这一项写的格子和时长覆盖原文件里同名的），理由写"`projects` 已经不用了，写在里面不生效"。
+     - 用户配置里的 `projects`（`obsolete_projects`）：每一项列一条，推荐"搬到 `<目录>/.claude/foreman.json`"，要写的内容取这条提醒的 `entries`（已经换成项目配置的写法、去掉了项目配置不认的字段；`dropped` 列出丢掉了哪些，写进理由），不要去读用户配置原文。目录不存在的推荐删除；目标文件已经存在的，在推荐里写出合并后的内容（`projects` 这一项写的格子和时长覆盖原文件里同名的），理由写"`projects` 已经不用了，写在里面不生效"。
+     - 项目配置还是平铺写法（`project_modules_flat`）：推荐"改成 `{ "modules": { "default": { … } } }` 写法，内容不变"，"内容"一栏写出它覆盖了哪些格子和时长（config 输出的 `project_config.cells`）。理由写：旧写法照样能读；但从 1.2 及更早的版本升级来的项目配置，现在是覆盖用户配置，不再只能收紧，里面以前会被忽略的放宽项（加候选、调高席位、延长时长）现在会生效，请核对。
+     - 项目配置写了只能放在用户配置里的键（`project_ignored_keys`）：推荐删掉这些键，理由写"只能写在用户配置里，项目配置里不生效"。
      - 失效的旧代号（`stale_alias`）：改成哪个现在的代号，选和它同一家、同一种接入方式的，拿不准就列出候选让用户选；不再续接升级前的任务时也可以删掉这条。
 
 6. **确认（弹窗）**：①到④都贴完以后，用 AskUserQuestion 问"怎么处理上面的建议？"，选项：
@@ -68,11 +72,12 @@ $ARGUMENTS
    - **agy 守卫的同意（弹窗）**：确认的结果里要新加 `agy cli` 协作方时，先运行 `node "<脚本路径>" agy-guard status`（只读）；`installed` 或 `valid` 为 `false` 时，接着用 AskUserQuestion 单独问一次"要在 ~/.gemini/config/ 下安装 foreman 的 agy 守卫吗？"。描述写清：会在 agy 的全局 `hooks.json` 里加一个 `foreman-guard` 条目，并写一个启动器和守卫脚本，原来的 `hooks.json` 先备份；平时用 agy 不受影响，每次工具调用多约 0.1 秒；foreman 在某个目录里运行 agy 期间，你在同一目录里自己用 agy 会被拦下工具调用；随时可以用 `agy-guard uninstall` 撤掉。选项："同意安装（推荐）"、"不加 agy"。选"不加 agy"时，这次不加任何 `agy cli` 协作方，其余建议照改。每次运行 setup 都要重新问，不沿用以前的回答。
 
 7. **改配置**：
-   - 先备份：把配置文件复制成同目录下的 `<文件名>.setup-<年月日-时分秒>.bak`；这次要改 `agent-aliases.json` 时，也把它复制成 `agent-aliases.json.setup-<年月日-时分秒>.bak`。
+   - 先备份：这次要改配置文件时，把它复制成同目录下的 `<文件名>.setup-<年月日-时分秒>.bak`；这次要改 `agent-aliases.json` 时，也把它复制成 `agent-aliases.json.setup-<年月日-时分秒>.bak`。只删旧备份、不改这两个文件时不用备份（否则下次 setup 又会把它当成旧备份）。
    - 改用户配置的 `agents` 和 `modules`（默认的那套在 `modules.default` 里，有场景块的按用户要改的场景改），每一格写成候选列表；`discuss` 和 `review` 的 `seats` 三级都保留在文件里，改席位数就改这里，新加必选时把对应等级调到不少于必选数。改写后文件里的 `levels` 是一行说明文字，除非用户在 ④ 里选了删除，否则保留不动。代号用模型名（opencode 和 pi 取 `/` 后面那段）；已经有同名代号时，加上类型后缀，比如 `deepseek-flash-api`、`deepseek-flash-opencode-cli`、`deepseek-flash-pi`。失效的旧代号改在 `agent-aliases.json` 里，只改或删那一条，不删整个文件：续接升级前的任务、项目配置里写的旧代号都靠它。
    - 补漏席：`review` 的 `gap` 三级都保留在文件里，按 ④ 里用户确认的结果改。
    - 场景模式（用户在 ④ 里同意开启时）：先把用户偏好文件（config 输出 `preferences` 里的第一个，即 `preferences.md`）复制成同目录下的 `preferences.md.setup-<年月日-时分秒>.bak`（文件不存在就不用备份），再写场景块：文件里已有 `<!-- foreman:scenes -->` 块时只替换块里的内容，没有就追加到文件末尾，块外面的内容一个字都不改。然后在用户配置的 `modules` 下按 ④ 里确认的内容加 `code`、`research` 两个场景块，只写和 `default` 不同的格子、`seats` 和 `gap`。写完第 7 步的 `config` 校验时，看输出的 `scenes.problems` 为空。
    - 迁移 `projects`（用户在 ④ 里同意时）：按确认的内容写各项目的 `.claude/foreman.json`（已有的先复制成 `foreman.json.setup-<年月日-时分秒>.bak`，没有 `.claude` 目录就建），再从用户配置里删掉 `projects`。写到别的仓库里的文件不会自动提交，在 ⑥ 里列出写了哪几个文件。
+   - 改项目配置（用户在 ④ 里同意了 `project_modules_flat`、`project_ignored_keys` 的建议时）：先把它复制成 `foreman.json.setup-<年月日-时分秒>.bak`，再改成 `default` 写法或删掉那几个键，内容不变；同样在 ⑥ 里列出。
    - 实时查看的两个开关：用户配置 `dispatch.watch` 里的 `terminal` 和 `web` 两项都要写上。`terminal` 保持原值（插件加载时已经把旧写法改写过，一般已经写着；没有就写 `true`）；`web` 按 ④ 里用户确认的结果写 `true` 或 `false`，④ 里没有这一项就保持原值。
    - 删旧版本留下的配置：按用户确认的项删。旧备份只删 ④ 里列出的那些，不删这次新建的。
    - API key 的放法：
@@ -92,10 +97,11 @@ $ARGUMENTS
 
 ## 推荐原则
 - 已有的安排默认不变。只在这几种情况推荐改：格子的模型或推理强度不在清单里；这次新装了工具，或者用户要加模型；审查、讨论的某一级是 `"claude code"`，而现在有合适的协作方；配置里还没有图像两格，而本机有能出图的协作方；讨论名单是从旧写法改写来的，还没决定谁必选；Codex 做讨论或审查时没有只读沙箱（提醒里有 `readonly_audited`）；讨论或审查某一级的候选明显少于席位数（看 ③ 的"席位与必选"，"候选不够"的格子）。执行的 simple、normal 交给 Claude Code 是默认安排，不主动改。
+- 这次 `--cwd` 的项目配置覆盖了的格子（config 输出的 `project_config.cells`）：③ 显示的是项目里生效的样子。按上面的规则要推荐改它们时，改的是项目配置，在推荐里写明文件；不要为了它们去改用户配置。
 - **场景模式**：用户配置的 `modules` 下只有 `default`、`scenes.names` 也为空时，在 ④ 的第一张表里列一项"场景模式"。审查 complex 的候选比这一级的席位数多出两个以上时推荐开启，否则列出、推荐"不开"。推荐开启时，推荐一栏写清：
   - 写进用户偏好的场景块原文，默认两个场景 code 和 research，内容照 `references/config.md` "场景"一节的样板；
-  - `modules.code`：审查 complex 只放两家强档模型（必选沿用 `default` 的），推理强度用最高的常用档，`seats` 为 2，`gap` 为 `false`；
-  - `modules.research`：审查 complex 放 `default` 这一格的全部候选，`seats` 取候选数和 6 里较小的，`gap` 为 `true`；讨论不改；
+  - `modules.code`：审查 complex 只放两个强档模型（必选沿用 `default` 的），推理强度用最高的常用档，`seats` 为 2，`gap` 为 `false`；
+  - `modules.research`：审查 normal 和 complex 各放 `default` 同一格的全部候选，`seats` 取候选数和上限里较小的（normal 上限 3，complex 上限 6），`gap` 都为 `true`；讨论不改（一般的研究证据审查是 2 级，所以 normal 也要配）；
   - 理由里说明：开启后，派活时先按偏好里的路由选场景，没写到的情况用 `default`；以后想让某个场景换模型、换推理强度或换必选，直接改它的场景块。
   已经有场景块时不列这一项；`scenes.problems` 不为空时，把每条问题列进 ④，推荐怎么改。
 - **补漏席**（`review.gap`）：默认不改。用户问到时说明：开着的等级，各席审完后再请一个没参加过的模型只找"清单还漏了什么"，多花一席的额度；场景模式下可以只在某个场景开。

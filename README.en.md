@@ -458,7 +458,7 @@ Fields this config doesn't use but that are often adjusted:
 ```
 
 - `sandbox`: the sandbox Codex uses for each task type (`run`, `review`, `discuss`): `read-only`, `workspace-write` or `danger-full-access`. Left out, Codex's own config applies. `read-only` is recommended for discussions and reviews; if the read-only sandbox won't start on Windows, switch to unelevated as described under "Safety notes" below.
-- `max_parallel`: how many runs this agent may have at once; 4 by default. When it's full, new dispatches queue for a slot in arrival order (for up to 60 minutes by default; `--queue-timeout` changes that, and 0 refuses right away instead of queueing), across all conversations.
+- `max_parallel`: how many runs this agent may have at once; 4 by default (2 for agy). When it's full, new dispatches queue for a slot in arrival order (for up to 60 minutes by default; `--queue-timeout` changes that, and 0 refuses right away instead of queueing), across all conversations.
 - `run_access`: lets opencode or pi do hands-on work; see above.
 - `extra_body`: extra parameters to send with API requests.
 - `bin`: the full path to the executable, if the command can't be found.
@@ -512,14 +512,16 @@ Then add scene blocks under `modules`:
                 "seats": { "complex": 2 }, "gap": { "complex": false } }
   },
   "research": {
-    "review": { "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "gpt-6.1-sol", "effort": "high" },
+    "review": { "normal": [{ "agent": "gpt-6.1-sol", "effort": "high", "required": true }, { "agent": "gpt-6-astra", "effort": "high" },
+                           { "agent": "deepseek-flash" }, { "agent": "glm-5.3" }],
+                "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "gpt-6.1-sol", "effort": "high" },
                             { "agent": "deepseek-flash" }, { "agent": "glm-5.3" }],
-                "seats": { "complex": 4 }, "gap": { "complex": true } }
+                "seats": { "normal": 3, "complex": 4 }, "gap": { "normal": true, "complex": true } }
   }
 }
 ```
 
-In the example above, code reviews use two seats, sol and astra, with no gap seat; research reviews use all four, with astra as the required agent instead. Both scenes change only the complex review; everything else follows `default`. All four modules can be configured by scene. Claude Code picks the scene by the routing in the preferences when it hands out work and creates plans, and says which line it followed. When the scenes in the preferences don't match the scene names in `modules`, handing out work and creating plans are both refused, and `config` points out what doesn't match. Details are under ["Scenes" in `config.md`](foreman-en/skills/dispatch/references/config.md).
+In the example above, code reviews (complex) use two seats, sol and astra, with no gap seat; research reviews ask more models at both normal and complex and keep a gap seat, with astra as the required agent at complex (an ordinary evidence review is level 2, so normal needs it too). Cells not written follow `default`. All four modules can be configured by scene. Claude Code picks the scene by the routing in the preferences when it hands out work and creates plans, and says which line it followed. When `modules` has a scene the preferences don't define, handing out work and creating plans are both refused, and `config` names the file; the other way round, a scene defined in the preferences but not in `modules` only gets a notice and works like `default`. When the project preferences have a scene block, that project uses only the scenes it defines (an empty block means no scenes). Details are under ["Scenes" in `config.md`](foreman-en/skills/dispatch/references/config.md).
 
 ### Preference files
 
@@ -551,6 +553,7 @@ Custom roles for role-mode discussions go here too; the format is under "Custom 
   - Leave `approval` at the default `never`: nobody can approve in a handed-off task, and a broken sandbox needs fixing at the sandbox.
 - **opencode and pi have no OS sandbox when doing hands-on work.** At `edit` they can't write outside the project or run commands; at `shell` their commands can reach the whole machine. It's off by default; only you can turn it on, in the user config, and a project config can't.
 - **Your code goes to the providers behind your agents.** Work handed to Codex goes to OpenAI; opencode, pi and API models send it to their providers, agy to Google, and API models also receive the files Claude Code attaches. Check that this is acceptable for sensitive projects; if needed, drop the API candidates in the project config, or set discussions and reviews to `"claude code"` as a whole.
+- **The project config and project preferences can override your settings.** A project's `.claude/foreman.json` can add candidates (only agents you defined in the user config), raise seat counts and lengthen time limits, and `.claude/foreman.md` can change the scene routing; that includes repositories cloned from someone else. Look at both files when you open an unfamiliar repository; `project_config` in the `config --cwd` output lists what it overrides.
 - **API keys can go in the user config or in environment variables.** In the config they're plain text, so don't commit or share `~/.claude/foreman/config.json`; keys in a project config are ignored. The `config` command never shows keys, and the script never writes them into run records.
 - **Pay-as-you-go means real costs.** Codex with API-key billing, API models, and pay-as-you-go providers reached through opencode or pi all cost money for each handoff or discussion. Set `dispatch.auto` to `false` if you don't want Claude Code starting handoffs, discussions and reviews on its own; it asks you first instead.
 - **Agents don't get stuck waiting for an answer.** Codex needs no approvals by default, opencode gets no way to ask questions or request confirmable permissions, pi has no question tool, and the guard blocks agy's question tool. Anything they need answered is collected in the result, and Claude Code decides: within the authority you've already given, it decides and resumes; it only asks you about business trade-offs, wider scope, extra cost and irreversible steps.
@@ -563,7 +566,7 @@ Each call is recorded in `~/.claude/foreman/runs/<run_id>/`: the brief, the even
 - Paths ignored by `.gitignore` aren't tracked unless you pass them with `--track` when handing off.
 - When the Codex quota runs out or an API balance is too low, the run is marked `quota_exhausted` and isn't retried automatically; for Codex it includes the expected reset time.
 - Runs whose dispatcher exited unexpectedly, got stuck or timed out are flagged to Claude Code the next time you start a session in that project.
-- After a review or discussion ends and Claude Code has checked it, it records what happened to each point in that run's `verdict.json`. `cli.mjs stats` sums these records up by model and module: seats, points confirmed and false positives, points only that model found, rework rate, time (median and P90), usage and cost, with missing usage shown as missing rather than 0. Add `--by effort,cell` to split the figures by reasoning effort and level as well; the output also gives, per kind and level, how long plans took from creation to the last seat's end. To compare before and after an effort change (say reviews from xhigh to high), use `--since` to look at the runs since the change. You can point to these figures in the preference files to adjust model tiers; the plugin never ranks models itself.
+- After a review or discussion ends and Claude Code has checked it, it records what happened to each point in that run's `verdict.json`. `cli.mjs stats` sums these records up by model and module: seats, points confirmed and false positives, points only that model found, rework rate, time (median and P90), usage and cost, with missing usage shown as missing rather than 0. Add `--by effort,cell,scene` (any of them) to split the figures by reasoning effort, level and scene as well; the output also gives, per kind and level, how long plans took from creation to the last seat's end. To compare before and after an effort change (say reviews from xhigh to high), use `--since` to look at the runs since the change. You can point to these figures in the preference files to adjust model tiers; the plugin never ranks models itself.
 
 ## Platforms
 

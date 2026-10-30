@@ -131,7 +131,7 @@
 - 用之前要装守卫（`agy-guard install`，`/foreman:setup` 会先征求用户同意）：在 `~/.gemini/config/hooks.json` 里加一个 `foreman-guard` 条目，同目录写启动器和守卫脚本。没有 foreman 运行时守卫回答 `ask`，用户平时用 agy 不受影响；
 - 每次派出前自检：项目（从工作目录往上到仓库根，加上每个 `--add-dir`）的 `.agents` 等目录里有 agy 的钩子、MCP 或插件配置，或者全局 `hooks.json` 里有 foreman 以外的钩子，就不派，报错写明是哪个文件；守卫文件和插件里的不一致时在锁里重新写入；
 - 守卫只放行读文件（路径限定在项目目录和 `--add-dir` 里）和任务清单；本机 agy 的沙箱经探针确认可用时（Windows 11 24H2 及以上），读档再放行沙箱里的命令：沙箱里改不了项目内外的文件、上不了网，但系统临时目录仍然可写。沙箱不可用时没有 shell，讨论材料附上 `git ls-files` 的清单；
-- 启动前去掉密钥类环境变量；运行期间在 foreman 状态目录写启动标记，同一目录里没有带策略的 agy 会被守卫拒绝工具调用；守卫的每次决定记在 `run_dir` 的 `agy-guard.jsonl`，用了工具却没有决定记录的一轮判失败；
+- 启动前去掉密钥类环境变量（只留 agy 自己登录可能用到的 `GEMINI_API_KEY`）；运行期间在 foreman 状态目录写启动标记，同一目录里没有带策略的 agy 会被守卫拒绝工具调用；守卫的每次决定记在 `run_dir` 的 `agy-guard.jsonl`，用了工具却没有决定记录的一轮判失败；
 - 用户自己的 GEMINI.md、skill 照常加载，全局 MCP 服务器会启动但工具被拒绝；会话出现在 agy 的历史里。
 
 **`type: "api"`**（兼容 OpenAI 接口的模型）
@@ -251,7 +251,7 @@
 - 新旧代号的对照记在 `~/.claude/foreman/agent-aliases.json`：续接旧任务、`--agent` 写旧代号、项目配置里的旧代号，都会自动换成新代号。
 - 同一个文件里同时写了 `levels`（对象）和 `modules` 时直接报错，不猜以哪个为准；`levels` 是上面那行说明文字时不算。项目配置里的 `levels` 不改写文件，只在内存里按 `modules` 读，并提示改成新写法。
 - 用户配置里的 `projects`（按项目目录写的覆盖）已经不用了：读到时不生效，每次都提示一次，`summary.warnings` 里有一条 `obsolete_projects`。改成在各项目里写 `.claude/foreman.json`（见文末），`/foreman:setup` 可以帮着搬过去，并从用户配置里删掉 `projects`。
-- 从 1.2 及更早的版本升级时，项目配置从"只能收紧"变成了"覆盖用户配置"：以前写了会被忽略的放宽项（加候选、调高席位、延长超时等），升级后会生效。
+- 从 1.2 及更早的版本升级时，项目配置从"只能收紧"变成了"覆盖用户配置"：以前写了会被忽略的放宽项（加候选、调高席位、延长超时等），升级后会生效；项目在某一格写 `"claude code"` 也不再挡住 `--agent` 点名派出（以前会挡住，并列在 `closed_by_project` 里，这个字段已经去掉）。`config` 和 `check` 会把还是平铺写法的项目配置列进 `summary.warnings`（`project_modules_flat`），`/foreman:setup` 会提醒你核对里面的放宽项。
 - 第一次读到平铺的 `modules`（下面直接是 `discuss`、`run`、`review`、`image`）时，脚本把它整体放进 `modules.default`，原文件先备份，并提示改写了什么；格子的内容一点不变。项目配置里的平铺写法不改写文件，只在内存里按 `default` 读，并提示改成新写法。同一个 `modules` 里既有平铺的模块又有场景时直接报错。不认识场景写法的旧版插件读到 `modules.default` 会报错，所以每台电脑都要升级。
 
 ## 场景
@@ -270,7 +270,7 @@
 
 - 块里以 `- **<名字>**：` 开头的行定义一个场景。名字只能用小写字母、数字和连字符，以字母开头；`default` 是保留名，不能用。
 - 其余文字是给 Claude Code 看的路由说明：什么样的任务算哪个场景。脚本不读它们，Claude Code 派活和建计划时按它们选。
-- 项目偏好里有场景块时，只用项目的场景；写一个空的场景块，表示这个项目不分场景。项目偏好里没有场景块时，用用户偏好的。
+- 项目偏好里有场景块时，只用项目的场景：项目定义了哪几个，这个项目里就只能用哪几个，用户配置里其余的场景块在这个项目里不生效（`config` 输出的 `scenes.inactive` 列出它们，并提示一句）；写一个空的场景块，表示这个项目不分场景、全用 `default`。项目配置自己写的场景块，必须在项目偏好里定义。项目偏好里没有场景块时，用用户偏好的。
 - 一份文件只能有一个场景块；开始和结束标记要配对。
 
 **2. 在 `modules` 下写场景块**：
@@ -283,27 +283,29 @@
                 "seats": { "complex": 2 }, "gap": { "complex": false } }
   },
   "research": {
-    "review": { "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "gpt-6.1-sol", "effort": "high" },
+    "review": { "normal": [{ "agent": "gpt-6.1-sol", "effort": "high", "required": true }, { "agent": "gpt-6-astra", "effort": "high" },
+                           { "agent": "deepseek-flash" }, { "agent": "glm-5.3" }],
+                "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "gpt-6.1-sol", "effort": "high" },
                             { "agent": "deepseek-flash" }, { "agent": "glm-5.3" }],
-                "seats": { "complex": 4 }, "gap": { "complex": true } }
+                "seats": { "normal": 3, "complex": 4 }, "gap": { "normal": true, "complex": true } }
   }
 }
 ```
 
-- 场景块只写要改的部分，其余沿用 `default`：写了的格子整格替换，`seats`、`gap` 按等级覆盖。上例的 `code` 只改了审查 complex，它的讨论、执行和图像都和 `default` 一样。
+- 场景块只写要改的部分，其余沿用 `default`：写了的格子整格替换，`seats`、`gap` 按等级覆盖。上例的 `code` 只改了审查 complex，它的讨论、执行和图像都和 `default` 一样；`research` 改了审查 normal 和 complex（一般的研究证据审查是 2 级，用于高风险决定的是 3 级，见 SKILL.md 的审查定级）。
 - 每个场景合并后都按同样的规则整体校验（能力、必选数不超过席位数、执行和图像一格最多一个必选等），报错会写明是哪个场景。
 - 不同场景可以有不同的必选方。场景由 Claude Code 按偏好里的路由选，脚本没法核实选得对不对，所以选的场景少了 `default` 同一格的某个必选时，`plan` 的输出会提示一句。
 - 场景能改所有四个模块；`dispatch` 里的设置不按场景分。
 
 **3. 派活时选场景**：
-- 要用的这一格只要在任何一个场景里和 `default` 不同（格子本身，或者这一级的 `seats`、`gap`），就算"按场景配了"。按场景配了的格子，建计划（`plan`）和直接派执行（`run --level`）时要写 `--scene <场景>` 和 `--scene-why "<依据偏好里的哪一条>"`；偏好没写到的情况写 `--scene default`。没按场景配的格子不用写。
-- 计划里的席位启动时，用计划记下的场景；续接（`resume`）沿用原任务的场景。这两种情况都不能再写 `--scene`。
+- 要用的这一格只要在任何一个场景里和 `default` 不同（格子本身，或者这一级的 `seats`、`gap`），就算"按场景配了"。按场景配了的格子，建计划（`plan`）和直接派执行（`run --level`）时要写 `--scene <场景>` 和 `--scene-why "<依据偏好里的哪一条>"`；偏好没写到的情况写 `--scene default`。没按场景配的格子不用写；写了也照收，只记进记录（`plan` 的 `notes` 会说明），用的是 `default` 的配置，`stats --by scene` 会按写的场景算。只在不生效的场景（见上）里不同的格子，不算按场景配了。
+- 计划里的席位启动时，用计划记下的场景；续接（`resume`）沿用原任务的场景。这两种情况都不能再写 `--scene` 或 `--scene-why`。
 - 选了场景以后，在这个场景的格子里怎么挑人、几席、补漏，都和没有场景时一样（见 `references/seats.md`）。
 
 **对不上时**：
 - 偏好里定义了、`modules` 里没写的场景，等于 `default`，提示一句。
-- `modules` 里有偏好没定义的场景，或者场景块写错了而 `modules` 里还有别的场景：`config` 和 `check` 报出来，派活、建计划、续接都会被拒绝，要先修好。`status`、看板照常能用。
-- 实际生效的场景看 `config` 输出的 `scenes`：`names`（场景名）、`source`（`user` 或 `project`）、`file`、`problems`（对不上的地方）。每个场景和 `default` 不同的格子看 `resolved_scenes`。
+- `modules` 里有偏好没定义的场景（场景定义来自项目偏好、这个场景块又只写在用户配置里时不算，见上），或者场景块写错了而 `modules` 里还有别的场景：`config` 和 `check` 报出来，提示里写明场景块在哪个文件；派活、建计划、续接都会被拒绝，要先修好。`status`、看板和 Claude Code 席的 `submit` 照常能用。
+- 实际生效的场景看 `config` 输出的 `scenes`：`names`（场景名）、`source`（`user` 或 `project`）、`file`、`inactive`（在这个项目里不生效的场景）、`problems`（对不上的地方）。每个场景和 `default` 不同的格子看 `resolved_scenes`。
 
 ## 项目配置：覆盖全局
 某个项目要换一套候选、多用或少用几家、改时长时，在项目里写 `<项目目录>/.claude/foreman.json`，形状和用户配置一样：
@@ -321,10 +323,10 @@
 }
 ```
 
-- 只能写 `modules`（任意场景），以及 `dispatch` 的 `discuss_max_rounds`、`timeout_min`、`stall_min`、`busy_ask_min`。`agents`、`auto`、`watch`、`intro`、`runs_dir` 作用于整台机器或整个会话，写在项目配置里会提示并忽略。协作方只能引用用户配置 `agents` 里定义过的代号。
+- 只能写 `modules`（任意场景），以及 `dispatch` 的 `discuss_max_rounds`、`timeout_min`、`stall_min`、`busy_ask_min`。`agents`、`auto`、`watch`、`intro`、`runs_dir` 作用于整台机器或整个会话，写在项目配置里会提示并忽略（`summary.warnings` 里有一条 `project_ignored_keys`）。协作方只能引用用户配置 `agents` 里定义过的代号。
 - 合并方式和用户配置覆盖默认值一样：写了的格子整格替换（要在用户配置的候选上加几个，就把原来那几个也写上），没写的格子沿用用户配置；`seats`、`gap` 按等级覆盖。可以加候选、改必选、调高席位、打开补漏、换推理强度、延长时长。
 - 有场景时按层叠：先算用户配置里这个场景的结果（用户的 `default` 加用户的场景块），再用项目配置里这个场景的结果（项目的 `default` 加项目的场景块）覆盖。所以项目的 `default` 也会盖过用户配置的场景块。
-- 合并后整体校验，写错时报错会指出是项目配置文件。项目配置还是平铺写法时，按 `default` 读，并提示改成新写法。
+- 合并后整体校验，写错时报错会指出是项目配置文件；席位数、补漏的报错里，值来自项目配置时也会写明。项目配置还是平铺写法时，按 `default` 读，并提示改成新写法（`summary.warnings` 里有一条 `project_modules_flat`）。
 - 只认项目目录本身的 `.claude/foreman.json`：`--cwd` 是哪个目录就读哪个目录下的。
 - `config --cwd` 输出的 `project_config` 是 `{ "path": "<文件路径>", "cells": [<覆盖了哪些场景的哪些格子和时长>] }`，没有项目配置时为 `null`；`check` 的总配置里也会列出来。
 
@@ -346,7 +348,8 @@
 - 脚本输出"已在配置文件 … 里写明审查每一级要不要补漏席"时，告诉用户：补漏席现在可以按等级开关，已经按原来的做法写进配置（只有 3 级审查做补漏轮），想关掉或在别的等级打开就改 `review.gap`；原文件备份在哪里。
 - 脚本输出"用户配置里的 projects 已经不用了"时，告诉用户哪几项不再生效，建议运行 `/foreman:setup` 把它们搬到各项目的 `.claude/foreman.json`。
 - 脚本输出"已把配置文件 … 的 modules 改成按场景写"时，告诉用户：配置换成了按场景的写法，原来的内容原样放进了 `modules.default`，用起来和以前一样；想按场景配时在 `modules` 下加场景块（见"场景"）；原文件备份在哪里。
-- 脚本输出"偏好里定义的场景 … 在 modules 里没有场景块"时，告诉用户这些场景现在和 `default` 一样，想让它们不同就按"场景"一节在 `modules` 下加场景块。`config` 的 `scenes.problems` 不为空时，把每一条转告用户：修好之前派活、建计划和续接都会被拒绝。
+- 脚本输出"偏好里定义的场景 … 在 modules 里没有场景块"时，告诉用户这些场景现在和 `default` 一样，想让它们不同就按"场景"一节在 `modules` 下加场景块。`config` 的 `scenes.problems` 不为空时，把每一条转告用户：修好之前派活、建计划和续接都会被拒绝。脚本输出"这个项目的偏好 … 没有定义场景 …"时，告诉用户这些场景在这个项目里不生效，是项目偏好的场景块决定的；想在这个项目里也用，就在项目偏好的场景块里加上。
+- `summary.warnings` 里有 `project_modules_flat` 时，告诉用户这份项目配置还是旧的平铺写法，建议改成 `{ "modules": { "default": { … } } }`；从 1.2 及更早的版本升级来的，提醒用户核对里面的放宽项（加候选、调高席位、延长时长），它们现在会生效。有 `project_ignored_keys` 时，告诉用户这几个键只能写在用户配置里，在项目配置里不生效。
 - 脚本输出"已把配置文件 … 改成新写法"时，告诉用户：配置换成了新写法（`type` 改为 `codex cli` / `opencode cli` / `api`，`"claude"` 改为 `"claude code"`），协作方代号改成了模型名（转告脚本列出的对照），实际用的模型和推理强度都没变，原文件备份在哪里。
 - 脚本输出"已把配置文件 … 里的 levels 改写成 modules"时，告诉用户：配置换成了 `modules` 写法，每一格的协作方、推理强度和顺序都没变；有一处行为变化，以前讨论一级里的协作方全员参加，现在是候选、由 Claude 挑，想保留全员参加就给它们标 `"required": true`；配置里还没有图像两格；文件里的 `levels` 留成了一行说明，旧版插件读到会报错，不会悄悄改成全由 Claude 做；原文件备份在哪里。建议运行 `/foreman:setup` 标必选、加图像两格。改配置时保留 `levels` 那行说明。
 - **Windows 上 Codex 的只读沙箱**：默认的 elevated 沙箱在 `read-only` 模式下可能连读文件的命令都启动不了。给讨论和审查设 `read-only` 之前先运行 `check`：起不来时按它的 `fix` 在 `~/.codex/config.toml` 的 `[windows]` 里改用 `sandbox = "unelevated"`。没设只读沙箱时（`readonly` 为 `audited`），只读靠规则约束和事后对比快照，发现写入就记为失败，见 `references/review.md` 的"只读"。
