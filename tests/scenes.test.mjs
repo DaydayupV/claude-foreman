@@ -337,6 +337,9 @@ test('项目偏好只启用定义过的用户场景，空块不阻止建计划�
   write(file, block([]));
   const out = output(await h.bridge(['config', '--cwd', h.cwd]));
   assert.deepEqual(out.scenes.inactive, ['code', 'research']); assert.deepEqual(out.scenes.problems, []);
+  // 空场景块：总配置 md 说这个项目不分场景，不再说要写 --scene
+  const md = (await h.bridge(['config', '--cwd', h.cwd, '--format', 'md'])).stdout;
+  assert.ok(md.includes(M.sceneSourceNone(file))); assert.equal(md.includes(M.sceneSource(file, 'project')), false);
   output(await h.bridge(planArgs(h))); output(await h.bridge(['resume', '--run', first.run_id, '--level', 'complex', '--reason', 'rework', '--brief', '-']));
   h.config(null); output(await h.bridge(['config', '--cwd', h.cwd]));
 });

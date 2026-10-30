@@ -93,7 +93,7 @@ test('项目配置忽略不允许的字段并保留允许的覆盖', async (t) =
   assert.equal(c.effective.agents.codex.bin, CODEX);
   assert.equal(c.effective.agents.codex.model, 'fake-codex');
   assert.equal(c.effective.agents.extra, undefined);
-  assert.ok(r.stderr.includes(M.projectIgnored(M.list(['unexpected', 'dispatch.auto', 'dispatch.runs_dir', 'dispatch.watch', 'agents']))));
+  assert.ok(r.stderr.includes(M.projectIgnored(M.list(['unexpected', 'dispatch.auto', 'dispatch.runs_dir', 'dispatch.watch', 'agents']), file)));
   assert.equal(read(file), original);
   assert.equal(fs.existsSync(`${file}.bak`), false);
 });

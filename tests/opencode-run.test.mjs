@@ -137,10 +137,10 @@ test('opencode 执行和续接需要用户授权，项目 agents 被忽略后仍
   const project = h.write('.claude/foreman.json', { agents: { oc: { run_access: 'shell' } }, modules: { default: { run: { complex: { agent: 'oc' } } } } });
   const invalid = await h.bridge(['config', '--cwd', h.cwd]);
   failed(invalid, M.projectConfigInvalid(project, M.configInvalid('modules.default.run.complex[0].agent', M.runAccessRequired('oc', 'opencode cli'))));
-  assert.ok(invalid.stderr.includes(M.projectIgnored('agents')));
+  assert.ok(invalid.stderr.includes(M.projectIgnored('agents', project)));
   h.write('.claude/foreman.json', { agents: { oc: { run_access: 'shell' } } });
   const config = await h.bridge(['config', '--cwd', h.cwd]), r = output(config);
-  assert.equal(config.stderr, `foreman: ${M.projectIgnored('agents')}\n`);
+  assert.equal(config.stderr, `foreman: ${M.projectIgnored('agents', project)}\n`);
   assert.equal(r.agents_status.oc.run_access, null);
   assert.equal(r.effective.modules.default.run.complex, 'claude code');
   failed(await h.bridge(taskArgs(h, 'run', ['--agent', 'oc'])), M.runAccessRequired('oc', 'opencode cli'));

@@ -45,8 +45,8 @@ test('项目不允许的顶层字段和 dispatch 字段忽略并提示，max_sea
   const file = h.write('.claude/foreman.json', { agents: {}, auto: false, intro: false,
     dispatch: { max_seats: 1, auto: false, watch: {}, intro: false, runs_dir: 'ignored', timeout_min: 20 } });
   const r = await h.bridge(configArgs(h)), out = output(r);
-  assert.ok(r.stderr.includes(M.projectIgnored(M.list(ignored))));
-  assert.deepEqual(out.summary.warnings.find((w) => w.kind === 'project_ignored_keys'), { kind: 'project_ignored_keys', file, keys: ignored, message: M.projectIgnored(M.list(ignored)) });
+  assert.ok(r.stderr.includes(M.projectIgnored(M.list(ignored), file)));
+  assert.deepEqual(out.summary.warnings.find((w) => w.kind === 'project_ignored_keys'), { kind: 'project_ignored_keys', file, keys: ignored, message: M.projectIgnored(M.list(ignored), file) });
   assert.equal(out.effective.dispatch.timeout_min, 20); assert.equal(out.effective.dispatch.auto, true);
   assert.equal(Object.hasOwn(out.effective.dispatch, 'max_seats'), false);
   assert.deepEqual(out.project_config.cells, ['dispatch.timeout_min']);
@@ -130,17 +130,18 @@ test('席位数和补漏报错标出项目来源，包括场景继承 default；
   for (const scene of ['default', 'code']) {
     const args = ['plan', '--cwd', h.cwd, '--module', 'review', '--cell', 'complex', '--group', 'origins', '--target', 'claims', '--file', h.write('claims.txt', '主张'),
       '--scene', scene, '--scene-why', '规则', '--seat', 'codex'];
-    const key = `modules.${scene}.review`, suffix = M.fromProjectConfig(file);
+    // 报错里写出项目配置实际写的键：场景格子的值来自项目的 default 时写 default 的键
+    const key = `modules.${scene}.review`, from = (at) => M.fromProjectConfig(file, at);
     write(file, { modules: { default: { review: { seats: { complex: 1 }, gap: { complex: false } } } } });
-    failed(await h.bridge([...args, '--seat', 'second']), M.planSeatCount(`${key}.seats.complex`, 1, 1, 2) + suffix);
-    failed(await h.bridge([...args, '--seat', 'second=gap']), M.planGapOff(`${key}.gap.complex`) + suffix);
+    failed(await h.bridge([...args, '--seat', 'second']), M.planSeatCount(`${key}.seats.complex`, 1, 1, 2) + from('modules.default.review.seats.complex'));
+    failed(await h.bridge([...args, '--seat', 'second=gap']), M.planGapOff(`${key}.gap.complex`) + from('modules.default.review.gap.complex'));
     const project = { modules: { default: { review: { seats: { complex: 1 } } } } };
     project.modules[scene] ??= { review: {} }; project.modules[scene].review.gap = { complex: true }; write(file, project);
-    failed(await h.bridge(args), M.planGapMissing(`${key}.gap.complex`, M.list(['second', 'third'])) + suffix);
+    failed(await h.bridge(args), M.planGapMissing(`${key}.gap.complex`, M.list(['second', 'third'])) + from(`${key}.gap.complex`));
   }
   c.modules.default.review.complex[0].required = c.modules.default.review.complex[1].required = true; h.config(c);
   write(file, { modules: { default: { review: { seats: { complex: 1 } } } } });
-  failed(await h.bridge(configArgs(h)), M.projectConfigInvalid(file, M.seatsBelowRequired('modules.default.review.seats.complex', 1, 2) + M.fromProjectConfig(file)));
+  failed(await h.bridge(configArgs(h)), M.projectConfigInvalid(file, M.seatsBelowRequired('modules.default.review.seats.complex', 1, 2) + M.fromProjectConfig(file, 'modules.default.review.seats.complex')));
 });
 
 test('废弃项目提醒提供现行迁移内容、丢弃字段，平铺转 default 且不带出 api key', async (t) => {

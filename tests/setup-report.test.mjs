@@ -146,7 +146,7 @@ test('项目迁移提醒进入 JSON 和 config/check md，主表标 default，�
     has(md, ['discuss', 'review', 'run', 'image'].map((module) => m.reportModuleNames[module] + m.reportDefaultScene));
     has(md, [m.reportSeatsTitle.split('**').slice(0, 2).join('**') + '**' + m.reportDefaultScene, m.sceneSource(prefs, 'project'), m.scenesInactive('research', prefs),
       `| ${m.reportModuleNames.review} complex | second · high`, m.reportSceneUse(`${m.reportModuleNames.review} N/C`, 'code'),
-      `- ℹ ${m.projectModulesFlat(file)}`, `- ℹ ${m.projectIgnored(m.list(['agents', 'dispatch.auto']))}`]);
+      `- ℹ ${m.projectModulesFlat(file)}`, `- ℹ ${m.projectIgnored(m.list(['agents', 'dispatch.auto']), file)}`]);
     assert.equal(md.includes('review.complex |'), false);
   }
   write(file, { modules: {} });

@@ -157,7 +157,7 @@ test('项目整格替换候选、必选、模型和强度，可以打开格子�
   assert.deepEqual(out.modules.default.review.normal, [{ agent: 'codex', effort: 'low', model: 'project-model' }]);
   assert.deepEqual(out.modules.default.review.complex, [{ agent: 'codex' }]);
   assert.deepEqual(out.modules.default.discuss.normal, [{ agent: 'api', effort: 'low', model: 'project-model' }, { agent: 'second', required: true }]);
-  assert.equal(r.stderr, `foreman: ${M.projectIgnored(M.list(['agents', 'dispatch.auto']))}\n`);
+  assert.equal(r.stderr, `foreman: ${M.projectIgnored(M.list(['agents', 'dispatch.auto']), path.join(h.cwd, '.claude', 'foreman.json'))}\n`);
   h.write('.claude/foreman.json', { modules: { default: { discuss: { normal: [{ agent: 'second' }] } } } });
   replaced = await h.bridge(['config', '--cwd', h.cwd]);
   assert.deepEqual(output(replaced).effective.modules.default.discuss.normal, [{ agent: 'second' }]);

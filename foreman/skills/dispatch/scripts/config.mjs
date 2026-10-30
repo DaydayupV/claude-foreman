@@ -167,7 +167,9 @@ const unknownAgentError = (key, name, cfg) => {
 
 const fromProjectConfig = (cfg, key) => {
   const cell = key.replace(/^modules\./, '').replace(/\[\d+\].*$/, '');
-  return cfg.project_config?.cells.some((at) => at === cell || at === cell.replace(/^[^.]+\./, 'default.')) ? M.fromProjectConfig(cfg.project_config.path) : '';
+  // 报出项目配置里实际写的那个键：场景格子的值可能来自项目配置的 default
+  const at = cfg.project_config?.cells.find((at) => at === cell) ?? cfg.project_config?.cells.find((at) => at === cell.replace(/^[^.]+\./, 'default.'));
+  return at ? M.fromProjectConfig(cfg.project_config.path, `modules.${at}`) : '';
 };
 
 function mergeConfig(base, extra) {
@@ -580,7 +582,7 @@ function projectConfig(cfg, project, file, adapters) {
     else ignored.push(key);
   }
   if (ignored.length) {
-    const message = M.projectIgnored(M.list(ignored));
+    const message = M.projectIgnored(M.list(ignored), file);
     notice(message); warnings.push({ kind: 'project_ignored_keys', file, keys: ignored, message });
   }
   const cells = Object.entries(allowed.modules || {}).flatMap(([scene, modules]) => Object.entries(modules || {}).flatMap(([module, values]) => Object.entries(values || {}).flatMap(([cell, value]) =>

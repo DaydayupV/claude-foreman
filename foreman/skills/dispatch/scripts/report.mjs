@@ -164,7 +164,7 @@ export const configReport = (cfg, summary, checks = null) => {
   for (const module of modules) blocks.push(M.reportModuleNames[module] + suffix, module === 'image' && !cfg.image_configured
     ? M.reportImageUnconfigured : cellTable(cfg, summary, module, checks));
   blocks.push(`${M.reportSeatsTitle}${suffix}${M.reportHeadingGap}${M.reportSeatsIntro}`, seatsTable(cfg, summary), M.reportSeatsNotes.map((text) => `- ${text}`).join('\n'));
-  if (cfg.scenes.source) blocks.push(M.sceneSource(cfg.scenes.file, cfg.scenes.source));
+  if (cfg.scenes.source) blocks.push(cfg.scenes.names.length ? M.sceneSource(cfg.scenes.file, cfg.scenes.source) : M.sceneSourceNone(cfg.scenes.file));
   if (cfg.scenes.inactive.length) blocks.push(M.scenesInactive(M.list(cfg.scenes.inactive), cfg.scenes.file));
   blocks.push(...sceneTables(cfg, summary), M.reportAgentsTitle);
   const problems = entries(summary).filter((item) => item.problem);
