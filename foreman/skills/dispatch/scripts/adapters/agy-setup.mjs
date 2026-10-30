@@ -405,7 +405,7 @@ export async function probeSandbox({ agent, cwd, addDirs = [], version, run, for
     // 项目目录不可写（只读挂载、ACL）时放不了探针文件：按沙箱没确认处理，不给 shell、不写缓存，讨论照常走只读文件。
     try { for (const file of [inside, outside, home]) fs.writeFileSync(file, canary, { flag: 'wx' }); }
     catch (e) { return { key, available: false, results: { canary: `error:${e.code || e.message}` }, at: new Date().toISOString(), tested: true }; }
-    const out = await run({ access: 'probe', runDir: dir, sandbox: true, probeCommands: commands,
+    const out = await run({ access: 'probe', runDir: dir, sandbox: true, probeCommands: commands, stopOnStartFailure: true,
       prompt: M.agyProbePrompt(commands), timeoutMs: timeLeft(deadline, 120000), deadline });
     timeLeft(deadline);
     const after = await networkControl(deadline);
@@ -420,6 +420,10 @@ export async function probeSandbox({ agent, cwd, addDirs = [], version, run, for
         results[data.name] = data.value;
       }
     }
+    // agy 自己的沙箱起不来时每条命令都跑不起来：记下原文、缓存不可用结论，免得每次派出都重测。
+    const startError = (out.tools || []).find((item) => item.tool === 'run_command' && item.error?.startsWith('Command failed to run:'))?.error;
+    if (!['write_project', 'write_outside', 'read_home', 'network', 'environment'].some((n) => n in results) && startError)
+      results.start_error = startError.slice('Command failed to run:'.length).trim().slice(0, 300);
     const networkError = results.network;
     results.network_control = { before, after };
     if (/^error:(EPERM|EACCES)$/.test(networkError)) results.network = 'sandbox_denied';
@@ -434,8 +438,9 @@ export async function probeSandbox({ agent, cwd, addDirs = [], version, run, for
     cache = { key, available: out.status === 'done' && unchanged && ['write_project', 'write_outside', 'read_home', 'network'].every((n) => results[n] === 'sandbox_denied'),
       results, at: new Date().toISOString() };
     // 探针这一轮没跑完（断流、钩子出错、模型没照做）时结论不可靠：这次按没有沙箱处理，但不写缓存，下次再测。
+    // 例外是 start_error：命令确实没能启动，结论已经定了，照样写缓存（不可用，24 小时后过期）。
     const complete = out.status === 'done' && ['write_project', 'write_outside', 'read_home', 'network', 'environment'].every((n) => n in results);
-    if (results.network !== 'unconfirmed' && (complete || !unchanged)) {
+    if (results.network !== 'unconfirmed' && (results.start_error || complete || !unchanged)) {
       // 缓存只是省下一次探针；锁忙不影响本次结论，但总时限仍要生效。
       try { await locked(() => {
         const store = readStore();

@@ -521,10 +521,16 @@ test('agy 工具错误对象和字符串识别守卫拒绝，命令输出解析�
       name: 'read_file', parameters: { Path: path.join(h.cwd, 'x') }, error } } } },
     { event: { event: 'step_update', step_update: { step_index: 51, state: 'DONE', step_type: 'tool', tool_name: 'run_command', tool_info: {
       name: 'run_command', parameters: { CommandLine: 'plain output' }, output: 'no exit prefix' } } } },
+    // 真实格式：守卫改写参数的提示在前，命令自己打印的行即使像"没能启动"也不算。
+    { event: { event: 'step_update', step_update: { step_index: 52, state: 'DONE', step_type: 'tool', tool_name: 'run_command', tool_info: {
+      name: 'run_command', parameters: { CommandLine: 'real format' }, output: 'A pre-tool hook changed the arguments of this tool call before it ran. Changed: CommandLine.\n\n'
+        + 'Command exited with code 3.\n\nCommand output:\nCommand failed to run: copied from a log\r\n' } } } },
   ] });
   const result = output(await run(h)), timeline = h.events(result.run_id);
   assert.equal(timeline.find((e) => e.type === 'item.completed' && e.item?.command === 'synthetic failure').item.exit_code, 7);
   assert.equal(timeline.find((e) => e.item?.command === 'plain output').item.exit_code, 0);
+  const real = timeline.find((e) => e.type === 'item.completed' && e.item?.command === 'real format').item;
+  assert.equal(real.exit_code, 3); assert.match(real.aggregated_output, /Command output:\nCommand failed to run: copied from a log/);
   assert.equal(result.questions.filter((q) => q.source === 'permission_denied').length, 2);
   const errors = timeline.filter((e) => e.type === 'item.completed' && e.item?.exit_code === 1);
   assert.equal(errors.length, 2); assert.ok(errors.every((e) => e.item.aggregated_output.startsWith('tool call denied by pre-tool hook: foreman guard:')));
@@ -607,6 +613,67 @@ test('agy 沙箱探针失败不给 shell、附文件清单，缓存按版本失�
   assert.equal(fs.readdirSync(stateDir(h)).some((f) => f.startsWith('agy-probe-')), false);
   const layout = moduleCall(h, 'adapters/agy-setup.mjs', `console.log(JSON.stringify(await x.probeSandbox({agent:{},cwd:${JSON.stringify(h.home)},version:'1.4.9',run:()=>{throw new Error('probe must not start')}})));`);
   assert.equal(layout.available, false); assert.equal(layout.results.layout, 'unavailable');
+});
+
+test('agy 沙箱启动失败缓存原文且再次派出不重测，DONE 命令退出码为 1，中英 check 显示故障', async (t) => {
+  const h = sandbox(t); configure(h); await install(h);
+  const error = 'exebox: creating sandbox: CreateProcessSecurityEnvironment: The system cannot find the path specified..';
+  h.scenario({ version: '1.4.10', run_start_error: error, steps: [
+    { tool: { name: 'run_command', args: { CommandLine: 'synthetic start failure' } }, files: { 'not-started.txt': 'changed' } },
+  ] });
+  const first = output(await run(h)); assert.equal(first.sandbox, 'files-only');
+  assert.ok(first.notes.includes(M.agySandboxStartResult(error))); assert.equal(first.notes.some((n) => n.startsWith(M.agySandboxResult({}).split('{')[0])), false);
+  const completed = h.events(first.run_id).find((e) => e.type === 'item.completed' && e.item?.tool === 'run_command').item;
+  assert.equal(completed.exit_code, 1); assert.equal(completed.aggregated_output, `Command failed to run: ${error}`);
+  const raw = lines(path.join(first.run_dir, 'agy.jsonl')).find((e) => e.step_update?.tool_name === 'run_command' && e.step_update.state === 'DONE').step_update;
+  assert.equal(raw.tool_info.output, `A pre-tool hook changed the arguments of this tool call before it ran. Changed: CommandLine.\n\nCommand failed to run: ${error}\n\nNo output from the command.`);
+  assert.equal(fs.existsSync(path.join(h.cwd, 'not-started.txt')), false);
+  const entries = Object.values(JSON.parse(read(path.join(stateDir(h), 'agy-sandbox.json'))).entries);
+  assert.equal(entries.length, 1); assert.equal(entries[0].available, false); assert.equal(entries[0].results.start_error, error);
+  const probes = h.calls().filter((c) => c.operation === 'probe').length; assert.equal(probes, 1);
+  assert.equal(output(await run(h)).sandbox, 'files-only');
+  for (const locale of ['zh', 'en']) {
+    const text = MESSAGES[locale], checked = await h.bridge(['check', '--agent', 'agy', '--format', 'md'], { env: { FOREMAN_LANG: locale } });
+    assert.equal(checked.code, 0, checked.stderr);
+    assert.ok(checked.stdout.includes(`⚠ ${text.reportIssue(text.reportAgySandbox('agy'), text.fixAgySandboxStart(error))}`), checked.stdout);
+    assert.ok(checked.stdout.includes(text.reportAgySandboxBroken), checked.stdout);
+  }
+  assert.equal(h.calls().filter((c) => c.operation === 'probe').length, probes);
+  assert.ok(h.calls().filter((c) => c.operation === 'run').every((c) => !c.args.includes('--sandbox')));
+});
+
+test('agy 探针首条启动失败即结束，短时限内缓存结论且不发后续命令', async (t) => {
+  const h = sandbox(t); configure(h); await install(h);
+  const error = 'exebox: creating sandbox: synthetic start failure';
+  h.scenario({ run_start_error: error, run_start_error_delay_ms: 60000 });
+  const result = output(await run(h, ['--timeout', '0.5'], { timeout: 60000 }));
+  assert.equal(result.status, 'done'); assert.equal(result.sandbox, 'files-only');
+  assert.equal(h.calls().filter((c) => c.operation === 'run_start_error').length, 1);
+  assert.equal(modelCalls(h).filter((c) => c.operation === 'probe').length, 1);
+  assert.equal(modelCalls(h).filter((c) => c.operation === 'run').length, 1);
+  const entries = Object.values(JSON.parse(read(path.join(stateDir(h), 'agy-sandbox.json'))).entries);
+  assert.equal(entries.length, 1); assert.equal(entries[0].available, false);
+  assert.equal(entries[0].results.start_error, error);
+});
+
+test('agy 部分探针有结果不记 start_error，全部启动失败只记首条并截到 300 字符', (t) => {
+  const h = sandbox(t); configure(h); fs.mkdirSync(stateDir(h), { recursive: true });
+  const error = `  exebox: ${'x'.repeat(320)}  `, names = ['write_project', 'write_outside', 'read_home', 'network', 'environment'];
+  const results = moduleCall(h, 'adapters/agy-setup.mjs', `const results=[];
+for(const received of ${JSON.stringify([null, ...names])}) results.push(await x.probeSandbox({cwd:${JSON.stringify(h.cwd)},version:'start-'+received,
+run:async({probeCommands})=>({status:'done',tools:probeCommands.map((command,i)=>{
+const code=Buffer.from(/Buffer\\.from\\('([^']+)'/.exec(command)[1],'base64').toString();
+const prefix=/FOREMAN_AGY_PROBE:[^"']+:/.exec(code)[0],name=/name:["']([^"']+)["']/.exec(code)[1];
+return name===received?{tool:'run_command',output:prefix+JSON.stringify({name,value:name==='environment'?false:'sandbox_denied'})}
+  :{tool:'run_command',error:'Command failed to run: '+(i?'later error':${JSON.stringify(error)}),output:''};})})}));
+console.log(JSON.stringify(results));`);
+  assert.equal(results[0].available, false); assert.equal(results[0].results.start_error, error.trim().slice(0, 300));
+  for (const [i, name] of names.entries()) {
+    assert.equal(results[i + 1].results[name], name === 'environment' ? false : 'sandbox_denied');
+    assert.equal(Object.hasOwn(results[i + 1].results, 'start_error'), false); assert.equal(results[i + 1].available, false);
+  }
+  const entries = JSON.parse(read(path.join(stateDir(h), 'agy-sandbox.json'))).entries;
+  assert.deepEqual(Object.keys(entries), [results[0].key]);
 });
 
 test('agy 网络探针对照区分权限拒绝、普通断网和超时，未确认不写缓存', (t) => {

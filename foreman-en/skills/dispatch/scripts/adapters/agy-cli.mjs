@@ -26,12 +26,15 @@ function normalizeEvent(ev) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
   return { event: ev.event, ...body, conversation_id: ev.conversation_id ?? body.conversation_id };
 }
-function toolInfo(ev) {
+function toolInfo(ev, tool) {
   const raw = ev.tool_info?.error ?? ev.error;
-  const error = (typeof raw === 'string' ? raw : raw?.message) || (ev.state === 'ERROR' ? 'tool failed' : null);
   const output = String(ev.tool_info?.output ?? '');
+  // run_command 的输出先是状态行（前面常有守卫改写参数的提示），"Command output:" 之后才是命令自己打印的内容：只在状态行里找。
+  const status = tool === 'run_command' ? output.split(/\r?\nCommand output:/)[0] : '';
+  // 命令没能启动（比如 agy 自己的沙箱建不起来）时 agy 仍报 DONE，只在状态行里写 Command failed to run。
+  const error = (typeof raw === 'string' ? raw : raw?.message) || (ev.state === 'ERROR' ? 'tool failed' : /^Command failed to run:.*$/m.exec(status)?.[0].trim() || null);
   return { args: ev.tool_info?.parameters || {}, output, error,
-    exit_code: error ? 1 : Number(/^Command exited with code (-?\d+)\./.exec(output)?.[1] ?? 0) };
+    exit_code: error ? 1 : Number(/^Command exited with code (-?\d+)\./m.exec(status)?.[1] ?? 0) };
 }
 function agyArgs({ model, session, sandbox, runDir, addDirs = [] }) {
   return ['-p=', '--input-format', 'stream-json', '--output-format', 'stream-json', '--model', model,
@@ -52,7 +55,7 @@ async function runAgy(options) {
   return out;
 }
 async function runOnce({ agent, model = agent.model, cwd, addDirs = [], access = 'read', runDir, prompt, timeoutMs = 120000,
-  stallMin = 0, session, sandbox = false, probeCommands, onEvent, deadline = Date.now() + timeoutMs }) {
+  stallMin = 0, session, sandbox = false, probeCommands, stopOnStartFailure = false, onEvent, deadline = Date.now() + timeoutMs }) {
   const out = { status: null, code: null, errors: [], notes: [], text: '', stderrTail: '', steps: 0, tools: [], result: null };
   const policy = policyFor({ cwd, addDirs, access, runDir, sandbox, probeCommands });
   let prepared;
@@ -92,7 +95,11 @@ async function runOnce({ agent, model = agent.model, cwd, addDirs = [], access =
           else if (!done.has(ev.step_index)) {
             if (!running.has(ev.step_index)) tools++;
             const start = running.get(ev.step_index);
-            out.tools.push({ tool: ev.tool_name || start?.tool_name, ...toolInfo(ev), args: { ...start?.tool_info?.parameters, ...ev.tool_info?.parameters } });
+            const tool = ev.tool_name || start?.tool_name;
+            const item = { tool, ...toolInfo(ev, tool), args: { ...start?.tool_info?.parameters, ...ev.tool_info?.parameters } };
+            out.tools.push(item);
+            // 探针遇到第一条没能启动的命令就结束：结论已经定了，模型再换写法重试只会拖到超时。
+            if (stopOnStartFailure && item.tool === 'run_command' && item.error?.startsWith('Command failed to run:')) stop('start_failed');
             running.delete(ev.step_index);
             done.add(ev.step_index);
           }
@@ -211,7 +218,7 @@ async function agySession(run, schema, promptFor) {
       return;
     }
     if (ev.step_type !== 'tool' || completed.has(key)) return;
-    const info = toolInfo(ev), tool = ev.tool_name || currentTools.get(key)?.tool;
+    const tool = ev.tool_name || currentTools.get(key)?.tool, info = toolInfo(ev, tool);
     if (!currentTools.has(key)) currentTools.set(key, { id: `agy-${++items}`, tool, args: info.args });
     const item = currentTools.get(key), args = { ...item.args, ...info.args };
     if (ev.state === 'ACTIVE') {
@@ -256,7 +263,7 @@ async function agySession(run, schema, promptFor) {
     sandbox = probe.available;
     meta.sandbox = sandbox ? 'agy-sandbox' : 'files-only';
     writeMeta();
-    if (probe.tested) notes.push(M.agySandboxResult(probe.results));
+    if (probe.tested) notes.push(probe.results.start_error ? M.agySandboxStartResult(probe.results.start_error) : M.agySandboxResult(probe.results));
     nextPrompt = promptFor(sandbox);
     if (!sandbox) {
       notes.push(M.agyNoSandbox);

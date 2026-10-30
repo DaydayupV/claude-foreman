@@ -197,6 +197,14 @@ console.log(environmentReport(checks,${JSON.stringify(env)},{}));`, { env: { FOR
         `Gemini Models ${windows[0]} 96%`, `Gemini Models ${windows[1]} 8%`, 'Gemini Models Monthly Limit 50%', 'Gemini Models daily 20%',
         `Claude and GPT models ${windows[0]} 63%`, `Claude and GPT models ${windows[1]} 77%`]))} |`]);
     assert.equal(md.stdout.includes('unused fix'), false);
+    const error = 'exebox: creating sandbox: CreateProcessSecurityEnvironment: The system cannot find the path specified..';
+    checks.agents.first.sandbox.results = { start_error: error };
+    const broken = await isolated(h, `import {environmentReport} from ${JSON.stringify(urlOf('report.mjs'))};console.log(environmentReport(${JSON.stringify(checks)},${JSON.stringify(env)},{}));`, { env: { FOREMAN_LANG: locale } });
+    assert.equal(broken.code, 0, broken.stderr);
+    has(broken.stdout, [`⚠ ${text.reportIssue(text.reportAgySandbox('first'), text.fixAgySandboxStart(error))}`,
+      `⚠ ${text.reportIssue(text.reportAgySandbox('second'), 'second fix')}`, ` · ${text.reportAgySandboxBroken} · `]);
+    assert.equal(broken.stdout.includes(text.fixAgySandbox), false);
+    delete checks.agents.first.sandbox.results;
   }
   checks.agents.first.sandbox.available = true;
   const md = await isolated(h, `import {environmentReport} from ${JSON.stringify(urlOf('report.mjs'))};console.log(environmentReport(${JSON.stringify(checks)},${JSON.stringify(env)},{}));`);

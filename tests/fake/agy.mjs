@@ -85,12 +85,15 @@ function probeOutput(command) {
 }
 async function toolCall(name, toolArgs = {}, options = {}) {
   const idx = ++step;
+  if (name === 'run_command' && s.run_start_error && s.run_start_error_delay_ms)
+    fs.appendFileSync(s.capture, JSON.stringify({ tool: 'agy', operation: 'run_start_error', command: toolArgs.CommandLine }) + '\n');
   const shown = name === 'run_command' ? { ...toolArgs, CommandLine: toolArgs.CommandLine.slice(0, 512) } : toolArgs;
   emit('step_update', { conversation_id: sid, step_index: idx, step_type: 'tool', state: 'ACTIVE', tool_name: name, tool_info: { name, parameters: shown } });
   await replay(options.before || []);
   const decision = callHooks(name, toolArgs);
   let output = options.output || '', error = null, contents;
-  if (decision.decision === 'deny') error = `tool call denied by pre-tool hook: ${decision.reason}`;
+  if (name === 'run_command' && s.run_start_error) output = `A pre-tool hook changed the arguments of this tool call before it ran. Changed: CommandLine.\n\nCommand failed to run: ${s.run_start_error}\n\nNo output from the command.`;
+  else if (decision.decision === 'deny') error = `tool call denied by pre-tool hook: ${decision.reason}`;
   else {
     try {
       if (name === 'read_file' || name === 'view_file') {
@@ -103,10 +106,11 @@ async function toolCall(name, toolArgs = {}, options = {}) {
       for (const [file, content] of Object.entries(options.files || {})) fs.writeFileSync(path.resolve(file), content);
     } catch (e) { error = e.message; }
   }
-  if (!error && name === 'run_command') output = `Command exited with code ${options.exit_code ?? 0}.\n\nCommand output:\n${output}\r\n`;
+  if (!error && name === 'run_command' && !s.run_start_error) output = `Command exited with code ${options.exit_code ?? 0}.\n\nCommand output:\n${output}\r\n`;
   const parameters = name === 'run_command' ? { CommandLine: shown.CommandLine } : shown;
   emit('step_update', { conversation_id: sid, step_index: idx, step_type: 'tool', state: error ? 'ERROR' : 'DONE', tool_name: name,
     tool_info: { name, parameters, ...(error ? { error: { type: 'TOOL_ERROR', message: error } } : { output }) } });
+  if (name === 'run_command' && s.run_start_error) await replay([{ delay_ms: s.run_start_error_delay_ms }]);
   return { contents, error };
 }
 const pending = new Map();
