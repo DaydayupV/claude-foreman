@@ -329,7 +329,7 @@ When one project should use a different set of candidates, more or fewer provide
 - It merges the way the user config overrides the defaults: a cell it writes is replaced as a whole (to add a few models to the user config's candidates, list the original ones too), cells it doesn't write keep the user config's value, and `seats` and `gap` override per level. It can add candidates, change required agents, raise seat counts, turn the gap seat on, change efforts and lengthen time limits.
 - With scenes, the layers stack: first the user config's result for that scene (the user's `default` plus the user's scene block), then the project config's result for that scene (the project's `default` plus the project's scene block) overrides it. So the project's `default` also overrides the user config's scene blocks.
 - The merged config is checked as a whole, and an error names the project config file; errors about seat counts or the gap seat also say when the value comes from the project config. A project config still written flat is read as `default`, with a notice suggesting the new format (and a `project_modules_flat` entry in `summary.warnings`).
-- Only the `.claude/foreman.json` in the project directory itself counts: the one in whatever directory `--cwd` names.
+- Only the `.claude/foreman.json` in the project directory itself counts: the one in whatever directory `--cwd` names. When it doesn't exist but the old name `.claude/codex-bridge.json` does, the old file is read as usual, with a notice to rename it.
 - `project_config` in the `config --cwd` output is `{ "path": "<file path>", "cells": [<the cells, by scene, and time limits it overrides>] }`, or `null` when there's no project config; `check`'s overview lists it too.
 
 ## Other rules
