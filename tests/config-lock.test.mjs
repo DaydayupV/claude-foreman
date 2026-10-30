@@ -217,11 +217,12 @@ fs.readFileSync = (file, ...args) => {
   return value;
 };
 try {
-  const lock = acquireLockSync(base + '.gen', { waitMs: mode === 'wait' ? 3000 : 150, legacy: { base, format: 'pid' }, busy: (owner) => { blocked = owner; throw new Error(M.configLockTimeout(base)); } });
+  const lock = acquireLockSync(base + '.gen', { waitMs: mode === 'wait' ? 3000 : 150, legacy: { base, format: 'pid' }, busy: (owner) => { blocked = owner; throw new Error(M.configLockTimeout(owner.file, owner.pid)); } });
   lock.release(); console.log(JSON.stringify({ acquired: true }));
 } catch (error) { console.log(JSON.stringify({ message: error.message, ...blocked, elapsed: Date.now() - started })); }`);
   const timed = output(await h.start(script, ['timeout']).done);
-  assert.equal(timed.message, MESSAGES.zh.configLockTimeout(base));
+  assert.equal(timed.message, MESSAGES.zh.configLockTimeout(base, process.pid));
+  assert.ok(timed.message.includes(`pid ${process.pid}`) && timed.message.includes('删掉这个文件'), timed.message);
   assert.equal(timed.file, base); assert.equal(timed.pid, process.pid);
   assert.ok(timed.elapsed >= 150, JSON.stringify(timed));
   assert.equal(read(base), String(process.pid));

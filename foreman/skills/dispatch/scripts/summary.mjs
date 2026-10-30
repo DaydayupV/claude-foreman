@@ -7,7 +7,7 @@ import { tierOf } from './tiers.mjs';
 
 // checks 是 check 输出里的 agents；没有时（config）各项的 ok 为 null。keepBackup 是不算旧备份的那个文件。
 export function buildSummary(cfg, adapters, checks = null, keepBackup = null) {
-  const agents = {}, warnings = [...cfg.project_warnings], models = new Map(), raw = readRawConfig();
+  const agents = {}, warnings = [...(cfg.config_warnings || []), ...cfg.project_warnings], models = new Map(), raw = readRawConfig();
   const userModules = raw?.modules?.default ? raw.modules : { default: raw?.modules || raw?.levels || {} };
   for (const [name, agent] of Object.entries(cfg.agents)) {
     agents[name] = { type: agent.type, model: agent.model ?? adapters[agent.type].status(agent).model ?? null, used_at: [],

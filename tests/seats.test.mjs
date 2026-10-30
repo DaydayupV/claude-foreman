@@ -165,7 +165,9 @@ test('改写锁：空的残留锁放久了会被清掉，活进程的锁等满 1
   const before = read(h.userConfig), started = Date.now(), waited = await h.bridge(['config']);
   assert.ok(Date.now() - started >= 10000);
   assert.equal(output(waited).effective.modules.default.discuss.seats.complex, DEFAULT_SEATS.discuss.complex);
-  assert.ok(waited.stderr.includes(M.configSeatsWriteFailed(h.userConfig, M.configLockTimeout(lock))));
+  const message = M.configSeatsWriteFailed(h.userConfig, M.configLockTimeout(lock, process.pid));
+  assert.ok(waited.stderr.includes(message), waited.stderr);
+  assert.deepEqual(output(waited).summary.warnings.filter((w) => w.kind === 'config_rewrite_failed'), [{ kind: 'config_rewrite_failed', file: h.userConfig, message }]);
   assert.equal(read(h.userConfig), before); assert.equal(fs.readFileSync(lock, 'utf8'), String(process.pid));
   fs.rmSync(lock);
 });

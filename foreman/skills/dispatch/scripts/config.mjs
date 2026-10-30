@@ -119,6 +119,8 @@ const LEGACY_DEFAULT_CONFIG = {
 };
 const OLD_TYPES = { codex: 'codex cli', opencode: 'opencode cli', 'openai-compatible': 'api' };
 const migratedConfigs = new Map();
+// 改写失败的提醒除了打到 stderr，也放进 config / check 的 summary.warnings，免得只在终端里一闪而过
+const rewriteFailures = new Map();
 let memoryAliases = {};
 const aliasesFile = path.join(path.dirname(USER_CONFIG), 'agent-aliases.json');
 const readAgentAliases = () => ({ ...(readJson(aliasesFile) || {}), ...memoryAliases });
@@ -416,7 +418,7 @@ function migrateStructure(config, file, base, project, adapters) {
     }
     if (converted.gap) result.modules.default.review = { ...result.modules.default.review, gap: { ...DEFAULT_GAP.review, complex: true } };
     mergeScenes(DEFAULT_CONFIG, result, adapters, (msg) => { invalid = true; throw new Error(msg); });
-    held = acquireLockSync(`${lock}.gen`, { waitMs: 10000, legacy: { base: lock, format: 'pid' }, busy: ({ file }) => { throw new Error(M.configLockTimeout(file)); } });
+    held = acquireLockSync(`${lock}.gen`, { waitMs: 10000, legacy: { base: lock, format: 'pid' }, busy: ({ file, pid }) => { throw new Error(M.configLockTimeout(file, pid)); } });
     const current = readJson(file);
     if (!isDeepStrictEqual(current, config)) {
       held.release();
@@ -452,8 +454,9 @@ function migrateStructure(config, file, base, project, adapters) {
     if (converted.gap) notice(M.configGapWritten(file, bak));
     if (converted.scenes) notice(M.configScenesWritten(file, bak));
   } catch (e) {
-    if (converted.old || converted.modules || converted.watch) notice(M.configMigrateFailed(file, e.message));
-    else if (!invalid) notice(converted.seats.length ? M.configSeatsWriteFailed(file, e.message) : M.configMigrateFailed(file, e.message));
+    const message = converted.old || converted.modules || converted.watch ? M.configMigrateFailed(file, e.message)
+      : invalid ? null : converted.seats.length ? M.configSeatsWriteFailed(file, e.message) : M.configMigrateFailed(file, e.message);
+    if (message) { notice(message); rewriteFailures.set(file, { kind: 'config_rewrite_failed', file, message }); }
   } finally {
     fs.rmSync(tmp, { force: true });
     fs.rmSync(aliasTmp, { force: true });
@@ -733,7 +736,7 @@ function loadConfig(cwd, adapters) {
   }
   const unused = scenes.names.filter((scene) => !configured.includes(scene));
   if (unused.length) notice(M.scenesNoBlock(M.list(unused)));
-  return { ...cfg, sources, image_configured: imageConfigured, project_config, project_warnings, scenes };
+  return { ...cfg, sources, image_configured: imageConfigured, project_config, project_warnings, config_warnings: [...rewriteFailures.values()], scenes };
 }
 
 

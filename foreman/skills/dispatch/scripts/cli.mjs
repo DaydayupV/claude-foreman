@@ -281,7 +281,7 @@ function cmdLayout(o) {
   const lock = `${user}.structure.lock`;
   try {
     if (!o.check && items.some((item) => !item.one_line)) {
-      held = acquireLockSync(`${lock}.gen`, { waitMs: 10000, legacy: { base: lock, format: 'pid' }, busy: ({ file }) => { throw new Error(M.configLockTimeout(file)); } });
+      held = acquireLockSync(`${lock}.gen`, { waitMs: 10000, legacy: { base: lock, format: 'pid' }, busy: ({ file, pid }) => { throw new Error(M.configLockTimeout(file, pid)); } });
       items = readFiles();
       for (const item of items) {
         if (item.one_line) continue;
@@ -322,7 +322,7 @@ function cmdLayout(o) {
 
 function cmdConfig(o) {
   const cfg = load(o.cwd ? resolveDir(o.cwd) : null);
-  const { sources, image_configured, project_config, project_warnings, scenes, scene_modules, scene_diff, ...effective } = cfg;
+  const { sources, image_configured, project_config, project_warnings, config_warnings, scenes, scene_modules, scene_diff, ...effective } = cfg;
   // opencode、pi 没写 run_access 时派不了执行任务：列出的能力和派发时的检查保持一致，免得按 modes 挑人挑到派不出去的
   const capabilitiesOf = (agent) => {
     const c = adapters[agent.type].capabilities;

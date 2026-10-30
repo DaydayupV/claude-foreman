@@ -47,21 +47,29 @@ test('平铺写法的旧配置缺 gap 时只备份补写一次，改写失败在
     const file = h.write('gap-migrate.mjs', `import fs from 'node:fs';
 import { loadConfig } from ${JSON.stringify(url('config.mjs'))};
 import { adapters } from ${JSON.stringify(url('adapters/index.mjs'))};
+import { buildSummary } from ${JSON.stringify(url('summary.mjs'))};
+import { configReport } from ${JSON.stringify(url('report.mjs'))};
 const rename = fs.renameSync;
 if (${denied}) fs.renameSync = (from, to) => {
   if (to === ${JSON.stringify(h.userConfig)}) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
   return rename(from, to);
 };
-console.log(JSON.stringify([loadConfig(null, adapters), loadConfig(null, adapters)]));`);
-    const r = await h.start(file).done, [first, second] = output(r);
+const cfg = loadConfig(null, adapters);
+console.log(JSON.stringify([cfg, loadConfig(null, adapters), configReport(cfg, buildSummary(cfg, adapters))]));`);
+    const r = await h.start(file).done, [first, second, report] = output(r);
     assert.deepEqual(first, second);
     assert.deepEqual(first.modules.review.gap, { simple: false, normal: false, complex: true });
     assert.equal(read(`${h.userConfig}.bak`), original);
     if (denied) {
       assert.equal(read(h.userConfig), original);
-      assert.equal(r.stderr, `foreman: ${M.configMigrateFailed(h.userConfig, 'EACCES')}\n`);
+      const message = M.configMigrateFailed(h.userConfig, 'EACCES');
+      assert.equal(r.stderr, `foreman: ${message}\n`);
+      // 改写失败也要出现在 summary.warnings 和 Markdown 的提醒里，不能只打到 stderr
+      assert.deepEqual(first.config_warnings, [{ kind: 'config_rewrite_failed', file: h.userConfig, message }]);
+      assert.ok(report.includes(`- ⚠ ${M.reportSentence(message)}`), report);
     } else {
       assert.ok(r.stderr.includes(M.configGapWritten(h.userConfig, `${h.userConfig}.bak`)), r.stderr);
+      assert.deepEqual(first.config_warnings, []);
       assert.ok(r.stderr.includes(M.configScenesWritten(h.userConfig, `${h.userConfig}.bak`)), r.stderr);
       assert.deepEqual(JSON.parse(read(h.userConfig)).modules.default.review.gap, first.modules.review.gap);
       assert.equal((await h.bridge(['config'])).stderr, '');

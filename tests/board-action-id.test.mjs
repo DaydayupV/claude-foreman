@@ -101,3 +101,13 @@ test('增加 aid 不改变 commandSpans 对并行命令区间的计算', () => {
   assert.deepEqual(spans(events), [[run.id, [{ a: 0, b: 3 }]]]);
   assert.deepEqual(spans(events), spans(events.map(({ aid, ...e }) => e)));
 });
+
+test('重试事件在页面时间线里带上等待秒数，和 watch 的写法一样', () => {
+  const [event] = normalize({ type: 'api.retry', ts: 0, reason: 'network', wait_s: 4 }, run, {});
+  assert.equal(event.n, 4);
+  const context = vm.createContext({ Display, B: { clock: { mode: 'live' }, runs: new Map() } });
+  vm.runInContext(`${source}\nglobalThis.lineOf = lineOf;`, context);
+  assert.equal(context.lineOf(event).text, `⚠ ${Display.D.watchApiRetry('network', 4)}`);
+  assert.ok(context.lineOf(event).text.includes('4'));
+  assert.equal(context.lineOf({ ...event, n: 0 }).text, `⚠ ${Display.D.watchApiRetry('network', 0)}`);
+});
