@@ -22,11 +22,11 @@ for (const lang of ['zh', 'en']) {
     assert.equal(r.agents.oc.ok, false);
     assert.equal(r.agents.oc.error, error);
     assert.deepEqual(r.agents.oc.variants, [
-      { model: 'fake/model', variant: 'low', used_at: ['modules.run.complex[0]'], ok: true, error: null },
-      { model: 'fake/override', variant: 'medium', used_at: ['modules.review.normal[0]'], ok: false, error },
+      { model: 'fake/model', variant: 'low', used_at: ['modules.default.run.complex[0]'], ok: true, error: null },
+      { model: 'fake/override', variant: 'medium', used_at: ['modules.default.review.normal[0]'], ok: false, error },
     ]);
     assert.equal(r.agents.oc.fix, messages.fixOpencodeVariant('oc', lang === 'en'
-      ? 'medium (modules.review.normal[0])' : 'medium（modules.review.normal[0]）'));
+      ? 'medium (modules.default.review.normal[0])' : 'medium（modules.default.review.normal[0]）'));
     const calls = s.calls().filter((c) => c.operation === 'run');
     assert.deepEqual(calls.map((c) => c.args[c.args.indexOf('-m') + 1]), ['fake/model', 'fake/model#low', 'fake/override#medium']);
     assert.ok(calls.every((c) => c.stdin === 'Reply with the single word OK.'));
@@ -41,11 +41,11 @@ test('check opencode 按模型和档位去重并保留所有等级位置', async
     for (const level of ['simple', 'normal', 'complex']) {
       const entry = { agent: 'oc', effort: 'high' };
       c.modules.default[mode][level] = mode === 'discuss' ? [{ agent: 'codex' }, entry] : entry;
-      usedAt.push(`modules.${mode}.${level}${mode === 'discuss' ? '[1]' : '[0]'}`);
+      usedAt.push(`modules.default.${mode}.${level}${mode === 'discuss' ? '[1]' : '[0]'}`);
     }
   }
   c.modules.default.discuss.complex[1].model = 'fake/other';
-  const overrideAt = usedAt.splice(usedAt.indexOf('modules.discuss.complex[1]'), 1)[0];
+  const overrideAt = usedAt.splice(usedAt.indexOf('modules.default.discuss.complex[1]'), 1)[0];
   h.config(c);
   const r = output(await h.bridge(['check', '--agent', 'oc']));
   assert.equal(r.agents.oc.ok, true);

@@ -65,7 +65,7 @@ test('check 按 Codex 清单核对推理强度，不支持的档位判不通过�
   const h = sandbox(t), s = h.scenario({ codex_catalog: codexCatalog });
   const r = output(await h.bridge(['check'], { env: s.env }), 1);
   const codex = r.agents.codex, supported = M.list(['low', 'medium', 'high']);
-  const maxAt = ['modules.discuss.complex[0]', 'modules.run.complex[0]', 'modules.review.complex[0]'];
+  const maxAt = ['modules.default.discuss.complex[0]', 'modules.default.run.complex[0]', 'modules.default.review.complex[0]'];
   assert.equal(r.ok, false);
   assert.equal(codex.ok, false);
   assert.deepEqual(codex.catalog, { ok: true });
@@ -104,18 +104,18 @@ test('check opencode 清单里没有的档位不发请求，修正提示列出�
   const supported = ['low', 'high'];
   assert.equal(r.agents.oc.ok, false);
   assert.deepEqual(r.agents.oc.variants, [
-    { model: 'fake/model', variant: 'high', used_at: ['modules.review.simple[0]'], ok: true, error: null, supported },
-    { model: 'fake/model', variant: 'medium', used_at: ['modules.review.normal[0]'], ok: false, error: M.effortNotInCatalog('medium', M.list(supported)), supported },
-    { model: 'fake/model', variant: 'default', used_at: ['modules.review.complex[0]'], ok: true, error: null, supported },
+    { model: 'fake/model', variant: 'high', used_at: ['modules.default.review.simple[0]'], ok: true, error: null, supported },
+    { model: 'fake/model', variant: 'medium', used_at: ['modules.default.review.normal[0]'], ok: false, error: M.effortNotInCatalog('medium', M.list(supported)), supported },
+    { model: 'fake/model', variant: 'default', used_at: ['modules.default.review.complex[0]'], ok: true, error: null, supported },
   ]);
-  assert.equal(r.agents.oc.fix, M.fixEffortUnsupported('oc', M.effortAt('medium', 'modules.review.normal[0]', 'fake/model', M.list(supported))));
+  assert.equal(r.agents.oc.fix, M.fixEffortUnsupported('oc', M.effortAt('medium', 'modules.default.review.normal[0]', 'fake/model', M.list(supported))));
   assert.deepEqual(runCalls(s), ['fake/model', 'fake/model#high']);
   assert.ok(s.calls().filter((c) => c.operation === 'run').every((c) => c.args[c.args.indexOf('--title') + 1] === 'foreman check'));
   const before = runCalls(s).length; // 调用记录按沙箱累计
   const empty = h.scenario({ opencode_catalog: opencodeCatalog, last_message: 'OK', models: ['fake/model', 'right/thing'] });
   const r2 = output(await h.bridge(['check', '--agent', 'oc2'], { env: empty.env }));
   assert.equal(r2.agents.oc2.ok, true);
-  assert.deepEqual(r2.agents.oc2.variants, [{ model: 'right/thing', variant: 'default', used_at: ['modules.discuss.simple[0]'], ok: true, error: null, supported: [] }]);
+  assert.deepEqual(r2.agents.oc2.variants, [{ model: 'right/thing', variant: 'default', used_at: ['modules.default.discuss.simple[0]'], ok: true, error: null, supported: [] }]);
   assert.deepEqual(runCalls(empty).slice(before), ['right/thing']);
 });
 
@@ -131,8 +131,8 @@ test('check opencode 清单里有的档位请求失败时转告真实报错，�
   assert.equal(r.agents.oc.ok, false);
   assert.equal(r.agents.oc.error, error);
   assert.equal(r.agents.oc.fix, [
-    M.fixEffortUnsupported('oc', M.effortAt('medium', 'modules.review.normal[0]', 'fake/model', M.list(supported))),
-    M.fixOpencodeVariantFailed('oc', 'high（modules.review.simple[0]）', error),
+    M.fixEffortUnsupported('oc', M.effortAt('medium', 'modules.default.review.normal[0]', 'fake/model', M.list(supported))),
+    M.fixOpencodeVariantFailed('oc', 'high（modules.default.review.simple[0]）', error),
   ].join('；'));
 });
 

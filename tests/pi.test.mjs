@@ -235,10 +235,10 @@ test('check：版本、清单、最小请求；推理强度只按清单核对，
   const r = output(await h.bridge(['check', '--agent', 'pi'], { env: s.env }), 1), pi = r.agents.pi, list = M.list(supported);
   assert.equal(pi.ok, false); assert.equal(pi.model_listed, true); assert.equal(pi.reply, 'OK'); assert.equal(pi.version, '1.3.0');
   assert.deepEqual(pi.efforts, [
-    { model: 'fake/model', variant: 'medium', used_at: ['modules.discuss.simple[0]'], ok: false, error: M.piEffortClamped('medium', 'high', list), supported },
-    { model: 'fake/model', variant: 'high', used_at: ['modules.discuss.normal[0]'], ok: true, error: null, supported },
+    { model: 'fake/model', variant: 'medium', used_at: ['modules.default.discuss.simple[0]'], ok: false, error: M.piEffortClamped('medium', 'high', list), supported },
+    { model: 'fake/model', variant: 'high', used_at: ['modules.default.discuss.normal[0]'], ok: true, error: null, supported },
   ]);
-  assert.equal(pi.fix, M.fixEffortUnsupported('pi', M.effortAt('medium', 'modules.discuss.simple[0]', 'fake/model', list)));
+  assert.equal(pi.fix, M.fixEffortUnsupported('pi', M.effortAt('medium', 'modules.default.discuss.simple[0]', 'fake/model', list)));
   const call = runs(s);
   assert.equal(call.length, 1);
   assert.ok(call[0].args.includes('--no-session') && call[0].args.includes('--no-tools') && !call[0].args.includes('--thinking'));

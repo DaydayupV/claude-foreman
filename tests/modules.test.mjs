@@ -252,7 +252,7 @@ test('check 和 summary 覆盖仅用于图像的协作方、强度和 shell 提�
     modules: { default: { image: { generate: [{ agent: 'codex', effort: 'high', required: true }], draw: [{ agent: 'oc', effort: 'low' }] } } } });
   const out = output(await h.bridge(['check']));
   assert.equal(out.ok, true);
-  assert.deepEqual(out.agents.oc.variants[0].used_at, ['modules.image.draw[0]']);
+  assert.deepEqual(out.agents.oc.variants[0].used_at, ['modules.default.image.draw[0]']);
   assert.equal(out.summary.modules.image.generate[0].required, true);
   assert.ok(out.summary.warnings.some((w) => w.kind === 'shell_access' && w.agent === 'oc'));
   assert.ok(h.calls().some((call) => call.operation === 'sandbox'));

@@ -261,6 +261,10 @@ test('Markdown 默认表保持数字，差异场景单列表格含必选和推�
   h.scenario({ codex_catalog: { models: ['fake-codex', 'second'].map((slug) => ({ slug, supported_reasoning_levels: ['medium', 'high', 'max'].map((effort) => ({ effort })) })) } });
   const checked = output(await h.bridge(['check']));
   assert.ok(checked.agents.second.efforts.some((v) => v.used_at.includes('modules.code.review.complex[0]')));
+  // 位置带上 default；场景从 default 继承来的格子不重复列
+  const places = Object.values(checked.agents).flatMap((a) => a.efforts || []).flatMap((v) => v.used_at);
+  assert.ok(places.length && places.every((at) => /^modules\.(default|code)\./.test(at)));
+  assert.ok(places.filter((at) => at.startsWith('modules.code.')).every((at) => at.startsWith('modules.code.review.complex')));
   assert.ok(!checked.summary.warnings.some((w) => w.kind === 'unused_agent' && w.agent === 'second'));
   c.modules.code.review.complex[0].model = 'cell-model'; h.config(c);
   const models = output(await h.bridge(['models']));
