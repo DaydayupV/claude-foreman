@@ -555,8 +555,10 @@ async function cmdCheck(o) {
     agents: {},
   };
   const variants = new Map(), usedModes = new Map();
-  for (const [scene, modules] of Object.entries(cfg.scene_modules)) for (const { module, at: flatAt, item } of eachEntry(modules)) {
-    const at = scene === 'default' ? flatAt : flatAt.replace('modules.', `modules.${scene}.`);
+  for (const [scene, modules] of Object.entries(cfg.scene_modules)) for (const { module, cell, at: flatAt, item } of eachEntry(modules)) {
+    // 位置和总配置的 used_at 一样写成 modules.<场景>.<模块>.<格子>[序号]；场景里只列和 default 不同的格子，继承来的不重复列
+    if (scene !== 'default' && !Object.hasOwn(cfg.scene_diff[scene]?.[module] || {}, cell)) continue;
+    const at = flatAt.replace('modules.', `modules.${scene}.`);
     const mode = module === 'image' ? 'run' : module;
     usedModes.set(item.agent, new Set([...(usedModes.get(item.agent) || []), mode]));
     // agy 格子不写 effort 也要核对：多档族必须指定，单档族可自动选择。
