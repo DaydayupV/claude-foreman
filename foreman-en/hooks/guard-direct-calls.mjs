@@ -87,8 +87,8 @@ function callsAgentDirectly(command) {
     const tokens = tokensOf(segment);
     let i = 0;
     while (i < tokens.length && /^\w+=/.test(tokens[i])) i++; // 跳过 VAR=value 前缀
-    // 重定向可以紧贴在程序名后面（agy>out.txt -p hi）：先拆开，再认程序名
-    const glued = /^([^'"<>]+?)((?:\d*|&|\*)?(?:>>?|<).*)$/.exec(tokens[i] || '');
+    // 重定向可以紧贴在程序名后面（agy>out.txt -p hi、"agy">out.txt）：先拆开，再认程序名；引号里的 > 不算
+    const glued = /^((?:"[^"]*"|'[^']*'|[^'"<>])+?)((?:\d*|&|\*)?(?:>>?|<).*)$/.exec(tokens[i] || '');
     if (glued) tokens.splice(i, 1, glued[1], glued[2]);
     const first = base(tokens[i] || '');
     let rest;
