@@ -7,7 +7,8 @@ import path from 'node:path';
 import { agentMaxParallel, DEFAULT_AGENT_PARALLEL } from './adapters/parallel.mjs';
 import { AGY_EFFORTS, splitAgyModel } from './adapters/agy-models.mjs';
 import { formatConfigText } from './config-layout.mjs';
-import { HERE, M, notice, isObject, readJson, die, pidAlive, pidExists, retryBusy, replaceFile, closestMatches, pathKey } from './util.mjs';
+import { acquireLockSync } from './locks.mjs';
+import { HERE, M, notice, isObject, readJson, die, pidAlive, retryBusy, replaceFile, closestMatches, pathKey } from './util.mjs';
 
 const ENTRY = path.join(HERE, 'cli.mjs');
 const SCHEMA = path.join(HERE, '..', 'schemas', 'report.schema.json');
@@ -404,19 +405,8 @@ function migrateStructure(config, file, base, project, adapters) {
   for (const agent of Object.values(result.agents || {})) if (Object.hasOwn(OLD_TYPES, agent?.type)) agent.type = OLD_TYPES[agent.type];
   let renamed = { aliases: {} };
   const lock = `${file}.structure.lock`, tmp = `${file}.${process.pid}.tmp`, aliasTmp = `${aliasesFile}.${process.pid}.tmp`;
-  // 锁文件的每次新建、读取和删除都经过 retryBusy：Windows 上别的进程正在删同一个锁文件时，这些操作会短暂报 EPERM。
-  // 删除时把"还该删"的判断（持有者已退出、或者是自己的）交给 retryBusy，每次重试前重新确认，免得删掉等待期间别的进程刚拿到的锁。
-  const ownerOf = () => {
-    try { return Number(retryBusy(() => fs.readFileSync(lock, 'utf8'))); }
-    catch (e) { if (e.code === 'ENOENT') return null; throw e; }
-  };
-  const mine = () => ownerOf() === process.pid;
-  // 持有者用 pidExists 判断：没权限探测也算还活着。锁文件是空的或写坏了（建锁后、写进程号前崩溃）时，放了 2 秒以上就当残留。
-  const lockAge = () => { try { return Date.now() - fs.statSync(lock).mtimeMs; } catch { return 0; } };
-  const stale = () => { const pid = ownerOf(); return pid !== null && (Number.isInteger(pid) && pid > 0 ? !pidExists(pid) : lockAge() > 2000); };
   // 只补 seats/gap 时配置本身有错，就留给后面的校验报出真正的错误。
-  let locked = false, invalid = false;
-  const deadline = Date.now() + 10000;
+  let held, invalid = false;
   try {
     if (converted.old) { renamed = renameAgentsByModel(result, adapters); result = renamed.config; }
     for (const module of converted.seats) {
@@ -426,20 +416,11 @@ function migrateStructure(config, file, base, project, adapters) {
     }
     if (converted.gap) result.modules.default.review = { ...result.modules.default.review, gap: { ...DEFAULT_GAP.review, complex: true } };
     mergeScenes(DEFAULT_CONFIG, result, adapters, (msg) => { invalid = true; throw new Error(msg); });
-    for (;;) {
-      try { retryBusy(() => fs.writeFileSync(lock, String(process.pid), { flag: 'wx' })); locked = true; break; }
-      catch (e) {
-        if (e.code !== 'EEXIST') throw e;
-        if (ownerOf() === null) continue;
-        if (stale()) retryBusy(() => fs.rmSync(lock, { force: true }), stale);
-        else if (Date.now() > deadline) throw new Error(M.configLockTimeout(lock));
-        else Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
-      }
-    }
+    held = acquireLockSync(lock, { waitMs: 10000, busy: () => { throw new Error(M.configLockTimeout(lock)); } });
     const current = readJson(file);
     if (!isDeepStrictEqual(current, config)) {
-      retryBusy(() => fs.rmSync(lock, { force: true }), mine);
-      locked = false;
+      held.release();
+      held = null;
       return migrateStructure(current, file, base, false, adapters);
     }
     let bak = `${file}.bak`;
@@ -476,7 +457,7 @@ function migrateStructure(config, file, base, project, adapters) {
   } finally {
     fs.rmSync(tmp, { force: true });
     fs.rmSync(aliasTmp, { force: true });
-    if (locked) retryBusy(() => fs.rmSync(lock, { force: true }), mine);
+    held?.release();
   }
   memoryAliases = { ...memoryAliases, ...renamed.aliases };
   migratedConfigs.set(file, result);
