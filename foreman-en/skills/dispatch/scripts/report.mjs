@@ -150,7 +150,7 @@ const notes = (summary, checks) => {
       const names = summary.warnings.filter((w) => w.kind === warning.kind).map((w) => w.agent);
       rows.push(warning.kind === 'unused_agent' ? `- ℹ ${M.reportUnusedAgents(names.length, M.list(names))}` : `- ⚠ ${M.reportPlaintextKeys(M.list(names))}`);
     } else {
-      const icon = warning.kind === 'scenes_mismatch' ? '❌' : ['readonly_audited', 'shell_access', 'stale_alias', 'host_seat_infeasible'].includes(warning.kind) ? '⚠' : 'ℹ';
+      const icon = warning.kind === 'scenes_mismatch' ? '❌' : ['readonly_audited', 'shell_access', 'stale_alias', 'host_seat_infeasible', 'config_rewrite_failed'].includes(warning.kind) ? '⚠' : 'ℹ';
       rows.push(`- ${icon} ${M.reportSentence(warning.message)}`);
     }
   }

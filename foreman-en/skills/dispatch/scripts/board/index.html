@@ -1980,7 +1980,7 @@ function lineOf(ev) {
     case 'image': return { cls: 'act', text: ev.viewed ? `◉ ${Display.D.watchImageViewed(t)}` : `▣ ${Display.D.watchImage(t)}`, kind: 'image' };
     case 'req': { const r = B.runs.get(ev.run); return { cls: 'node', text: Display.D.watchApiRequest(t, r?.effort, ev.n) }; }
     case 'queued': return { cls: 'node', text: `⋯ ${Display.D.watchApiQueued}` };
-    case 'retry': return { cls: 'act bad', text: `⚠ ${Display.D.watchApiRetry(t)}` };
+    case 'retry': return { cls: 'act bad', text: `⚠ ${Display.D.watchApiRetry(t, ev.n)}` };
     case 'error': { const a = Display.errorAction(t); return { cls: 'act bad', text: `${a.mark} ${a.text}` }; }
     case 'tool': return { cls: 'act', text: `· ${t}` };
     case 'dispatch': return { cls: 'act link', text: `⇢ ${t}${targets(ev)}` };

@@ -101,7 +101,7 @@ export function normalize(raw, run, state) {
     else if (it.type === 'error') emit('error', { t: it.message });
   } else if (raw.type === 'api.request') emit('req', { t: raw.model, n: raw.attempt });
   else if (raw.type === 'api.queued') emit('queued');
-  else if (raw.type === 'api.retry') emit('retry', { t: raw.reason });
+  else if (raw.type === 'api.retry') emit('retry', { t: raw.reason, n: raw.wait_s });
   else if (raw.type === 'api.usage' || raw.type === 'step.usage' || raw.type === 'turn.completed' && raw.usage) {
     const usage = raw.usage || {}, input = usage.input_tokens || 0, output = usage.output_tokens || 0;
     const u = usageOf(usage);
