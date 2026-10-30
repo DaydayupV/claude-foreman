@@ -195,7 +195,7 @@ test('agy 的查询带上 shell 重定向照样放行，重定向不掩盖模型
   // 带引号的 '>' 是传给程序的普通参数，不能当成重定向把后面的模型参数吞掉；紧贴程序名的重定向也要先拆开再认程序
   for (const command of ['agy --version 2>&1 -p hi', 'agy -p hi 2>&1', 'agy > out.txt', 'agy models > m.txt -p hi',
     "agy models '>' -p hi", 'agy help ">" --prompt hi', 'agy --version "*>" -p hi', 'agy>out.txt -p hi', 'agy>out.txt',
-    'codex>log.txt exec hi', 'opencode>o.txt run hi', 'opencode run > o.txt hi'])
+    'codex>log.txt exec hi', 'opencode>o.txt run hi', 'opencode run > o.txt hi', '"agy">out.txt -p hi', "'agy'>out.txt -p hi"])
     assert.equal((await h.hook('guard-direct-calls.mjs', { tool_input: { command } })).code, 2, command);
 });
 
