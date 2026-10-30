@@ -41,6 +41,7 @@
 - 排查 agy 时：记录目录里 `agy.log` 开头常有一串 "You are not logged into Antigravity"，运行成功时也有，不代表没登录。登录有没有问题看结果的 `errors` 和 `check`。
 - `check` 报 agy 自己的沙箱起不来（原文类似 `exebox: creating sandbox: …`）：这是 agy 在本机建不起沙箱，不是网络或项目路径的问题，重测也一样。agy 照常参加讨论和审查，只是只读文件、不跑命令；agy 升级后会自动重测，这个结论也会在 24 小时后过期。
 - `check` 报 agy 的沙箱"没拦住"某些写入或读取（比如项目外写入、读主目录）：沙箱能起来，但隔离不够，所以按不可用处理，agy 只读文件、不跑命令。这和网络无关，重测结果也一样；要不要深究由用户决定，插件不改 agy 的设置。探针跑完记录目录就删了，要看 agy 当时做了什么，读 `~/.gemini/antigravity-cli/brain/<对话 ID>/.system_generated/logs/transcript_full.jsonl`。
+- agy 在模型端断流或被限流时会自己重试几次，只写在它自己的日志里：foreman 读到后在状态、实时查看和看板里显示"连接断开，N 秒后重试"这类提示，结果的 `notes` 写明重试了几次、用时和用量包含那几次。这是在等 agy 自己恢复，不是卡死；`stall_min` 也把重试算作有动静。
 
 ## 遇到沙箱问题时停下来
 Codex 因为沙箱无法启动命令或报错时（结果的 `notes` 会提示"Codex 的沙箱启动不了命令"，常见原文是 `windows sandbox failed`、`setup refresh had errors`），不要重试，也不要自己换沙箱、改配置文件、想办法绕开脚本。先运行 `check`，它会不调模型地测一遍沙箱，`fix` 里列出可选的修法；把错误原文、你的判断和这些选项告诉用户，由用户决定。不要建议改 `approval`：派出去的任务没人能批准，`never` 是对的，问题在沙箱。Windows 上 Codex 只读沙箱的具体情况见 `references/config.md`。
