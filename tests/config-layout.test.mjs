@@ -241,3 +241,27 @@ test('用户配置还不存在时说明先生成，不建任何文件', async (t
     assert.equal(fs.existsSync(path.dirname(missing)), false);
   });
 });
+
+test('原地写到一半出错时写回原文；写回也失败时说出备份在哪里', async (t) => {
+  for (const [name, failures] of [['截断第一次出错', 1], ['截断一直出错', Infinity]]) await t.test(name, async (t) => {
+    const h = sandbox(t);
+    h.config(JSON.stringify(sample, null, 2) + '\n');
+    const original = read(h.userConfig);
+    const script = h.write('layout-eio.mjs', `import fs from 'node:fs';
+const truncate = fs.ftruncateSync;
+let left = ${failures === Infinity ? 'Infinity' : failures};
+fs.ftruncateSync = (fd, len) => { if (left-- > 0) throw Object.assign(new Error('EIO: i/o error, ftruncate'), { code: 'EIO' }); return truncate(fd, len); };
+process.argv = [process.execPath, ${JSON.stringify(BRIDGE)}, 'layout'];
+await import(${JSON.stringify(pathToFileURL(BRIDGE).href)});`);
+    const r = await h.start(script).done;
+    const backup = fs.readdirSync(path.dirname(h.userConfig)).find((n) => n.includes('.layout-'));
+    assert.ok(backup);
+    assert.equal(read(path.join(path.dirname(h.userConfig), backup)), original);
+    if (failures === 1) {
+      failed(r, MESSAGES.zh.layoutWriteFailed(h.userConfig, 'EIO: i/o error, ftruncate'));
+      assert.equal(read(h.userConfig), original);
+    } else {
+      failed(r, MESSAGES.zh.layoutRestoreFailed(h.userConfig, path.join(path.dirname(h.userConfig), backup)));
+    }
+  });
+});

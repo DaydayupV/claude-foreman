@@ -309,17 +309,25 @@ function cmdLayout(o) {
           if (fs.existsSync(item.backup)) item.backup += `-${Date.now()}-${process.pid}`;
           fs.copyFileSync(file, item.backup, fs.constants.COPYFILE_EXCL);
         }
-        // \u5728\u539F\u6587\u4EF6\u4E0A\u76F4\u63A5\u5199\uFF0C\u4E0D\u6362\u6210\u65B0\u6587\u4EF6\uFF1A\u5355\u72EC\u8BBE\u8FC7\u7684\u8BBF\u95EE\u63A7\u5236\uFF08Windows ACL\uFF09\u3001\u5C5E\u4E3B\u548C\u6743\u9650\u90FD\u4FDD\u7559\uFF0C\u65B0\u6587\u4EF6\u53EA\u4F1A\u7EE7\u627F\u76EE\u5F55\u7684\u6743\u9650\u3002
-        // \u5199\u574F\u7684\u98CE\u9669\u7531\u524D\u9762\u7684\u5907\u4EFD\u3001\u4E0B\u9762\u7684\u8BFB\u56DE\u6BD4\u5BF9\u548C\u5199\u56DE\u539F\u6587\u515C\u4F4F
+        // 在原文件上直接写，不换成新文件：单独设过的访问控制（Windows ACL）、属主和权限都保留，新文件只会继承目录的权限。
+        // 写坏的风险由前面的备份、下面的读回比对和写回原文兜住
         const save = (content) => {
           const buf = Buffer.from(content, 'utf8'), fd = fs.openSync(file, 'r+');
           try { fs.writeSync(fd, buf, 0, buf.length, 0); fs.ftruncateSync(fd, buf.length); fs.fsyncSync(fd); }
           finally { fs.closeSync(fd); }
         };
-        save(formatConfigText(value));
-        let matches = false;
-        try { matches = isDeepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')), value); } catch {}
-        if (!matches) { save(text); throw new Error(M.layoutMismatch(file)); }
+        try {
+          save(formatConfigText(value));
+          let matches = false;
+          try { matches = isDeepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')), value); } catch {}
+          if (!matches) throw new Error(M.layoutMismatch(file));
+        } catch (e) {
+          // 写到一半出错或读回不一致：写回原文并核对；写回也失败时说出备份在哪里
+          let restored = false;
+          try { save(text); restored = fs.readFileSync(file, 'utf8') === text; } catch { /* 下面按没恢复处理 */ }
+          if (!restored) throw new Error(M.layoutRestoreFailed(file, item.backup));
+          throw e.message === M.layoutMismatch(file) ? e : new Error(M.layoutWriteFailed(file, e.message));
+        }
         item.changed = true;
       }
     }
