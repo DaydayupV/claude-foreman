@@ -91,6 +91,8 @@ test('layout 改写用户和项目配置、备份原文并保留权限，重复�
   const aliases = write(path.join(path.dirname(h.userConfig), 'agent-aliases.json'), '{broken');
   fs.chmodSync(h.userConfig, 0o600);
   const files = [h.userConfig, project], originals = files.map(read), mode = fs.statSync(h.userConfig).mode & 0o777;
+  // 原地改写：文件本身不换，Windows 上单独设的访问控制和属主随文件保留
+  const ids = files.map((file) => fs.statSync(file).ino);
   const result = output(await h.bridge(['layout', '--cwd', h.cwd]));
   assert.equal(result.files.length, 2);
   for (const [i, item] of result.files.entries()) {
@@ -104,6 +106,7 @@ test('layout 改写用户和项目配置、备份原文并保留权限，重复�
   assert.deepEqual(json(project), projectValue);
   assert.equal(read(h.userConfig), expected);
   assert.equal(fs.statSync(h.userConfig).mode & 0o777, mode);
+  assert.deepEqual(files.map((file) => fs.statSync(file).ino), ids);
   const times = files.map((file) => fs.statSync(file).mtimeMs);
   assert.deepEqual(output(await h.bridge(['layout', '--cwd', h.cwd])), {
     files: files.map((file, i) => ({ file, kind: i ? 'project' : 'user', one_line: true, changed: false, backup: null })),
@@ -182,13 +185,12 @@ test('读回内容不一致或无法解析时恢复原文，并按指定语言�
     const h = sandbox(t);
     h.config('\uFEFF' + JSON.stringify(sample, null, 2).replace(/\n/g, '\r\n') + '\r\n');
     const original = read(h.userConfig);
+    // 第一次原地写完、关闭文件时把它改坏，模拟读回内容不一致
     const script = h.write('layout-mismatch.mjs', `import fs from 'node:fs';
-const rename = fs.renameSync;
-let corrupted = false;
-fs.renameSync = (from, to) => {
-  rename(from, to);
-  if (to === ${JSON.stringify(h.userConfig)} && !corrupted) { corrupted = true; fs.writeFileSync(to, ${JSON.stringify(corrupt)}); }
-};
+const open = fs.openSync, close = fs.closeSync, target = ${JSON.stringify(h.userConfig)};
+let fd = null, corrupted = false;
+fs.openSync = (file, flags, ...rest) => { const n = open(file, flags, ...rest); if (file === target && flags === 'r+' && !corrupted) fd = n; return n; };
+fs.closeSync = (n) => { close(n); if (n === fd) { fd = null; corrupted = true; fs.writeFileSync(target, ${JSON.stringify(corrupt)}); } };
 process.argv = [process.execPath, ${JSON.stringify(BRIDGE)}, 'layout'];
 await import(${JSON.stringify(pathToFileURL(BRIDGE).href)});`);
     failed(await h.start(script, [], { env: { FOREMAN_LANG: lang } }).done, MESSAGES[lang].layoutMismatch(h.userConfig));
@@ -220,4 +222,22 @@ test('layout 中英文帮助和总帮助列出新命令，不触发旧文件迁�
     assert.ok(usage.stdout.includes('|layout|'));
   }
   assert.equal(fs.existsSync(h.userConfig), false);
+});
+
+test('layout 认项目里的旧文件名 .claude/codex-bridge.json', async (t) => {
+  const h = sandbox(t);
+  h.config(sample);
+  output(await h.bridge(['layout']));
+  const legacy = h.write('.claude/codex-bridge.json', { modules: { default: { review: sample.modules.default.review } } });
+  const result = output(await h.bridge(['layout', '--cwd', h.cwd, '--no-backup']));
+  assert.deepEqual(result.files[1], { file: legacy, kind: 'project', one_line: false, changed: true, backup: null });
+  assert.equal(isOneLine(read(legacy)), true);
+});
+
+test('用户配置还不存在时说明先生成，不建任何文件', async (t) => {
+  for (const lang of ['zh', 'en']) await t.test(lang, async (t) => {
+    const h = sandbox(t), missing = path.join(h.home, 'nowhere', 'config.json');
+    failed(await h.bridge(['layout'], { env: { FOREMAN_CONFIG: missing, FOREMAN_LANG: lang } }), MESSAGES[lang].layoutNoConfig(missing));
+    assert.equal(fs.existsSync(path.dirname(missing)), false);
+  });
 });

@@ -190,7 +190,9 @@ for (const [label, command] of [
 test('agy 的查询带上 shell 重定向照样放行，重定向不掩盖模型参数', async (t) => {
   const h = sandbox(t);
   for (const command of ['agy --version 2>&1', 'agy --version 2>&1 | head -2', 'agy --version > v.txt', 'agy --version 2> err.txt', 'agy models >models.txt 2>&1',
-    'agy --version *> $null', 'agy --version *>&1', 'agy models *>$null', 'agy>v.txt --version'])
+    'agy --version *> $null', 'agy --version *>&1', 'agy models *>$null', 'agy>v.txt --version',
+    // 程序名末尾的数字属于程序名：agy2、opencode2 是别的程序
+    'agy2>out.txt -p hi', 'opencode2>o.txt run hi'])
     assert.equal((await h.hook('guard-direct-calls.mjs', { tool_input: { command } })).code, 0, command);
   // 带引号的 '>' 是传给程序的普通参数，不能当成重定向把后面的模型参数吞掉；紧贴程序名的重定向也要先拆开再认程序
   for (const command of ['agy --version 2>&1 -p hi', 'agy -p hi 2>&1', 'agy > out.txt', 'agy models > m.txt -p hi',
