@@ -4,7 +4,9 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { HERE, M, die, need, notice, resolveDir, readBrief, isGitRepo, isAscii, agentTypeOf, closestMatches, pathKey, pidExists, sleep } from './util.mjs';
+import { isDeepStrictEqual } from 'node:util';
+import { formatConfigText, isOneLine } from './config-layout.mjs';
+import { HERE, M, die, need, notice, resolveDir, readBrief, isGitRepo, isAscii, agentTypeOf, closestMatches, pathKey, pidExists, sleep, retryBusy, replaceFile } from './util.mjs';
 
 // 只输出结果的子命令接到 head 这类提前关掉管道的命令上时，写 stdout 会抛 EPIPE：读的一方已经够了，安静退出，
 // 不打 Node 的堆栈。会派活、会改记录的子命令不这样处理（中途退出会丢掉收尾）
@@ -18,7 +20,7 @@ if (['status', 'stats', 'config', 'tiers'].includes(process.argv[2])) {
 }
 
 // 不带值的选项；其余选项都把下一个参数当作它的值。
-const FLAGS = new Set(['uncommitted', 'no-snapshot', 'verbose', 'no-intro', 'snap', 'vector', 'allow-edge', 'author', 'stop', 'all', 'reprobe']);
+const FLAGS = new Set(['uncommitted', 'no-snapshot', 'verbose', 'no-intro', 'snap', 'vector', 'allow-edge', 'author', 'stop', 'all', 'reprobe', 'check', 'no-backup']);
 
 // --help（或 -h）只打印这一条子命令的用法（assets 可以带动作），退出码 0。和 parseArgs 一样走一遍参数，
 // 写在某个选项的值里的（比如 --title --help、--title -h）不算。
@@ -38,6 +40,11 @@ function helpText([cmd, ...rest]) {
 }
 const HELP = helpText(process.argv.slice(2));
 if (HELP) { process.stdout.write(`${HELP}\n`); process.exit(0); }
+if (process.argv[2] === 'layout') {
+  try { cmdLayout(parseArgs(process.argv.slice(2)).opts); }
+  catch (e) { die(e.message); }
+  process.exit(0);
+}
 
 // 其余模块在 --help 之后才加载：config.mjs 一加载就会迁移旧版的配置和偏好文件，--help 不该写任何文件。
 const { USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, agentMaxParallel, CLAUDE_CODE, cellList, eachEntry, mapCells, sceneView, selectScene, isScened, resolveAgentAlias, detectEnvironment, projectFile, loadConfig, resolveProfile, validatePlan, unknownAgentError } = await import('./config.mjs');
@@ -250,6 +257,71 @@ async function cmdReview(o) {
   if (typeof rejection === 'string') die(rejection);
   const brief = readBrief(o, target !== 'diff' || !git);
   return adapters[profile.agent.type].execute({ cfg, ...profile, mode: 'review', kind: 'review', cwd, brief, git, reviewTarget: target, reviewScope, title: o.title, opts: o });
+}
+
+function cmdLayout(o) {
+  const user = process.env.FOREMAN_CONFIG || process.env.CODEX_BRIDGE_CONFIG || path.join(os.homedir(), '.claude', 'foreman', 'config.json');
+  const files = [{ file: user, kind: 'user' }];
+  if (o.cwd) {
+    const file = path.join(resolveDir(o.cwd), '.claude', 'foreman.json');
+    if (fs.existsSync(file)) files.push({ file, kind: 'project' });
+  }
+  const readFiles = () => files.map((info) => {
+    const text = fs.readFileSync(info.file, 'utf8');
+    let value;
+    try { value = JSON.parse(text.replace(/^\uFEFF/, '')); }
+    catch (e) { throw new Error(M.configBadJson(info.file, e.message)); }
+    return { ...info, text, value, one_line: isOneLine(text), changed: false, backup: null };
+  });
+  let items = readFiles(), locked = false;
+  const lock = `${user}.structure.lock`;
+  const ownerOf = () => {
+    try { return Number(retryBusy(() => fs.readFileSync(lock, 'utf8'))); }
+    catch (e) { if (e.code === 'ENOENT') return null; throw e; }
+  };
+  const lockAge = () => { try { return Date.now() - fs.statSync(lock).mtimeMs; } catch { return 0; } };
+  const stale = () => { const pid = ownerOf(); return pid !== null && (Number.isInteger(pid) && pid > 0 ? !pidExists(pid) : lockAge() > 2000); };
+  try {
+    if (!o.check && items.some((item) => !item.one_line)) {
+      const deadline = Date.now() + 10000;
+      for (;;) {
+        try { retryBusy(() => fs.writeFileSync(lock, String(process.pid), { flag: 'wx' })); locked = true; break; }
+        catch (e) {
+          if (e.code !== 'EEXIST') throw e;
+          if (ownerOf() === null) continue;
+          if (stale()) retryBusy(() => fs.rmSync(lock, { force: true }), stale);
+          else if (Date.now() > deadline) throw new Error(M.configLockTimeout(lock));
+          else Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+        }
+      }
+      items = readFiles();
+      for (const item of items) {
+        if (item.one_line) continue;
+        const { file, text, value } = item, mode = fs.statSync(file).mode & 0o777;
+        if (!o['no-backup']) {
+          const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+          item.backup = `${file}.layout-${stamp}.bak`;
+          if (fs.existsSync(item.backup)) item.backup += `-${Date.now()}-${process.pid}`;
+          fs.copyFileSync(file, item.backup, fs.constants.COPYFILE_EXCL);
+        }
+        const tmp = `${file}.${process.pid}.tmp`;
+        const save = (content) => {
+          fs.writeFileSync(tmp, content, { flag: 'wx', mode });
+          fs.chmodSync(tmp, mode);
+          replaceFile(tmp, file);
+        };
+        fs.rmSync(tmp, { force: true });
+        try {
+          save(formatConfigText(value));
+          let matches = false;
+          try { matches = isDeepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')), value); } catch {}
+          if (!matches) { save(text); throw new Error(M.layoutMismatch(file)); }
+          item.changed = true;
+        } finally { fs.rmSync(tmp, { force: true }); }
+      }
+    }
+  } finally { if (locked) retryBusy(() => fs.rmSync(lock, { force: true }), () => ownerOf() === process.pid); }
+  process.stdout.write(JSON.stringify({ files: items.map(({ file, kind, one_line, changed, backup }) => ({ file, kind, one_line, changed, backup })) }, null, 2) + '\n');
 }
 
 function cmdConfig(o) {
