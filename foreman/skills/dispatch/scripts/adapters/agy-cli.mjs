@@ -55,8 +55,8 @@ async function runAgy(options) {
   return out;
 }
 async function runOnce({ agent, model = agent.model, cwd, addDirs = [], access = 'read', runDir, prompt, timeoutMs = 120000,
-  stallMin = 0, session, sandbox = false, probeCommands, stopOnStartFailure = false, onEvent, deadline = Date.now() + timeoutMs }) {
-  const out = { status: null, code: null, errors: [], notes: [], text: '', stderrTail: '', steps: 0, tools: [], result: null };
+  stallMin = 0, session, sandbox = false, probeCommands, stopOnStartFailure = false, onEvent, onRetry, deadline = Date.now() + timeoutMs }) {
+  const out = { status: null, code: null, errors: [], notes: [], text: '', stderrTail: '', steps: 0, tools: [], result: null, retries: [] };
   const policy = policyFor({ cwd, addDirs, access, runDir, sandbox, probeCommands });
   let prepared;
   try { prepared = await prepareAgyRun(agent, policy, deadline); out.notes.push(...prepared.notes); }
@@ -114,8 +114,31 @@ async function runOnce({ agent, model = agent.model, cwd, addDirs = [], access =
       while ((i = buf.indexOf('\n')) >= 0) { record(buf.slice(0, i).replace(/\r$/, '')); buf = buf.slice(i + 1); }
     });
     child.stderr.on('data', (chunk) => { out.stderrTail = (out.stderrTail + chunk).slice(-4000); fs.appendFileSync(path.join(runDir, 'stderr.log'), chunk); });
+    // agy 在模型端断流时自己重试，只在 --log-file 里写一行"Run: attempt N failed (原因), retrying in Xs"，事件流里没有：
+    // 每秒读一次日志新增的部分，读到就转告调用方（状态和看板显示"N 秒后重试"），结束时再读一次
+    // 从这次启动时的长度读起：同一个记录目录里修报告格式的那次请求，不能把上一次的重试再算一遍
+    const logFile = path.join(runDir, 'agy.log');
+    let logAt = fs.existsSync(logFile) ? fs.statSync(logFile).size : 0, logRest = '';
+    const scanLog = () => {
+      let size;
+      try { size = fs.statSync(logFile).size; } catch { return; }
+      if (size < logAt) { logAt = 0; logRest = ''; }
+      if (size === logAt) return;
+      const fd = fs.openSync(logFile, 'r'), buf = Buffer.alloc(size - logAt);
+      try { fs.readSync(fd, buf, 0, buf.length, logAt); } finally { fs.closeSync(fd); }
+      logAt = size;
+      const lines = (logRest + buf.toString('utf8')).split('\n');
+      logRest = lines.pop();
+      for (const line of lines) {
+        const m = /Run: attempt (\d+) failed \((.*)\), retrying in ([\d.]+)(ms|s)\b/.exec(line);
+        if (!m) continue;
+        const retry = { attempt: Number(m[1]), error: m[2], wait_s: Math.round(Number(m[3]) / (m[4] === 'ms' ? 1000 : 1)) };
+        out.retries.push(retry); lastAt = Date.now(); onRetry?.(retry);
+      }
+    };
     const timer = setTimeout(() => stop('timeout'), Math.max(1, timeoutMs));
     const poll = setInterval(() => {
+      scanLog();
       if (isCancelled(runDir)) stop('cancelled');
       else if (stallMin && !running.size && Date.now() - lastAt >= stallMin * 60000) stop('stalled');
     }, 1000);
@@ -125,6 +148,8 @@ async function runOnce({ agent, model = agent.model, cwd, addDirs = [], access =
       process.removeListener('SIGINT', onSignal); process.removeListener('SIGTERM', onSignal); process.removeListener('exit', onExit);
       try {
         if (buf.trim()) record(buf);
+        scanLog();
+        if (out.retries.length) out.notes.push(M.agyRetried(out.retries.length, out.retries.at(-1).error));
         out.code = code;
         if (isCancelled(runDir)) out.status = 'cancelled';
         if (tools && (!fs.existsSync(decisions) || fs.statSync(decisions).size <= before)) out.errors.push(M.agyDecisionsMissing);
@@ -180,6 +205,9 @@ async function executeAgy(ctx) {
   announceBoard(ctx.cfg);
   return finishDiscussion(run, { ...await agySession(run, schema, promptFor), files, changesNote: M.agyNoChanges, sandbox: run.meta.sandbox });
 }
+// agy 重试的原因归到 API 重试已有的几类，状态和看板沿用同样的文字；认不出的照原文显示
+const agyRetryReason = (error) => /EOF|stream|connection|reset|timed? ?out/i.test(error) ? 'network'
+  : /\b429\b|RESOURCE_EXHAUSTED|rate.?limit/i.test(error) ? 'rate_limit' : /\b5\d\d\b|INTERNAL|UNAVAILABLE/i.test(error) ? 'server' : error;
 async function agySession(run, schema, promptFor) {
   const { ctx, meta, writeMeta, started } = run, { dir, cwd, agent, model, effort, agentName, addDirs } = ctx;
   const split = splitAgyModel(model);
@@ -281,7 +309,8 @@ async function agySession(run, schema, promptFor) {
     if (Date.now() >= deadline) { meta.status = 'timeout'; return null; }
     currentTools = new Map(); completed = new Set(); responses = new Map(); usageSteps = new Set();
     const out = await lowLevel({ access: repairing ? 'none' : 'read', runDir: dir, session: meta.session_id, sandbox: !repairing && sandbox,
-      prompt: nextPrompt, timeoutMs: deadline - Date.now(), stallMin, onEvent: translate });
+      prompt: nextPrompt, timeoutMs: deadline - Date.now(), stallMin, onEvent: translate,
+      onRetry: (retry) => event({ type: 'api.retry', reason: agyRetryReason(retry.error), wait_s: retry.wait_s, attempt: retry.attempt }) });
     errors.push(...out.errors); notes.push(...out.notes);
     meta.status = out.status; last = out.text;
     return meta.status === 'done' ? { last, canRepair: !!meta.session_id } : null;

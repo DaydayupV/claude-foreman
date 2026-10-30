@@ -1122,3 +1122,16 @@ test('agy 直接调用守卫只放行管理查询，提示参数、裸调用和�
     'agy models -p hi', 'agy help --prompt=hi', 'agy --version -p hi', 'agy models -- hi', '& "C:\\fake\\agy.exe" -p hi'])
     assert.equal((await h.hook('guard-direct-calls.mjs', { tool_input: { command } })).code, 2, command);
 });
+
+test('agy 在模型端断流后自己重试：日志里的重试行变成重试事件，结果注明重试了几次', async (t) => {
+  const h = sandbox(t); configure(h); await install(h);
+  const at = (n, error, wait) => `I1030 13:48:54.498240     470 run.go:301] Run: attempt ${n} failed (${error}), retrying in ${wait}`;
+  h.scenario({ retry_log: [at(1, 'stream reading error: unexpected EOF', '4s'), 'I1030 13:50:00.000000 470 other.go:1] unrelated',
+    at(2, 'stream reading error: unexpected EOF', '5.838801607s'), at(3, 'RESOURCE_EXHAUSTED: 429', '1500ms'), at(4, 'odd failure', '2s')] });
+  const r = output(await run(h));
+  assert.equal(r.status, 'done');
+  const retries = h.events(r.run_id).filter((e) => e.type === 'api.retry');
+  assert.deepEqual(retries.map((e) => [e.reason, e.wait_s, e.attempt]),
+    [['network', 4, 1], ['network', 6, 2], ['rate_limit', 2, 3], ['odd failure', 2, 4]]);
+  assert.ok(r.notes.includes(M.agyRetried(4, 'odd failure')));
+});

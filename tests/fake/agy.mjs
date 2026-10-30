@@ -162,6 +162,8 @@ else {
     if (!s.no_init) emit('init', { model: value('--model'), cwd: process.cwd(), tools: [], permission_mode: 'always-proceed' });
     if (args.includes('--log-file')) fs.appendFileSync(value('--log-file'), s.sandbox_log ?? (args.includes('--sandbox') && s.sandbox !== false
       ? 'Print mode: enabling terminal sandbox for this session\n' : ''));
+    // 模拟 agy 在模型端断流后自己重试：重试行写进 --log-file
+    if (s.retry_log && args.includes('--log-file')) fs.appendFileSync(value('--log-file'), s.retry_log.join('\n') + '\n');
     const prompt = JSON.parse(input.trim()).message.content;
     let checkReply;
     if (operation === 'probe') for (const command of policy.probe_commands) await toolCall('run_command', { CommandLine: command });
