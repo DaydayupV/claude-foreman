@@ -103,6 +103,20 @@ test('自定义配置文件时，旧备份按它的文件名找', async (t) => {
   assert.equal(cfg.user_config, file); assert.deepEqual(cfg.summary.warnings.find((w) => w.kind === 'old_backups').files, ['my.json.setup-1.bak']);
 });
 
+test('--keep-backup 指定的备份不算旧备份，只剩它时不提醒', async (t) => {
+  const h = sandbox(t), dir = path.dirname(h.userConfig); h.config(baseConfig());
+  write(path.join(dir, 'config.json.bak'), '{}'); write(path.join(dir, 'config.json.setup-2.bak'), '{"api_key":"synthetic-backup-secret"}');
+  const backups = (r) => output(r).summary.warnings.find((w) => w.kind === 'old_backups');
+  // 写完整路径和只写文件名都认；它的 key 不算进 contain_keys。
+  for (const keep of [path.join(dir, 'config.json.setup-2.bak'), 'config.json.setup-2.bak']) {
+    assert.deepEqual(backups(await h.bridge(['config', '--keep-backup', keep])), { kind: 'old_backups', files: ['config.json.bak'], contain_keys: false, message: M.reportOldBackups(dir, 1, false) });
+  }
+  assert.deepEqual(backups(await h.bridge(['check', '--keep-backup', 'config.json.setup-2.bak'])).files, ['config.json.bak']);
+  fs.rmSync(path.join(dir, 'config.json.bak'));
+  assert.equal(backups(await h.bridge(['config', '--keep-backup', 'config.json.setup-2.bak'])), undefined);
+  assert.deepEqual(backups(await h.bridge(['config'])).files, ['config.json.setup-2.bak']);
+});
+
 test('协作方没开执行权限、只读审计和旧代号提醒按图标呈现', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.oc = opencodeAgent(); h.config(c);
   write(path.join(path.dirname(h.userConfig), 'agent-aliases.json'), { old: 'gone' });

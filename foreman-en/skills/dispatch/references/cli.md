@@ -17,8 +17,8 @@ node "<script path>" status [--run <run_id|last> | --group <name> | --plan <plan
 node "<script path>" watch  [--run <run_id|last> | --group <name>]
 node "<script path>" board  [--replay <conversation id|run_id|group|all> [--speed <N>] [--maxgap <sec>]] (without --replay: the live board)
 node "<script path>" board --stop (shuts down the live board server)
-node "<script path>" config [--cwd "<project dir>"] [--format json|md]
-node "<script path>" check  [--agent <agent>] [--format json|md] [--reprobe]
+node "<script path>" config [--cwd "<project dir>"] [--format json|md] [--keep-backup "<backup file>"]
+node "<script path>" check  [--agent <agent>] [--cwd "<project dir>"] [--format json|md] [--reprobe] [--keep-backup "<backup file>"]
 node "<script path>" models [--format json|md]
 node "<script path>" agy-guard <install|uninstall|status> (agy's global guard; see check below)
 node "<script path>" tiers  [--model <name>]... [--all] [--cwd "<project dir>"] [--format json|md] (model tiers, overall scores, strengths and weaknesses; rules in references/model-tiers.md)
@@ -47,7 +47,7 @@ Tests whether the environment works: Node.js, Git, and every agent in the config
 
 The overall `ok` only counts Node.js and the agents the cells use (image cells included); a failure in an unused agent is reported but doesn't block anything. For each failed item, `fix` in the result says what to do; pass it on to the user.
 
-`summary` in the result is the overview of the whole config: `modules` gives each cell's candidates with their model, effort, whether they're required (`required`) and whether they passed (with a `problem` if not), `agents` gives the cells each agent is used in (`used_at` is written `modules.<module>.<cell>[index]`), and `warnings` lists things worth noting (unused agents, keys written in plain text in the config, shell access for hands-on work or drawing, Codex agents with no read-only sandbox for discussions or reviews (`readonly_audited`), stale old IDs, and leftovers from older versions that can be removed: the unused `dispatch.max_seats` (`obsolete_max_seats`), an `api_key_env` that has no effect because `api_key` is also set (`obsolete_key_env`), old config backups (`old_backups`), and the `levels` note left for old plugin versions (`legacy_levels_note`, to keep)). `config` also outputs `summary`, without check results.
+`summary` in the result is the overview of the whole config: `modules` gives each cell's candidates with their model, effort, whether they're required (`required`) and whether they passed (with a `problem` if not), `agents` gives the cells each agent is used in (`used_at` is written `modules.<module>.<cell>[index]`), and `warnings` lists things worth noting (unused agents, keys written in plain text in the config, shell access for hands-on work or drawing, Codex agents with no read-only sandbox for discussions or reviews (`readonly_audited`), stale old IDs, and leftovers from older versions that can be removed: the unused `dispatch.max_seats` (`obsolete_max_seats`), an `api_key_env` that has no effect because `api_key` is also set (`obsolete_key_env`), old config backups (`old_backups`; the one named by `--keep-backup` doesn't count, which is how `/foreman:setup` keeps the backup it just made after changing the config), and the `levels` note left for old plugin versions (`legacy_levels_note`, to keep)). `config` also outputs `summary`, without check results.
 
 `config`, `check` and `models` all take `--format md`: instead of JSON they print laid-out Markdown tables, which `/foreman-en:setup` pastes for the user as they are. `check` prints two parts, "Environment" and "Configuration"; `config` prints only "Configuration", without the check column; `models` prints tables of every model. The default is `--format json`. To show the user the configuration, use the output of `check --format md` (or `config --format md`) instead of building tables yourself.
 

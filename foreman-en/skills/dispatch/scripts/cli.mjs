@@ -63,8 +63,8 @@ if (CONFIG) records.initializeRecords(CONFIG);
 const { RUNS_ROOT, CLAUDE_SESSION, findRun, isRunning } = records; // 记录目录在 initializeRecords 之后才定下来
 
 // summary.mjs 保持只读，新增配置提醒在 config/check 共用的出口补齐。
-function buildSummary(cfg, adapters, checks = null) {
-  const summary = summarize(cfg, adapters, checks);
+function buildSummary(cfg, adapters, checks = null, keepBackup = null) {
+  const summary = summarize(cfg, adapters, checks, keepBackup);
   if (cfg.scenes.problems.length) summary.warnings.push({ kind: 'scenes_mismatch', problems: cfg.scenes.problems, message: M.scenesProblem(M.list(cfg.scenes.problems)) });
   const unused = cfg.scenes.names.filter((scene) => !Object.hasOwn(cfg.scene_modules, scene));
   if (unused.length) summary.warnings.push({ kind: 'scenes_unused', message: M.scenesNoBlock(M.list(unused)) });
@@ -282,7 +282,7 @@ function cmdConfig(o) {
     preferences: [USER_PREFS, ...(o.cwd ? [projectFile(resolveDir(o.cwd), PROJECT_PREFS, LEGACY_PROJECT_PREFS)] : [])]
       .map((file) => ({ file, exists: fs.existsSync(file) })),
     environment: detectEnvironment(adapters, effective.agents),
-    summary: buildSummary(cfg, adapters),
+    summary: buildSummary(cfg, adapters, null, o['keep-backup']),
   };
   process.stdout.write(o.format === 'md' ? configReport(cfg, result.summary) : JSON.stringify(result, null, 2) + '\n');
 }
@@ -485,7 +485,7 @@ async function cmdCheck(o) {
   }
   const referenced = new Set(Object.values(cfg.scene_modules).flatMap((modules) => eachEntry(modules).map(({ item }) => item.agent)));
   result.ok = nodeOk && !cfg.scenes.problems.length && Object.entries(result.agents).every(([name, agent]) => !referenced.has(name) || agent.ok);
-  result.summary = buildSummary(cfg, adapters, result.agents);
+  result.summary = buildSummary(cfg, adapters, result.agents, o['keep-backup']);
   // 通用汇总跳过空 effort；agy 的未指定档位也可能是逐格错误。
   for (const modules of Object.values(result.summary.scene_modules)) for (const { item } of eachEntry(modules)) {
     if (item.type !== 'agy cli' || item.effort != null) continue;

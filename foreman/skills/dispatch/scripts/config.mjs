@@ -125,11 +125,12 @@ const readAgentAliases = () => ({ ...(readJson(aliasesFile) || {}), ...memoryAli
 const readRawConfig = (file = USER_CONFIG) => {
   try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); } catch { return null; }
 };
-const readOldBackups = () => {
-  const dir = path.dirname(USER_CONFIG);
+// keep 是 setup 这次刚建的备份（--keep-backup），它要留着，不算旧备份。
+const readOldBackups = (keep = null) => {
+  const dir = path.dirname(USER_CONFIG), kept = keep ? path.basename(keep) : null;
   try {
     const files = fs.readdirSync(dir, { withFileTypes: true }).filter((f) => f.isFile() && f.name.startsWith(`${path.basename(USER_CONFIG)}.`)
-      && (f.name.endsWith('.bak') || f.name.includes('.bak-')))
+      && (f.name.endsWith('.bak') || f.name.includes('.bak-')) && f.name !== kept)
       .map((f) => ({ name: f.name, time: fs.statSync(path.join(dir, f.name)).mtimeMs }))
       .sort((a, b) => a.time - b.time || a.name.localeCompare(b.name)).map((f) => f.name);
     const contain_keys = files.map((f) => fs.readFileSync(path.join(dir, f), 'utf8').includes('"api_key"')).some(Boolean);

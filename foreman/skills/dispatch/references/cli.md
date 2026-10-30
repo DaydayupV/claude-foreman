@@ -17,8 +17,8 @@ node "<脚本路径>" status [--run <run_id|last> | --group <组名> | --plan <p
 node "<脚本路径>" watch  [--run <run_id|last> | --group <组名>]
 node "<脚本路径>" board  [--replay <对话 id|run_id|组名|all> [--speed <倍数>] [--maxgap <秒>]]（不带 --replay 是直播看板）
 node "<脚本路径>" board --stop（关掉直播看板服务）
-node "<脚本路径>" config [--cwd "<项目目录>"] [--format json|md]
-node "<脚本路径>" check  [--agent <协作方>] [--format json|md] [--reprobe]
+node "<脚本路径>" config [--cwd "<项目目录>"] [--format json|md] [--keep-backup "<备份文件>"]
+node "<脚本路径>" check  [--agent <协作方>] [--cwd "<项目目录>"] [--format json|md] [--reprobe] [--keep-backup "<备份文件>"]
 node "<脚本路径>" models [--format json|md]
 node "<脚本路径>" agy-guard <install|uninstall|status>（agy 的全局守卫，见下面 check 一节）
 node "<脚本路径>" tiers  [--model <名字>]... [--all] [--cwd "<项目目录>"] [--format json|md]（模型档位、综合分和长短处，规则见 references/model-tiers.md）
@@ -47,7 +47,7 @@ node "<脚本路径>" assets <template|cut|check|diff|layers|patch|trace|capture
 
 总体 `ok` 只看 Node.js 和被格子引用到的协作方（包括图像格子）；没被引用的不通过只是报告出来，不影响使用。每项不通过时，结果里的 `fix` 写明该怎么处理，转告用户即可。
 
-结果里的 `summary` 是总配置情况：`modules` 是每一格有哪些候选、什么模型和推理强度、是否必选（`required`）、检查是否通过（不通过的写了 `problem`），`agents` 是每个协作方用在哪几格（`used_at` 写成 `modules.<模块>.<格子>[序号]`），`warnings` 是值得注意的地方（没用到的协作方、明文写在配置里的 key、shell 权限用于执行或手画、讨论或审查没有只读沙箱的 Codex（`readonly_audited`）、失效的旧代号，以及旧版本留下、可以删掉的配置：已经不用的 `dispatch.max_seats`（`obsolete_max_seats`）、和 `api_key` 同时写了而不起作用的 `api_key_env`（`obsolete_key_env`）、旧的配置备份（`old_backups`）、给旧版插件看的 `levels` 说明行（`legacy_levels_note`，保留）。`config` 的输出里也有 `summary`，只是不带检查结果。
+结果里的 `summary` 是总配置情况：`modules` 是每一格有哪些候选、什么模型和推理强度、是否必选（`required`）、检查是否通过（不通过的写了 `problem`），`agents` 是每个协作方用在哪几格（`used_at` 写成 `modules.<模块>.<格子>[序号]`），`warnings` 是值得注意的地方（没用到的协作方、明文写在配置里的 key、shell 权限用于执行或手画、讨论或审查没有只读沙箱的 Codex（`readonly_audited`）、失效的旧代号，以及旧版本留下、可以删掉的配置：已经不用的 `dispatch.max_seats`（`obsolete_max_seats`）、和 `api_key` 同时写了而不起作用的 `api_key_env`（`obsolete_key_env`）、旧的配置备份（`old_backups`；`--keep-backup` 指定的那个不算，`/foreman:setup` 改完配置后用它留下刚建的备份）、给旧版插件看的 `levels` 说明行（`legacy_levels_note`，保留）。`config` 的输出里也有 `summary`，只是不带检查结果。
 
 `config`、`check`、`models` 都接受 `--format md`：不输出 JSON，改为输出排好的 Markdown 表格，`/foreman:setup` 原样贴给用户。`check` 输出"环境"和"总配置"两段，`config` 只有"总配置"、没有检查列，`models` 输出全部模型的表。默认是 `--format json`。要把总配置告诉用户时，用 `check --format md`（或 `config --format md`）的输出，不要自己排表。
 

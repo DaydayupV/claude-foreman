@@ -5,8 +5,8 @@ import { M } from './util.mjs';
 import { loadPrices, priceFor } from './prices.mjs';
 import { tierOf } from './tiers.mjs';
 
-// checks 是 check 输出里的 agents；没有时（config）各项的 ok 为 null。
-export function buildSummary(cfg, adapters, checks = null) {
+// checks 是 check 输出里的 agents；没有时（config）各项的 ok 为 null。keepBackup 是不算旧备份的那个文件。
+export function buildSummary(cfg, adapters, checks = null, keepBackup = null) {
   const agents = {}, warnings = [], models = new Map();
   for (const [name, agent] of Object.entries(cfg.agents)) {
     agents[name] = { type: agent.type, model: agent.model ?? adapters[agent.type].status(agent).model ?? null, used_at: [],
@@ -60,7 +60,7 @@ export function buildSummary(cfg, adapters, checks = null) {
   for (const [agent, info] of Object.entries(cfg.agents)) if (info.type === 'api' && info.api_key && info.api_key_env) {
     warnings.push({ kind: 'obsolete_key_env', agent, api_key_env: info.api_key_env, env_set: !!process.env[info.api_key_env], message: M.reportObsoleteKeyEnv(agent, info.api_key_env) });
   }
-  const backups = readOldBackups();
+  const backups = readOldBackups(keepBackup);
   if (backups?.files.length) warnings.push({ kind: 'old_backups', ...backups, message: M.reportOldBackups(path.dirname(USER_CONFIG), backups.files.length, backups.contain_keys) });
   if (typeof raw?.levels === 'string') warnings.push({ kind: 'legacy_levels_note', message: M.reportLegacyLevelsNote });
   return { modules, scene_modules, agents, warnings };
