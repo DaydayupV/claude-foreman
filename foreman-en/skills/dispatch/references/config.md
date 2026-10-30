@@ -15,6 +15,8 @@ It has three parts:
 
 How to reach an agent goes only in `agents`; who gets what goes only in `modules`.
 
+**Layout**: in `modules`, each candidate goes on one line (`{ "agent": …, "effort": …, "required": true }`), `seats` and `gap` take one line each, other objects of plain values also fit on one line, and the rest is indented as usual. The scripts use this layout whenever they write the config file themselves (migrations, the first-run config); the `layout` command rewrites an existing user or project config this way without changing the content (see `references/cli.md`), and `/foreman-en:setup` suggests it. Use the same layout when editing by hand, since it is easier to read; a different layout still loads fine.
+
 Example:
 
 ```json

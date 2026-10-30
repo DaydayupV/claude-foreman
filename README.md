@@ -237,7 +237,7 @@ flowchart TD
 
 ## 配置
 
-用户配置在 `~/.claude/foreman/config.json`，项目配置在 `<项目目录>/.claude/foreman.json`。可以直接编辑文件，也可以对 Claude Code 说"用 `/foreman:config` 把复杂任务改成 ultra"。字段的完整说明见 [references/config.md](foreman/skills/dispatch/references/config.md)。
+用户配置在 `~/.claude/foreman/config.json`，项目配置在 `<项目目录>/.claude/foreman.json`。可以直接编辑文件，也可以对 Claude Code 说"用 `/foreman:config` 把复杂任务改成 ultra"。字段的完整说明见 [references/config.md](foreman/skills/dispatch/references/config.md)。`modules` 推荐写成一项一行：每个候选一行，`seats`、`gap` 各一行；`/foreman:setup` 可以把现有的配置改成这样，内容不变。
 
 ### 第一次使用
 

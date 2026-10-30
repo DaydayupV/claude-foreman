@@ -237,7 +237,7 @@ Upgrading from codex-bridge? See [below](#upgrading-from-codex-bridge).
 
 ## Configuration
 
-The user config is `~/.claude/foreman/config.json`, and a project config is `<project dir>/.claude/foreman.json`. Edit the file directly, or tell Claude Code something like "use `/foreman-en:config` to switch complex tasks to ultra". Every setting is described in [references/config.md](foreman-en/skills/dispatch/references/config.md).
+The user config is `~/.claude/foreman/config.json`, and a project config is `<project dir>/.claude/foreman.json`. Edit the file directly, or tell Claude Code something like "use `/foreman-en:config` to switch complex tasks to ultra". Every setting is described in [references/config.md](foreman-en/skills/dispatch/references/config.md). `modules` reads best one entry per line: each candidate on one line, `seats` and `gap` on one line each; `/foreman-en:setup` can rewrite an existing config this way without changing the content.
 
 ### First run
 

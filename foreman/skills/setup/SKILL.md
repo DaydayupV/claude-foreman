@@ -39,6 +39,8 @@ $ARGUMENTS
    - `summary.warnings` 里有 `project_modules_flat` 或 `project_ignored_keys` 时（这次 `--cwd` 的项目配置有问题），在 ① 后面用一句话转告是哪个文件、什么问题，并按第 5 步放进 ④。
    - 两条命令里任何一条打印过"这个项目的偏好 … 没有定义场景 …"时，在 ① 后面用一句话转告：这些场景在这个项目里不生效，是项目偏好的场景块决定的。
 
+   - 再运行 `node "<脚本路径>" layout --cwd "<当前项目目录>" --check`（JSON，只读），记下 `one_line` 为 `false` 的文件，按第 5 步放进 ④。
+
 2. **读模型清单**：运行 `node "<脚本路径>" models --format md`，贴成 ②。再运行一次不带 `--format` 的 `models`（JSON），从 `agents.<代号>` 读出配置里的模型在不在清单里：`listed` 为 `false` 说明模型名写错了或已经下线，`closest` 是最接近的写法，放进 ④。
    - 用户要的 opencode 或 pi 模型不在 ② 里：② 末尾已经写了怎么登录，不用再说。
    - pi 遇到模型不支持的档位不报错，会悄悄换一档，所以推理强度只从 ② 里列出的档位里选。
@@ -61,6 +63,7 @@ $ARGUMENTS
      - 用户配置里的 `projects`（`obsolete_projects`）：每一项列一条，推荐"搬到 `<目录>/.claude/foreman.json`"，要写的内容取这条提醒的 `entries`（已经换成项目配置的写法、去掉了项目配置不认的字段；`dropped` 列出丢掉了哪些，写进理由），不要去读用户配置原文。目录不存在的推荐删除；目标文件已经存在的，在推荐里写出合并后的内容（`projects` 这一项写的格子和时长覆盖原文件里同名的），理由写"`projects` 已经不用了，写在里面不生效"。
      - 项目配置还是平铺写法（`project_modules_flat`）：推荐"改成 `{ "modules": { "default": { … } } }` 写法，内容不变"，"内容"一栏写出它覆盖了哪些格子和时长（config 输出的 `project_config.cells`）。理由写：旧写法照样能读；但从 1.2 及更早的版本升级来的项目配置，现在是覆盖用户配置，不再只能收紧，里面以前会被忽略的放宽项（加候选、调高席位、延长时长）现在会生效，请核对。
      - 项目配置写了只能放在用户配置里的键（`project_ignored_keys`）：推荐删掉这些键，理由写"只能写在用户配置里，项目配置里不生效"。
+     - 配置文件不是一项一行的写法（第 1 步 `layout --check` 里 `one_line` 为 `false` 的文件）：每个文件列一条，推荐"改成一项一行的写法（内容不变）"，理由写"每个候选一行、席位和补漏各一行，读起来省事；改之前先备份，写完读回来逐项比对"。
      - 失效的旧代号（`stale_alias`）：改成哪个现在的代号，选和它同一家、同一种接入方式的，拿不准就列出候选让用户选；不再续接升级前的任务时也可以删掉这条。
 
 6. **确认（弹窗）**：①到④都贴完以后，用 AskUserQuestion 问"怎么处理上面的建议？"，选项：
@@ -72,8 +75,9 @@ $ARGUMENTS
    - **agy 守卫的同意（弹窗）**：确认的结果里要新加 `agy cli` 协作方时，先运行 `node "<脚本路径>" agy-guard status`（只读）；`installed` 或 `valid` 为 `false` 时，接着用 AskUserQuestion 单独问一次"要在 ~/.gemini/config/ 下安装 foreman 的 agy 守卫吗？"。描述写清：会在 agy 的全局 `hooks.json` 里加一个 `foreman-guard` 条目，并写一个启动器和守卫脚本，原来的 `hooks.json` 先备份；平时用 agy 不受影响，每次工具调用多约 0.1 秒；foreman 在某个目录里运行 agy 期间，你在同一目录里自己用 agy 会被拦下工具调用；随时可以用 `agy-guard uninstall` 撤掉。选项："同意安装（推荐）"、"不加 agy"。选"不加 agy"时，这次不加任何 `agy cli` 协作方，其余建议照改。每次运行 setup 都要重新问，不沿用以前的回答。
 
 7. **改配置**：
+   - 改写法（用户在 ④ 里同意时）：在其余改动之前运行 `node "<脚本路径>" layout --cwd "<当前项目目录>"`；它给要改的文件各建一份备份（输出里的 `backup`），这份就算这次新建的备份，下面不用再备份同一个文件。用户没同意改写法的文件，不替它改写法。
    - 先备份：这次要改配置文件时，把它复制成同目录下的 `<文件名>.setup-<年月日-时分秒>.bak`；这次要改 `agent-aliases.json` 时，也把它复制成 `agent-aliases.json.setup-<年月日-时分秒>.bak`。只删旧备份、不改这两个文件时不用备份（否则下次 setup 又会把它当成旧备份）。
-   - 改用户配置的 `agents` 和 `modules`（默认的那套在 `modules.default` 里，有场景块的按用户要改的场景改），每一格写成候选列表；`discuss` 和 `review` 的 `seats` 三级都保留在文件里，改席位数就改这里，新加必选时把对应等级调到不少于必选数。改写后文件里的 `levels` 是一行说明文字，除非用户在 ④ 里选了删除，否则保留不动。代号用模型名（opencode 和 pi 取 `/` 后面那段）；已经有同名代号时，加上类型后缀，比如 `deepseek-flash-api`、`deepseek-flash-opencode-cli`、`deepseek-flash-pi`。失效的旧代号改在 `agent-aliases.json` 里，只改或删那一条，不删整个文件：续接升级前的任务、项目配置里写的旧代号都靠它。
+   - 改用户配置的 `agents` 和 `modules`（默认的那套在 `modules.default` 里，有场景块的按用户要改的场景改），每一格写成候选列表，按一项一行写：每个候选一行，`seats`、`gap` 各一行（见 `references/config.md` 的"写法"）；`discuss` 和 `review` 的 `seats` 三级都保留在文件里，改席位数就改这里，新加必选时把对应等级调到不少于必选数。改写后文件里的 `levels` 是一行说明文字，除非用户在 ④ 里选了删除，否则保留不动。代号用模型名（opencode 和 pi 取 `/` 后面那段）；已经有同名代号时，加上类型后缀，比如 `deepseek-flash-api`、`deepseek-flash-opencode-cli`、`deepseek-flash-pi`。失效的旧代号改在 `agent-aliases.json` 里，只改或删那一条，不删整个文件：续接升级前的任务、项目配置里写的旧代号都靠它。
    - 补漏席：`review` 的 `gap` 三级都保留在文件里，按 ④ 里用户确认的结果改。
    - 场景模式（用户在 ④ 里同意开启时）：先把用户偏好文件（config 输出 `preferences` 里的第一个，即 `preferences.md`）复制成同目录下的 `preferences.md.setup-<年月日-时分秒>.bak`（文件不存在就不用备份），再写场景块：文件里已有 `<!-- foreman:scenes -->` 块时只替换块里的内容，没有就追加到文件末尾，块外面的内容一个字都不改。然后在用户配置的 `modules` 下按 ④ 里确认的内容加 `code`、`research` 两个场景块，只写和 `default` 不同的格子、`seats` 和 `gap`。写完第 7 步的 `config` 校验时，看输出的 `scenes.problems` 为空。
    - 迁移 `projects`（用户在 ④ 里同意时）：按确认的内容写各项目的 `.claude/foreman.json`（已有的先复制成 `foreman.json.setup-<年月日-时分秒>.bak`，没有 `.claude` 目录就建），再从用户配置里删掉 `projects`。写到别的仓库里的文件不会自动提交，在 ⑥ 里列出写了哪几个文件。

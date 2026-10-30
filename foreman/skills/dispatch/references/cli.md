@@ -18,6 +18,7 @@ node "<脚本路径>" watch  [--run <run_id|last> | --group <组名>]
 node "<脚本路径>" board  [--replay <对话 id|run_id|组名|all> [--speed <倍数>] [--maxgap <秒>]]（不带 --replay 是直播看板）
 node "<脚本路径>" board --stop（关掉直播看板服务）
 node "<脚本路径>" config [--cwd "<项目目录>"] [--format json|md] [--keep-backup "<备份文件>"]
+node "<脚本路径>" layout [--cwd "<项目目录>"] [--check] [--no-backup]（把配置文件改成一项一行的写法，见下面 check 一节后面）
 node "<脚本路径>" check  [--agent <协作方>] [--cwd "<项目目录>"] [--format json|md] [--reprobe] [--keep-backup "<备份文件>"]
 node "<脚本路径>" models [--format json|md]
 node "<脚本路径>" agy-guard <install|uninstall|status>（agy 的全局守卫，见下面 check 一节）
@@ -44,6 +45,8 @@ node "<脚本路径>" assets <template|cut|check|diff|layers|patch|trace|capture
 - **agy**：能否启动、`agy models` 里有没有这个模型；守卫自检（项目和全局配置、守卫文件、agy 实际加载的钩子）；沙箱探针（同一 agy 版本、系统和磁盘只测一次，结果缓存；测出不可用的结果 24 小时后过期，过期后下一次 check 或派出时重测，`--reprobe` 不等过期、这次就重测）；再发一个请求，让模型用 `read_file` 读一个临时文件并原样回复，确认守卫放行并留下了决定记录；最后读额度，任一额度桶剩余不到 10% 时提醒。会在 agy 的历史里留下会话。守卫没装、文件不一致或有别的钩子时，`fix` 会写明处理办法；沙箱不可用时 `fix` 写明原因：沙箱没拦住哪些写入或读取（重测结果不会变）、沙箱起不来、或者检测时没联网（联网后用 `--reprobe` 重测）。
 
 `agy-guard install` 在 `~/.gemini/config/` 下装守卫（先备份 `hooks.json`），`uninstall` 删掉条目和文件，`status` 只读、报告装没装、文件是否一致和正在运行的 agy 任务。装和卸会拿一把跨进程的锁，有 agy 任务在运行时拒绝。**只在用户同意后运行 `install`**（`/foreman:setup` 的弹窗，或者用户明确要求），它改的是用户目录里 agy 的全局配置。
+
+`layout` 把用户配置（和 `--cwd` 项目里的 `.claude/foreman.json`，有的话）的 `modules` 改成一项一行的写法（见 `references/config.md` 的"写法"），内容和键的顺序都不变：已经是这种写法的文件不动；其余的先备份成同目录下的 `<文件名>.layout-<年月日-时分秒>.bak`（`--no-backup` 不备份），写完读回来和原内容逐项比对，不一致就恢复原文件并报错。它不做配置迁移，也不改 `agent-aliases.json`。`--check` 只报告、不写文件。输出 JSON：`files` 里每个文件的 `file`、`kind`（`user` 或 `project`）、`one_line`（改之前是不是这种写法）、`changed`、`backup`。改的是用户自己的文件，**只在用户同意后运行**（`/foreman:setup` 的确认，或者用户明确要求）；`--check` 随时可以跑。
 
 总体 `ok` 只看 Node.js 和被格子引用到的协作方（包括图像格子）；没被引用的不通过只是报告出来，不影响使用。每项不通过时，结果里的 `fix` 写明该怎么处理，转告用户即可。
 
