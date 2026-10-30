@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { agentMaxParallel, DEFAULT_AGENT_PARALLEL } from './adapters/parallel.mjs';
 import { AGY_EFFORTS, splitAgyModel } from './adapters/agy-models.mjs';
+import { formatConfigText } from './config-layout.mjs';
 import { HERE, M, notice, isObject, readJson, die, pidAlive, pidExists, retryBusy, replaceFile, closestMatches, pathKey } from './util.mjs';
 
 const ENTRY = path.join(HERE, 'cli.mjs');
@@ -456,7 +457,7 @@ function migrateStructure(config, file, base, project, adapters) {
     // 新文件沿用原文件的权限：umask 宽松时，不能让改写把只有自己能读的配置（可能有明文 key）变成别人也能读。
     const mode = fs.statSync(file).mode & 0o777;
     fs.rmSync(tmp, { force: true });
-    fs.writeFileSync(tmp, JSON.stringify(result, null, 2) + '\n', { flag: 'wx', mode });
+    fs.writeFileSync(tmp, formatConfigText(result), { flag: 'wx', mode });
     fs.chmodSync(tmp, mode);
     replaceFile(tmp, file);
     if (converted.old) notice(M.configStructureMigrated(file, bak, M.list(Object.entries(renamed.aliases).map(([a, b]) => `${a} → ${b}`))));
@@ -686,7 +687,7 @@ function loadConfig(cwd, adapters) {
     try {
       const environment = detectEnvironment(adapters), starter = buildStarterConfig(environment);
       fs.mkdirSync(path.dirname(USER_CONFIG), { recursive: true });
-      fs.writeFileSync(USER_CONFIG, JSON.stringify(starter, null, 2) + '\n', { flag: 'wx' });
+      fs.writeFileSync(USER_CONFIG, formatConfigText(starter), { flag: 'wx' });
       let parts = environment.codex.logged_in ? M.starterCodex('gpt-6.1-sol', 'gpt-6-astra') : M.starterNoCodex;
       if (environment.opencode.models) parts += M.starterOpencode(environment.opencode.models);
       if (environment.pi.models) parts += M.starterPi(environment.pi.models);
