@@ -163,7 +163,7 @@ export const configReport = (cfg, summary, checks = null) => {
   if (cfg.project_config) blocks.splice(1, 0, M.reportProjectConfig(cfg.project_config.path, M.list(cfg.project_config.cells)));
   for (const module of modules) blocks.push(M.reportModuleNames[module] + suffix, module === 'image' && !cfg.image_configured
     ? M.reportImageUnconfigured : cellTable(cfg, summary, module, checks));
-  blocks.push(M.reportSeatsTitle.replace(/\*\*(?=[　 ])/, `**${suffix}`), seatsTable(cfg, summary), M.reportSeatsNotes.map((text) => `- ${text}`).join('\n'));
+  blocks.push(`${M.reportSeatsTitle}${suffix}${M.reportHeadingGap}${M.reportSeatsIntro}`, seatsTable(cfg, summary), M.reportSeatsNotes.map((text) => `- ${text}`).join('\n'));
   if (cfg.scenes.source) blocks.push(M.sceneSource(cfg.scenes.file, cfg.scenes.source));
   if (cfg.scenes.inactive.length) blocks.push(M.scenesInactive(M.list(cfg.scenes.inactive), cfg.scenes.file));
   blocks.push(...sceneTables(cfg, summary), M.reportAgentsTitle);

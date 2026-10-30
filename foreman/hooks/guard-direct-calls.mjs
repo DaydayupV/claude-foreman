@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// PreToolUse 钩子：拦下直接调用 codex exec / codex review / opencode run / pi 的 Bash 和 PowerShell 命令，
+// PreToolUse 钩子：拦下直接调用 codex exec / codex review / opencode run / pi / agy 跑模型的 Bash 和 PowerShell 命令，
 // 要求改走 cli.mjs。退出码 2 会阻止这次调用，并把 stderr 的内容反馈给 Claude。
 
 import fs from 'node:fs';
@@ -42,20 +42,21 @@ function piRunsModel(words) {
   return true;
 }
 
-// 重定向（2>&1、>out.txt、2> err.txt、<in.txt）是 shell 的，不算 agy 的参数；只写了符号的，后面那个词是文件名
-function dropRedirects(words) {
+// 重定向（2>&1、>out.txt、2> err.txt、<in.txt、PowerShell 的 *> $null）是 shell 的，不算程序的参数；只写了符号的，
+// 后面那个词是文件名。带引号的词是普通参数（'>' 会原样传给程序），所以在去掉引号之前判断
+const REDIRECT = /^(?:\d*|&|\*)(?:>>?|<)(.*)$/;
+function dropRedirects(tokens) {
   const out = [];
-  for (let i = 0; i < words.length; i++) {
-    const m = /^(?:\d*|&)(?:>>?|<)(.*)$/.exec(words[i]);
-    if (!m) out.push(words[i]);
+  for (let i = 0; i < tokens.length; i++) {
+    const m = /^["']/.test(tokens[i]) ? null : REDIRECT.exec(tokens[i]);
+    if (!m) out.push(tokens[i]);
     else if (!m[1]) i++;
   }
   return out;
 }
 
 // agy 的查询白名单不能掩盖后面的模型参数，-- 之后也一律视为提示词。
-function agyRunsModel(all) {
-  const words = dropRedirects(all);
+function agyRunsModel(words) {
   if (words.length === 1 && words[0] === '--version') return false;
   return !new Set(['models', 'agents', 'changelog', 'help']).has(words[0])
     || words.slice(1).some((w) => w === '--' || /^-(?:p|i).*$/.test(w) || /^--(?:print|prompt|input-format)(?:=|$)/.test(w));
@@ -86,6 +87,9 @@ function callsAgentDirectly(command) {
     const tokens = tokensOf(segment);
     let i = 0;
     while (i < tokens.length && /^\w+=/.test(tokens[i])) i++; // 跳过 VAR=value 前缀
+    // 重定向可以紧贴在程序名后面（agy>out.txt -p hi）：先拆开，再认程序名
+    const glued = /^([^'"<>]+?)((?:\d*|&|\*)?(?:>>?|<).*)$/.exec(tokens[i] || '');
+    if (glued) tokens.splice(i, 1, glued[1], glued[2]);
     const first = base(tokens[i] || '');
     let rest;
     let opencode = false, pi = false, agy = false;
@@ -102,7 +106,7 @@ function callsAgentDirectly(command) {
     else if (npxRuns(/^@earendil-works\/pi-coding-agent(@.*)?$/)) { rest = tokens.slice(npx.rest); pi = true; }
     else if (/^agy(\.exe|\.cmd|\.ps1)?$/.test(first)) { rest = tokens.slice(i + 1); agy = true; }
     else continue;
-    const words = rest.map((t) => t.replace(/^["']|["']$/g, ''));
+    const words = dropRedirects(rest).map((t) => t.replace(/^["']|["']$/g, ''));
     if (agy) { if (agyRunsModel(words)) return true; continue; }
     if (pi) {
       if (piRunsModel(words)) return true;

@@ -297,3 +297,15 @@ test('submit 遇到读不出的记录时拒绝登记，不留下空目录', asyn
     assert.deepEqual(runDirs(), before);
   }
 });
+
+for (const module of ['discuss', 'review']) test(`${module} 计划席位的预检只读和这次启动有关的记录：已结束的无关旧记录坏了照样启动`, async (t) => {
+  const h = sandbox(t); h.config(baseConfig());
+  const archived = seedRun(h, '20200101-000000-aaaa');
+  const p = output(await h.bridge(planArgs(h, module)));
+  // submit 在登记锁里写活动索引，旧记录从此算"见过的已结束任务"，锁内准入不再读它
+  output(await h.bridge(submitArgs(h, p)));
+  write(path.join(archived, 'meta.json'), '{bad archive');
+  const s = h.scenario({ last_message: module === 'discuss' ? discussion : review });
+  const r = output(await h.bridge(launch(p), { env: s.env }));
+  assert.equal(r.status, 'done');
+});
