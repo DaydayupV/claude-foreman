@@ -281,7 +281,7 @@ function cmdLayout(o) {
   const lock = `${user}.structure.lock`;
   try {
     if (!o.check && items.some((item) => !item.one_line)) {
-      held = acquireLockSync(lock, { waitMs: 10000, busy: () => { throw new Error(M.configLockTimeout(lock)); } });
+      held = acquireLockSync(`${lock}.gen`, { waitMs: 10000, legacy: { base: lock, format: 'pid' }, busy: ({ file }) => { throw new Error(M.configLockTimeout(file)); } });
       items = readFiles();
       for (const item of items) {
         if (item.one_line) continue;
