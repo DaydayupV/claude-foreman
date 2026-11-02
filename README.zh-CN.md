@@ -1,0 +1,641 @@
+# claude-foreman
+
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![LINUX DO](https://img.shields.io/badge/LINUX%20DO-Community-blue?logo=linux&logoColor=white)](https://linux.do)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/DaydayupV/claude-foreman/pulls)
+[![GitHub stars](https://img.shields.io/github/stars/DaydayupV/claude-foreman?style=social)](https://github.com/DaydayupV/claude-foreman/stargazers)
+
+[English](README.md)
+
+![用 CC 实现全模型协作：Claude Code 指挥 GPT、Claude、DeepSeek、Gemini 等模型](docs/images/banner.zh.png)
+
+一个 Claude Code 插件，让 Claude Code 当"工头"：它负责规划、决策和验收，把动手的编码工作按你的配置派给 Codex、opencode、pi 等 CLI 工具，也能请它们独立审查代码，或者在复杂方案上召集几个模型一起讨论，最后由 Claude Code 裁决。
+
+- **Claude Code 把关**：协作方交回的改动，Claude Code 逐个看 diff、实际运行验证，不合格就返工；讨论里各方的意见只作参考，接受还是拒绝由 Claude Code 按论据决定。
+- **用你自己的额度**：协作方用的是你的 Codex 订阅、opencode 订阅或 API 余额，不占 Claude Code 的额度。
+- **全程看得见**：每次派活都写明交给了谁、什么模型和推理强度；终端里能实时看到每个模型在做什么。
+
+**介绍视频**：[在 B 站观看](https://www.bilibili.com/video/BV13sxL6aE4Z/)
+
+**实际运行**：网页看板的星图，本机最近的每个对话是一个星系，正在派活的星系发亮：
+
+![网页看板的星图：每个对话一个星系，下方是对话列表和用量](docs/images/board-universe.webp)
+
+飞进一个对话：四个模型同时讨论，每一席的进度、实时速度、产出和费用一目了然：
+
+![网页看板的单对话视图：四个模型同时讨论，下方是每一席的用量](docs/images/board-conversation.webp)
+
+## 安装和设置
+
+### 推荐：Claude 桌面版导入 release 包
+
+插件主要在 Claude 桌面版的 Code 页里开发和测试：派活后实时画面会自动在终端面板里打开、切到前台（网页看板关着时），启动动画也是按桌面版的终端调的。
+
+1. 从[最新 release](https://github.com/DaydayupV/claude-foreman/releases/latest) 下载插件包：中文版是 `foreman.plugin`，英文版是 `foreman-en.plugin`。两者只有语言不同，装一个就行（见[中文版和英文版](#中文版和英文版)）。同一个插件的 `.zip` 和 `.plugin` 内容完全相同，任选一个。
+2. 在 Claude 桌面版里把这个文件作为插件上传，装好后列在"我的上传"里。
+3. 打开 Code 页，运行 `/foreman:setup`（英文版是 `/foreman-en:setup`），见下面的[运行设置](#运行设置)。
+
+升级时下载新版 release，照样上传，再到"我的上传"里删掉旧版：新上传的可能和旧版并存，不会自动替换。
+
+### 也可以：从 marketplace 安装
+
+用命令行版，或者在桌面版里不想上传文件时，在 Claude Code 里运行：
+
+```
+/plugin marketplace add DaydayupV/claude-foreman
+/plugin install foreman@claude-foreman
+```
+
+英文版装 `foreman-en@claude-foreman`。升级时运行 `/plugin marketplace update claude-foreman`。命令行版派活、审查、讨论都和桌面版一样，区别只是实时查看要你自己在另一个终端里运行 Claude Code 给出的命令。
+
+从 codex-bridge 升级的，见[后面的说明](#从-codex-bridge-升级)。
+
+### 前提
+
+- [Claude Code](https://claude.com/claude-code)
+- Node.js 18 或更高版本。在 WSL 里运行 Claude Code 时，WSL 里也要装 Node.js，否则插件的钩子会在每条命令前报错
+- Git 2.25 或更高版本，用来追踪协作方改了哪些文件
+- 协作方，有几个配几个（一个都没有也能装，那样所有工作由 Claude Code 自己做）：
+  - [Codex CLI](https://github.com/openai/codex)，已安装并登录。推荐，生成图片只能交给它
+  - [opencode](https://opencode.ai) 2.x 或 [pi](https://github.com/earendil-works/pi)，用来接入各家模型
+  - Agy CLI（Google Antigravity CLI），已安装并登录，能参加讨论和审查（目前只验证了 Windows 11）
+  - 兼容 OpenAI 接口的模型 API key（比如 DeepSeek、Kimi、MiMo），能参加讨论和审查（只审文本，不看截图）
+
+### 运行设置
+
+装好后运行 `/foreman:setup`。它的输出结构是固定的：先列出本机有哪些工具、能用的全部模型和每个模型支持的推理强度，再给出当前配置的总表（每类任务的每一级交给谁、每一级派几家、谁必选、哪些协作方没用上、有什么要注意的），然后是修改建议（包括旧版本留下、可以删掉的配置）。你看完再在最后的弹窗里确认或逐项调整，它改好配置，报告改了什么。装了新工具、想换模型时可以再跑。
+
+## 工作方式
+
+插件分三个模块：**讨论**、**执行**、**审查**。它们没有固定顺序：Claude Code 每做完一步，都判断下一步该做什么，需要哪个模块就进哪个，一个请求里可以按任意顺序、多次进入。比如"讨论方案 → 执行 → 讨论实现效果 → 返工 → 审查"，或者"执行 → 审查 → 讨论审查指出的设计问题 → 再执行"。
+
+```mermaid
+flowchart LR
+    start(["收到请求"]) --> hub{"Claude Code<br/>判断下一步"}
+    hub -- "要定方案或评估效果" --> discuss["讨论"]
+    hub -- "要动手" --> run["执行"]
+    hub -- "要交付改动" --> review["审查"]
+    discuss --> hub
+    run --> hub
+    review --> hub
+    hub -- "做完了" --> report(["汇报"])
+
+    classDef claude fill:#EEEDFE,stroke:#534AB7,color:#3C3489
+    classDef module fill:#E1F5EE,stroke:#0F6E56,color:#085041
+    class hub claude
+    class discuss,run,review module
+```
+
+每次进入一个模块，都按这一类的标准单独定级：不值得找外部模型的小事是 0 级，由 Claude Code 自己做；其余分简单、常规、复杂三级（`simple` / `normal` / `complex`），每一级有哪些候选模型、谁必选、用什么推理强度由你在配置里决定，Claude Code 每次从候选里挑；写成 `"claude code"` 的那一级同样由 Claude Code 自己做。派出去之后终端里能实时看到模型的每一步，结束后 Claude Code 向你汇报用了哪个模型、花了多少 token。
+
+三个模块各自的内部流程如下，紫色的步骤由 Claude Code 做，绿色的有协作方参与。
+
+**讨论**
+
+```mermaid
+flowchart TD
+    d0{"按讨论定级"} -- "0 级" --> dself["Claude Code 自己想清楚"]
+    d0 -- "1 级" --> dqa["请一个模型给第二意见"]
+    d0 -- "2–3 级" --> dmode{"选模式"}
+    dmode -- "普通" --> dnormal["同一份议题<br/>各方独立出方案"]
+    dmode -- "多角色" --> droles["按能力分配角色<br/>弹窗请你确认"]
+    droles --> dcards["各方从自己的角色出方案"]
+    dnormal --> dcross["有实质分歧时<br/>第 2 轮交叉挑错"]
+    dcards --> dcross
+    dcross --> ddecide["Claude Code 逐条裁决<br/>写决策记录"]
+
+    classDef claude fill:#EEEDFE,stroke:#534AB7,color:#3C3489
+    classDef agent fill:#E1F5EE,stroke:#0F6E56,color:#085041
+    class d0,dself,dmode,droles,ddecide claude
+    class dqa,dnormal,dcards,dcross agent
+```
+
+**执行**
+
+```mermaid
+flowchart TD
+    r0{"分工"} -- "决策、设计、文字" --> rself["Claude Code 自己做"]
+    r0 -- "画图（含 SVG 动画里整块用的插画）" --> rroute["弹窗让你选路线"]
+    rroute --> rimg["图像模块：出图、手画两格"]
+    r0 -- "其余执行工作" --> rlevel{"按执行定级"}
+    rlevel -- "0 级" --> rself
+    rlevel -- "1–3 级" --> rrun["按配置派给协作方"]
+    rrun --> rcheck["验收：看 diff<br/>亲自运行验证"]
+    rimg --> rasset["assets 去背景、切部件<br/>按格子命名、检查"]
+    rasset --> rimgcheck["Claude Code 看对照拼图"]
+    rimgcheck -- "不合格" --> rimgredo["改了再重出<br/>同一问题三次没改善交给你决定"]
+    rcheck -- "不合格" --> rrework["返工一次<br/>再不行 Claude Code 接手"]
+    rrework --> rcheck
+
+    classDef claude fill:#EEEDFE,stroke:#534AB7,color:#3C3489
+    classDef agent fill:#E1F5EE,stroke:#0F6E56,color:#085041
+    class r0,rself,rroute,rlevel,rcheck,rasset,rimgcheck claude
+    class rimg,rrun,rrework,rimgredo agent
+```
+
+**审查**
+
+```mermaid
+flowchart TD
+    v0{"按改动的风险定级"} -- "0 级" --> vself["Claude Code 验收就够"]
+    v0 -- "1–3 级" --> vnew["另一个模型开新会话审查"]
+    vnew --> vfix["Claude Code 逐条核实<br/>修复、重新验证"]
+
+    classDef claude fill:#EEEDFE,stroke:#534AB7,color:#3C3489
+    classDef agent fill:#E1F5EE,stroke:#0F6E56,color:#085041
+    class v0,vself,vfix claude
+    class vnew agent
+```
+
+## 能做什么
+
+| 命令 | 作用 |
+|---|---|
+| `/foreman:run <任务>` | 把一个执行任务派给配置的协作方，完成后 Claude Code 审查改动、实际运行验证，不合格就返工 |
+| `/foreman:review` | 请协作方审查未提交的改动、某个分支或某次提交，也能审没改过的文件、研究结论和证据、截图和播放文件；协作方交回结构化的问题清单，Claude Code 逐条核实，排除误报 |
+| `/foreman:discuss <议题>` | 几个模型就复杂方案各出方案、互相挑错，Claude Code 逐条裁决，给出决策记录；目标互相拉扯的议题可以用多角色模式，见下文 |
+| `/foreman:watch` | 在终端里实时查看各个模型正在做什么；开着网页看板时同时给出网页链接，见下文 |
+| `/foreman:status` | 查看最近的任务或某次任务的详细结果，包括 token 消耗和 Codex 额度 |
+| `/foreman:setup` | 设置引导：检测本机的工具，列出能用的模型，给出当前配置的总表和修改建议，按你的选择改好配置 |
+| `/foreman:config` | 查看或修改配置 |
+
+也可以直接对 Claude Code 说"检查一下环境"（`check`：每个协作方能不能用、配置的推理强度模型支不支持、Codex 的沙箱能不能启动），"列出能用的模型"（`models`），或者"看看各个模型的档位"（`tiers`：在用模型的档位、综合分和长短处，数据来自第三方排行榜 LiveBench）。
+
+### 不用命令也行
+
+插件自带的 skill 会让 Claude Code 每次进入讨论、执行或审查时分别定级，达到门槛的自己发起：
+
+- 给出方案之前，以及执行之后要评估效果、决定下一步怎么调时，复杂、不确定的问题先找其他模型讨论，结论由 Claude Code 裁决。
+- 动手之前，执行类工作按等级和配置派出；只由 Claude Code 做的工作（决策、设计、文字）和 0 级的小事不派。
+- 交付之前，按改动的风险判断要不要请另一个模型审查。
+- 大任务能拆成互不相干的几份时，同时派给几个会话，缩短等待（每个协作方的并发上限见 `max_parallel`）。
+
+不想让 Claude Code 自己发起，把 `dispatch.auto` 设成 `false`：派活、讨论和审查之前它都会先问你。
+
+上面表格里的命令只由你来输入，Claude Code 不会自己调用它们：这些命令表示"你点名要做"，会跳过 0 级判断。Claude Code 自己发起时走插件的 skill，照样定级、照样遵守 `dispatch.auto`。
+
+### 多角色讨论
+
+议题里有几个目标互相拉扯时（比如安全和便利、实现成本和体验、兼容和重构），2、3 级讨论可以改用多角色模式：每个模型带一张角色卡，从一个视角检查同一个议题，比如架构师、数学/正确性、实证核查员、维护与兼容、用户体验、边界清单员，再留一个不带角色的综合对照位。
+
+- **按能力分配**：先看工具能不能做到（比如实证核查员要跑命令，只能给 Codex），再看长处和模型档位：需要复杂思考的角色先给强档模型，档位只作参考，不是能不能参加的资格。模型档位按第三方评测分强、中、弱三档，见 [references/model-tiers.md](foreman/skills/dispatch/references/model-tiers.md)。
+- **优先一个模型一个角色**：合格的模型不够时，让强档模型多开一个会话扮另一个角色；多开的会话各占一个并发名额，结论一致也只算一份证据。中档、弱档模型可以作"广度席"，只参加第 1 轮，观点由 Claude 逐条核实。
+- **核心角色不合并**：这个议题最需要的视角各占一席，3 级时同一个核心角色可以由两个不同的模型各扮一遍。席位数按这一级的 `seats`，必选的模型一定占一席。
+- **一定先请你确认**：启动前弹窗列出"模型 → 角色"的分配，`dispatch.auto` 开着也一样；你可以按推荐开始、调整，或者改用普通讨论。
+- 角色只决定各方重点检查什么，不决定结论；裁决照样按证据，几个角色意见一致不算多一份证据。
+- 自定义角色、某类议题默认用多角色模式、对某个模型档位的不同看法，都可以写进偏好文件。角色表和分配规则见 [references/roles.md](foreman/skills/dispatch/references/roles.md)。
+
+为了不让 Claude Code 忘了这些（项目里有自己的 skill 时尤其容易漏），插件会在每个会话开始时提醒它一次，并附上你的偏好文件。
+
+### 出图素材
+
+位图交给 Codex 的内置出图工具画，画完由 Claude Code 在本机用 `assets` 子命令处理成下游能直接用的素材：透明背景的部件 PNG、按名字列出的 manifest、对照拼图，扁平少色的再转成 SVG（每个部件一个图层，可以导入 Figma、Illustrator）。
+
+- **开工前先选路线**：每个新的图形交付物开工前，Claude Code 都会弹窗让你选：① 位图、② 位图 + 矢量混合（定稿图加手画会弯的部件）、③ 纯矢量（先出一张参考图定风格）、④ 纯矢量 / 代码（不出图）；弹窗里写明出图和手画各用哪个模型、参考图会不会上传、返工规则。`dispatch.auto` 开着也会问；同一个交付物的返工、局部重出不再问，换路线、加交付物、扩大范围、换模型厂商会重新问。插件的钩子记下你选的路线，派出图像任务前脚本会核对：你取消了、没选，或者选的和要派的不一样，就不派出。这一点在桌面版实测过，命令行版还没测。
+- **出图和手画是图像模块的两格**：出图（`generate`）出定稿图、背景板、局部变体和独立素材，手画（`draw`）照定稿图画会弯的部件，或者在纯矢量路线里直接画。不分等级，用 `plan --module image` 建计划、`image` 命令派出。有人绕开图像模块、用普通执行任务出了图，结果里会提示；纯矢量路线的 SVG 里嵌了位图，也会提示。
+- **SVG、HTML 和动画里同源取件**：Codex 只画整张定稿图（你看过、认可后才往下做），再在定稿图上改出一张去掉主体的背景板；作品里的部件都从这张定稿图上取。整块动的部件（头、躯干、道具、柜台）由 Claude Code 用 `assets layers` 按原位置裁出；本身要弯、要和代码画的东西精确接触的部件（弯曲的四肢、尾巴）交给 Codex 照定稿图手画成 SVG、写好变形，Claude Code 写任务说明并自己截图验收（对照试片里两边指标打平，盲看时 Codex 手画的更自然）；要按物理逐帧模拟的、要和机械对齐的、文字和 UI 控件用代码画。实测图像模型画不准关节转轴和接触点，单独取出的部件还会被放大（最多到两倍）、重画比例；同一张图上取出的部件接缝严丝合缝，线宽也一样。动手前会告诉你哪些部件整块动、哪些交给 Codex 描成路径弯曲。
+- **表情只叠补丁**：眨眼、张嘴在定稿图上局部改图，只取变了的那一块叠上去，不整张换图，避免闪动。
+- **角色这类细节多的画默认不转 SVG**：转出来又大又有色带，保留 PNG 嵌进页面。
+- **多个部件按格子命名**：先画一张编号格子模板交给 Codex，让它把第 N 个部件画在第 N 格，切图时按格子命名，不会因为模型打乱顺序而张冠李戴。
+- **改图和照参考图出图**：任务说明会写明把参考图通过 `referenced_image_paths` 传给出图工具；没传的话，结果里的 `image_calls` 会显示出来并提示。局部修改只替换被改的那个部件。
+- **有量化的重出门槛**：背景板或表情改图测出的偏移超过 3 像素或缩放偏离超过 1%，背景板还留着主体残影，或者定稿图里会动的部件被压住，就改做法重出，不在下游打补丁、也不另写配准脚本绕过去。出图不设固定次数，同一个问题连续三次没改善才停下来问你。
+- **补丁、描图、截图和播放检查也在本机做**：`assets patch` 从改图里只取变了的区域（眨眼、张嘴），`assets trace` 照定稿图描出要弯的部件（曲线轮廓，描边粗细均匀，Codex 手画时用它打底），`assets capture` 用本机的 Chrome 或 Edge 按时刻截图，`assets playback` 截下一圈动画，检查闪动、首尾衔接，并生成能直接播放的 APNG 给你看。
+- **背景**：默认要透明背景，脚本清理边缘的淡光晕；主体是白色或浅色时改用品红纯色底。
+- **扁平素材转 SVG 不用另装东西**：用插件自带的描图，直边是直线、曲线是贝塞尔曲线，对照拼图里能看到 SVG 画回来的样子。
+- 做不到的：像素风、指定精确像素尺寸、超过约 157 万像素的高清图、让模型画单独的关节部件，以及需要定稿图里没有的那一面的大幅转身、换视角。
+
+图像模块的流程见 [references/image.md](foreman/skills/dispatch/references/image.md)，提示词模板见 [references/image-assets.md](foreman/skills/dispatch/references/image-assets.md)，`assets` 命令的选项和各项检查见 [references/assets-cli.md](foreman/skills/dispatch/references/assets-cli.md)。
+
+### 实时查看
+
+- 每个任务顶上固定两行：第一行是模型，写成"gpt-6.1-sol max · Codex CLI"（模型、推理强度 · 接入方式），整行颜色跟着状态变，右边是状态和用时，比如"running 37:51"；第二行是任务，写成"run · 标题 · complex"，最前面是模块（run、discuss、review、image），续接的后面写第几轮，图像任务用格子和路线代替等级。
+- 下面是一条时间线：左边是时间，模型说的话、命令、读文件和搜索、文件改动、生成和打开的图片依次往下排。两句话之间的动作只显示前几条，其余折成"… +9 commands"一行；连着改的文件并成一行；失败的命令在行尾标"✗ exit 1"，搜索没搜到写"no match"。最底下一行是最近一条思考摘要和按键提示。
+- 画面随窗口大小重排。↑↓、PgUp/PgDn 或鼠标滚轮往回翻，End 回到最新；运行中按 q 退出查看，任务照常运行。任务结束后画面停着，照样能翻看，结尾写出状态、用时、改动、用量、费用（按模型官方 API 价格算）和结论；按 q 离开后完整的记录留在终端里。任务被续接（返工、讨论的下一轮）后，底部上面会提示续接成了哪一轮，按 n 换过去。
+- 讨论、审查和拆开的执行任务在一个窗口里按席位排开。标题行写"discuss · panel · 标题 · normal"：模块、模式（panel 是普通多席，roles 是角色模式，split 是并发拆分）、标题、等级和第几轮，右边是各状态的个数，比如"●2 ✔1"。每席一块：行首是席位号，第一行是模型和状态，角色模式在下一行写角色，并发拆分写这一份的标题和等级；正文在运行中是它最近说的话、思考摘要和最近的动作，结束后是它的结论。Claude Code 席排在最前（席位号 0），和其他席一样写出报告的结论。
+- 窗口有富余时正文多显示几行，放不下时用滚轮翻看。按席位号打开那一席的完整时间线，Esc 返回。某个 API 模型因为服务繁忙在排队时，按 x 可以终止它。计划缺了必选、补漏席没跑完、审查期间材料变了时，标题下面多写一行提醒。全部结束后画面停着，按 q 离开后留下一份汇总，每席写结论、用量和 run_id，最后一行是回看某一席的命令。
+- 实时查看、`status` 和开工那一行里插件自己写的字段（状态词、用时、模型标签、用量、标签和提示）中英两个插件都用英文，显示得一样；模型和 Claude Code 写的内容，包括任务标题，照原文显示。
+- 颜色只表示状态：运行中青色、完成绿色、交回问题、等人回答和排队黄色、其余没做成的红色。任务行和模型行加粗，模型行跟着状态变色；角色和拆开的那一份的标题加粗；路径、用量、提示和时间用暗色。
+- 加 `--verbose` 看全部细节：思考原文、每条命令和输出、token 用量。
+- 新派出的对话第一次打开时，先放几秒启动动画：模型的像素头像、"正在启动"和几句玩笑（单个模型 5 秒，讨论 10 秒），按任意键跳过，`dispatch.intro` 设成 `false` 可以关掉。头像按模型名认，认不出的用 ??? 头像。
+- Claude 桌面版里，实时画面开在终端面板里，派活后自动打开（开着网页看板时不自动打开，只给看板链接）；命令行版里，Claude Code 会把命令发给你，在另一个终端里运行。
+
+### 网页看板
+
+终端实时查看之外的另一个入口，默认关闭：在配置里把 `dispatch.watch.web` 设成 `true`，或者运行 `/foreman:setup`（按本机内存决定开不开）。开着时派出任务只给看板链接，不再自动打开终端实时查看；想在终端里看时用 `/foreman:watch`。派出任务后，Claude Code 会在告诉你"已派出"的那句话里附上看板链接（每次派出都附，一起派出的几个任务附一次；最后的汇报里再附一次）。插件的钩子在派出命令运行前也会显示这个链接，桌面版里它折在工具调用里面；这一轮在后台派出过任务、Claude Code 的回复正文里却没有看板链接时，钩子会在这一轮结束前拦一次，让它补上那句话。
+
+- **怎么打开**：开着时，每次派活都先在对话里给一个链接，再启动任务；`/foreman:watch` 也会给。点开会在你的默认浏览器里打开：先看到星图，随后自动飞进这个对话的看板（刷新页面时直接回到看板）；不会在 Claude 应用里打开。
+- **星图**：
+  - 本机最近 24 小时的每个 Claude Code 对话是一个星系，同一个项目的聚成一团星云。对话列表和 Claude 桌面版的侧栏一致：桌面版里归档或删掉的对话、桌面版列表里没有的会话（比如命令行里 `claude -p` 的一次性调用）不显示，但在终端里用 claude 派过任务的对话照样显示；从别的对话里启动的子对话归到父对话的项目，在列表里缩在父对话下面。只用命令行、没有桌面版时，全部对话照列。
+  - 正在干活的协作方是绕着星系转的星；等你确认的对话外面有一圈琥珀色光环；出了错留一个红点。
+  - 星云的颜色来自用过的模型：每个项目的星云、每个星系的盘面，按里面的对话用过的模型上色（Claude Code 橙色、Qwen 紫色、DeepSeek 蓝色……），用得多的颜色占得多，正在跑的更亮，几个模型同时跑也不会亮成一团；单个对话看板里弧线区的星云也一样。
+  - 下方表格每个对话一行：鼠标移上去，星图里对应的星系会高亮，点一行就飞进这个对话。一行的任务数、用量和费用是这个对话从头到现在的全部（包括桌面版重启前的记录），和飞进去的看板一致；最近 24 小时只决定列出哪些对话。状态列里，还在进行的组里每个出了问题（超时、失败、被停止、没交回有效结果）的席位一个红点，整组结束后消失。
+  - 左上的"同时运行"面板列出四个模块里用到的协作方，每格是它能同时跑的一个任务，被哪个对话占着就亮成那个对话的颜色；不在模块里的协作方只在有任务跑着时出现。
+- **单个对话的看板**：点一个星系或表格里的一行，或者对着星系一直往里滚，就飞进这个对话的看板；按 Esc、点左上角的 FOREMAN 或一直往外缩，回到星图。看板是这个对话从头到现在的全部历史（包括桌面版重启前的记录，不管派没派过任务），里面有：
+  - Claude Code 和各个席位的卡片，以及模型之间的光路；
+  - 派发计划、交叉挑错、裁决这些环节的动画；
+  - 下面的用量表（行多时在表上滚动）：和终端区一样按组排，正在跑的组在前，每组前面一行组标题和各状态的个数；鼠标停在一行上，画面里这一席突出、其余变暗；
+  - 各席的终端（在用量表上滚到底后继续往下滚）：正在跑的组在上面一排，结束一分钟以后挪到下面的 finished 一段：你最后一条消息之后结束的组照样展开，样子和上面一样；更早轮次的组折成一行（标题、计数、结束时间、这一组所有轮次的费用），点一下展开，点栏头再收起。
+  - 状态的颜色和终端里的实时查看按同一套规则分：运行中、完成、部分完成和交回问题、失败和超时、已续接各是一种颜色。
+- **费用**：用量表里的费用一律按模型官方 API 价格算（鼠标停在上面会提示），用来比较各模型花了多少，和实际扣费不一定相同：Codex、Claude Code 用订阅时不按 token 扣钱，opencode、pi 的实际扣费以它们自己的账单为准。和 Claude Code 在对话里的汇报、`stats` 用的是同一个价格表（插件自带的 `prices.json`）；表里没有的模型、没有记下用量的任务不算，那一行显示 `?`，合计后面带 `+`。
+- **看板服务**：
+  - 这台电脑上所有对话共用一个本地进程，只在 127.0.0.1 上、带一次性令牌访问；
+  - 只读你的对话记录和运行记录，另外读 Claude 桌面版对话列表里每个对话的几项元数据（会话 id、归档标记、从哪个对话启动、启动目录）；
+  - 30 分钟没人看、也没有任务在跑就自己退出（在后台放了 30 分钟以上的看板标签页不算有人看）；插件被卸载或更新后也会退出；
+  - 要马上关掉，在终端运行 `node <插件的 scripts 目录>/cli.mjs board --stop`。
+- **回放（调试用）**：平时的链接都是直播。要把已经结束的对话按时间重新播一遍查问题，在终端运行 `node <插件的 scripts 目录>/cli.mjs board --replay <对话 id、任务 id、组名或 all>`。可以加 `--speed <倍数>` 加速、`--maxgap <秒>` 压缩空档。
+  - 它另起一个临时的回放服务，打印一个链接，十分钟没人看就退出，不影响正在看的直播页面。
+  - 要回放的记录超过 256 MB 时直接拒绝，并说明大小。
+  - 用老格式的回放链接打开直播页面时，页面照常显示直播，顶部提示怎么回放。
+- **资源占用**：服务约 100–130 MB 内存，浏览器标签页约 60–90 MB。内存偏低（总内存不到 8 GB 或可用不到 2 GB）时，`/foreman:setup` 会建议关着。
+- **浏览器**：需要较新的浏览器，Chrome 或 Edge 111、Firefox 113、Safari 16.2 及以上。
+
+## 配置
+
+用户配置在 `~/.claude/foreman/config.json`，项目配置在 `<项目目录>/.claude/foreman.json`。可以直接编辑文件，也可以对 Claude Code 说"用 `/foreman:config` 把复杂任务改成 ultra"。字段的完整说明见 [references/config.md](foreman/skills/dispatch/references/config.md)。`modules` 推荐写成一项一行：每个候选一行，`seats`、`gap` 各一行；`/foreman:setup` 可以把现有的配置改成这样，内容不变。
+
+### 第一次使用
+
+第一次运行时，插件先检测本机有什么，再生成配置：
+
+| 检测到 | 生成的安排 |
+|---|---|
+| 能用的 Codex（已安装、已登录） | 简单和常规的执行由 Claude Code 自己做，复杂的执行交给 Codex 的 `gpt-6.1-sol`；审查和讨论交给 Codex，复杂的用 `gpt-6-astra`；出图用 `gpt-6.1-sol`，手画会弯的部件用 `gpt-6-astra` |
+| 没有 Codex | 所有任务暂时由 Claude Code 自己做，图像两格关掉 |
+| API key 环境变量（DeepSeek、Kimi、MiMo） | 写进配置，先不加入讨论 |
+| opencode、pi、agy | 不自动加，用哪个模型由你选 |
+
+花钱或有安全影响的选择不会自动做，交给 `/foreman:setup` 和你一起定。
+
+### 配置的结构
+
+配置分三块：
+
+| 块 | 管什么 |
+|---|---|
+| `dispatch` | 插件怎么派活：是否主动派、实时查看、启动动画、讨论轮数、超时、记录目录 |
+| `agents` | 有哪些协作方、怎么连接 |
+| `modules` | 每类任务的每一格有哪些候选、谁必选、用什么推理强度；讨论和审查每一级几席、审查要不要补漏席 |
+
+一个最小的例子：Codex 做复杂的执行和所有审查，复杂的讨论再加一个 opencode 里的模型，出图和手画也交给 Codex。没写的字段用默认值。
+
+```json
+{
+  "agents": {
+    "gpt-6.1-sol": { "type": "codex cli", "model": "gpt-6.1-sol" },
+    "gpt-6-astra": { "type": "codex cli", "model": "gpt-6-astra" },
+    "glm-5.3":     { "type": "opencode cli", "model": "opencode-go/glm-5.3" }
+  },
+  "modules": {
+    "default": {
+      "discuss": { "simple": "claude code", "normal": [{ "agent": "gpt-6.1-sol", "effort": "high" }], "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "glm-5.3" }] },
+      "run":     { "simple": "claude code", "normal": "claude code", "complex": [{ "agent": "gpt-6.1-sol", "effort": "max" }] },
+      "review":  { "simple": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "normal": [{ "agent": "gpt-6.1-sol", "effort": "high" }], "complex": [{ "agent": "gpt-6-astra", "effort": "max" }] },
+      "image":   { "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }], "draw": [{ "agent": "gpt-6-astra", "effort": "max" }] }
+    }
+  }
+}
+```
+
+- `agents` 的键是协作方的**代号**，`modules` 和 `--agent` 用它引用。建议直接用模型名，可以用字母、数字、`.`、`-`、`_`。
+- 三种任务（`discuss` 讨论、`run` 执行、`review` 审查）各分三级，另有一个不进配置的 0 级（见下文"任务等级"）；图像（`image`）不分等级，分出图（`generate`）和手画（`draw`）两格。
+- 每一格写一组候选。一格有几个候选时，Claude Code 每次按规则挑：讨论和审查每一级挑几个由 `seats` 决定（默认值见 [`config.md` 的"候选和必选"](foreman/skills/dispatch/references/config.md)，不含 Claude Code 自己），尽量用不同的模型，候选少于这个数时全上；审查每一级要不要另加补漏席由 `gap` 决定，默认不加；执行每份工作派一个。标了 `"required": true` 的是必选，这一格用到时一定参加。
+- 写成 `"claude code"` 表示 Claude Code 自己做；对审查和讨论来说，就是这一格不找外部模型。图像的格子写 `null` 表示关掉。
+- `effort` 是推理强度，不写就用默认值。Codex 是 `low` 到 `ultra`；opencode 是模型的 variant；pi 是 thinking 档位；agy 是 `low` / `medium` / `high` 这类档位（agy 把它写在模型 ID 的后缀里，插件派出时再拼回去）；API 原样作为 `reasoning_effort` 发出。
+- 图像任务开工前先弹窗让你选路线，路线决定用到哪几格：只用到手画的纯矢量路线不碰出图那一格，那一格里的必选也不会参加。
+
+以前平铺的 `modules`（下面直接是 `discuss`、`run` 等）照常能读：第一次读到时插件把它原样放进 `modules.default`，原文件先备份。旧的 `levels` 写法也照常能读：第一次读到时，插件把它改写成 `modules`，每一格的协作方、推理强度和顺序都不变，原文件备份为 `config.json.bak`。注意一处变化：以前讨论一级里写的模型全部参加，改写后它们是候选、由 Claude Code 挑；想保留全员参加，就给它们都标上 `"required": true`，`/foreman:setup` 可以帮着标，也会帮你加上图像两格。
+
+### 五种协作方
+
+| `type` | 是什么 | 能做的任务 | 自己读代码 | 隔离 | 用谁的额度 |
+|---|---|---|---|---|---|
+| `codex cli` | 本机的 Codex CLI | 执行、审查、讨论、生成图片 | 能 | Codex 自己的沙箱 | Codex 订阅或 OpenAI API |
+| `opencode cli` | 本机的 opencode，接入它支持的各家模型 | 审查、讨论；写了 `run_access` 还能执行 | 能 | 只限定工具，没有系统沙箱 | 在 opencode 里登录的厂商，或 OpenCode Go 订阅 |
+| `pi cli` | 本机的 pi，接入它支持的各家模型 | 同 opencode | 能 | 同 opencode，读写路径由插件注入的守卫检查 | 在 pi 里登录的厂商 |
+| `agy cli` | 本机的 Agy CLI（Google Antigravity CLI） | 审查、讨论 | 能 | 插件装在 agy 全局钩子里的守卫；只读命令跑在 agy 的沙箱里 | 在 agy 里登录的 Google 账号 |
+| `api` | 兼容 OpenAI 接口的模型 | 讨论、审查（只审文本） | 不能，Claude Code 把相关文件附过去 | 不涉及 | 厂商的 API 余额 |
+
+同一种可以配多个，各用不同模型。Codex 不是必需的。
+
+### 任务等级
+
+Claude Code 每次进入讨论、执行或审查时，都按这一类的标准单独定级；同一类在一个请求里再次出现，也重新定级。三类的标准不一样：
+
+| 等级 | 讨论（看决策的不确定性和选错的代价） | 执行（看要多少判断、出错的代价） | 审查（看被审改动的风险） |
+|---|---|---|---|
+| 0 级 | 方案已经明确或你已拍板：不找外部模型 | 一处就能改完、自己改比写任务说明还快的小改动 | 小改动、文档、样式、配置，或有测试覆盖的低风险改动：Claude Code 验收就够 |
+| 1 `simple` | 需要第二意见的一次性问答 | 做法确定、几乎不用判断 | 改动量大但很机械 |
+| 2 `normal` | 有几个方案要比较，影响有限 | 有规格，细节要自己设计 | 较大的一般功能和修复 |
+| 3 `complex` | 复杂、不确定、选错代价高 | 根因不明、出错代价高、跨模块 | 金额、数据、并发、鉴权等高风险代码 |
+
+0 级固定由 Claude Code 自己做，不在配置里；1–3 级有哪些候选、谁必选、用什么推理强度由你在 `modules` 里决定，Claude Code 只在这一格的候选里挑。等级看判断和风险，不看改动多少：照清单机械地改 20 个文件是简单，改模块之间的接口是复杂。审查只看被审的改动本身：执行时是 3 级、根因难查，都不会让审查自动升到 3 级；只有改变了高风险行为、或者排除不了对它的影响才算 3 级。修完以后，只有修复本身又碰到高风险时才复审一次，而且只审修复的部分。派出去的每次调用都必须带上等级，漏了脚本直接报错，不会悄悄按某个档位运行。
+
+- 想临时指定时，对 Claude Code 说"用 ultra 跑"或"用某某模型跑"，Claude Code 会加上 `--effort`（只换推理强度）或 `--model`（只能换同一个提供方的模型）。
+- 某一级写成 `"claude code"` 时，你仍然可以明确要求把某个任务派出去，Claude Code 会用 `--agent` 点名。
+- 一次派几个席位（比如几个模型讨论同一个议题）时，Claude Code 先建一份派发计划，脚本检查必选是否都在、讨论和审查的外部席位数是否和 `seats` 一致，再逐席启动。必选的模型失败或额度用完时，这件事算没做完，不会拿别的模型顶替。
+- 0 级只限一处就能改完的小改动。默认 `simple` 也由 Claude Code 自己做；把 `simple` 交给协作方的话，除了 0 级的小改动，其余的活都会派出去。
+
+### 接入 API 模型
+
+1. **加协作方**：`{ "type": "api", "base_url": "...", "model": "..." }`。兼容 OpenAI 接口的都行，比如 DeepSeek、Kimi、MiMo、GLM、通义千问、OpenRouter；有特殊参数时写在 `extra_body` 里，会原样并进请求。
+2. **填 key**，二选一：
+   - 环境变量：写 `"api_key_env": "DEEPSEEK_API_KEY"`，再设置这个环境变量。Windows 上在"系统属性 → 环境变量"里加一个用户变量；macOS 和 Linux 写进 shell 的启动文件。设置后重启 Claude Code 才能读到。
+   - 配置文件：写 `"api_key": "sk-..."`，立即生效，但是明文保存，这个文件不要提交或分享。两种都写时，以配置文件里的为准。
+3. **加进讨论或审查**：在 `modules.default.discuss` 或 `modules.default.review`（或某个场景块）需要的格子里加上它。
+
+也可以交给 `/foreman:setup`，比如运行 `/foreman:setup 加 DeepSeek`；key 由你自己填，不用发到对话里。API 模型自己翻不了代码，Claude Code 会把相关文件随议题或审查说明附过去（审查改动时附的是补丁；每次上限约 30 万字符），并对照原文核实它对代码的说法。
+
+### 接入 opencode
+
+装了 opencode 2.x 的话，它里面能用的模型都可以参加讨论和审查，比如 [OpenCode Go](https://opencode.ai/docs/go/) 订阅里的 GLM、Kimi、Qwen、MiniMax、DeepSeek。它们能自己读项目里的代码，代价是每读一次文件多一次请求，更费额度。
+
+1. **登录**：终端运行 `opencode`，用 `/connect` 登录（OpenCode Go 选 OpenCode Go），再运行 `opencode models` 看能用哪些模型。名字带 `-free` 的免费模型不要配：OpenCode 现在只允许在它自己的界面里用免费模型，从命令行调用会被拒绝（报错 "OpenCode's free tier can only be used from within OpenCode"）。
+2. **加进配置**：每个模型加一项 `{ "type": "opencode cli", "model": "opencode-go/glm-5.3" }`，再加进需要的格子。也可以交给 `/foreman:setup`。
+
+讨论和审查时，插件给它注入一个只读代理，只有读文件、搜索和列目录的工具；审查要看的改动由插件用 git 算好附给它。key 和登录都留在 opencode 里。结果里的费用（`cost_usd`）和其他协作方一样按模型官方 API 价格算；opencode 自己报的费用（OpenCode Go 的额度按它扣）另存在 `reported_cost_usd`。Go 的额度按模型分开算，高档模型额度少，建议只放在复杂讨论里。
+
+### 接入 pi
+
+装了 pi（`npm install -g @earendil-works/pi-coding-agent`）的话，用法和 opencode 一样。
+
+1. **登录**：终端运行 `pi`，用 `/login` 登录要用的厂商（或者设置厂商的 API key 环境变量），再运行 `pi --list-models` 看能用哪些模型。
+2. **加进配置**：每个模型加一项 `{ "type": "pi cli", "model": "deepseek/deepseek-flash" }`，再加进需要的格子。
+
+- 推理强度是 pi 的 thinking 档位（`off` 到 `max`），每个模型支持的不一样。**写了模型不支持的档位，pi 不报错，会悄悄换成最接近的一档**，所以改完运行一次 `check`，它会说明会被换成哪一档。
+- pi 本身没有权限系统。插件每次只开放这次任务需要的工具，注入守卫扩展让读写路径不出项目目录，也不加载你自己装的扩展、skill 和 MCP。项目的 AGENTS.md / CLAUDE.md 照常读，会话存在 pi 的默认位置。
+
+### 接入 agy
+
+装了 Agy CLI（Google Antigravity CLI，命令 `agy`）并登录好账号的话，可以让它参加讨论和审查。目前只验证了 Windows 11；执行任务还不支持。
+
+1. **装守卫**：agy 不能按次加载扩展，插件只能靠 agy 的全局钩子管住它的工具。`/foreman:setup` 加 agy 时会先问你同不同意，同意后在 `~/.gemini/config/` 下写一个钩子条目 `foreman-guard`、一个启动器和守卫脚本，原来的 `hooks.json` 先备份。也可以让 Claude Code 运行 `agy-guard install`。
+2. **加进配置**：运行 `agy models` 看能用哪些模型。agy 把推理强度写在模型 ID 的后缀里（比如 `gemini-3.8-flash-high`），插件把它拆开，写法和其他协作方一样：协作方写 `{ "type": "agy cli", "model": "gemini-3.8-flash" }`，格子里写 `"effort": "high"`，派出时再拼成 agy 认的 ID。只有一档或者没有档位的模型（比如 `claude-sonnet-4-6`）不用写 `effort`。旧写法（`model` 写完整 ID、不写 `effort`）照常能用。
+
+- **守卫对你平时用 agy 的影响**：没有 foreman 运行时，守卫对每次工具调用都回答"按 agy 自己的设置来"，平时用 agy 的体验不变，每次工具调用多约 0.1 秒。foreman 在某个目录里运行 agy 期间，你在同一目录里自己用 agy 会被拦下工具调用，拒绝理由里写明原因和什么时候结束。
+- **哪些情况不派 agy**：项目里（包括 `.agents/` 等目录）有 agy 的钩子、MCP 或插件配置，或者全局 `hooks.json` 里除了 foreman 的条目还有别的钩子时，插件管不住它们，这次不派 agy，结果里写明是哪个文件挡住的。
+- **能读什么、能跑什么**：讨论和审查时只放行读文件，路径限定在项目目录和 `--add-dir` 指定的目录里。本机的 agy 沙箱可用时（Windows 11 24H2 及以上），还能在沙箱里跑只读的命令：沙箱里改不了项目内外的文件、上不了网，但系统临时目录仍然可写，所以它保证的是项目文件不变、不能联网，不是整台机器只读；沙箱不可用时没有 shell，插件附上项目的文件清单代替。启动 agy 前，插件会去掉 API key 之类的环境变量（agy 自己登录可能用到的 `GEMINI_API_KEY` 保留，沙箱里的命令也看得到它）。
+- 你自己的 GEMINI.md 和 skill 照常加载，全局配置的 MCP 服务器也会启动，但它们的工具会被守卫拒绝。agy 的会话会出现在它的历史里。
+- **卸载**：让 Claude Code 运行 `agy-guard uninstall`，它删掉钩子条目和守卫文件。插件已经卸掉、没法运行这个命令时，手动打开 `~/.gemini/config/hooks.json` 删掉名为 `foreman-guard` 的条目（只剩它时可以删掉整个文件），再删掉同目录下的 `foreman-agy-guard.mjs`、`foreman-agy-guard.cmd` 和 `foreman-agy-guard.sh`。只删文件不删条目的话，agy 的每次工具调用都会被拦下。
+
+### 让 opencode 或 pi 做执行任务
+
+在用户配置里给这个协作方写 `run_access`，再放进 `modules.default.run`（或者图像的 `draw`）的格子（项目配置开不了）：
+
+- `"edit"`：只能读写项目目录里的文件，不能运行命令，测试由 Claude Code 事后跑。
+- `"shell"`：还能运行命令，比如跑测试。没有系统沙箱，命令以你的账户权限运行、能访问整台机器，只适合你信任的项目和模型。
+
+两档都会先拍改动快照，Claude Code 事后逐个文件审查 diff。
+
+### 完整示例
+
+<details>
+<summary>展开：四种协作方都用上的一份完整配置</summary>
+
+```json
+{
+  "dispatch": {
+    "auto": true,
+    "watch": { "terminal": true, "web": false },
+    "intro": true,
+    "discuss_max_rounds": 2,
+    "timeout_min": 240,
+    "stall_min": 20,
+    "busy_ask_min": 2
+  },
+  "agents": {
+    "gpt-6-astra":        { "type": "codex cli", "model": "gpt-6-astra" },
+    "gpt-6.1-sol":        { "type": "codex cli", "model": "gpt-6.1-sol" },
+    "deepseek-flash":     { "type": "opencode cli", "model": "deepseek/deepseek-flash" },
+    "glm-5.3":            { "type": "opencode cli", "model": "opencode-go/glm-5.3" },
+    "mimo-v2.6-pro":      { "type": "pi cli", "model": "xiaomi/mimo-v2.6-pro" },
+    "kimi-k2.6":          { "type": "api", "base_url": "https://api.moonshot.cn/v1", "api_key_env": "KIMI_API_KEY", "model": "kimi-k2.6" }
+  },
+  "modules": {
+    "default": {
+      "discuss": {
+        "simple": [
+          { "agent": "gpt-6-astra", "effort": "medium" },
+          { "agent": "glm-5.3" }
+        ],
+        "normal": [
+          { "agent": "gpt-6-astra", "effort": "high" },
+          { "agent": "deepseek-flash", "effort": "high" },
+          { "agent": "glm-5.3" }
+        ],
+        "complex": [
+          { "agent": "gpt-6-astra", "effort": "max", "required": true },
+          { "agent": "deepseek-flash", "effort": "max" },
+          { "agent": "kimi-k2.6" },
+          { "agent": "mimo-v2.6-pro", "effort": "high" },
+          { "agent": "glm-5.3" }
+        ],
+        "seats": { "simple": 2, "normal": 4, "complex": 8 }
+      },
+      "run": {
+        "simple":  "claude code",
+        "normal":  "claude code",
+        "complex": [{ "agent": "gpt-6.1-sol", "effort": "max" }]
+      },
+      "review": {
+        "simple":  [{ "agent": "gpt-6-astra", "effort": "medium" }],
+        "normal":  [{ "agent": "gpt-6-astra", "effort": "high" }, { "agent": "deepseek-flash", "effort": "high" }],
+        "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "deepseek-flash", "effort": "max" }, { "agent": "glm-5.3" }],
+        "seats":   { "simple": 1, "normal": 2, "complex": 2 },
+        "gap":     { "simple": false, "normal": false, "complex": true }
+      },
+      "image": {
+        "generate": [{ "agent": "gpt-6.1-sol", "effort": "medium" }],
+        "draw":     [{ "agent": "gpt-6-astra", "effort": "max" }]
+      }
+    }
+  }
+}
+```
+
+| 代号 | 接入方式 | 用在哪 |
+|---|---|---|
+| `gpt-6.1-sol` | Codex CLI | 复杂的执行、出图 |
+| `gpt-6-astra` | Codex CLI | 所有审查和讨论的候选，复杂的讨论和审查必选；手画会弯的部件 |
+| `glm-5.3` | opencode（OpenCode Go 订阅） | 三级讨论和复杂审查的候选 |
+| `deepseek-flash` | opencode | 常规和复杂的讨论、审查的候选 |
+| `mimo-v2.6-pro` | pi | 复杂讨论的候选 |
+| `kimi-k2.6` | API，key 在环境变量 `KIMI_API_KEY` 里 | 复杂讨论的候选 |
+
+简单和常规的执行由 Claude Code 自己做。讨论和审查的候选随等级增加：每次由 Claude Code 从候选里挑几席（个数由 `seats` 决定，三级都写在配置里），`gpt-6-astra` 在复杂的讨论和审查里必选，一定参加。复杂的审查另加一个补漏席（`gap`）：各席审完后，再请一个没参加过的模型只找"清单还漏了什么"。
+
+这份配置没用到、但常会调整的字段：
+
+```json
+"gpt-6.1-sol":        { "type": "codex cli", "model": "gpt-6.1-sol", "sandbox": { "run": "workspace-write" }, "max_parallel": 2 },
+"glm-5.3":            { "type": "opencode cli", "model": "opencode-go/glm-5.3", "run_access": "edit" },
+"deepseek-v4-pro":    { "type": "api", "base_url": "https://api.deepseek.com", "api_key_env": "DEEPSEEK_API_KEY", "model": "deepseek-v4-pro", "extra_body": { "temperature": 0.3 } }
+```
+
+- `sandbox`：Codex 每类任务（`run`、`review`、`discuss`）用的沙箱，`read-only`、`workspace-write` 或 `danger-full-access`；不写就用 Codex 自己的配置。讨论和审查推荐 `read-only`；Windows 上只读沙箱启动不了时，见下面“安全提示”改用 unelevated。
+- `max_parallel`：这个协作方同时最多跑几个任务，默认 4（agy 默认 2）。满了以后，新的派发按先来后到排队等名额（默认最多等 60 分钟，`--queue-timeout` 可以改，写 0 表示不排队、直接拒绝），不同对话派出的任务也一起排。
+- `run_access`：允许 opencode 或 pi 做执行任务，见上文。
+- `extra_body`：API 请求里额外带的参数。
+- `bin`：找不到命令时，写可执行文件的完整路径。
+
+</details>
+
+### 项目配置
+
+某个项目要换一套候选、多用或少用几个模型、改时长时，在项目里写 `<项目目录>/.claude/foreman.json`，它覆盖你的用户配置：
+
+```json
+{
+  "dispatch": { "timeout_min": 600 },
+  "modules": {
+    "default": {
+      "review": {
+        "normal": [{ "agent": "gpt-6.1-sol", "required": true }, { "agent": "glm-5.3" }, { "agent": "kimi-k2.6" }],
+        "seats": { "normal": 3 }
+      }
+    }
+  }
+}
+```
+
+- 只能写 `modules`（包括场景块和 `seats`、`gap`），以及 `dispatch` 的 `discuss_max_rounds`、`timeout_min`、`stall_min`、`busy_ask_min`；协作方要在用户配置的 `agents` 里定义，项目里不能新加。
+- 写了的格子整格替换，没写的沿用用户配置；`seats`、`gap` 按等级覆盖。可以加候选、改必选、调高席位、延长时长。
+- 以前写在用户配置 `projects` 里的按项目覆盖已经不用了，`/foreman:setup` 可以帮你搬到各项目的 `.claude/foreman.json`。
+
+### 按场景配置
+
+同一类任务有时服务于不同的场合：研究证据的审查想"广"，多找几家、加补漏席；高风险代码的审查想"准"，只用最强的两家、推理强度开满。这时可以在 `modules` 下按场景整套配置：`default` 是默认的一套，其余场景只写要改的部分。不需要的话不用管，配置里只有 `modules.default`。
+
+先在偏好文件里定义场景和怎么选（`/foreman:setup` 可以帮你写）：
+
+```markdown
+<!-- foreman:scenes -->
+## 场景路由
+- **code**：评判或决定代码、接口、配置、脚本、测试的改动；`--target diff` 的审查一律算 code。
+- **research**：研究结论和证据、研究方案、卡片、说明文档、研究方向构思；`--target claims` 的审查一律算 research。
+- 两类都有的拆成两个计划；没写到的情况用 default。
+<!-- /foreman:scenes -->
+```
+
+再在 `modules` 下加场景块：
+
+```json
+"modules": {
+  "default": { "discuss": { … }, "run": { … }, "review": { … }, "image": { … } },
+  "code": {
+    "review": { "complex": [{ "agent": "gpt-6.1-sol", "effort": "max", "required": true }, { "agent": "gpt-6-astra", "effort": "max" }],
+                "seats": { "complex": 2 }, "gap": { "complex": false } }
+  },
+  "research": {
+    "review": { "normal": [{ "agent": "gpt-6.1-sol", "effort": "high", "required": true }, { "agent": "gpt-6-astra", "effort": "high" },
+                           { "agent": "deepseek-flash" }, { "agent": "glm-5.3" }],
+                "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "gpt-6.1-sol", "effort": "high" },
+                            { "agent": "deepseek-flash" }, { "agent": "glm-5.3" }],
+                "seats": { "normal": 3, "complex": 4 }, "gap": { "normal": true, "complex": true } }
+  }
+}
+```
+
+上面的例子里，代码审查（complex）用 sol 和 astra 两席、不补漏；研究审查在 normal 和 complex 都多找几家、留补漏席，complex 的必选换成 astra（一般的研究证据审查是 2 级，所以 normal 也要配）。没写的格子都沿用 `default`。四个模块都能按场景配。Claude Code 派活和建计划时按偏好里的路由选场景，并写明依据。`modules` 里有偏好没定义的场景时，派活和建计划都会被拒绝，`config` 会指出是哪个文件；反过来，偏好定义了、`modules` 里没写的场景只提示一句，按 `default` 用。项目偏好写了场景块时，这个项目只用它定义的场景（空块表示不分场景）。详见 [`config.md` 的"场景"](foreman/skills/dispatch/references/config.md)。
+
+### 偏好文件
+
+有些习惯不好写成 JSON，比如你的项目里哪类代码算高风险、哪些活不想派出去。这些可以用文字写在偏好文件里，Claude Code 每个会话开始用插件时会读：
+
+- 用户级：`~/.claude/foreman/preferences.md`
+- 项目级：`<项目目录>/.claude/foreman.md`
+
+偏好文件只能在插件的硬规则以内调整做法：配置文件本身、必选、材料能不能发给某一家、讨论和审查只读、要弹窗确认的事和每一级的席位数，都不受偏好文件影响。在这个范围以内，和插件自带的规则冲突时以偏好文件为准。两份都读，冲突时以项目级为准。例如：
+
+```markdown
+# foreman 偏好
+
+- 这个项目的计费和对账代码按高风险处理：派活用 complex，改完都请 Codex 审查。
+- 数据库迁移脚本不派出去，由 Claude Code 自己写。
+- 改动超过 200 行就请 Codex 审查。
+- 性能和可维护性互相拉扯的讨论用多角色模式；kimi-k2.6 按强档模型对待。
+- 按 stats 的本地实测，deepseek-v4.1-flash 在审查里的独有发现多，审查时按强档用。
+```
+
+多角色讨论的自定义角色也写在这里，格式见 [references/roles.md](foreman/skills/dispatch/references/roles.md) 的"用户自定义角色"。
+
+## 安全提示
+
+- **Claude Code 只能通过插件调用协作方。** 插件带有一个钩子：Claude Code 直接运行 `codex exec`、`codex review`、`opencode run`、用 pi 跑任务或用 agy 跑模型的命令会被拦下，这样每次调用都有记录、改动追踪和明确的模型和推理强度。你自己在终端里运行它们不受影响。
+- **Codex 的隔离靠它自己的沙箱。**
+  - 沙箱以 Codex 的配置为准。是 `danger-full-access` 时，Codex 能读写电脑上的任何目录；任务说明会限定改动范围、Claude Code 事后也会审查 diff，但这些都不是技术上的隔离。想要隔离，把 `agents.<代号>.sandbox` 设成 `workspace-write` 或 `read-only`。讨论和审查推荐设 `read-only`：写入被系统拦下（结果的 `readonly` 为 `sandbox`）；没设时只靠规则约束和事后对比快照（`audited`），发现写入就记为失败。Windows 上的只读沙箱可能连读文件的命令都启动不了，这时按 `check` 的提示改用 `[windows] sandbox = "unelevated"`。
+  - Windows 上 Codex 默认的 elevated 沙箱要先以管理员身份完成一次设置，设置坏了每条命令都会失败（报 `windows sandbox failed`）。改了沙箱之后让 Claude Code 运行一次 `check`：它不调模型地测一遍沙箱，坏了会列出修法，比如改用 `[windows] sandbox = "unelevated"`。
+  - 审批 `approval` 保持默认的 `never` 就好：派出去的任务没人能批准，沙箱坏了要修沙箱。
+- **opencode 和 pi 做执行时没有系统沙箱。** `edit` 档写不了项目以外的文件、不能运行命令；`shell` 档的命令能访问整台机器。默认不开放，要你自己在用户配置里写，项目配置开不了。
+- **代码会发给协作方背后的厂商。** 派给 Codex 的发给 OpenAI；opencode、pi 和 API 模型发给对应的厂商，agy 发给 Google，API 模型还会收到 Claude Code 附上的文件。涉及敏感代码的项目先确认没问题，必要时在项目配置里去掉 API 候选，或者把讨论、审查整格写成 `"claude code"`。
+- **项目配置和项目偏好能覆盖你的设置。** 项目里的 `.claude/foreman.json` 能加候选（只能用你在用户配置里定义的协作方）、调高席位、延长时长，`.claude/foreman.md` 能改场景路由；从别人那里克隆来的仓库也一样。打开陌生仓库时先看看这两个文件，`config --cwd` 的 `project_config` 会列出它覆盖了什么。
+- **API key 可以写在用户配置里，也可以放在环境变量里。** 写在配置里是明文，`~/.claude/foreman/config.json` 不要提交或分享；项目配置里写的 key 不生效。`config` 命令不显示 key，脚本也不会把 key 写进运行记录。配置的备份（`.bak`）和迁移时改写出来的新文件继承所在目录的权限：想只让自己能读，就让整个目录只有自己能读（默认的 `~/.claude/foreman` 就是这样），别只给配置文件单独设权限。
+- **按量计费的都会产生费用。** Codex 用 API key 计费时、API 模型、opencode 和 pi 接入的按量计费厂商，每次派活或讨论都会花钱。不想让 Claude Code 自己发起派活、讨论和审查，就把 `dispatch.auto` 设成 `false`，它会先问你。
+- **协作方不会因为等人回答而卡住。** Codex 默认不需要审批，opencode 不开放提问和需要确认的权限，pi 没有提问工具，agy 的提问工具被守卫拒绝。它们要人回答的事都收集在结果里，由 Claude Code 判断：你已有授权内的直接决定后续接，业务取舍、扩大范围、花钱和不可逆的操作才问你。
+
+## 运行记录
+
+每次调用都会在 `~/.claude/foreman/runs/<run_id>/` 留档：任务说明、事件流、diff、最终报告。API 模型的运行没有 diff，另外多一份对话历史 `messages.json`，续接时接着发。`/foreman:status` 可以查看。
+
+- 改动追踪用的是放在记录目录里的独立 git 仓库，不会碰你项目里的 `.git`。它比较任务开始和结束时的整个工作目录，所以同一时间你、Claude Code 或别的会话改的文件也会被看到：有证据是协作方改的文件和归属未知的文件分开标出，Claude Code 不会直接还原归属未知的改动。
+- 被 `.gitignore` 忽略的路径默认不追踪，派活时用 `--track` 指定后才会追踪。
+- Codex 额度用完、API 余额不足时，任务标记为 `quota_exhausted`，不会自动重试；Codex 的会带上预计恢复时间。
+- 调度进程意外退出、卡死或超时的任务，下次在这个项目里开会话时，Claude Code 会收到提醒。
+- 审查或讨论结束、Claude Code 核实完后，会把每条意见的去留记进那个任务的 `verdict.json`。`cli.mjs stats` 按模型和模块汇总这些记录：席位数、成立和误报的条数、只有它发现的条数、返工率、用时（中位数和 P90）、用量和费用，没记录到用量的写明缺失，不当成 0。加 `--by effort,cell,scene`（任选几项）还能按推理强度、等级和场景分开统计，输出里另有每类、每级计划从建计划到最后一席结束的整体耗时；想比较改档前后（比如审查从 xhigh 改成 high），配合 `--since` 看改完以后的记录。你可以在偏好文件里引用这份统计调整模型档位；插件不会自动排名。
+
+## 平台支持
+
+主要在 Windows 的 Claude 桌面版（含 Microsoft Store 版）上开发和测试；命令行版也测过，插件、命令和钩子的加载和桌面版一样。macOS 和 Linux 的代码路径已经写好，但还没有实际测试，欢迎反馈问题。
+
+- **桌面版的实时查看**开在终端面板里，终端面板只接受 ASCII 命令。记录目录（默认 `~/.claude/foreman/runs`）的路径里有中文等字符时（比如 Windows 用户名是中文），`/foreman:setup` 会提示；在配置里把 `dispatch.runs_dir` 设成纯英文路径就行。命令行版不受影响。
+- **从图形界面启动的程序**（比如 macOS 桌面版）PATH 里可能没有 Homebrew、nvm 等目录。脚本找不到命令时，会再到 node 所在的目录、`/opt/homebrew/bin`、`/usr/local/bin` 等常见位置找；仍然找不到，就在这个协作方里写上 `bin`（可执行文件的完整路径）。插件的钩子要用 `node`，也需要能在 PATH 里找到它。
+- **实时查看**用到全屏重画，Windows Terminal、macOS 的终端和 iTerm2、VS Code 的终端以及常见的 Linux 终端都支持；`TERM=dumb` 这类简单终端会改成逐行输出。启动动画用 24 位色，macOS 自带的终端会自动改用 256 色；它主要在 Claude 桌面版的终端里看过，别的终端里显示不对时，用 `dispatch.intro: false` 关掉。
+
+## 从 codex-bridge 升级
+
+这个插件原来叫 codex-bridge。Claude Code 不会把旧插件自动升级成新名字，需要手动换一次：
+
+1. 卸载旧插件：`/plugin uninstall codex-bridge@claude-codex-bridge`。新旧插件同时装着时，两边的钩子会重复拦截、重复提醒。
+2. 按[安装](#安装和设置)的步骤安装 `foreman`，用 release 包或者新的 marketplace 都行。
+3. 用桌面版"我的上传"装过旧插件的，在那里把它删掉。
+
+你的设置会在新插件第一次运行时自动搬过去：
+
+| 原来 | 现在 |
+|---|---|
+| 插件 `codex-bridge` / `codex-bridge-en`，marketplace `claude-codex-bridge` | `foreman` / `foreman-en`，marketplace `claude-foreman` |
+| `/codex-bridge:rescue` | `/foreman:run`；其他命令只换前缀 |
+| 配置 `~/.claude/codex-bridge.json` | `~/.claude/foreman/config.json`（自动复制） |
+| 偏好 `~/.claude/codex-bridge.md` | `~/.claude/foreman/preferences.md`（自动复制） |
+| 运行记录 `~/.claude/codex-runs` | `~/.claude/foreman/runs`（整个搬过去；旧目录里还有任务在跑时，下次再搬） |
+| 项目里的 `.claude/codex-bridge.json`、`.claude/codex-bridge.md` | `.claude/foreman.json`、`.claude/foreman.md`（旧名照常能读，会提示改名） |
+| 环境变量 `CODEX_BRIDGE_CONFIG`、`CODEX_RUNS_DIR`、`CODEX_BRIDGE_LANG` | `FOREMAN_CONFIG`、`FOREMAN_RUNS_DIR`、`FOREMAN_LANG`（旧名暂时还认） |
+
+配置还会改成新写法：`type` 改为 `codex cli` / `opencode cli` / `api`，`"claude"` 改为 `"claude code"`，协作方代号改成模型名（比如 `codex` 改为 `gpt-6-astra`），`levels` 改写成 `modules`（见上文"配置的结构"）。每一格实际用的模型和推理强度不变，原文件备份为 `config.json.bak`。旧配置和旧偏好文件保留，确认没问题后可以自己删掉。
+
+## 中文版和英文版
+
+插件市场里有两个插件，规则和输出的语言不同，其余完全一样：
+
+- `foreman`：中文版，命令是 `/foreman:…`
+- `foreman-en`：英文版，命令是 `/foreman-en:…`
+
+只装其中一个就行。两者共用同一份配置文件、偏好文件和运行记录，换装另一个不用重新配置。
+
+## 开发
+
+两个插件的脚本是同一份：`skills/dispatch/scripts/` 下除 `language.json` 以外的全部文件（入口是 `cli.mjs`），以及 `hooks/` 下的钩子脚本。只改 `foreman/` 里的那份，再运行同步工具复制到英文插件：
+
+```bash
+node tools/sync-shared.mjs
+```
+
+- 提交前可以用 `node tools/sync-shared.mjs --check` 检查两份脚本、两份 schema 的结构和两个插件的版本号是否一致。
+- 测试：`npm test`（只用 Node 内置模块，不用装依赖），说明见 [tests/README.md](tests/README.md)。
+- 终端提示、发给协作方的约束和提示词都在 `messages.mjs` 里，中英文各一份；各个 skill 的 `SKILL.md`（斜杠命令也是 skill，在 `skills/<命令名>/SKILL.md`）、`references/` 和 schema 两个插件各写各的。
+- 模型档位的数据在 `scripts/model-tiers.json`，来自 LiveBench，几个月就变：每次发版前复制最新榜单，用 `tools/import-livebench.mjs` 导入（做法见 `references/model-tiers.md` 的"维护"）。模型身份和别名在 `scripts/models.json`，价格在 `scripts/prices.json`，三份都只改中文插件那份，再用 `tools/sync-shared.mjs` 同步。
+- 启动动画的头像数据由 `node tools/make-avatars.mjs` 从 `tools/avatars/source.webp` 生成。
+- 网页看板的服务在 `skills/dispatch/scripts/board/`，两个插件共用；页面的源码在仓库根目录的 `board/`，改完运行 `node board/build.mjs` 生成 `index.html`（中英文共用一份，按插件语言显示），再运行同步工具。协议和设计记录在 `docs/board/`。
+
+## 许可证
+
+[MIT](LICENSE)

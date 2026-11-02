@@ -5,40 +5,80 @@
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/DaydayupV/claude-foreman/pulls)
 [![GitHub stars](https://img.shields.io/github/stars/DaydayupV/claude-foreman?style=social)](https://github.com/DaydayupV/claude-foreman/stargazers)
 
-[English](README.en.md)
+[中文](README.zh-CN.md)
 
-![用 CC 实现全模型协作：Claude Code 指挥 GPT、Claude、DeepSeek、Gemini 等模型](docs/images/banner.zh.png)
+![Claude Code × all models: Claude Code commands GPT, Claude, DeepSeek, Gemini and more](docs/images/banner.en.png)
 
-一个 Claude Code 插件，让 Claude Code 当"工头"：它负责规划、决策和验收，把动手的编码工作按你的配置派给 Codex、opencode、pi 等 CLI 工具，也能请它们独立审查代码，或者在复杂方案上召集几个模型一起讨论，最后由 Claude Code 裁决。
+A Claude Code plugin that makes Claude Code the foreman: it plans, decides and checks the results, and hands off hands-on coding work to CLI agents such as Codex, opencode and pi according to your config. It can also ask them for independent code reviews, or gather several models to weigh in on a complex design before Claude Code decides.
 
-- **Claude Code 把关**：协作方交回的改动，Claude Code 逐个看 diff、实际运行验证，不合格就返工；讨论里各方的意见只作参考，接受还是拒绝由 Claude Code 按论据决定。
-- **用你自己的额度**：协作方用的是你的 Codex 订阅、opencode 订阅或 API 余额，不占 Claude Code 的额度。
-- **全程看得见**：每次派活都写明交给了谁、什么模型和推理强度；终端里能实时看到每个模型在做什么。
+- **Claude Code checks the work**: Claude Code reviews every diff an agent hands back, runs it to verify, and sends it back for rework if needed. In discussions, the other models' views are input only; Claude Code accepts or rejects each point on its merits.
+- **Your own quota**: agents run on your Codex plan, opencode subscription or API credit, not on your Claude Code quota.
+- **Visible all the way**: every handoff says who got it, with which model and reasoning effort, and a terminal view shows each model's progress live.
 
-**介绍视频**：[在 B 站观看](https://www.bilibili.com/video/BV13sxL6aE4Z/)
+**Intro video**: [watch on Bilibili](https://www.bilibili.com/video/BV13sxL6aE4Z/)
 
-**实际运行**：网页看板的星图，本机最近的每个对话是一个星系，正在派活的星系发亮：
+**In action**: the web board's star map, where each recent conversation on this computer is a galaxy and the ones handing off work light up:
 
-![网页看板的星图：每个对话一个星系，下方是对话列表和用量](docs/images/board-universe.webp)
+![The web board's star map: one galaxy per conversation, with the conversation list and usage below](docs/images/board-universe.webp)
 
-飞进一个对话：四个模型同时讨论，每一席的进度、实时速度、产出和费用一目了然：
+Flying into one conversation: four models discussing at once, with each seat's progress, live speed, output and cost:
 
-![网页看板的单对话视图：四个模型同时讨论，下方是每一席的用量](docs/images/board-conversation.webp)
+![One conversation on the web board: four models discussing at once, with each seat's usage below](docs/images/board-conversation.webp)
 
-## 工作方式
+## Install and setup
 
-插件分三个模块：**讨论**、**执行**、**审查**。它们没有固定顺序：Claude Code 每做完一步，都判断下一步该做什么，需要哪个模块就进哪个，一个请求里可以按任意顺序、多次进入。比如"讨论方案 → 执行 → 讨论实现效果 → 返工 → 审查"，或者"执行 → 审查 → 讨论审查指出的设计问题 → 再执行"。
+### Recommended: the Claude desktop app, with the release package
+
+The plugin is mainly developed and tested in the Code tab of the Claude desktop app: after each handoff the live view opens in the terminal panel and comes to the front by itself (while the web board is off), and the intro is tuned for the desktop app's terminal.
+
+1. Download the package from the [latest release](https://github.com/DaydayupV/claude-foreman/releases/latest): `foreman-en.plugin` for English, or `foreman.plugin` for Chinese. The two differ only in language, so install just one (see [English and Chinese versions](#english-and-chinese-versions)). The `.zip` and `.plugin` files of the same plugin are identical; either one works.
+2. Upload the file as a plugin in the Claude desktop app. It's listed under "My Uploads".
+3. Open the Code tab and run `/foreman-en:setup` (`/foreman:setup` for the Chinese plugin); see [Running setup](#running-setup) below.
+
+To upgrade, download the new release and upload it the same way, then delete the old version from "My Uploads": a new upload can sit next to the old one instead of replacing it.
+
+### Or: install from the marketplace
+
+In the CLI, or in the desktop app if you'd rather not upload a file, run this in Claude Code:
+
+```
+/plugin marketplace add DaydayupV/claude-foreman
+/plugin install foreman-en@claude-foreman
+```
+
+For the Chinese plugin, install `foreman@claude-foreman` instead. To upgrade, run `/plugin marketplace update claude-foreman`. The CLI does the same handoffs, reviews and discussions; the only difference is that you run the live-view command Claude Code gives you in another terminal yourself.
+
+Upgrading from codex-bridge? See [below](#upgrading-from-codex-bridge).
+
+### Requirements
+
+- [Claude Code](https://claude.com/claude-code)
+- Node.js 18 or later. If you run Claude Code inside WSL, Node.js must be installed inside WSL too, or the plugin's hooks will error before every command
+- Git 2.25 or later, used to track which files the agents changed
+- Agents, as many as you like (with none, the plugin still installs and Claude Code does all the work itself):
+  - The [Codex CLI](https://github.com/openai/codex), installed and signed in. Recommended; image generation can only go to Codex
+  - [opencode](https://opencode.ai) 2.x or [pi](https://github.com/earendil-works/pi), to reach models from many providers
+  - Agy CLI (Google Antigravity CLI), installed and signed in, for discussions and reviews (only Windows 11 verified so far)
+  - API keys for models with an OpenAI-compatible API (such as DeepSeek, Kimi or MiMo); these can join discussions and reviews (text only, no screenshots)
+
+### Running setup
+
+After installing, run `/foreman-en:setup`. Its output always has the same structure: which tools this machine has, every model available and the efforts each supports, then the current config (who gets each level of each task type, how many outside models each level uses, who is required, which agents aren't used, and anything to watch out for), then suggested changes (including leftovers from older versions that can be removed). After reading it all you confirm or adjust the suggestions in a pop-up at the end, and it changes the config and reports what changed. Run it again after installing a new tool or to change models.
+
+## How it works
+
+The plugin has three modules: **discuss**, **run** and **review**. They have no fixed order: after each step Claude Code decides what comes next and goes into whichever module it needs, so one request can use them in any order and more than once. For example "discuss the approach → run → discuss the result → rework → review", or "run → review → discuss a design problem the review raised → run again".
 
 ```mermaid
 flowchart LR
-    start(["收到请求"]) --> hub{"Claude Code<br/>判断下一步"}
-    hub -- "要定方案或评估效果" --> discuss["讨论"]
-    hub -- "要动手" --> run["执行"]
-    hub -- "要交付改动" --> review["审查"]
+    start(["A request comes in"]) --> hub{"Claude Code<br/>decides the next step"}
+    hub -- "settle an approach or judge a result" --> discuss["Discuss"]
+    hub -- "do the work" --> run["Run"]
+    hub -- "deliver changes" --> review["Review"]
     discuss --> hub
     run --> hub
     review --> hub
-    hub -- "做完了" --> report(["汇报"])
+    hub -- "done" --> report(["Report"])
 
     classDef claude fill:#EEEDFE,stroke:#534AB7,color:#3C3489
     classDef module fill:#E1F5EE,stroke:#0F6E56,color:#085041
@@ -46,23 +86,23 @@ flowchart LR
     class discuss,run,review module
 ```
 
-每次进入一个模块，都按这一类的标准单独定级：不值得找外部模型的小事是 0 级，由 Claude Code 自己做；其余分简单、常规、复杂三级（`simple` / `normal` / `complex`），每一级有哪些候选模型、谁必选、用什么推理强度由你在配置里决定，Claude Code 每次从候选里挑；写成 `"claude code"` 的那一级同样由 Claude Code 自己做。派出去之后终端里能实时看到模型的每一步，结束后 Claude Code 向你汇报用了哪个模型、花了多少 token。
+Each time it enters a module, Claude Code levels that step by the module's own criteria. Small things not worth an outside model are level 0, which Claude Code does itself; the rest are simple, normal or complex (`simple` / `normal` / `complex`). Which candidate models levels 1–3 have, who is required, and with what effort is up to you in the config, and Claude Code picks from the candidates each time; a level set to `"claude code"` is done by Claude Code itself too. Once something is handed off, a live view in the terminal shows each step the model takes, and at the end Claude Code reports which model did the work and how many tokens it used.
 
-三个模块各自的内部流程如下，紫色的步骤由 Claude Code 做，绿色的有协作方参与。
+Inside each module (purple steps are done by Claude Code; green ones involve an agent):
 
-**讨论**
+**Discuss**
 
 ```mermaid
 flowchart TD
-    d0{"按讨论定级"} -- "0 级" --> dself["Claude Code 自己想清楚"]
-    d0 -- "1 级" --> dqa["请一个模型给第二意见"]
-    d0 -- "2–3 级" --> dmode{"选模式"}
-    dmode -- "普通" --> dnormal["同一份议题<br/>各方独立出方案"]
-    dmode -- "多角色" --> droles["按能力分配角色<br/>弹窗请你确认"]
-    droles --> dcards["各方从自己的角色出方案"]
-    dnormal --> dcross["有实质分歧时<br/>第 2 轮交叉挑错"]
+    d0{"Level the discussion"} -- "Level 0" --> dself["Claude Code thinks it through"]
+    d0 -- "Level 1" --> dqa["One model gives a second opinion"]
+    d0 -- "Levels 2–3" --> dmode{"Choose the mode"}
+    dmode -- "Normal" --> dnormal["Same brief for everyone<br/>independent proposals"]
+    dmode -- "Role mode" --> droles["Roles assigned by ability<br/>you confirm in a pop-up"]
+    droles --> dcards["Each proposes from its role"]
+    dnormal --> dcross["Round 2 critique<br/>when they really disagree"]
     dcards --> dcross
-    dcross --> ddecide["Claude Code 逐条裁决<br/>写决策记录"]
+    dcross --> ddecide["Claude Code rules on each point<br/>writes the decision record"]
 
     classDef claude fill:#EEEDFE,stroke:#534AB7,color:#3C3489
     classDef agent fill:#E1F5EE,stroke:#0F6E56,color:#085041
@@ -70,21 +110,21 @@ flowchart TD
     class dqa,dnormal,dcards,dcross agent
 ```
 
-**执行**
+**Run**
 
 ```mermaid
 flowchart TD
-    r0{"分工"} -- "决策、设计、文字" --> rself["Claude Code 自己做"]
-    r0 -- "画图（含 SVG 动画里整块用的插画）" --> rroute["弹窗让你选路线"]
-    rroute --> rimg["图像模块：出图、手画两格"]
-    r0 -- "其余执行工作" --> rlevel{"按执行定级"}
-    rlevel -- "0 级" --> rself
-    rlevel -- "1–3 级" --> rrun["按配置派给协作方"]
-    rrun --> rcheck["验收：看 diff<br/>亲自运行验证"]
-    rimg --> rasset["assets 去背景、切部件<br/>按格子命名、检查"]
-    rasset --> rimgcheck["Claude Code 看对照拼图"]
-    rimgcheck -- "不合格" --> rimgredo["改了再重出<br/>同一问题三次没改善交给你决定"]
-    rcheck -- "不合格" --> rrework["返工一次<br/>再不行 Claude Code 接手"]
+    r0{"Who does what"} -- "Decisions, design, text" --> rself["Claude Code does it"]
+    r0 -- "Drawing (incl. illustrations used whole in SVG animations)" --> rroute["You choose the route<br/>in a pop-up"]
+    rroute --> rimg["Image module:<br/>generate and draw cells"]
+    r0 -- "Other hands-on work" --> rlevel{"Level the work"}
+    rlevel -- "Level 0" --> rself
+    rlevel -- "Levels 1–3" --> rrun["Handed off per the config"]
+    rrun --> rcheck["Check: read the diff<br/>run it"]
+    rimg --> rasset["assets removes backgrounds,<br/>splits and names parts, checks"]
+    rasset --> rimgcheck["Claude Code looks at<br/>the contact sheet"]
+    rimgcheck -- "Not good enough" --> rimgredo["Change something and regenerate<br/>your call after three tries<br/>with no improvement"]
+    rcheck -- "Not good enough" --> rrework["One rework<br/>then Claude Code takes over"]
     rrework --> rcheck
 
     classDef claude fill:#EEEDFE,stroke:#534AB7,color:#3C3489
@@ -93,13 +133,13 @@ flowchart TD
     class rimg,rrun,rrework,rimgredo agent
 ```
 
-**审查**
+**Review**
 
 ```mermaid
 flowchart TD
-    v0{"按改动的风险定级"} -- "0 级" --> vself["Claude Code 验收就够"]
-    v0 -- "1–3 级" --> vnew["另一个模型开新会话审查"]
-    vnew --> vfix["Claude Code 逐条核实<br/>修复、重新验证"]
+    v0{"Level by the change's risk"} -- "Level 0" --> vself["Claude Code's check is enough"]
+    v0 -- "Levels 1–3" --> vnew["Another model reviews<br/>in a new session"]
+    vnew --> vfix["Claude Code verifies each finding<br/>fixes, checks again"]
 
     classDef claude fill:#EEEDFE,stroke:#534AB7,color:#3C3489
     classDef agent fill:#E1F5EE,stroke:#0F6E56,color:#085041
@@ -107,162 +147,136 @@ flowchart TD
     class vnew agent
 ```
 
-## 能做什么
+## What it does
 
-| 命令 | 作用 |
+| Command | What it does |
 |---|---|
-| `/foreman:run <任务>` | 把一个执行任务派给配置的协作方，完成后 Claude Code 审查改动、实际运行验证，不合格就返工 |
-| `/foreman:review` | 请协作方审查未提交的改动、某个分支或某次提交，也能审没改过的文件、研究结论和证据、截图和播放文件；协作方交回结构化的问题清单，Claude Code 逐条核实，排除误报 |
-| `/foreman:discuss <议题>` | 几个模型就复杂方案各出方案、互相挑错，Claude Code 逐条裁决，给出决策记录；目标互相拉扯的议题可以用多角色模式，见下文 |
-| `/foreman:watch` | 在终端里实时查看各个模型正在做什么；开着网页看板时同时给出网页链接，见下文 |
-| `/foreman:status` | 查看最近的任务或某次任务的详细结果，包括 token 消耗和 Codex 额度 |
-| `/foreman:setup` | 设置引导：检测本机的工具，列出能用的模型，给出当前配置的总表和修改建议，按你的选择改好配置 |
-| `/foreman:config` | 查看或修改配置 |
+| `/foreman-en:run <task>` | Hands a task to the configured agent. When it finishes, Claude Code reviews the diff, runs it to verify, and sends it back for rework if needed |
+| `/foreman-en:review` | Has an agent review uncommitted changes, a branch or a commit, or existing files, research conclusions with their evidence, and screenshots or playback files. The agent returns a structured list of issues; Claude Code checks each finding and filters out false positives |
+| `/foreman-en:discuss <topic>` | Several models each propose an approach to a complex design and critique each other's; Claude Code rules on each point and writes up a decision record; topics with competing goals can use role mode, see below |
+| `/foreman-en:watch` | Shows what each model is doing, live, in a terminal, plus a link to the web board when it is on; see below |
+| `/foreman-en:status` | Lists recent runs, or shows the details of one, including token use and Codex quota |
+| `/foreman-en:setup` | Setup guide: detects this machine's tools, lists the models available, shows the current config and suggested changes, and changes the config the way you choose |
+| `/foreman-en:config` | Shows or changes the config |
 
-也可以直接对 Claude Code 说"检查一下环境"（`check`：每个协作方能不能用、配置的推理强度模型支不支持、Codex 的沙箱能不能启动），"列出能用的模型"（`models`），或者"看看各个模型的档位"（`tiers`：在用模型的档位、综合分和长短处，数据来自第三方排行榜 LiveBench）。
+You can also just ask Claude Code to "check the environment" (`check`: whether each agent works, whether its model supports the configured efforts, and whether Codex's sandbox can start), to "list the available models" (`models`), or to "show the model tiers" (`tiers`: each model in use with its tier, overall score, strengths and weaknesses, from the third-party LiveBench leaderboard).
 
-### 不用命令也行
+### Without commands
 
-插件自带的 skill 会让 Claude Code 每次进入讨论、执行或审查时分别定级，达到门槛的自己发起：
+The bundled skill has Claude Code level each discussion, piece of hands-on work and review as it comes up, and start what crosses the threshold on its own:
 
-- 给出方案之前，以及执行之后要评估效果、决定下一步怎么调时，复杂、不确定的问题先找其他模型讨论，结论由 Claude Code 裁决。
-- 动手之前，执行类工作按等级和配置派出；只由 Claude Code 做的工作（决策、设计、文字）和 0 级的小事不派。
-- 交付之前，按改动的风险判断要不要请另一个模型审查。
-- 大任务能拆成互不相干的几份时，同时派给几个会话，缩短等待（每个协作方的并发上限见 `max_parallel`）。
+- Before giving an approach, and when judging the result of work already done to decide what to adjust, talk complex, uncertain questions through with other models first; Claude Code rules on the conclusion.
+- Before starting work, hand off hands-on work as the levels and config say; work only Claude Code does (decisions, design, text) and level 0 small things aren't handed off.
+- Before delivering, decide by the risk of the change whether another model should review it.
+- When a big task splits into parts that don't touch each other, hand them to several sessions at once to cut the wait (each agent's limit is `max_parallel`).
 
-不想让 Claude Code 自己发起，把 `dispatch.auto` 设成 `false`：派活、讨论和审查之前它都会先问你。
+If you'd rather Claude Code didn't start these on its own, set `dispatch.auto` to `false`: it asks you before handing off work, starting a discussion or asking for a review.
 
-上面表格里的命令只由你来输入，Claude Code 不会自己调用它们：这些命令表示"你点名要做"，会跳过 0 级判断。Claude Code 自己发起时走插件的 skill，照样定级、照样遵守 `dispatch.auto`。
+Only you type the commands in the table above; Claude Code doesn't call them itself. They mean "you asked for this by name" and skip the level 0 check. When Claude Code starts something on its own, it goes through the plugin's skill, which still levels the step and follows `dispatch.auto`.
 
-### 多角色讨论
+### Role-mode discussions
 
-议题里有几个目标互相拉扯时（比如安全和便利、实现成本和体验、兼容和重构），2、3 级讨论可以改用多角色模式：每个模型带一张角色卡，从一个视角检查同一个议题，比如架构师、数学/正确性、实证核查员、维护与兼容、用户体验、边界清单员，再留一个不带角色的综合对照位。
+When a topic has several goals pulling against each other (such as security and convenience, implementation cost and user experience, compatibility and a rewrite), a level 2 or 3 discussion can use role mode: each model gets a role card and checks the same topic from one angle, such as architect, math / correctness, fact checker, maintenance and compatibility, user experience or edge-case lister, plus an overall reviewer with no role.
 
-- **按能力分配**：先看工具能不能做到（比如实证核查员要跑命令，只能给 Codex），再看长处和模型档位：需要复杂思考的角色先给强档模型，档位只作参考，不是能不能参加的资格。模型档位按第三方评测分强、中、弱三档，见 [references/model-tiers.md](foreman/skills/dispatch/references/model-tiers.md)。
-- **优先一个模型一个角色**：合格的模型不够时，让强档模型多开一个会话扮另一个角色；多开的会话各占一个并发名额，结论一致也只算一份证据。中档、弱档模型可以作"广度席"，只参加第 1 轮，观点由 Claude 逐条核实。
-- **核心角色不合并**：这个议题最需要的视角各占一席，3 级时同一个核心角色可以由两个不同的模型各扮一遍。席位数按这一级的 `seats`，必选的模型一定占一席。
-- **一定先请你确认**：启动前弹窗列出"模型 → 角色"的分配，`dispatch.auto` 开着也一样；你可以按推荐开始、调整，或者改用普通讨论。
-- 角色只决定各方重点检查什么，不决定结论；裁决照样按证据，几个角色意见一致不算多一份证据。
-- 自定义角色、某类议题默认用多角色模式、对某个模型档位的不同看法，都可以写进偏好文件。角色表和分配规则见 [references/roles.md](foreman/skills/dispatch/references/roles.md)。
+- **Assigned by ability**: first whether the tools can do it (the fact checker has to run commands, so only Codex can take it), then strengths and the model tier: roles that need hard thinking go to strong models first, but the tier is only a guide, not a condition for taking part. Models are sorted into strong, mid and weak tiers from a third-party leaderboard; see [references/model-tiers.md](foreman-en/skills/dispatch/references/model-tiers.md).
+- **One model per role first**: when there aren't enough qualifying models, a strong model opens another session for another role; each extra session takes a parallel slot, and its agreeing conclusions still count as one piece of evidence. Mid and weak models can take "breadth seats" that only join round 1, with Claude checking each of their points.
+- **Core roles are never merged**: the angles a topic needs most get a seat each, and at level 3 one core role can be played by two different models. The number of seats follows the level's `seats`, and required models always get one.
+- **You always confirm first**: before it starts, a pop-up lists the "model → role" assignment, even with `dispatch.auto` on; you can start as suggested, adjust it, or use a normal discussion instead.
+- A role only sets what each model checks most closely, not its conclusion; decisions still go by evidence, and several roles agreeing doesn't count as more evidence.
+- Custom roles, using role mode by default for some kinds of topics, and a different view of a model's tier can all go in the preference files. The role table and assignment rules are in [references/roles.md](foreman-en/skills/dispatch/references/roles.md).
 
-为了不让 Claude Code 忘了这些（项目里有自己的 skill 时尤其容易漏），插件会在每个会话开始时提醒它一次，并附上你的偏好文件。
+So that Claude Code doesn't forget (easy when a project has its own skills), the plugin reminds it once at the start of every session and includes your preference files.
 
-### 出图素材
+### Image assets
 
-位图交给 Codex 的内置出图工具画，画完由 Claude Code 在本机用 `assets` 子命令处理成下游能直接用的素材：透明背景的部件 PNG、按名字列出的 manifest、对照拼图，扁平少色的再转成 SVG（每个部件一个图层，可以导入 Figma、Illustrator）。
+Bitmaps are drawn by Codex's built-in image tool, then Claude Code turns them into assets ready for downstream use with the `assets` subcommand on your machine: transparent PNG parts, a manifest listing them by name, a contact sheet, and SVG for flat assets with few colors (one layer per part, which opens in Figma or Illustrator).
 
-- **开工前先选路线**：每个新的图形交付物开工前，Claude Code 都会弹窗让你选：① 位图、② 位图 + 矢量混合（定稿图加手画会弯的部件）、③ 纯矢量（先出一张参考图定风格）、④ 纯矢量 / 代码（不出图）；弹窗里写明出图和手画各用哪个模型、参考图会不会上传、返工规则。`dispatch.auto` 开着也会问；同一个交付物的返工、局部重出不再问，换路线、加交付物、扩大范围、换模型厂商会重新问。插件的钩子记下你选的路线，派出图像任务前脚本会核对：你取消了、没选，或者选的和要派的不一样，就不派出。这一点在桌面版实测过，命令行版还没测。
-- **出图和手画是图像模块的两格**：出图（`generate`）出定稿图、背景板、局部变体和独立素材，手画（`draw`）照定稿图画会弯的部件，或者在纯矢量路线里直接画。不分等级，用 `plan --module image` 建计划、`image` 命令派出。有人绕开图像模块、用普通执行任务出了图，结果里会提示；纯矢量路线的 SVG 里嵌了位图，也会提示。
-- **SVG、HTML 和动画里同源取件**：Codex 只画整张定稿图（你看过、认可后才往下做），再在定稿图上改出一张去掉主体的背景板；作品里的部件都从这张定稿图上取。整块动的部件（头、躯干、道具、柜台）由 Claude Code 用 `assets layers` 按原位置裁出；本身要弯、要和代码画的东西精确接触的部件（弯曲的四肢、尾巴）交给 Codex 照定稿图手画成 SVG、写好变形，Claude Code 写任务说明并自己截图验收（对照试片里两边指标打平，盲看时 Codex 手画的更自然）；要按物理逐帧模拟的、要和机械对齐的、文字和 UI 控件用代码画。实测图像模型画不准关节转轴和接触点，单独取出的部件还会被放大（最多到两倍）、重画比例；同一张图上取出的部件接缝严丝合缝，线宽也一样。动手前会告诉你哪些部件整块动、哪些交给 Codex 描成路径弯曲。
-- **表情只叠补丁**：眨眼、张嘴在定稿图上局部改图，只取变了的那一块叠上去，不整张换图，避免闪动。
-- **角色这类细节多的画默认不转 SVG**：转出来又大又有色带，保留 PNG 嵌进页面。
-- **多个部件按格子命名**：先画一张编号格子模板交给 Codex，让它把第 N 个部件画在第 N 格，切图时按格子命名，不会因为模型打乱顺序而张冠李戴。
-- **改图和照参考图出图**：任务说明会写明把参考图通过 `referenced_image_paths` 传给出图工具；没传的话，结果里的 `image_calls` 会显示出来并提示。局部修改只替换被改的那个部件。
-- **有量化的重出门槛**：背景板或表情改图测出的偏移超过 3 像素或缩放偏离超过 1%，背景板还留着主体残影，或者定稿图里会动的部件被压住，就改做法重出，不在下游打补丁、也不另写配准脚本绕过去。出图不设固定次数，同一个问题连续三次没改善才停下来问你。
-- **补丁、描图、截图和播放检查也在本机做**：`assets patch` 从改图里只取变了的区域（眨眼、张嘴），`assets trace` 照定稿图描出要弯的部件（曲线轮廓，描边粗细均匀，Codex 手画时用它打底），`assets capture` 用本机的 Chrome 或 Edge 按时刻截图，`assets playback` 截下一圈动画，检查闪动、首尾衔接，并生成能直接播放的 APNG 给你看。
-- **背景**：默认要透明背景，脚本清理边缘的淡光晕；主体是白色或浅色时改用品红纯色底。
-- **扁平素材转 SVG 不用另装东西**：用插件自带的描图，直边是直线、曲线是贝塞尔曲线，对照拼图里能看到 SVG 画回来的样子。
-- 做不到的：像素风、指定精确像素尺寸、超过约 157 万像素的高清图、让模型画单独的关节部件，以及需要定稿图里没有的那一面的大幅转身、换视角。
+- **You choose the route before work starts**: before each new graphic deliverable, Claude Code asks you in a pop-up: ① bitmap, ② bitmap + vector mix (a final image plus hand-drawn pieces that bend), ③ pure vector (a reference image first to set the style), or ④ pure vector / code (no image generation). The pop-up says which model generates and which hand-draws, whether reference images get uploaded, and the rework rule. It asks even with `dispatch.auto` on; rework and partial regeneration of the same deliverable don't ask again, while switching routes, adding a deliverable, widening the scope or changing the model vendor does. The plugin's hook records the route you chose, and the script checks it before an image task goes out: if you cancelled, didn't choose, or chose something else, nothing goes out. This was tested in the desktop app; the CLI hasn't been tested yet.
+- **Generating and drawing are the two cells of the image module**: `generate` makes the final image, background plates, local variants and standalone assets; `draw` hand-draws the pieces that bend from the final image, or draws the whole thing on the pure vector routes. There are no levels; a plan made with `plan --module image` goes out with the `image` command. If images get generated outside the image module by a plain hands-on task, the result points it out, and so does an SVG on a pure vector route that embeds a bitmap.
+- **In SVG, HTML and animations, every piece comes from one image**: Codex draws only the whole final image (nothing goes further until you've seen and approved it), then edits it into a background plate with the subject removed; every piece of the work comes from that final image. Pieces that move as a whole (a head, a torso, props, a counter) are cut out where they are by Claude Code with `assets layers`; pieces that bend themselves or must touch things drawn in code exactly (bending limbs, tails) go to Codex, which hand-draws them as SVG traced from the final image and writes their deformation, while Claude Code writes the brief and checks the result with its own screenshots (in a comparison the two tied on the metrics, and in a blind review Codex's version looked more natural); shapes simulated by physics every frame, things tied to mechanics, text and UI controls are drawn in code. In testing, the image model couldn't place joint pivots and contact points accurately, and pieces it took out on their own came back enlarged (up to twice the size) with redrawn proportions; pieces cut from the same image meet exactly, with the same line weight. Claude Code tells you before starting which pieces move as a whole and which go to Codex to be traced and bent.
+- **Expressions are only patches**: a blink or an open mouth is a local edit of the final image, and only the changed region is laid over, instead of swapping the whole image, which would flicker.
+- **Detailed images such as characters aren't turned into SVG by default**: they come out large and banded, so they stay PNG, embedded in the page.
+- **Several parts are named by slot**: Codex gets a numbered slot template and draws part N in slot N, and the cut names parts by slot, so a model reshuffling the layout can't mislabel them.
+- **Edits and images from a reference**: the brief says to pass the reference through `referenced_image_paths`; if it wasn't passed, `image_calls` in the result shows it and a warning points it out. A partial change replaces only the part that changed.
+- **Measured thresholds for regenerating**: when the background plate or an expression edit measures more than 3 pixels off or more than 1% scaled against the final image, when the plate still shows traces of the subject, or when a moving piece in the final image is covered by another, the image is regenerated with a different approach, not patched up later or worked around with a custom registration script. There's no fixed number of generations; it stops to ask you only when three tries in a row don't improve the same problem.
+- **Patches, tracing, screenshots and playback checks also run locally**: `assets patch` takes only the changed region of an edited image (a blink, an open mouth), `assets trace` traces a piece that bends from the final image (curved outlines with an even line weight; Codex starts from it when hand-drawing), `assets capture` takes screenshots at given moments with your local Chrome or Edge, and `assets playback` captures one loop of the animation, checks flicker and the loop seam, and makes an APNG you can play.
+- **Backgrounds**: transparent by default, with the script cleaning the faint halo at the edges; a flat magenta background when the subject is white or pale.
+- **Turning flat assets into SVG needs nothing extra**: the plugin's own tracer draws straight edges as lines and curves as Bézier curves, and the contact sheet shows the SVG rendered back.
+- Not supported: pixel art, exact pixel sizes, high-resolution images above about 1.57 megapixels, having the model draw separate jointed parts, and big turns or changes of viewpoint that need a side the final image doesn't show.
 
-图像模块的流程见 [references/image.md](foreman/skills/dispatch/references/image.md)，提示词模板见 [references/image-assets.md](foreman/skills/dispatch/references/image-assets.md)，`assets` 命令的选项和各项检查见 [references/assets-cli.md](foreman/skills/dispatch/references/assets-cli.md)。
+The image module's workflow is in [references/image.md](foreman-en/skills/dispatch/references/image.md), the prompt templates in [references/image-assets.md](foreman-en/skills/dispatch/references/image-assets.md), and the `assets` command options and checks in [references/assets-cli.md](foreman-en/skills/dispatch/references/assets-cli.md).
 
-### 实时查看
+### The live view
 
-- 每个任务顶上固定两行：第一行是模型，写成"gpt-6.1-sol max · Codex CLI"（模型、推理强度 · 接入方式），整行颜色跟着状态变，右边是状态和用时，比如"running 37:51"；第二行是任务，写成"run · 标题 · complex"，最前面是模块（run、discuss、review、image），续接的后面写第几轮，图像任务用格子和路线代替等级。
-- 下面是一条时间线：左边是时间，模型说的话、命令、读文件和搜索、文件改动、生成和打开的图片依次往下排。两句话之间的动作只显示前几条，其余折成"… +9 commands"一行；连着改的文件并成一行；失败的命令在行尾标"✗ exit 1"，搜索没搜到写"no match"。最底下一行是最近一条思考摘要和按键提示。
-- 画面随窗口大小重排。↑↓、PgUp/PgDn 或鼠标滚轮往回翻，End 回到最新；运行中按 q 退出查看，任务照常运行。任务结束后画面停着，照样能翻看，结尾写出状态、用时、改动、用量、费用（按模型官方 API 价格算）和结论；按 q 离开后完整的记录留在终端里。任务被续接（返工、讨论的下一轮）后，底部上面会提示续接成了哪一轮，按 n 换过去。
-- 讨论、审查和拆开的执行任务在一个窗口里按席位排开。标题行写"discuss · panel · 标题 · normal"：模块、模式（panel 是普通多席，roles 是角色模式，split 是并发拆分）、标题、等级和第几轮，右边是各状态的个数，比如"●2 ✔1"。每席一块：行首是席位号，第一行是模型和状态，角色模式在下一行写角色，并发拆分写这一份的标题和等级；正文在运行中是它最近说的话、思考摘要和最近的动作，结束后是它的结论。Claude Code 席排在最前（席位号 0），和其他席一样写出报告的结论。
-- 窗口有富余时正文多显示几行，放不下时用滚轮翻看。按席位号打开那一席的完整时间线，Esc 返回。某个 API 模型因为服务繁忙在排队时，按 x 可以终止它。计划缺了必选、补漏席没跑完、审查期间材料变了时，标题下面多写一行提醒。全部结束后画面停着，按 q 离开后留下一份汇总，每席写结论、用量和 run_id，最后一行是回看某一席的命令。
-- 实时查看、`status` 和开工那一行里插件自己写的字段（状态词、用时、模型标签、用量、标签和提示）中英两个插件都用英文，显示得一样；模型和 Claude Code 写的内容，包括任务标题，照原文显示。
-- 颜色只表示状态：运行中青色、完成绿色、交回问题、等人回答和排队黄色、其余没做成的红色。任务行和模型行加粗，模型行跟着状态变色；角色和拆开的那一份的标题加粗；路径、用量、提示和时间用暗色。
-- 加 `--verbose` 看全部细节：思考原文、每条命令和输出、token 用量。
-- 新派出的对话第一次打开时，先放几秒启动动画：模型的像素头像、"正在启动"和几句玩笑（单个模型 5 秒，讨论 10 秒），按任意键跳过，`dispatch.intro` 设成 `false` 可以关掉。头像按模型名认，认不出的用 ??? 头像。
-- Claude 桌面版里，实时画面开在终端面板里，派活后自动打开（开着网页看板时不自动打开，只给看板链接）；命令行版里，Claude Code 会把命令发给你，在另一个终端里运行。
+- Every run keeps two lines at the top: the model, written like "gpt-6.1-sol max · Codex CLI" (model and effort · how it's reached), colored by status, with the status and elapsed time on the right, such as "running 37:51"; and the task, written like "run · title · complex", starting with the module (run, discuss, review, image), with the round for a resume, and the cell and route instead of the level for image tasks.
+- Below that is a timeline: times down the left, with what the model says, commands, file reads and searches, file changes and images generated or opened in order. Only the first few actions between two messages are shown and the rest fold into one line such as "… +9 commands"; files changed one after another share one line; a failed command is marked "✗ exit 1" at the end of its line, and a search that found nothing says "no match". The bottom line shows the latest thinking summary and the keys.
+- The view re-flows when the window is resized. Scroll back with ↑↓, PgUp/PgDn or the mouse wheel and press End to jump to the latest; while the run is going, q stops watching and the run keeps going. When the run ends the view stays on screen and can still be scrolled, with the status, duration, changes, token use, cost (at official API prices) and conclusion at the end; after q the full record stays in the terminal. Once the run is resumed (a rework, a discussion's next round), a line above the bottom one names the new run, and n switches to it.
+- Discussions, reviews and split hands-on work are shown in one window, one block per seat. The heading reads "discuss · panel · title · normal": the module, the mode (panel for several plain seats, roles for role mode, split for parallel parts), the title, the level and the round, with the count of each status on the right, such as "●2 ✔1". Each block starts with the seat number and a line with the model and its status; role mode puts the role on the next line, and split work puts that part's title and level there. While a seat is working its body shows what it last said, its thinking summary and its latest actions; once it's done, its conclusion. The Claude Code seat comes first (seat 0) and shows its report's conclusion like any other seat.
+- Blocks get more lines when the window has room, and you scroll with the mouse wheel when they don't fit. Press a seat's number to open its full timeline and Esc to go back. When an API model is queued because its service is busy, press x to stop it. When the plan is missing a required seat, the gap seat hasn't finished, or the material under review changed during the review, one extra line under the heading says so. When everything has finished the view stays on screen; after q a summary is left behind, with each seat's conclusion, token use and run_id, and one last line with the command to replay a seat.
+- The fields the plugin writes itself in the live view, `status` and the start line (status words, durations, model labels, token use, labels and hints) are in English in both plugins, so they look the same; what the models and Claude Code write, task titles included, is shown as written.
+- Color only means status: cyan for running, green for done, yellow for questions returned, waiting for an answer or queued, red for anything else that didn't finish. Task lines and model lines are bold, and the model line takes the status color; roles and the titles of split parts are bold; paths, token use, hints and times are dim.
+- Add `--verbose` for every detail: the raw reasoning, each command and its output, token use.
+- The first time it opens for a newly dispatched conversation, a few seconds of intro play first: the model's pixel avatar, "Starting …" and a few jokes (5 seconds for one model, 10 for a discussion). Any key skips it, and setting `dispatch.intro` to `false` turns it off. The avatar is picked by the model name, with a ??? avatar for anything it doesn't recognize.
+- In the Claude desktop app, the live view opens in the terminal panel by itself after each handoff (not while the web board is on: then you get the board link instead); in the CLI, Claude Code sends you the command to run in another terminal.
 
-### 网页看板
+### The web board
 
-终端实时查看之外的另一个入口，默认关闭：在配置里把 `dispatch.watch.web` 设成 `true`，或者运行 `/foreman:setup`（按本机内存决定开不开）。开着时派出任务只给看板链接，不再自动打开终端实时查看；想在终端里看时用 `/foreman:watch`。派出任务后，Claude Code 会在告诉你"已派出"的那句话里附上看板链接（每次派出都附，一起派出的几个任务附一次；最后的汇报里再附一次）。插件的钩子在派出命令运行前也会显示这个链接，桌面版里它折在工具调用里面；这一轮在后台派出过任务、Claude Code 的回复正文里却没有看板链接时，钩子会在这一轮结束前拦一次，让它补上那句话。
+Another way to watch besides the terminal live view, off by default: set `dispatch.watch.web` to `true` in the config, or run `/foreman-en:setup` (it decides from this computer's memory). While it's on, handoffs give the board link and no longer open the terminal live view by themselves; use `/foreman-en:watch` when you want the terminal view. After handing work off, Claude Code adds the board link to the sentence that tells you so (on every handoff, once for several runs handed off together, and once more in the final report). A plugin hook also shows the link right before the handoff command runs; the desktop app folds it into the tool calls. When a turn handed work off in the background but Claude Code's reply text has no board link, the hook stops the turn from ending once, so Claude Code adds that sentence.
 
-- **怎么打开**：开着时，每次派活都先在对话里给一个链接，再启动任务；`/foreman:watch` 也会给。点开会在你的默认浏览器里打开：先看到星图，随后自动飞进这个对话的看板（刷新页面时直接回到看板）；不会在 Claude 应用里打开。
-- **星图**：
-  - 本机最近 24 小时的每个 Claude Code 对话是一个星系，同一个项目的聚成一团星云。对话列表和 Claude 桌面版的侧栏一致：桌面版里归档或删掉的对话、桌面版列表里没有的会话（比如命令行里 `claude -p` 的一次性调用）不显示，但在终端里用 claude 派过任务的对话照样显示；从别的对话里启动的子对话归到父对话的项目，在列表里缩在父对话下面。只用命令行、没有桌面版时，全部对话照列。
-  - 正在干活的协作方是绕着星系转的星；等你确认的对话外面有一圈琥珀色光环；出了错留一个红点。
-  - 星云的颜色来自用过的模型：每个项目的星云、每个星系的盘面，按里面的对话用过的模型上色（Claude Code 橙色、Qwen 紫色、DeepSeek 蓝色……），用得多的颜色占得多，正在跑的更亮，几个模型同时跑也不会亮成一团；单个对话看板里弧线区的星云也一样。
-  - 下方表格每个对话一行：鼠标移上去，星图里对应的星系会高亮，点一行就飞进这个对话。一行的任务数、用量和费用是这个对话从头到现在的全部（包括桌面版重启前的记录），和飞进去的看板一致；最近 24 小时只决定列出哪些对话。状态列里，还在进行的组里每个出了问题（超时、失败、被停止、没交回有效结果）的席位一个红点，整组结束后消失。
-  - 左上的"同时运行"面板列出四个模块里用到的协作方，每格是它能同时跑的一个任务，被哪个对话占着就亮成那个对话的颜色；不在模块里的协作方只在有任务跑着时出现。
-- **单个对话的看板**：点一个星系或表格里的一行，或者对着星系一直往里滚，就飞进这个对话的看板；按 Esc、点左上角的 FOREMAN 或一直往外缩，回到星图。看板是这个对话从头到现在的全部历史（包括桌面版重启前的记录，不管派没派过任务），里面有：
-  - Claude Code 和各个席位的卡片，以及模型之间的光路；
-  - 派发计划、交叉挑错、裁决这些环节的动画；
-  - 下面的用量表（行多时在表上滚动）：和终端区一样按组排，正在跑的组在前，每组前面一行组标题和各状态的个数；鼠标停在一行上，画面里这一席突出、其余变暗；
-  - 各席的终端（在用量表上滚到底后继续往下滚）：正在跑的组在上面一排，结束一分钟以后挪到下面的 finished 一段：你最后一条消息之后结束的组照样展开，样子和上面一样；更早轮次的组折成一行（标题、计数、结束时间、这一组所有轮次的费用），点一下展开，点栏头再收起。
-  - 状态的颜色和终端里的实时查看按同一套规则分：运行中、完成、部分完成和交回问题、失败和超时、已续接各是一种颜色。
-- **费用**：用量表里的费用一律按模型官方 API 价格算（鼠标停在上面会提示），用来比较各模型花了多少，和实际扣费不一定相同：Codex、Claude Code 用订阅时不按 token 扣钱，opencode、pi 的实际扣费以它们自己的账单为准。和 Claude Code 在对话里的汇报、`stats` 用的是同一个价格表（插件自带的 `prices.json`）；表里没有的模型、没有记下用量的任务不算，那一行显示 `?`，合计后面带 `+`。
-- **看板服务**：
-  - 这台电脑上所有对话共用一个本地进程，只在 127.0.0.1 上、带一次性令牌访问；
-  - 只读你的对话记录和运行记录，另外读 Claude 桌面版对话列表里每个对话的几项元数据（会话 id、归档标记、从哪个对话启动、启动目录）；
-  - 30 分钟没人看、也没有任务在跑就自己退出（在后台放了 30 分钟以上的看板标签页不算有人看）；插件被卸载或更新后也会退出；
-  - 要马上关掉，在终端运行 `node <插件的 scripts 目录>/cli.mjs board --stop`。
-- **回放（调试用）**：平时的链接都是直播。要把已经结束的对话按时间重新播一遍查问题，在终端运行 `node <插件的 scripts 目录>/cli.mjs board --replay <对话 id、任务 id、组名或 all>`。可以加 `--speed <倍数>` 加速、`--maxgap <秒>` 压缩空档。
-  - 它另起一个临时的回放服务，打印一个链接，十分钟没人看就退出，不影响正在看的直播页面。
-  - 要回放的记录超过 256 MB 时直接拒绝，并说明大小。
-  - 用老格式的回放链接打开直播页面时，页面照常显示直播，顶部提示怎么回放。
-- **资源占用**：服务约 100–130 MB 内存，浏览器标签页约 60–90 MB。内存偏低（总内存不到 8 GB 或可用不到 2 GB）时，`/foreman:setup` 会建议关着。
-- **浏览器**：需要较新的浏览器，Chrome 或 Edge 111、Firefox 113、Safari 16.2 及以上。
+- **Opening it**: when it's on, every handoff first gives a link in the conversation, then starts the work; `/foreman-en:watch` gives one too. It opens in your default browser: you see the star map first, then fly into that conversation's board on your own (a reload goes straight back to the board); it never opens inside the Claude app.
+- **The star map**:
+  - Every Claude Code conversation on this computer from the last 24 hours is a galaxy, and conversations of the same project gather into a nebula. The list matches the Claude desktop app's sidebar: conversations archived or deleted there, and sessions the app doesn't list (one-off `claude -p` calls from a terminal, for example), are left out, except a terminal conversation that has handed off work; a conversation started from another one belongs to its parent's project and is listed indented under it. With only the command line and no desktop app, every conversation is listed.
+  - Agents at work are stars circling their galaxy; a conversation waiting for you has an amber ring; one with a failure keeps a red dot.
+  - The nebulas take their colours from the models used: each project's nebula and each galaxy's disc are coloured by the models its conversations used (Claude Code orange, Qwen purple, DeepSeek blue, ...), a model that did more taking more of it, and the ones running now brighter, without several running models adding up to a glare; the nebula in a single conversation's arc area works the same way.
+  - The table below has one row per conversation: hover a row to highlight its galaxy, click it to fly into that conversation. A row's runs, tokens and cost cover the whole conversation from its start (including transcripts from before a desktop restart), the same as its board; the last 24 hours only decide which conversations are listed. In the status column, each seat with a problem (timed out, failed, stopped, no valid result) in a group that is still going gets a red dot, which goes away once the group has ended.
+  - The "Running now" panel at the top left lists the agents used in the four modules; each cell is one run the agent can have going at once, lit in the color of the conversation using it. Agents outside the modules only show up while they have a run going.
+- **One conversation's board**: click a galaxy or a row in the table, or keep scrolling in on a galaxy, to fly into that conversation's board; Esc, clicking FOREMAN at the top left or zooming all the way out takes you back to the star map. The board covers the conversation's whole history (including transcripts from before a desktop restart, whether or not it dispatched anything) and shows:
+  - cards for Claude Code and each seat, with light paths between the models;
+  - animations for the dispatch plan, the cross-check and the verdict;
+  - the usage table below (scroll on it when there are many rows), ordered like the terminal section: running groups first, each group under a line with its title and status counts; hovering a row brings that seat forward on the board and dims the rest;
+  - each seat's terminal (keep scrolling past the end of the usage table): running groups in the top row; a minute after a group ends it moves to the "finished" part below: groups that ended after your latest message stay open and look the same, groups from earlier rounds fold into one line (title, counts, end time, the cost of all its rounds) that opens on click; click a column head to fold it again.
+  - Status colors follow the same split as the terminal live view: running; done; partly done and questions returned; failed and timed out; resumed — one color each.
+- **Cost**: the usage table always prices each model at its official API price (hover over it to see this), to compare what the models cost; it may differ from what you're actually charged: Codex and Claude Code on a subscription aren't charged per token, and opencode and pi bill through their own accounts. Claude Code's reports in the conversation and `stats` use the same price table (the plugin's `prices.json`); models missing from it and runs with no recorded usage aren't counted: that row shows `?` and the total gets a `+`.
+- **The board server**:
+  - One local process shared by every conversation on this computer, reachable only on 127.0.0.1 with a one-time token.
+  - It only reads your conversation records and run records, plus a few fields of each conversation in the Claude desktop app's list (its session ids, archived flag, which conversation started it, and its start folder).
+  - It exits after 30 minutes with nobody looking and nothing running (a board tab left in the background for over 30 minutes doesn't count as looking), and when the plugin is removed or updated.
+  - To shut it down now, run `node <the plugin's scripts folder>/cli.mjs board --stop` in a terminal.
+- **Replay (for debugging)**: every link the plugin gives is live. To play a finished conversation back in time to look into a problem, run `node <the plugin's scripts folder>/cli.mjs board --replay <conversation id, run id, group or all>` in a terminal. Add `--speed <N>` to speed it up and `--maxgap <sec>` to shorten idle gaps.
+  - It starts a separate, temporary replay server and prints a link. The server exits after ten minutes with no one watching, and leaves the live page alone.
+  - Records over 256 MB in total are refused, with the size given.
+  - Opening an old-style replay link on the live page shows live data, with a line at the top saying how to replay.
+- **Resources**: the server takes about 100–130 MB of memory, and the browser tab about 60–90 MB. On a computer low on memory (under 8 GB in total or under 2 GB available), `/foreman-en:setup` suggests keeping it off.
+- **Browser**: it needs a recent browser: Chrome or Edge 111, Firefox 113, Safari 16.2 or later.
 
-## 前提
+## Configuration
 
-- [Claude Code](https://claude.com/claude-code)
-- Node.js 18 或更高版本。在 WSL 里运行 Claude Code 时，WSL 里也要装 Node.js，否则插件的钩子会在每条命令前报错
-- Git 2.25 或更高版本，用来追踪协作方改了哪些文件
-- 协作方，有几个配几个（一个都没有也能装，那样所有工作由 Claude Code 自己做）：
-  - [Codex CLI](https://github.com/openai/codex)，已安装并登录。推荐，生成图片只能交给它
-  - [opencode](https://opencode.ai) 2.x 或 [pi](https://github.com/earendil-works/pi)，用来接入各家模型
-  - Agy CLI（Google Antigravity CLI），已安装并登录，能参加讨论和审查（目前只验证了 Windows 11）
-  - 兼容 OpenAI 接口的模型 API key（比如 DeepSeek、Kimi、MiMo），能参加讨论和审查（只审文本，不看截图）
+The user config is `~/.claude/foreman/config.json`, and a project config is `<project dir>/.claude/foreman.json`. Edit the file directly, or tell Claude Code something like "use `/foreman-en:config` to switch complex tasks to ultra". Every setting is described in [references/config.md](foreman-en/skills/dispatch/references/config.md). `modules` reads best one entry per line: each candidate on one line, `seats` and `gap` on one line each; `/foreman-en:setup` can rewrite an existing config this way without changing the content.
 
-## 安装和设置
+### First run
 
-**推荐在 Claude 桌面版的 Code 页里用。** 插件主要在桌面版上开发和测试：派活后实时画面会自动在终端面板里打开、切到前台（网页看板关着时），启动动画也是按桌面版的终端调的。命令行版同样能用，派活、审查、讨论都一样，区别只是实时查看要你自己在另一个终端里运行 Claude Code 给出的命令。
+On first run, the plugin checks what this machine has, then generates a config:
 
-在 Claude Code 里运行：
-
-```
-/plugin marketplace add DaydayupV/claude-foreman
-/plugin install foreman@claude-foreman
-```
-
-装好后运行 `/foreman:setup`。它的输出结构是固定的：先列出本机有哪些工具、能用的全部模型和每个模型支持的推理强度，再给出当前配置的总表（每类任务的每一级交给谁、每一级派几家、谁必选、哪些协作方没用上、有什么要注意的），然后是修改建议（包括旧版本留下、可以删掉的配置）。你看完再在最后的弹窗里确认或逐项调整，它改好配置，报告改了什么。装了新工具、想换模型时可以再跑。
-
-从 codex-bridge 升级的，见[后面的说明](#从-codex-bridge-升级)。
-
-## 配置
-
-用户配置在 `~/.claude/foreman/config.json`，项目配置在 `<项目目录>/.claude/foreman.json`。可以直接编辑文件，也可以对 Claude Code 说"用 `/foreman:config` 把复杂任务改成 ultra"。字段的完整说明见 [references/config.md](foreman/skills/dispatch/references/config.md)。`modules` 推荐写成一项一行：每个候选一行，`seats`、`gap` 各一行；`/foreman:setup` 可以把现有的配置改成这样，内容不变。
-
-### 第一次使用
-
-第一次运行时，插件先检测本机有什么，再生成配置：
-
-| 检测到 | 生成的安排 |
+| Found | Resulting setup |
 |---|---|
-| 能用的 Codex（已安装、已登录） | 简单和常规的执行由 Claude Code 自己做，复杂的执行交给 Codex 的 `gpt-6.1-sol`；审查和讨论交给 Codex，复杂的用 `gpt-6-astra`；出图用 `gpt-6.1-sol`，手画会弯的部件用 `gpt-6-astra` |
-| 没有 Codex | 所有任务暂时由 Claude Code 自己做，图像两格关掉 |
-| API key 环境变量（DeepSeek、Kimi、MiMo） | 写进配置，先不加入讨论 |
-| opencode、pi、agy | 不自动加，用哪个模型由你选 |
+| A usable Codex (installed and signed in) | Claude Code does simple and normal hands-on tasks itself, and complex ones go to Codex's `gpt-6.1-sol`. Reviews and discussions go to Codex, with `gpt-6-astra` for complex ones. Images are generated by `gpt-6.1-sol`, and pieces that bend are hand-drawn by `gpt-6-astra` |
+| No Codex | Claude Code does every task itself for now, and both image cells are off |
+| API key environment variables (DeepSeek, Kimi, MiMo) | Added to the config, but not to any discussion yet |
+| opencode, pi, agy | Not added automatically; you pick the models |
 
-花钱或有安全影响的选择不会自动做，交给 `/foreman:setup` 和你一起定。
+Choices that cost money or affect safety are never made automatically; `/foreman-en:setup` goes through them with you.
 
-### 配置的结构
+### How the config is laid out
 
-配置分三块：
+It has three parts:
 
-| 块 | 管什么 |
+| Part | What it covers |
 |---|---|
-| `dispatch` | 插件怎么派活：是否主动派、实时查看、启动动画、讨论轮数、超时、记录目录 |
-| `agents` | 有哪些协作方、怎么连接 |
-| `modules` | 每类任务的每一格有哪些候选、谁必选、用什么推理强度；讨论和审查每一级几席、审查要不要补漏席 |
+| `dispatch` | How the plugin hands off work: whether to do it on its own, the live view, the intro, discussion rounds, time limits, the run directory |
+| `agents` | Which agents there are and how to reach them |
+| `modules` | Which candidates each cell of each task type has, who is required, and with what effort; how many seats each discussion and review level uses, and whether a review adds a gap seat |
 
-一个最小的例子：Codex 做复杂的执行和所有审查，复杂的讨论再加一个 opencode 里的模型，出图和手画也交给 Codex。没写的字段用默认值。
+A minimal example: Codex does complex hands-on work and every review, complex discussions add one model from opencode, and Codex also generates images and hand-draws pieces. Anything left out uses its default.
 
 ```json
 {
@@ -282,100 +296,100 @@ flowchart TD
 }
 ```
 
-- `agents` 的键是协作方的**代号**，`modules` 和 `--agent` 用它引用。建议直接用模型名，可以用字母、数字、`.`、`-`、`_`。
-- 三种任务（`discuss` 讨论、`run` 执行、`review` 审查）各分三级，另有一个不进配置的 0 级（见下文"任务等级"）；图像（`image`）不分等级，分出图（`generate`）和手画（`draw`）两格。
-- 每一格写一组候选。一格有几个候选时，Claude Code 每次按规则挑：讨论和审查每一级挑几个由 `seats` 决定（默认值见 [`config.md` 的"候选和必选"](foreman/skills/dispatch/references/config.md)，不含 Claude Code 自己），尽量用不同的模型，候选少于这个数时全上；审查每一级要不要另加补漏席由 `gap` 决定，默认不加；执行每份工作派一个。标了 `"required": true` 的是必选，这一格用到时一定参加。
-- 写成 `"claude code"` 表示 Claude Code 自己做；对审查和讨论来说，就是这一格不找外部模型。图像的格子写 `null` 表示关掉。
-- `effort` 是推理强度，不写就用默认值。Codex 是 `low` 到 `ultra`；opencode 是模型的 variant；pi 是 thinking 档位；agy 是 `low` / `medium` / `high` 这类档位（agy 把它写在模型 ID 的后缀里，插件派出时再拼回去）；API 原样作为 `reasoning_effort` 发出。
-- 图像任务开工前先弹窗让你选路线，路线决定用到哪几格：只用到手画的纯矢量路线不碰出图那一格，那一格里的必选也不会参加。
+- Each key under `agents` is the agent's **ID**, which `modules` and `--agent` refer to. Naming it after its model works best; IDs may use letters, digits, `.`, `-` and `_`.
+- Each of the three task types (`discuss`, `run` for hands-on work, `review`) has three levels, plus a level 0 that isn't in the config (see "Task levels" below); images (`image`) have no levels, just two cells: `generate` for image generation and `draw` for hand-drawing.
+- Each cell lists candidates. When a cell has several, Claude Code picks by its rules each time: for discussions and reviews, `seats` sets how many per level (defaults in ["Candidates and required agents" in `config.md`](foreman-en/skills/dispatch/references/config.md), not counting Claude Code itself), using different models where possible and all of them when there are fewer candidates; whether a review level adds a gap seat is set by `gap`, off by default; for hands-on work, one agent per piece of work. An entry marked `"required": true` is required and always takes part when the cell is used.
+- `"claude code"` means Claude Code does it itself; for reviews and discussions, that cell uses no outside model. `null` turns an image cell off.
+- `effort` is the reasoning effort; leave it out for the default. For Codex it's `low` to `ultra`; for opencode, the model's variant; for pi, its thinking level; for agy, a level such as `low` / `medium` / `high` (agy puts it in the model ID suffix, and the plugin adds it back when dispatching); for API models it's sent as `reasoning_effort` as is.
+- Image tasks start with a pop-up where you choose the route, and the route decides which cells are used: a pure vector route that only draws never touches the generate cell, so that cell's required agents don't take part.
 
-以前平铺的 `modules`（下面直接是 `discuss`、`run` 等）照常能读：第一次读到时插件把它原样放进 `modules.default`，原文件先备份。旧的 `levels` 写法也照常能读：第一次读到时，插件把它改写成 `modules`，每一格的协作方、推理强度和顺序都不变，原文件备份为 `config.json.bak`。注意一处变化：以前讨论一级里写的模型全部参加，改写后它们是候选、由 Claude Code 挑；想保留全员参加，就给它们都标上 `"required": true`，`/foreman:setup` 可以帮着标，也会帮你加上图像两格。
+A flat `modules` from before (with `discuss`, `run` and so on directly under it) still works: the first time the plugin reads it, it moves it unchanged into `modules.default`, backing up the original first. The old `levels` form still works too: the first time the plugin reads it, it rewrites it as `modules`, keeping every cell's agents, efforts and order, and backs up the original as `config.json.bak`. One thing changes: the models at a discussion level used to all take part, and after the rewrite they're candidates Claude Code picks from. To keep everyone taking part, mark them all `"required": true`; `/foreman-en:setup` can mark them, and it adds the two image cells too.
 
-### 五种协作方
+### The five kinds of agents
 
-| `type` | 是什么 | 能做的任务 | 自己读代码 | 隔离 | 用谁的额度 |
+| `type` | What it is | Tasks it can do | Reads code itself | Isolation | Whose quota |
 |---|---|---|---|---|---|
-| `codex cli` | 本机的 Codex CLI | 执行、审查、讨论、生成图片 | 能 | Codex 自己的沙箱 | Codex 订阅或 OpenAI API |
-| `opencode cli` | 本机的 opencode，接入它支持的各家模型 | 审查、讨论；写了 `run_access` 还能执行 | 能 | 只限定工具，没有系统沙箱 | 在 opencode 里登录的厂商，或 OpenCode Go 订阅 |
-| `pi cli` | 本机的 pi，接入它支持的各家模型 | 同 opencode | 能 | 同 opencode，读写路径由插件注入的守卫检查 | 在 pi 里登录的厂商 |
-| `agy cli` | 本机的 Agy CLI（Google Antigravity CLI） | 审查、讨论 | 能 | 插件装在 agy 全局钩子里的守卫；只读命令跑在 agy 的沙箱里 | 在 agy 里登录的 Google 账号 |
-| `api` | 兼容 OpenAI 接口的模型 | 讨论、审查（只审文本） | 不能，Claude Code 把相关文件附过去 | 不涉及 | 厂商的 API 余额 |
+| `codex cli` | The Codex CLI on this machine | Hands-on work, reviews, discussions, images | Yes | Codex's own sandbox | Your Codex plan or OpenAI API |
+| `opencode cli` | opencode on this machine, with the models it can reach | Reviews and discussions; hands-on work once `run_access` is set | Yes | Limited tools only, no OS sandbox | Providers you signed in to in opencode, or an OpenCode Go subscription |
+| `pi cli` | pi on this machine, with the models it can reach | Same as opencode | Yes | Same as opencode, with file paths checked by a guard the plugin injects | Providers you signed in to in pi |
+| `agy cli` | Agy CLI (Google Antigravity CLI) on this machine | Reviews, discussions | Yes | A guard the plugin installs in agy's global hooks; read-only commands run in agy's sandbox | The Google account you signed in to in agy |
+| `api` | A model with an OpenAI-compatible API | Discussions, reviews (text only) | No; Claude Code attaches the relevant files | Not applicable | The provider's API balance |
 
-同一种可以配多个，各用不同模型。Codex 不是必需的。
+You can have several agents of one type, each with a different model. Codex isn't required.
 
-### 任务等级
+### Task levels
 
-Claude Code 每次进入讨论、执行或审查时，都按这一类的标准单独定级；同一类在一个请求里再次出现，也重新定级。三类的标准不一样：
+Each time Claude Code enters a discussion, hands-on work or a review, it levels that step by the kind's own criteria; when the same kind comes up again in one request, it's levelled again. The criteria differ by kind:
 
-| 等级 | 讨论（看决策的不确定性和选错的代价） | 执行（看要多少判断、出错的代价） | 审查（看被审改动的风险） |
+| Level | Discussion (how uncertain, how costly a wrong choice) | Hands-on work (how much judgement, how costly a mistake) | Review (risk of the change) |
 |---|---|---|---|
-| 0 级 | 方案已经明确或你已拍板：不找外部模型 | 一处就能改完、自己改比写任务说明还快的小改动 | 小改动、文档、样式、配置，或有测试覆盖的低风险改动：Claude Code 验收就够 |
-| 1 `simple` | 需要第二意见的一次性问答 | 做法确定、几乎不用判断 | 改动量大但很机械 |
-| 2 `normal` | 有几个方案要比较，影响有限 | 有规格，细节要自己设计 | 较大的一般功能和修复 |
-| 3 `complex` | 复杂、不确定、选错代价高 | 根因不明、出错代价高、跨模块 | 金额、数据、并发、鉴权等高风险代码 |
+| 0 | The approach is clear or you've decided: no outside model | A small change done in one place, quicker to make than to brief | Small changes, docs, styling, config, or low-risk changes with tests: Claude Code's check is enough |
+| 1 `simple` | A one-off question that needs a second opinion | The method is settled, little judgement needed | Large but mechanical changes |
+| 2 `normal` | A few options to compare, limited impact | There's a spec, details need designing | Larger ordinary features and fixes |
+| 3 `complex` | Complex, uncertain and costly to get wrong | Unknown cause, costly mistakes, cross-module | High-risk code: money, data, concurrency, auth |
 
-0 级固定由 Claude Code 自己做，不在配置里；1–3 级有哪些候选、谁必选、用什么推理强度由你在 `modules` 里决定，Claude Code 只在这一格的候选里挑。等级看判断和风险，不看改动多少：照清单机械地改 20 个文件是简单，改模块之间的接口是复杂。审查只看被审的改动本身：执行时是 3 级、根因难查，都不会让审查自动升到 3 级；只有改变了高风险行为、或者排除不了对它的影响才算 3 级。修完以后，只有修复本身又碰到高风险时才复审一次，而且只审修复的部分。派出去的每次调用都必须带上等级，漏了脚本直接报错，不会悄悄按某个档位运行。
+Level 0 is always done by Claude Code and isn't in the config; which candidates levels 1–3 have, who is required and with what effort is up to you in `modules`, and Claude Code only picks from the cell's candidates. Levels go by judgement and risk, not by how much changes: renaming across 20 files from a list is simple, while changing an interface between modules is complex. A review goes only by the change under review: level 3 hands-on work or a cause that was hard to find doesn't make the review level 3 by itself; only changes that alter high-risk behaviour, or whose effect on it can't be ruled out, do. After fixes, there's a second review only when the fix itself touches high-risk behaviour, and it covers just the fix. Every call that goes out must carry a level; if it's missing, the script errors out rather than quietly picking one.
 
-- 想临时指定时，对 Claude Code 说"用 ultra 跑"或"用某某模型跑"，Claude Code 会加上 `--effort`（只换推理强度）或 `--model`（只能换同一个提供方的模型）。
-- 某一级写成 `"claude code"` 时，你仍然可以明确要求把某个任务派出去，Claude Code 会用 `--agent` 点名。
-- 一次派几个席位（比如几个模型讨论同一个议题）时，Claude Code 先建一份派发计划，脚本检查必选是否都在、讨论和审查的外部席位数是否和 `seats` 一致，再逐席启动。必选的模型失败或额度用完时，这件事算没做完，不会拿别的模型顶替。
-- 0 级只限一处就能改完的小改动。默认 `simple` 也由 Claude Code 自己做；把 `simple` 交给协作方的话，除了 0 级的小改动，其余的活都会派出去。
+- To choose on the spot, tell Claude Code "run it with ultra" or "use such-and-such model"; Claude Code adds `--effort` (it only changes the effort) or `--model` (only another model from the same provider).
+- When a level is `"claude code"`, you can still explicitly ask for a task to be handed off, and Claude Code names an agent with `--agent`.
+- To hand one task to several seats (say, several models discussing one topic), Claude Code first creates a dispatch plan; the script checks that every required agent is in it and that a discussion or review has as many external seats as `seats` says, then each seat is started. If a required model fails or runs out of quota, the task counts as unfinished; another model doesn't stand in for it.
+- Level 0 is only for small changes done in one place. By default Claude Code also does `simple` itself; give `simple` to an agent and everything except level 0 changes gets handed off.
 
-### 接入 API 模型
+### Adding API models
 
-1. **加协作方**：`{ "type": "api", "base_url": "...", "model": "..." }`。兼容 OpenAI 接口的都行，比如 DeepSeek、Kimi、MiMo、GLM、通义千问、OpenRouter；有特殊参数时写在 `extra_body` 里，会原样并进请求。
-2. **填 key**，二选一：
-   - 环境变量：写 `"api_key_env": "DEEPSEEK_API_KEY"`，再设置这个环境变量。Windows 上在"系统属性 → 环境变量"里加一个用户变量；macOS 和 Linux 写进 shell 的启动文件。设置后重启 Claude Code 才能读到。
-   - 配置文件：写 `"api_key": "sk-..."`，立即生效，但是明文保存，这个文件不要提交或分享。两种都写时，以配置文件里的为准。
-3. **加进讨论或审查**：在 `modules.default.discuss` 或 `modules.default.review`（或某个场景块）需要的格子里加上它。
+1. **Add the agent**: `{ "type": "api", "base_url": "...", "model": "..." }`. Any OpenAI-compatible API works, such as DeepSeek, Kimi, MiMo, GLM, Qwen or OpenRouter; provider-specific parameters go in `extra_body` and are merged into the request as is.
+2. **Fill in the key**, either way:
+   - Environment variable: write `"api_key_env": "DEEPSEEK_API_KEY"`, then set that variable. On Windows, add a user variable under "System Properties → Environment Variables"; on macOS and Linux, put it in your shell's startup file. Restart Claude Code so it can see it.
+   - Config file: write `"api_key": "sk-..."`. It takes effect immediately but is stored in plain text, so don't commit or share the file. If both are set, the one in the config file wins.
+3. **Add it to discussions or reviews**: list it in the cells you want under `modules.default.discuss` or `modules.default.review` (or in a scene block).
 
-也可以交给 `/foreman:setup`，比如运行 `/foreman:setup 加 DeepSeek`；key 由你自己填，不用发到对话里。API 模型自己翻不了代码，Claude Code 会把相关文件随议题或审查说明附过去（审查改动时附的是补丁；每次上限约 30 万字符），并对照原文核实它对代码的说法。
+You can also leave this to `/foreman-en:setup`, for example `/foreman-en:setup add DeepSeek`; you fill in the key yourself, with no need to paste it into the chat. API models can't look through your code themselves, so Claude Code sends the relevant files along with the topic or review brief (the patch, when reviewing changes; up to about 300,000 characters each time) and checks what they say about the code against the source.
 
-### 接入 opencode
+### Adding opencode
 
-装了 opencode 2.x 的话，它里面能用的模型都可以参加讨论和审查，比如 [OpenCode Go](https://opencode.ai/docs/go/) 订阅里的 GLM、Kimi、Qwen、MiniMax、DeepSeek。它们能自己读项目里的代码，代价是每读一次文件多一次请求，更费额度。
+With opencode 2.x installed, any model it can use can join discussions and do reviews, for example GLM, Kimi, Qwen, MiniMax or DeepSeek from an [OpenCode Go](https://opencode.ai/docs/go/) subscription. They read your project's code themselves; the trade-off is that every file they read is another request, which uses more quota.
 
-1. **登录**：终端运行 `opencode`，用 `/connect` 登录（OpenCode Go 选 OpenCode Go），再运行 `opencode models` 看能用哪些模型。名字带 `-free` 的免费模型不要配：OpenCode 现在只允许在它自己的界面里用免费模型，从命令行调用会被拒绝（报错 "OpenCode's free tier can only be used from within OpenCode"）。
-2. **加进配置**：每个模型加一项 `{ "type": "opencode cli", "model": "opencode-go/glm-5.3" }`，再加进需要的格子。也可以交给 `/foreman:setup`。
+1. **Sign in**: run `opencode` in a terminal and sign in with `/connect` (choose OpenCode Go for a Go subscription), then run `opencode models` to see which models you can use. Don't configure the free models (names ending in `-free`): OpenCode now only allows them inside its own app, and calls from the command line are refused with "OpenCode's free tier can only be used from within OpenCode".
+2. **Add them to the config**: one entry per model, `{ "type": "opencode cli", "model": "opencode-go/glm-5.3" }`, then add it to the cells you want. `/foreman-en:setup` can do this for you.
 
-讨论和审查时，插件给它注入一个只读代理，只有读文件、搜索和列目录的工具；审查要看的改动由插件用 git 算好附给它。key 和登录都留在 opencode 里。结果里的费用（`cost_usd`）和其他协作方一样按模型官方 API 价格算；opencode 自己报的费用（OpenCode Go 的额度按它扣）另存在 `reported_cost_usd`。Go 的额度按模型分开算，高档模型额度少，建议只放在复杂讨论里。
+For discussions and reviews, the plugin gives opencode a read-only agent with only the read, search and list tools; for a review, the plugin works out the changes with git and attaches them. Keys and sign-in stay in opencode. The result's cost (`cost_usd`) is priced at the model's official API price like every other agent's; the cost opencode reports itself (what OpenCode Go quota is charged by) is kept in `reported_cost_usd`. Go's limits are per model, and premium models have small limits, so keep them for complex discussions.
 
-### 接入 pi
+### Adding pi
 
-装了 pi（`npm install -g @earendil-works/pi-coding-agent`）的话，用法和 opencode 一样。
+With pi installed (`npm install -g @earendil-works/pi-coding-agent`), it works like opencode.
 
-1. **登录**：终端运行 `pi`，用 `/login` 登录要用的厂商（或者设置厂商的 API key 环境变量），再运行 `pi --list-models` 看能用哪些模型。
-2. **加进配置**：每个模型加一项 `{ "type": "pi cli", "model": "deepseek/deepseek-flash" }`，再加进需要的格子。
+1. **Sign in**: run `pi` in a terminal and sign in to the providers you want with `/login` (or set the provider's API key environment variable), then run `pi --list-models` to see which models you can use.
+2. **Add them to the config**: one entry per model, `{ "type": "pi cli", "model": "deepseek/deepseek-flash" }`, then add it to the cells you want.
 
-- 推理强度是 pi 的 thinking 档位（`off` 到 `max`），每个模型支持的不一样。**写了模型不支持的档位，pi 不报错，会悄悄换成最接近的一档**，所以改完运行一次 `check`，它会说明会被换成哪一档。
-- pi 本身没有权限系统。插件每次只开放这次任务需要的工具，注入守卫扩展让读写路径不出项目目录，也不加载你自己装的扩展、skill 和 MCP。项目的 AGENTS.md / CLAUDE.md 照常读，会话存在 pi 的默认位置。
+- The effort is pi's thinking level (`off` to `max`), and each model supports its own set. **If you set a level the model doesn't support, pi doesn't report an error; it quietly switches to the nearest one**, so run `check` after a change: it says which level would be used instead.
+- pi has no permission system of its own. Every call from the plugin enables only the tools the task needs and injects a guard extension that keeps file reads and writes inside the project directory; your own extensions, skills and MCP servers aren't loaded. The project's AGENTS.md / CLAUDE.md are read as usual, and sessions stay in pi's default location.
 
-### 接入 agy
+### Adding agy
 
-装了 Agy CLI（Google Antigravity CLI，命令 `agy`）并登录好账号的话，可以让它参加讨论和审查。目前只验证了 Windows 11；执行任务还不支持。
+If Agy CLI (Google Antigravity CLI, command `agy`) is installed and signed in, it can take part in discussions and reviews. Only Windows 11 has been verified so far, and hands-on work isn't supported yet.
 
-1. **装守卫**：agy 不能按次加载扩展，插件只能靠 agy 的全局钩子管住它的工具。`/foreman:setup` 加 agy 时会先问你同不同意，同意后在 `~/.gemini/config/` 下写一个钩子条目 `foreman-guard`、一个启动器和守卫脚本，原来的 `hooks.json` 先备份。也可以让 Claude Code 运行 `agy-guard install`。
-2. **加进配置**：运行 `agy models` 看能用哪些模型。agy 把推理强度写在模型 ID 的后缀里（比如 `gemini-3.8-flash-high`），插件把它拆开，写法和其他协作方一样：协作方写 `{ "type": "agy cli", "model": "gemini-3.8-flash" }`，格子里写 `"effort": "high"`，派出时再拼成 agy 认的 ID。只有一档或者没有档位的模型（比如 `claude-sonnet-4-6`）不用写 `effort`。旧写法（`model` 写完整 ID、不写 `effort`）照常能用。
+1. **Install the guard**: agy can't load an extension per call, so the plugin can only control its tools through agy's global hooks. When `/foreman-en:setup` adds agy, it asks for your consent first; if you agree, it writes a hook entry named `foreman-guard`, a launcher and the guard script under `~/.gemini/config/`, after backing up the existing `hooks.json`. You can also ask Claude Code to run `agy-guard install`.
+2. **Add them to the config**: run `agy models` to see the models you can use. agy puts the effort in the model ID suffix (for example `gemini-3.8-flash-high`); the plugin splits it off, so you write it like any other agent: the agent is `{ "type": "agy cli", "model": "gemini-3.8-flash" }`, the cell says `"effort": "high"`, and the plugin builds the ID agy expects when dispatching. Models with one level or none (such as `claude-sonnet-4-6`) need no `effort`. The old form (a full ID in `model`, no `effort`) still works.
 
-- **守卫对你平时用 agy 的影响**：没有 foreman 运行时，守卫对每次工具调用都回答"按 agy 自己的设置来"，平时用 agy 的体验不变，每次工具调用多约 0.1 秒。foreman 在某个目录里运行 agy 期间，你在同一目录里自己用 agy 会被拦下工具调用，拒绝理由里写明原因和什么时候结束。
-- **哪些情况不派 agy**：项目里（包括 `.agents/` 等目录）有 agy 的钩子、MCP 或插件配置，或者全局 `hooks.json` 里除了 foreman 的条目还有别的钩子时，插件管不住它们，这次不派 agy，结果里写明是哪个文件挡住的。
-- **能读什么、能跑什么**：讨论和审查时只放行读文件，路径限定在项目目录和 `--add-dir` 指定的目录里。本机的 agy 沙箱可用时（Windows 11 24H2 及以上），还能在沙箱里跑只读的命令：沙箱里改不了项目内外的文件、上不了网，但系统临时目录仍然可写，所以它保证的是项目文件不变、不能联网，不是整台机器只读；沙箱不可用时没有 shell，插件附上项目的文件清单代替。启动 agy 前，插件会去掉 API key 之类的环境变量（agy 自己登录可能用到的 `GEMINI_API_KEY` 保留，沙箱里的命令也看得到它）。
-- 你自己的 GEMINI.md 和 skill 照常加载，全局配置的 MCP 服务器也会启动，但它们的工具会被守卫拒绝。agy 的会话会出现在它的历史里。
-- **卸载**：让 Claude Code 运行 `agy-guard uninstall`，它删掉钩子条目和守卫文件。插件已经卸掉、没法运行这个命令时，手动打开 `~/.gemini/config/hooks.json` 删掉名为 `foreman-guard` 的条目（只剩它时可以删掉整个文件），再删掉同目录下的 `foreman-agy-guard.mjs`、`foreman-agy-guard.cmd` 和 `foreman-agy-guard.sh`。只删文件不删条目的话，agy 的每次工具调用都会被拦下。
+- **How the guard affects your own agy use**: when no foreman run is active, the guard answers every tool call with "use agy's own setting", so agy works as before, with about 0.1 s added per tool call. While foreman runs agy in a folder, your own agy in that same folder has its tool calls blocked; the reason says why and when it ends.
+- **When agy isn't used**: if the project (including folders like `.agents/`) has agy hooks, MCP or plugin config, or the global `hooks.json` has hooks besides foreman's, the plugin can't control them, so agy isn't dispatched that time and the result names the file that blocked it.
+- **What it can read and run**: in discussions and reviews only file reads are allowed, limited to the project directory and folders given with `--add-dir`. When agy's sandbox works on this machine (Windows 11 24H2 or later), it can also run read-only commands inside the sandbox: they can't change files inside or outside the project or reach the network, but the system temp folder stays writable, so what it guarantees is unchanged project files and no network, not a read-only machine; without the sandbox it gets no shell, and the plugin attaches the project's file list instead. Before starting agy, the plugin removes environment variables such as API keys (`GEMINI_API_KEY`, which agy may use to sign in, is kept, and commands in the sandbox can see it).
+- Your own GEMINI.md and skills load as usual and your global MCP servers start, but the guard blocks their tools. agy's sessions show up in its history.
+- **Uninstalling**: ask Claude Code to run `agy-guard uninstall`, which removes the hook entry and the guard files. If the plugin is already gone and you can't run it, open `~/.gemini/config/hooks.json`, delete the entry named `foreman-guard` (or the whole file if it's the only one), then delete `foreman-agy-guard.mjs`, `foreman-agy-guard.cmd` and `foreman-agy-guard.sh` in the same folder. Deleting the files but not the entry blocks every agy tool call.
 
-### 让 opencode 或 pi 做执行任务
+### Letting opencode or pi do hands-on work
 
-在用户配置里给这个协作方写 `run_access`，再放进 `modules.default.run`（或者图像的 `draw`）的格子（项目配置开不了）：
+Give the agent `run_access` in the user config, then put it in a `modules.default.run` cell (or the image `draw` cell); a project config can't turn this on:
 
-- `"edit"`：只能读写项目目录里的文件，不能运行命令，测试由 Claude Code 事后跑。
-- `"shell"`：还能运行命令，比如跑测试。没有系统沙箱，命令以你的账户权限运行、能访问整台机器，只适合你信任的项目和模型。
+- `"edit"`: reads and writes files in the project directory only, with no commands. Claude Code runs the tests afterwards.
+- `"shell"`: can also run commands, such as tests. There's no OS sandbox: its commands run with your account's permissions and can reach the whole machine, so use this only for projects and models you trust.
 
-两档都会先拍改动快照，Claude Code 事后逐个文件审查 diff。
+Both take a change snapshot first, and Claude Code reviews the diff file by file afterwards.
 
-### 完整示例
+### A complete example
 
 <details>
-<summary>展开：四种协作方都用上的一份完整配置</summary>
+<summary>Expand: a complete config using all four kinds of agents</summary>
 
 ```json
 {
@@ -438,18 +452,18 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 }
 ```
 
-| 代号 | 接入方式 | 用在哪 |
+| ID | Reached through | Used for |
 |---|---|---|
-| `gpt-6.1-sol` | Codex CLI | 复杂的执行、出图 |
-| `gpt-6-astra` | Codex CLI | 所有审查和讨论的候选，复杂的讨论和审查必选；手画会弯的部件 |
-| `glm-5.3` | opencode（OpenCode Go 订阅） | 三级讨论和复杂审查的候选 |
-| `deepseek-flash` | opencode | 常规和复杂的讨论、审查的候选 |
-| `mimo-v2.6-pro` | pi | 复杂讨论的候选 |
-| `kimi-k2.6` | API，key 在环境变量 `KIMI_API_KEY` 里 | 复杂讨论的候选 |
+| `gpt-6.1-sol` | Codex CLI | Complex hands-on work, image generation |
+| `gpt-6-astra` | Codex CLI | A candidate for every review and discussion, required for complex ones; hand-drawing pieces that bend |
+| `glm-5.3` | opencode (OpenCode Go subscription) | A candidate for discussions at all three levels and for complex reviews |
+| `deepseek-flash` | opencode | A candidate for normal and complex discussions and reviews |
+| `mimo-v2.6-pro` | pi | A candidate for complex discussions |
+| `kimi-k2.6` | API, with the key in the `KIMI_API_KEY` environment variable | A candidate for complex discussions |
 
-简单和常规的执行由 Claude Code 自己做。讨论和审查的候选随等级增加：每次由 Claude Code 从候选里挑几席（个数由 `seats` 决定，三级都写在配置里），`gpt-6-astra` 在复杂的讨论和审查里必选，一定参加。复杂的审查另加一个补漏席（`gap`）：各席审完后，再请一个没参加过的模型只找"清单还漏了什么"。
+Claude Code does simple and normal hands-on work itself. Discussions and reviews get more candidates as the level rises: each time Claude Code picks a few seats from them (as many as `seats` says, with all three levels written in the config), and `gpt-6-astra` is required for complex discussions and reviews, so it always takes part. Complex reviews also add a gap seat (`gap`): after the seats finish, one more model that hasn't taken part looks only for "what the list still misses".
 
-这份配置没用到、但常会调整的字段：
+Fields this config doesn't use but that are often adjusted:
 
 ```json
 "gpt-6.1-sol":        { "type": "codex cli", "model": "gpt-6.1-sol", "sandbox": { "run": "workspace-write" }, "max_parallel": 2 },
@@ -457,17 +471,17 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 "deepseek-v4-pro":    { "type": "api", "base_url": "https://api.deepseek.com", "api_key_env": "DEEPSEEK_API_KEY", "model": "deepseek-v4-pro", "extra_body": { "temperature": 0.3 } }
 ```
 
-- `sandbox`：Codex 每类任务（`run`、`review`、`discuss`）用的沙箱，`read-only`、`workspace-write` 或 `danger-full-access`；不写就用 Codex 自己的配置。讨论和审查推荐 `read-only`；Windows 上只读沙箱启动不了时，见下面“安全提示”改用 unelevated。
-- `max_parallel`：这个协作方同时最多跑几个任务，默认 4（agy 默认 2）。满了以后，新的派发按先来后到排队等名额（默认最多等 60 分钟，`--queue-timeout` 可以改，写 0 表示不排队、直接拒绝），不同对话派出的任务也一起排。
-- `run_access`：允许 opencode 或 pi 做执行任务，见上文。
-- `extra_body`：API 请求里额外带的参数。
-- `bin`：找不到命令时，写可执行文件的完整路径。
+- `sandbox`: the sandbox Codex uses for each task type (`run`, `review`, `discuss`): `read-only`, `workspace-write` or `danger-full-access`. Left out, Codex's own config applies. `read-only` is recommended for discussions and reviews; if the read-only sandbox won't start on Windows, switch to unelevated as described under "Safety notes" below.
+- `max_parallel`: how many runs this agent may have at once; 4 by default (2 for agy). When it's full, new dispatches queue for a slot in arrival order (for up to 60 minutes by default; `--queue-timeout` changes that, and 0 refuses right away instead of queueing), across all conversations.
+- `run_access`: lets opencode or pi do hands-on work; see above.
+- `extra_body`: extra parameters to send with API requests.
+- `bin`: the full path to the executable, if the command can't be found.
 
 </details>
 
-### 项目配置
+### Project config
 
-某个项目要换一套候选、多用或少用几个模型、改时长时，在项目里写 `<项目目录>/.claude/foreman.json`，它覆盖你的用户配置：
+When one project should use a different set of candidates, more or fewer models, or other time limits, write `<project>/.claude/foreman.json` in the project; it overrides your user config:
 
 ```json
 {
@@ -483,26 +497,26 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 }
 ```
 
-- 只能写 `modules`（包括场景块和 `seats`、`gap`），以及 `dispatch` 的 `discuss_max_rounds`、`timeout_min`、`stall_min`、`busy_ask_min`；协作方要在用户配置的 `agents` 里定义，项目里不能新加。
-- 写了的格子整格替换，没写的沿用用户配置；`seats`、`gap` 按等级覆盖。可以加候选、改必选、调高席位、延长时长。
-- 以前写在用户配置 `projects` 里的按项目覆盖已经不用了，`/foreman:setup` 可以帮你搬到各项目的 `.claude/foreman.json`。
+- It can only set `modules` (including scene blocks, `seats` and `gap`) and `discuss_max_rounds`, `timeout_min`, `stall_min`, `busy_ask_min` under `dispatch`; agents must be defined in the user config's `agents`, and a project can't add new ones.
+- A cell it writes is replaced as a whole, and cells it doesn't write keep the user config's value; `seats` and `gap` override per level. It can add candidates, change who is required, raise seat counts and lengthen time limits.
+- The per-project overrides that used to go under `projects` in the user config are no longer used; `/foreman-en:setup` can move them to each project's `.claude/foreman.json`.
 
-### 按场景配置
+### Configuring by scene
 
-同一类任务有时服务于不同的场合：研究证据的审查想"广"，多找几家、加补漏席；高风险代码的审查想"准"，只用最强的两家、推理强度开满。这时可以在 `modules` 下按场景整套配置：`default` 是默认的一套，其余场景只写要改的部分。不需要的话不用管，配置里只有 `modules.default`。
+The same kind of task sometimes serves different occasions: a review of research evidence should be broad, with more providers and a gap seat; a review of high-risk code should be precise, using only the two strongest at full effort. In that case you can write a whole setup per scene under `modules`: `default` is the default setup, and other scenes list only what they change. If you don't need this, skip it; the config then has only `modules.default`.
 
-先在偏好文件里定义场景和怎么选（`/foreman:setup` 可以帮你写）：
+First define the scenes and how to choose between them in a preference file (`/foreman-en:setup` can write it for you):
 
 ```markdown
 <!-- foreman:scenes -->
-## 场景路由
-- **code**：评判或决定代码、接口、配置、脚本、测试的改动；`--target diff` 的审查一律算 code。
-- **research**：研究结论和证据、研究方案、卡片、说明文档、研究方向构思；`--target claims` 的审查一律算 research。
-- 两类都有的拆成两个计划；没写到的情况用 default。
+## Scene routing
+- **code**: judging or deciding changes to code, interfaces, configs, scripts and tests; reviews with `--target diff` always count as code.
+- **research**: research conclusions and evidence, research plans, cards, docs, research-direction ideas; reviews with `--target claims` always count as research.
+- Split work that has both into two plans; use default where nothing here applies.
 <!-- /foreman:scenes -->
 ```
 
-再在 `modules` 下加场景块：
+Then add scene blocks under `modules`:
 
 ```json
 "modules": {
@@ -521,107 +535,107 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 }
 ```
 
-上面的例子里，代码审查（complex）用 sol 和 astra 两席、不补漏；研究审查在 normal 和 complex 都多找几家、留补漏席，complex 的必选换成 astra（一般的研究证据审查是 2 级，所以 normal 也要配）。没写的格子都沿用 `default`。四个模块都能按场景配。Claude Code 派活和建计划时按偏好里的路由选场景，并写明依据。`modules` 里有偏好没定义的场景时，派活和建计划都会被拒绝，`config` 会指出是哪个文件；反过来，偏好定义了、`modules` 里没写的场景只提示一句，按 `default` 用。项目偏好写了场景块时，这个项目只用它定义的场景（空块表示不分场景）。详见 [`config.md` 的"场景"](foreman/skills/dispatch/references/config.md)。
+In the example above, code reviews (complex) use two seats, sol and astra, with no gap seat; research reviews ask more models at both normal and complex and keep a gap seat, with astra as the required agent at complex (an ordinary evidence review is level 2, so normal needs it too). Cells not written follow `default`. All four modules can be configured by scene. Claude Code picks the scene by the routing in the preferences when it hands out work and creates plans, and says which line it followed. When `modules` has a scene the preferences don't define, handing out work and creating plans are both refused, and `config` names the file; the other way round, a scene defined in the preferences but not in `modules` only gets a notice and works like `default`. When the project preferences have a scene block, that project uses only the scenes it defines (an empty block means no scenes). Details are under ["Scenes" in `config.md`](foreman-en/skills/dispatch/references/config.md).
 
-### 偏好文件
+### Preference files
 
-有些习惯不好写成 JSON，比如你的项目里哪类代码算高风险、哪些活不想派出去。这些可以用文字写在偏好文件里，Claude Code 每个会话开始用插件时会读：
+Some habits don't fit in JSON, such as which code in your project counts as high-risk, or what you never want handed off. Write those in plain text in a preference file. Claude Code reads it the first time it uses the plugin in a session:
 
-- 用户级：`~/.claude/foreman/preferences.md`
-- 项目级：`<项目目录>/.claude/foreman.md`
+- User level: `~/.claude/foreman/preferences.md`
+- Project level: `<project>/.claude/foreman.md`
 
-偏好文件只能在插件的硬规则以内调整做法：配置文件本身、必选、材料能不能发给某一家、讨论和审查只读、要弹窗确认的事和每一级的席位数，都不受偏好文件影响。在这个范围以内，和插件自带的规则冲突时以偏好文件为准。两份都读，冲突时以项目级为准。例如：
+Preference files only adjust how things are done within the plugin's hard rules: the config files themselves, required agents, whether material may go to a given provider, read-only discussions and reviews, the things that need a confirmation pop-up, and each level's seat count can't be changed by preference files. Within that, they win over the plugin's built-in rules. Both files are read, and where they conflict the project level wins. For example:
 
 ```markdown
-# foreman 偏好
+# foreman preferences
 
-- 这个项目的计费和对账代码按高风险处理：派活用 complex，改完都请 Codex 审查。
-- 数据库迁移脚本不派出去，由 Claude Code 自己写。
-- 改动超过 200 行就请 Codex 审查。
-- 性能和可维护性互相拉扯的讨论用多角色模式；kimi-k2.6 按强档模型对待。
-- 按 stats 的本地实测，deepseek-v4.1-flash 在审查里的独有发现多，审查时按强档用。
+- Treat billing and reconciliation code in this project as high-risk: hand it off as complex, and always have Codex review the changes.
+- Don't hand off database migration scripts; Claude Code writes them.
+- Ask Codex for a review when a change is over 200 lines.
+- Use role mode for discussions where performance and maintainability pull against each other; treat kimi-k2.6 as a strong model.
+- Local results from stats show deepseek-v4.1-flash finding many issues no one else does in reviews; treat it as strong for reviews.
 ```
 
-多角色讨论的自定义角色也写在这里，格式见 [references/roles.md](foreman/skills/dispatch/references/roles.md) 的"用户自定义角色"。
+Custom roles for role-mode discussions go here too; the format is under "Custom roles" in [references/roles.md](foreman-en/skills/dispatch/references/roles.md).
 
-## 安全提示
+## Safety notes
 
-- **Claude Code 只能通过插件调用协作方。** 插件带有一个钩子：Claude Code 直接运行 `codex exec`、`codex review`、`opencode run`、用 pi 跑任务或用 agy 跑模型的命令会被拦下，这样每次调用都有记录、改动追踪和明确的模型和推理强度。你自己在终端里运行它们不受影响。
-- **Codex 的隔离靠它自己的沙箱。**
-  - 沙箱以 Codex 的配置为准。是 `danger-full-access` 时，Codex 能读写电脑上的任何目录；任务说明会限定改动范围、Claude Code 事后也会审查 diff，但这些都不是技术上的隔离。想要隔离，把 `agents.<代号>.sandbox` 设成 `workspace-write` 或 `read-only`。讨论和审查推荐设 `read-only`：写入被系统拦下（结果的 `readonly` 为 `sandbox`）；没设时只靠规则约束和事后对比快照（`audited`），发现写入就记为失败。Windows 上的只读沙箱可能连读文件的命令都启动不了，这时按 `check` 的提示改用 `[windows] sandbox = "unelevated"`。
-  - Windows 上 Codex 默认的 elevated 沙箱要先以管理员身份完成一次设置，设置坏了每条命令都会失败（报 `windows sandbox failed`）。改了沙箱之后让 Claude Code 运行一次 `check`：它不调模型地测一遍沙箱，坏了会列出修法，比如改用 `[windows] sandbox = "unelevated"`。
-  - 审批 `approval` 保持默认的 `never` 就好：派出去的任务没人能批准，沙箱坏了要修沙箱。
-- **opencode 和 pi 做执行时没有系统沙箱。** `edit` 档写不了项目以外的文件、不能运行命令；`shell` 档的命令能访问整台机器。默认不开放，要你自己在用户配置里写，项目配置开不了。
-- **代码会发给协作方背后的厂商。** 派给 Codex 的发给 OpenAI；opencode、pi 和 API 模型发给对应的厂商，agy 发给 Google，API 模型还会收到 Claude Code 附上的文件。涉及敏感代码的项目先确认没问题，必要时在项目配置里去掉 API 候选，或者把讨论、审查整格写成 `"claude code"`。
-- **项目配置和项目偏好能覆盖你的设置。** 项目里的 `.claude/foreman.json` 能加候选（只能用你在用户配置里定义的协作方）、调高席位、延长时长，`.claude/foreman.md` 能改场景路由；从别人那里克隆来的仓库也一样。打开陌生仓库时先看看这两个文件，`config --cwd` 的 `project_config` 会列出它覆盖了什么。
-- **API key 可以写在用户配置里，也可以放在环境变量里。** 写在配置里是明文，`~/.claude/foreman/config.json` 不要提交或分享；项目配置里写的 key 不生效。`config` 命令不显示 key，脚本也不会把 key 写进运行记录。配置的备份（`.bak`）和迁移时改写出来的新文件继承所在目录的权限：想只让自己能读，就让整个目录只有自己能读（默认的 `~/.claude/foreman` 就是这样），别只给配置文件单独设权限。
-- **按量计费的都会产生费用。** Codex 用 API key 计费时、API 模型、opencode 和 pi 接入的按量计费厂商，每次派活或讨论都会花钱。不想让 Claude Code 自己发起派活、讨论和审查，就把 `dispatch.auto` 设成 `false`，它会先问你。
-- **协作方不会因为等人回答而卡住。** Codex 默认不需要审批，opencode 不开放提问和需要确认的权限，pi 没有提问工具，agy 的提问工具被守卫拒绝。它们要人回答的事都收集在结果里，由 Claude Code 判断：你已有授权内的直接决定后续接，业务取舍、扩大范围、花钱和不可逆的操作才问你。
+- **Claude Code can only call agents through the plugin.** The plugin includes a hook that blocks Claude Code's commands that run `codex exec`, `codex review`, `opencode run`, a pi task or an agy model run directly, so every call is recorded, has its changes tracked, and uses an explicit model and effort. Running them yourself in a terminal isn't affected.
+- **Codex is isolated by its own sandbox.**
+  - The sandbox is whatever Codex is configured with. With `danger-full-access`, Codex can read and write any directory on your machine; the task brief limits what it should touch and Claude Code reviews the diff afterwards, but that is not isolation. For isolation, set `agents.<ID>.sandbox` to `workspace-write` or `read-only`. `read-only` is recommended for discussions and reviews: the OS blocks writes (the result's `readonly` is `sandbox`); without it, only the rules and a snapshot comparison afterwards hold it back (`audited`), and any write marks the run failed. On Windows the read-only sandbox may fail to start even file-reading commands; then follow `check` and switch to `[windows] sandbox = "unelevated"`.
+  - Codex's default elevated sandbox on Windows needs a one-time setup with administrator rights, and if that setup is broken, every command fails (with `windows sandbox failed`). After changing the sandbox, have Claude Code run `check`: it tests the sandbox without calling a model and lists fixes if it's broken, such as switching to `[windows] sandbox = "unelevated"`.
+  - Leave `approval` at the default `never`: nobody can approve in a handed-off task, and a broken sandbox needs fixing at the sandbox.
+- **opencode and pi have no OS sandbox when doing hands-on work.** At `edit` they can't write outside the project or run commands; at `shell` their commands can reach the whole machine. It's off by default; only you can turn it on, in the user config, and a project config can't.
+- **Your code goes to the providers behind your agents.** Work handed to Codex goes to OpenAI; opencode, pi and API models send it to their providers, agy to Google, and API models also receive the files Claude Code attaches. Check that this is acceptable for sensitive projects; if needed, drop the API candidates in the project config, or set discussions and reviews to `"claude code"` as a whole.
+- **The project config and project preferences can override your settings.** A project's `.claude/foreman.json` can add candidates (only agents you defined in the user config), raise seat counts and lengthen time limits, and `.claude/foreman.md` can change the scene routing; that includes repositories cloned from someone else. Look at both files when you open an unfamiliar repository; `project_config` in the `config --cwd` output lists what it overrides.
+- **API keys can go in the user config or in environment variables.** In the config they're plain text, so don't commit or share `~/.claude/foreman/config.json`; keys in a project config are ignored. The `config` command never shows keys, and the script never writes them into run records. Config backups (`.bak`) and the new file a migration writes take the permissions of their folder: to keep them readable only by you, restrict the whole folder (the default `~/.claude/foreman` already is), not just the config file.
+- **Pay-as-you-go means real costs.** Codex with API-key billing, API models, and pay-as-you-go providers reached through opencode or pi all cost money for each handoff or discussion. Set `dispatch.auto` to `false` if you don't want Claude Code starting handoffs, discussions and reviews on its own; it asks you first instead.
+- **Agents don't get stuck waiting for an answer.** Codex needs no approvals by default, opencode gets no way to ask questions or request confirmable permissions, pi has no question tool, and the guard blocks agy's question tool. Anything they need answered is collected in the result, and Claude Code decides: within the authority you've already given, it decides and resumes; it only asks you about business trade-offs, wider scope, extra cost and irreversible steps.
 
-## 运行记录
+## Run records
 
-每次调用都会在 `~/.claude/foreman/runs/<run_id>/` 留档：任务说明、事件流、diff、最终报告。API 模型的运行没有 diff，另外多一份对话历史 `messages.json`，续接时接着发。`/foreman:status` 可以查看。
+Each call is recorded in `~/.claude/foreman/runs/<run_id>/`: the brief, the event stream, the diff and the final report. Runs by API models have no diff, but add the conversation history `messages.json`, which a resume continues from. `/foreman-en:status` reads them.
 
-- 改动追踪用的是放在记录目录里的独立 git 仓库，不会碰你项目里的 `.git`。它比较任务开始和结束时的整个工作目录，所以同一时间你、Claude Code 或别的会话改的文件也会被看到：有证据是协作方改的文件和归属未知的文件分开标出，Claude Code 不会直接还原归属未知的改动。
-- 被 `.gitignore` 忽略的路径默认不追踪，派活时用 `--track` 指定后才会追踪。
-- Codex 额度用完、API 余额不足时，任务标记为 `quota_exhausted`，不会自动重试；Codex 的会带上预计恢复时间。
-- 调度进程意外退出、卡死或超时的任务，下次在这个项目里开会话时，Claude Code 会收到提醒。
-- 审查或讨论结束、Claude Code 核实完后，会把每条意见的去留记进那个任务的 `verdict.json`。`cli.mjs stats` 按模型和模块汇总这些记录：席位数、成立和误报的条数、只有它发现的条数、返工率、用时（中位数和 P90）、用量和费用，没记录到用量的写明缺失，不当成 0。加 `--by effort,cell,scene`（任选几项）还能按推理强度、等级和场景分开统计，输出里另有每类、每级计划从建计划到最后一席结束的整体耗时；想比较改档前后（比如审查从 xhigh 改成 high），配合 `--since` 看改完以后的记录。你可以在偏好文件里引用这份统计调整模型档位；插件不会自动排名。
+- Change tracking uses a separate git repository inside the record folder and never touches your project's `.git`. It compares the whole working directory at the start and end of a run, so files that you, Claude Code or another session change at the same time are seen too: files with evidence that the agent changed them are marked separately from files of unknown origin, and Claude Code won't simply revert changes of unknown origin.
+- Paths ignored by `.gitignore` aren't tracked unless you pass them with `--track` when handing off.
+- When the Codex quota runs out or an API balance is too low, the run is marked `quota_exhausted` and isn't retried automatically; for Codex it includes the expected reset time.
+- Runs whose dispatcher exited unexpectedly, got stuck or timed out are flagged to Claude Code the next time you start a session in that project.
+- After a review or discussion ends and Claude Code has checked it, it records what happened to each point in that run's `verdict.json`. `cli.mjs stats` sums these records up by model and module: seats, points confirmed and false positives, points only that model found, rework rate, time (median and P90), usage and cost, with missing usage shown as missing rather than 0. Add `--by effort,cell,scene` (any of them) to split the figures by reasoning effort, level and scene as well; the output also gives, per kind and level, how long plans took from creation to the last seat's end. To compare before and after an effort change (say reviews from xhigh to high), use `--since` to look at the runs since the change. You can point to these figures in the preference files to adjust model tiers; the plugin never ranks models itself.
 
-## 平台支持
+## Platforms
 
-主要在 Windows 的 Claude 桌面版（含 Microsoft Store 版）上开发和测试；命令行版也测过，插件、命令和钩子的加载和桌面版一样。macOS 和 Linux 的代码路径已经写好，但还没有实际测试，欢迎反馈问题。
+Mainly developed and tested in the Claude desktop app on Windows (including the Microsoft Store version); the CLI has been tested too, and loads the plugin, commands and hooks the same way. The macOS and Linux code paths are written but not yet tested in practice; issue reports are welcome.
 
-- **桌面版的实时查看**开在终端面板里，终端面板只接受 ASCII 命令。记录目录（默认 `~/.claude/foreman/runs`）的路径里有中文等字符时（比如 Windows 用户名是中文），`/foreman:setup` 会提示；在配置里把 `dispatch.runs_dir` 设成纯英文路径就行。命令行版不受影响。
-- **从图形界面启动的程序**（比如 macOS 桌面版）PATH 里可能没有 Homebrew、nvm 等目录。脚本找不到命令时，会再到 node 所在的目录、`/opt/homebrew/bin`、`/usr/local/bin` 等常见位置找；仍然找不到，就在这个协作方里写上 `bin`（可执行文件的完整路径）。插件的钩子要用 `node`，也需要能在 PATH 里找到它。
-- **实时查看**用到全屏重画，Windows Terminal、macOS 的终端和 iTerm2、VS Code 的终端以及常见的 Linux 终端都支持；`TERM=dumb` 这类简单终端会改成逐行输出。启动动画用 24 位色，macOS 自带的终端会自动改用 256 色；它主要在 Claude 桌面版的终端里看过，别的终端里显示不对时，用 `dispatch.intro: false` 关掉。
+- **The live view in the desktop app** opens in the terminal panel, which only accepts ASCII commands. If the run directory (`~/.claude/foreman/runs` by default) has non-English characters in its path (for example a Windows user name in Chinese), `/foreman-en:setup` will point it out; set `dispatch.runs_dir` in the config to a plain-English path. The CLI isn't affected.
+- **Programs started from a graphical app** (such as the macOS desktop app) may have a PATH without Homebrew, nvm and similar directories. If the script can't find a command, it also looks in the directory node runs from, `/opt/homebrew/bin`, `/usr/local/bin` and other common places; if it's still not found, set `bin` on that agent to the executable's full path. The plugin's hooks run `node`, so it also needs to be on the PATH.
+- **The live view** redraws the whole screen. Windows Terminal, macOS Terminal and iTerm2, the VS Code terminal and common Linux terminals all support this; simple terminals such as `TERM=dumb` get line-by-line output instead. The intro uses 24-bit color and switches to 256 colors in macOS's built-in Terminal; it has mainly been seen in the Claude desktop app's terminal, so if it looks wrong elsewhere, turn it off with `dispatch.intro: false`.
 
-## 从 codex-bridge 升级
+## Upgrading from codex-bridge
 
-这个插件原来叫 codex-bridge。Claude Code 不会把旧插件自动升级成新名字，需要手动换一次：
+This plugin used to be called codex-bridge. Claude Code doesn't upgrade a plugin to a new name on its own, so switch over once by hand:
 
-1. 卸载旧插件：`/plugin uninstall codex-bridge@claude-codex-bridge`。新旧插件同时装着时，两边的钩子会重复拦截、重复提醒。
-2. 按[安装](#安装和设置)的步骤添加新的 marketplace，安装 `foreman`。
-3. 用桌面版"我的上传"装过旧插件的，在那里把它删掉。
+1. Uninstall the old plugin: `/plugin uninstall codex-bridge-en@claude-codex-bridge`. With both installed, their hooks block and remind twice.
+2. Install `foreman-en` as in [Install and setup](#install-and-setup), from the release package or the new marketplace.
+3. If you installed the old plugin through "My Uploads" in the desktop app, delete it there.
 
-你的设置会在新插件第一次运行时自动搬过去：
+Your settings move over automatically the first time the new plugin runs:
 
-| 原来 | 现在 |
+| Before | Now |
 |---|---|
-| 插件 `codex-bridge` / `codex-bridge-en`，marketplace `claude-codex-bridge` | `foreman` / `foreman-en`，marketplace `claude-foreman` |
-| `/codex-bridge:rescue` | `/foreman:run`；其他命令只换前缀 |
-| 配置 `~/.claude/codex-bridge.json` | `~/.claude/foreman/config.json`（自动复制） |
-| 偏好 `~/.claude/codex-bridge.md` | `~/.claude/foreman/preferences.md`（自动复制） |
-| 运行记录 `~/.claude/codex-runs` | `~/.claude/foreman/runs`（整个搬过去；旧目录里还有任务在跑时，下次再搬） |
-| 项目里的 `.claude/codex-bridge.json`、`.claude/codex-bridge.md` | `.claude/foreman.json`、`.claude/foreman.md`（旧名照常能读，会提示改名） |
-| 环境变量 `CODEX_BRIDGE_CONFIG`、`CODEX_RUNS_DIR`、`CODEX_BRIDGE_LANG` | `FOREMAN_CONFIG`、`FOREMAN_RUNS_DIR`、`FOREMAN_LANG`（旧名暂时还认） |
+| Plugins `codex-bridge` / `codex-bridge-en`, marketplace `claude-codex-bridge` | `foreman` / `foreman-en`, marketplace `claude-foreman` |
+| `/codex-bridge-en:rescue` | `/foreman-en:run`; other commands only change their prefix |
+| Config `~/.claude/codex-bridge.json` | `~/.claude/foreman/config.json` (copied automatically) |
+| Preferences `~/.claude/codex-bridge.md` | `~/.claude/foreman/preferences.md` (copied automatically) |
+| Run records `~/.claude/codex-runs` | `~/.claude/foreman/runs` (moved as a whole; if runs are still in progress there, it moves on a later run) |
+| A project's `.claude/codex-bridge.json` and `.claude/codex-bridge.md` | `.claude/foreman.json` and `.claude/foreman.md` (the old names are still read, with a suggestion to rename) |
+| Environment variables `CODEX_BRIDGE_CONFIG`, `CODEX_RUNS_DIR`, `CODEX_BRIDGE_LANG` | `FOREMAN_CONFIG`, `FOREMAN_RUNS_DIR`, `FOREMAN_LANG` (the old names still work for now) |
 
-配置还会改成新写法：`type` 改为 `codex cli` / `opencode cli` / `api`，`"claude"` 改为 `"claude code"`，协作方代号改成模型名（比如 `codex` 改为 `gpt-6-astra`），`levels` 改写成 `modules`（见上文"配置的结构"）。每一格实际用的模型和推理强度不变，原文件备份为 `config.json.bak`。旧配置和旧偏好文件保留，确认没问题后可以自己删掉。
+The config is also rewritten in the new format: `type` becomes `codex cli` / `opencode cli` / `api`, `"claude"` becomes `"claude code"`, agent IDs are renamed after their models (for example `codex` becomes `gpt-6-astra`), and `levels` is rewritten as `modules` (see "How the config is laid out" above). The model and effort each cell actually uses stay the same, and the original is backed up as `config.json.bak`. The old config and preferences files are kept; delete them yourself once everything works.
 
-## 中文版和英文版
+## English and Chinese versions
 
-插件市场里有两个插件，规则和输出的语言不同，其余完全一样：
+The marketplace has two plugins that differ only in the language of their rules and output:
 
-- `foreman`：中文版，命令是 `/foreman:…`
-- `foreman-en`：英文版，命令是 `/foreman-en:…`
+- `foreman-en`: English, commands are `/foreman-en:…`
+- `foreman`: Chinese, commands are `/foreman:…`
 
-只装其中一个就行。两者共用同一份配置文件、偏好文件和运行记录，换装另一个不用重新配置。
+Install just one. Both share the same config file, preference files and run records, so switching doesn't mean setting things up again.
 
-## 开发
+## Development
 
-两个插件的脚本是同一份：`skills/dispatch/scripts/` 下除 `language.json` 以外的全部文件（入口是 `cli.mjs`），以及 `hooks/` 下的钩子脚本。只改 `foreman/` 里的那份，再运行同步工具复制到英文插件：
+Both plugins use the same scripts: everything under `skills/dispatch/scripts/` except `language.json` (the entry point is `cli.mjs`), plus the hook scripts under `hooks/`. Only edit the copy in `foreman/`, then run the sync tool to copy it into the English plugin:
 
 ```bash
 node tools/sync-shared.mjs
 ```
 
-- 提交前可以用 `node tools/sync-shared.mjs --check` 检查两份脚本、两份 schema 的结构和两个插件的版本号是否一致。
-- 测试：`npm test`（只用 Node 内置模块，不用装依赖），说明见 [tests/README.md](tests/README.md)。
-- 终端提示、发给协作方的约束和提示词都在 `messages.mjs` 里，中英文各一份；各个 skill 的 `SKILL.md`（斜杠命令也是 skill，在 `skills/<命令名>/SKILL.md`）、`references/` 和 schema 两个插件各写各的。
-- 模型档位的数据在 `scripts/model-tiers.json`，来自 LiveBench，几个月就变：每次发版前复制最新榜单，用 `tools/import-livebench.mjs` 导入（做法见 `references/model-tiers.md` 的"维护"）。模型身份和别名在 `scripts/models.json`，价格在 `scripts/prices.json`，三份都只改中文插件那份，再用 `tools/sync-shared.mjs` 同步。
-- 启动动画的头像数据由 `node tools/make-avatars.mjs` 从 `tools/avatars/source.webp` 生成。
-- 网页看板的服务在 `skills/dispatch/scripts/board/`，两个插件共用；页面的源码在仓库根目录的 `board/`，改完运行 `node board/build.mjs` 生成 `index.html`（中英文共用一份，按插件语言显示），再运行同步工具。协议和设计记录在 `docs/board/`。
+- Before committing, `node tools/sync-shared.mjs --check` checks that both copies of the scripts, the structure of both sets of schemas and both plugin versions match.
+- Tests: `npm test` (Node built-ins only, nothing to install); see [tests/README.md](tests/README.md).
+- Terminal messages, the rules and prompts sent to agents and other text live in `messages.mjs`, with a Chinese and an English set; each plugin has its own skill `SKILL.md` files (slash commands are skills too, in `skills/<command>/SKILL.md`), `references/` and schemas.
+- The model tier data is in `scripts/model-tiers.json`, from LiveBench, which changes within months: before each release, copy the latest leaderboard and import it with `tools/import-livebench.mjs` (see "Upkeep" in `references/model-tiers.md`). Model identities and aliases are in `scripts/models.json` and prices in `scripts/prices.json`; edit only the Chinese plugin's copies, then sync with `tools/sync-shared.mjs`.
+- The intro's avatar data is generated by `node tools/make-avatars.mjs` from `tools/avatars/source.webp`.
+- The web board's server is in `skills/dispatch/scripts/board/`, shared by both plugins; the page's source is in `board/` at the repo root. After changing it, run `node board/build.mjs` to generate `index.html` (one file for both languages, shown in the plugin's language), then the sync tool. The protocol and design notes are in `docs/board/`.
 
-## 许可证
+## License
 
 [MIT](LICENSE)
