@@ -3,7 +3,7 @@
 收到执行任务或图像任务的结果、开始验收之前读这一篇。Claude 自己做的执行工作也按这里验收。图像任务另有自己的验收项和重出规则，见 `references/image.md`；结果不是正常完成（卡死、额度用完、要人回答等）时先看 `references/recovery.md`。
 
 ## 验收（每次必做）
-1. 先看 `status` 和 `report.status`：不是 `completed` 就先读 `open_issues`。正常结束、却没交回合格报告的任务，status 和实时查看显示 "no valid result"，按失败处理。
+1. 先看 `status` 和 `report.status`：不是 `completed` 就先读 `open_issues`。正常结束、却没交回合格报告的任务，status 和实时查看显示 "no valid result"，按失败处理。再读 `report.suggestions`：协作方看到的更好做法、范围外的问题和风险，不影响 status，也不算没做完。逐条核实：成立、又在这次的目标以内的，按下面的返工处理或 Claude 直接改；在范围外的，向用户汇报时列出来，要不要做由用户决定（要做就当新任务定级）；不成立的忽略。
 2. 读 `run_dir/diff.patch`（这个任务的补丁；别的任务同时改的文件在 `diff.all.patch`），并核对 `changes.files`：
    - 有没有改到范围外的文件；`report.files_changed` 和实际改动是否一致。
    - `by` 为 `reported` 的文件，对照 diff 确认确实是这次任务该改的即可。`by` 为 `unknown` 的文件，可能是 Claude 自己、其他会话改的，也可能是协作方用命令写了却没报告。先弄清是谁改的，**不要直接还原**。其中标了 `group_run` 的落在同一目录下另一个同时运行的执行任务的写入范围里、又不在这个任务自己的范围里，多半是它改的，归到它验收（只在 `diff.all.patch` 里）。`changes.unstable_files` 里的文件拍快照时一直在被改写，改动没法比较：不能据此认定它们没变，要自己看一眼（文件多时这里只列前 20 个，完整列表在 `changes.unstable_list` 指向的文件里）。

@@ -5,7 +5,7 @@
   "properties": {
     "position": {
       "type": "string",
-      "description": "Your core conclusion or recommendation, in a sentence or two"
+      "description": "Your core conclusion or recommendation, with the key reasons"
     },
     "options": {
       "type": "array",
@@ -16,7 +16,7 @@
         "required": ["name", "idea", "pros", "cons", "recommended"],
         "properties": {
           "name": { "type": "string", "description": "Short name for the option" },
-          "idea": { "type": "string", "description": "How it works, in a few sentences" },
+          "idea": { "type": "string", "description": "How it works and why it would work; a complex option can be written out in full" },
           "pros": { "type": "array", "items": { "type": "string" } },
           "cons": { "type": "array", "items": { "type": "string" } },
           "recommended": { "type": "boolean" }
@@ -25,13 +25,13 @@
     },
     "critiques": {
       "type": "array",
-      "description": "Objections to and challenges of the given proposal or the previous round's points; may be empty if no proposal was given",
+      "description": "Objections to and challenges of the given proposal, the previous round's points or the question itself (whether it's the right question, whether a constraint should change); may be empty if there are none",
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": ["target", "issue", "severity", "suggestion"],
         "properties": {
-          "target": { "type": "string", "description": "Which point this is about" },
+          "target": { "type": "string", "description": "Which point this is about: an option, a point, the question itself or a constraint" },
           "issue": { "type": "string", "description": "What the problem is and what it's based on" },
           "severity": { "type": "string", "enum": ["high", "medium", "low"] },
           "suggestion": { "type": "string", "description": "How to change it" }

@@ -82,7 +82,7 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
   - 报告是 JSON，讨论计划按 `discuss.schema.json`、审查计划按 `review.schema.json` 校验，不合格就报错并列出问题。计划不是讨论或审查计划、或者没有 `host`（旧计划）时拒绝。
   - 在登记锁里检查并登记，和外部席启动用同一把锁。讨论每轮交一份：这是第几轮按已提交报告里最大的轮次加 1 算，不超过 `dispatch.discuss_max_rounds`，`parent` 指向上一份报告。锁内有读不出的记录（可能就是一份报告）时拒绝登记，免得算错轮次。审查只提交一次，并按计划重算材料指纹，和计划不一致就拒绝。
   - 记录目录里写 `meta.json`（`mode: "submit"`、`participant: "host"`、`agent: "claude-code"`、`agent_type: "host"`、`model`（`--model` 的值，没写为 `null`）、`model_source`（写了 `--model` 时为 `"self_reported"`）、`plan`、`seat: 0`、`role`、`round`、`parent`、`author`、`report_sha256`、`submitted_at`，审查另有 `review_fingerprint`；`status` 直接是 `done`，没有进程号）、报告快照 `report.json` 和 `result.json`（`report` 是报告内容，`usage` 为 `null`）。
-  - 输出 JSON：`run_id`、`plan`、`seat`、`round`、`submitted_at`、`report_sha256`、`run_dir`，以及 `commands`（第 1 轮是各外部席的启动命令，讨论后面几轮是各席的续接命令）。后面几轮另有 `resumable`（能续接的每一席：`seat`、`agent`、`model`、`run_id`）和 `note`：脚本不知道模型档位，广度席不续接，由 Claude 只挑要进下一轮的席位运行。
+  - 输出 JSON：`run_id`、`plan`、`seat`、`round`、`submitted_at`、`report_sha256`、`run_dir`，以及 `commands`（第 1 轮是各外部席的启动命令，讨论后面几轮是各席的续接命令）。后面几轮另有 `resumable`（能续接的每一席：`seat`、`agent`、`model`、`run_id`）和 `note`：脚本不知道模型档位，广度席默认不续接（它提出的关键观点还没解决时可以续接），由 Claude 只挑要进下一轮的席位运行。
   - 准入：带 `host` 的计划，外部席启动或续接时要求 Claude Code 席已经提交了这一轮的报告：审查要有一份，讨论要有一份轮次不小于这一轮的报告（第 2 轮要有第 2 轮的报告；同一轮多出来的不算）。没有就拒绝，提示先 `submit`。审查席失败后重新启动不受影响（报告已经在）。计划文件被删了照样检查：这份计划提交过报告，就按有 Claude Code 席处理；计划文件读得到却解析不了时拒绝启动。
   - 报告记录不算运行中、不占并发名额、不出现在会话开始时的未完成提醒里；`resume` 和 `cancel` 会拒绝它；`judge` 照常可用，`--same` 可以和同一计划的外部席互连。
 - 计划不占并发名额；每一席启动时照常按它的协作方计并发。

@@ -36,7 +36,7 @@ Keep a role card under 10 lines, in this format:
 | Overall reviewer | No role; looks at the proposal as a whole | Strong | Overall score | — |
 | Maintenance and compatibility | Old configs and data, migration, keeping both languages in step | Mid | Coding | Reads code |
 | Minimalist | Whether it's overdone: extra options, abstractions, compatibility branches | Mid | Coding | Reads code |
-| User experience | The user's path, interruptions, what the user sees when things go wrong | Mid | Design | — (gives input only; Claude still owns the design) |
+| User experience | The user's path, interruptions, what the user sees when things go wrong | Mid | Design | — (gives input and alternative designs; Claude still settles the design) |
 | Edge-case lister | Lists edge cases, unusual input, empty values and concurrency cases | Weak | — | Reads code |
 
 - Pick only the roles that matter for the topic; there's no need to use them all. With 4 or more participants, keep an overall reviewer to catch what the preset roles all miss.
@@ -57,7 +57,7 @@ External participants can only come from this cell's candidates (`resolved_modul
 2. **Required candidates first**: a candidate marked required (`required`) always takes a seat; `plan` refuses a plan that leaves one out.
 3. **Tiers are a guide**: the suggested tier in the table isn't a condition for taking part. Core roles go first to participants that meet the suggested tier; among participants of the same tier, pick by the strengths the role looks for. Model tiers are the candidates' `tier` in the `config` output, with strengths from the `tiers` command (rules in `references/model-tiers.md`); the preference files can change a model's tier based on local results (`stats`), and then they win.
 4. **Different models first**: one model per role.
-5. **Below the tier means a breadth seat**: a participant below a role's suggested tier can still take the role, but the seat is a **breadth seat**: it hands in its round 1 proposal or review report on its own, Claude checks every point, and it doesn't join round 2. While there are free seats, mid and weak participants can all take part this way; a low tier alone is no reason to leave a model out.
+5. **Below the tier means a breadth seat**: a participant below a role's suggested tier can still take the role, but the seat is a **breadth seat**: it hands in its round 1 proposal or review report on its own and Claude checks every point; by default it isn't resumed for a discussion's round 2, but it can be when a key point it raised is still open and it needs to answer the challenges (see "Round 2" below). While there are free seats, mid and weak participants can all take part this way; a low tier alone is no reason to leave a model out.
 6. **Two seats for a core role at level 3**: on a level 3 topic, one core role can be played by two different base models, each in its own seat with the same role card. One model reached through api, pi and opencode counts as one base model (compared after dropping the `provider/` prefix).
 7. **Never merge core roles**: each core role has a seat of its own and never shares a role card with another role. When seats run short, drop minor roles first, or fold their checks into the overall reviewer; never drop a core role. In the user's multi-role trial, after one role was merged into another seat, 4 of the 5 issues that were missed belonged to it.
 8. **No free qualifying participant: give a strong model another session**: when a core role has no free participant that meets its suggested tier, have a strong model open another session for it first, as before. Each extra session takes one of that agent's concurrency slots (`max_parallel`; tasks from other groups and sessions count too; if it's full, start the extra one once earlier tasks finish), and it isn't independent evidence: several seats of one model agreeing count as one.
@@ -80,7 +80,7 @@ First list the full assignment in the message: seat number, model (tier), role, 
   ② gpt-6-astra (strong) → Fact checker
   ③ deepseek-v4.1-flash (mid) → Maintenance and compatibility
   ④ mimo-v2.6-pro (weak) → Edge-case lister
-  ⑤ glm-5.3-flash (weak, breadth seat, round 1 only) → Math / correctness (core, second seat)
+  ⑤ glm-5.3-flash (weak, breadth seat, round 1 by default) → Math / correctness (core, second seat)
   Not in this discussion: qwen3.8-flash (weak, no seats left)
   ```
 - Option one, "Start as suggested (Recommended)": sum it up in one sentence in its description (such as "Start the 6 seats as above, including the Claude Code seat"); `preview` can also hold the full table with reasons.
@@ -101,9 +101,9 @@ First list the full assignment in the message: seat number, model (tier), role, 
 
 ## Round 2
 - When to hold it: the participants really disagree on the shared questions, or a role raised a risk that can be backed up and that nobody else addressed. Roles simply looking at different things isn't disagreement.
-- The Claude Code seat first submits this round's challenges as its report, then the external seats are resumed. Resume only the seats that aren't breadth seats. Points a breadth seat raised in round 1 that Claude Code confirmed go to the others as part of an anonymous proposal.
+- The Claude Code seat first submits this round's challenges as its report, then the external seats are resumed. By default, resume only the seats that aren't breadth seats; points a breadth seat raised in round 1 that Claude Code confirmed go to the others as part of an anonymous proposal. When a key point a breadth seat raised is still open (someone pushed back, or it needs to back the point up), resume that seat too so it can answer.
 - Label the proposals anonymously as "Proposal A / B / …", removing both model and role names but keeping each proposal's goals, constraints and evidence.
-- The resume brief asks each participant to first find the most serious problem in the other proposals against the shared goal, then add what its own role sees; if another proposal has already dealt with its concern, it should say so plainly instead of digging in to stay in character.
+- The resume brief asks each participant to first find the most serious problem in the other proposals against the shared goal, then add what its own role sees; if another proposal has already dealt with its concern, it should say so plainly instead of digging in to stay in character; if it can combine the strengths of several proposals into a better one, it puts that in options too.
 
 ## Deciding and the decision record
 - Several roles agreeing doesn't add evidence, and roles played by the same model count for even less. Decide only by evidence, constraints and reversibility.

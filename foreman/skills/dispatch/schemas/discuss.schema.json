@@ -5,7 +5,7 @@
   "properties": {
     "position": {
       "type": "string",
-      "description": "你的核心结论或推荐，一两句话说清楚"
+      "description": "你的核心结论或推荐，以及最关键的理由"
     },
     "options": {
       "type": "array",
@@ -16,7 +16,7 @@
         "required": ["name", "idea", "pros", "cons", "recommended"],
         "properties": {
           "name": { "type": "string", "description": "方案的简短名称" },
-          "idea": { "type": "string", "description": "怎么做，几句话" },
+          "idea": { "type": "string", "description": "怎么做、为什么可行；复杂的方案可以展开写" },
           "pros": { "type": "array", "items": { "type": "string" } },
           "cons": { "type": "array", "items": { "type": "string" } },
           "recommended": { "type": "boolean" }
@@ -25,13 +25,13 @@
     },
     "critiques": {
       "type": "array",
-      "description": "对给定方案或前一轮观点的反对和质疑；没有给你方案时可以为空",
+      "description": "对给定方案、前一轮观点或议题本身（问题问得对不对、约束该不该改）的反对和质疑；都没有时可以为空",
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": ["target", "issue", "severity", "suggestion"],
         "properties": {
-          "target": { "type": "string", "description": "针对哪一点" },
+          "target": { "type": "string", "description": "针对哪一点：某个方案、某个观点、议题本身或某条约束" },
           "issue": { "type": "string", "description": "问题是什么，依据是什么" },
           "severity": { "type": "string", "enum": ["high", "medium", "low"] },
           "suggestion": { "type": "string", "description": "建议怎么改" }
