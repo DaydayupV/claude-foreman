@@ -188,7 +188,7 @@ async function executePi(ctx) {
       if (material.tooLarge) die((scope.kind === 'commit' ? M.reviewCommitTooLarge : M.reviewTooLarge)(material.chars, MAX_REVIEW_CHARS));
       parts.push(M.reviewMaterial(material.fileList, material.patch, material.fence, material.note));
     }
-    prompt = [...parts, M.reviewFooter, M.reviewSchemaFooter(schemaText)].join('\n\n') + '\n';
+    prompt = [...parts, M.reviewFooter(ctx.reviewTarget), M.reviewSchemaFooter(schemaText)].join('\n\n') + '\n';
   } else if (exec) prompt = ctx.parent
     ? `${brief}${focusFiles(files)}\n\n${M.resumeFooter}\n\n${M.opencodeRunResumeFooter}\n`
     : `${brief}\n\n${M.footer(cwd, ctx.addDirs || [])}\n\n${M.opencodeRunFooter(schemaText, access)}\n`;
