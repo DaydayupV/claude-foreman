@@ -193,7 +193,7 @@ async function executeAgy(ctx) {
       if (material.tooLarge) die((scope.kind === 'commit' ? M.reviewCommitTooLarge : M.reviewTooLarge)(material.chars, MAX_REVIEW_CHARS));
       parts.push(M.reviewMaterial(material.fileList, material.patch, material.fence, material.note));
     }
-    promptFor = (shell) => [M.agyReviewPrompt(cwd, scope?.description || ctx.reviewTarget, shell), ...parts, M.reviewFooter, M.reviewSchemaFooter(schemaText)].join('\n\n');
+    promptFor = (shell) => [M.agyReviewPrompt(cwd, scope?.description || ctx.reviewTarget, shell), ...parts, M.reviewFooter(ctx.reviewTarget), M.reviewSchemaFooter(schemaText)].join('\n\n');
   } else promptFor = (shell) => `${brief}${focusFiles(files)}\n\n${ctx.parent ? M.opencodeResumeFooter : M.agyDiscussFooter(cwd, schemaText, shell)}\n`;
   const { id, dir, release } = await newRunDir(ctx);
   const run = startRun({ ...ctx, id, dir, release, readonly: 'tools' }, { sandbox: 'files-only' });

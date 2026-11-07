@@ -104,7 +104,7 @@ for (const scope of ['uncommitted', 'base', 'commit']) {
     const expectedScope = scope === 'uncommitted' ? M.reviewScopeUncommitted : scope === 'base' ? M.reviewScopeBase('HEAD', sha) : M.reviewScopeCommit(sha);
     assert.ok(call.stdin.includes(M.reviewPromptGit(h.cwd, expectedScope)));
     assert.ok(call.stdin.includes('检查边界条件'));
-    assert.ok(call.stdin.includes(M.reviewFooter));
+    assert.ok(call.stdin.includes(M.reviewFooter('diff')));
     assert.equal(r.review_scope.description, expectedScope);
     assert.equal(r.review_scope.fingerprint, json(path.join(r.run_dir, 'review-scope.json')).fingerprint);
     assert.ok(read(path.join(r.run_dir, 'review.patch')).includes('diff --git'));

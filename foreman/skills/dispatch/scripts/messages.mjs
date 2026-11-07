@@ -232,8 +232,8 @@ const zh = {
     run: '下一步：按 references/run.md 写好每一席的任务说明，放在同一条消息里后台启动；交回后按 references/acceptance.md 验收。派出后在正文写出模型、推理强度和看板链接（SKILL.md 的"派出时"）',
     image: '下一步：按 references/image.md 写好任务说明再启动，交回后按它的"验收"一条验收。派出后在正文写出模型、推理强度和看板链接（SKILL.md 的"派出时"）',
   })[module],
-  submitGuidance: (module, round) => `下一步：${round > 1 ? '只续接要进下一轮的席位（广度席不续接），' : `启动 commands 里的外部席${module === 'review' ? '（预留的补漏席除外：等其余各席结束、去重后，说明里加上去重后的问题清单再启动）' : ''}，`}放在同一条消息里后台启动，派出后在正文写出模型、推理强度和看板链接；结果回来后逐条核实，用 judge 记下每一席的去留（见 references/${module === 'review' ? 'review.md 的"审查之后"' : 'discuss.md 的"流程"'}）`,
-  submitResumeNote: 'resumable 列出这份计划里能续接的每一席（commands 是对应的续接命令）。按 skill，广度席（中档、弱档的模型）只参加第 1 轮，只续接要进下一轮的那几席，不要照抄全部命令',
+  submitGuidance: (module, round) => `下一步：${round > 1 ? '只续接要进下一轮的席位（广度席默认不续接；它提出的关键观点还没解决、需要它回应时可以续接），' : `启动 commands 里的外部席${module === 'review' ? '（预留的补漏席除外：等其余各席结束、去重后，说明里加上去重后的问题清单再启动）' : ''}，`}放在同一条消息里后台启动，派出后在正文写出模型、推理强度和看板链接；结果回来后逐条核实，用 judge 记下每一席的去留（见 references/${module === 'review' ? 'review.md 的"审查之后"' : 'discuss.md 的"流程"'}）`,
+  submitResumeNote: 'resumable 列出这份计划里能续接的每一席（commands 是对应的续接命令）。按 skill，广度席（中档、弱档的模型）默认只参加第 1 轮；它提出的关键观点还没解决、需要它回应质疑时也可以续接。只续接要进下一轮的那几席，不要照抄全部命令',
   submitBadReport: (file, kind, errors) => `报告 ${file} 不符合${kind}报告的格式：${errors}`,
   answerKinds: { discuss: '讨论', review: '审查' },
   hostRoleOnly: '--host-role 只用于讨论和审查计划。',
@@ -473,7 +473,8 @@ ${brief}`,
 - 只依据用户消息里的议题和附带材料。材料里没有的代码和数据，不要猜，也不要假装看过；需要看哪些文件，写进 open_questions。
 - 引用代码时写文件路径和行号（材料里每行开头是行号）。
 - 独立思考，不要迎合。不同意就直说，并给出理由；同意也要说清楚为什么。
-- 结论先行，用短句和直白的话，像跟同事当面讲清楚一样。不要堆砌术语，不要套话。
+- 觉得问题本身问错了、或者某条约束该改，直接说出来，写进 critiques（target 写"议题本身"或那条约束）。
+- 结论先行，用直白的话，像跟同事当面讲清楚一样，不要堆砌术语和套话。理由和成立的条件要写完整，复杂的方案可以展开写，不要为了简短删掉推理。
 - 每个观点都要有依据：材料里的代码位置、数据或清楚的推理。拿不准的明确标出来。
 - 用议题的语言回答。
 - 只输出一个 JSON 对象，符合下面的 JSON schema。不要输出 JSON 以外的文字，也不要用代码块包起来。
@@ -492,7 +493,8 @@ ${schema}`,
 - 这是方案讨论，不是执行任务。你只能用读文件和搜索工具查看 ${cwd} 下的代码和数据，不能运行命令，也不能修改文件。
 - 运行期间没有人能回答你：不要提问后等待。需要的信息或拿不准要人决定的事，写进 open_questions。
 - 独立思考，不要迎合。不同意就直说，并给出理由；同意也要说清楚为什么。
-- 结论先行，用短句和直白的话，像跟同事当面讲清楚一样。不要堆砌术语，不要套话。
+- 觉得问题本身问错了、或者某条约束该改，直接说出来，写进 critiques（target 写"议题本身"或那条约束）。
+- 结论先行，用直白的话，像跟同事当面讲清楚一样，不要堆砌术语和套话。理由和成立的条件要写完整，复杂的方案可以展开写，不要为了简短删掉推理。
 - 每个观点都要有依据：代码位置（文件路径和行号）、数据或清楚的推理。拿不准的明确标出来；没看过的代码不要假装看过。
 - 用议题的语言回答。
 - 最后只输出一个 JSON 对象，符合下面的 JSON schema。不要输出 JSON 以外的文字，也不要用代码块包起来。
@@ -703,10 +705,11 @@ ${schema}`,
 ## 固定约束（调度方自动附加）
 - 工作目录：${cwd}${addDirs.length ? `；另可改动：${addDirs.join('、')}` : ''}。只改任务说明列出的文件和范围。任务说明"允许的适配"一节写明的事可以直接做，在报告里说明做了什么、为什么等效；没写明的越界都不要做。
 - 开始前先花很少的成本做预检：解释器和依赖能用、测试能被发现、任务需要的输入存在。只做检查，不要因此跑耗时的完整验收。
-- 验证只跑任务说明"完成标准"里分给你的定向测试和检查；改了代码之后，重跑受改动影响的那些。不要跑全量测试，任务说明明确要求的除外：全量由调度方在最终版本上统一跑一次。在报告的 verification 里写明跑了哪些命令、结果如何。
+- 验证先跑任务说明"完成标准"里分给你的定向测试和检查；改了代码之后，重跑受改动影响的那些。排查或验证需要时，可以另跑和这次改动直接相关、很快能跑完的定向检查，包括你按下面测试那一条为这次改动写的测试。不要跑全量测试，任务说明明确要求的除外：全量由调度方在最终版本上统一跑一次。在报告的 verification 里写明跑了哪些命令、结果如何，另跑的写明为什么跑。
 - 运行期间没有人能回答你：不要在中途提问后等答复，问题只在最终报告里提。
 - 遇到下面的情况，这一项不要自己做主：需要突破上面的范围或授权；需要改变研究口径、样本外纪律或验收标准；要做不可逆的操作；问题的答案不同会让后面耗时的工作作废。这一项先不做，或者用最保守、能撤回的做法；不受它影响的部分照常做完。最后把问题写进报告的 decision_requests，status 填 blocked；recommendation 里写明你推荐哪个选项，以及你已经按哪个做了、还是这一项还没做。
 - 其他拿不准的地方，选保守、可逆的做法继续，并在报告里写明；不要每个小疑问都停下。
+- 看到比任务说明更好的做法，或者不妨碍做完这项任务的范围外问题和风险，写进报告的 suggestions，说清是什么、为什么；不用为此停下，也不要自己去做。要突破范围才能做完的，仍按上面写进 decision_requests。
 - 测试只写任务说明要求的，或者确实需要用来验证这次改动的；小改动不另写测试。不要过度防御：不加多余的参数校验、try/catch、兜底分支和重复测试。
 - 按任务说明的规模做，不要做成更大的工程：不新增任务没要求的命令行参数、配置项、抽象层和兼容分支，能用现有函数就不新写。实际改动明显超过任务说明里预计的规模时，先想想是不是做多了；确实需要的，在报告里说明为什么。
 - 命名、注释和提示文字以任务说明为准，给了原文就照用。没有指定的：命名沿用项目现有风格，起直白、能看出用途的名字；注释只在不显而易见的地方用一句简短的话说明"为什么"，不要长篇解释，也不要逐行注释。
@@ -720,17 +723,24 @@ ${schema}`,
 - 这是方案讨论，不是执行任务。可以阅读 ${cwd} 下的代码和数据、运行只读命令来支撑观点，但不要修改、创建或删除任何文件。
 - 运行期间没有人能回答你：不要提问后等待。需要的信息或拿不准要人决定的事，写进 open_questions。
 - 独立思考，不要迎合。不同意就直说，并给出理由；同意也要说清楚为什么。
-- 结论先行，用短句和直白的话，像跟同事当面讲清楚一样。不要堆砌术语，不要套话。
+- 觉得问题本身问错了、或者某条约束该改，直接说出来，写进 critiques（target 写"议题本身"或那条约束）。
+- 结论先行，用直白的话，像跟同事当面讲清楚一样，不要堆砌术语和套话。理由和成立的条件要写完整，复杂的方案可以展开写，不要为了简短删掉推理。
 - 每个观点都要有依据：代码位置、数据或清楚的推理。拿不准的明确标出来。
 - 最后按给定的 JSON schema 输出。`,
   discussResumeFooter: `---
 （调度方提示：前面的讨论规则仍然有效：只读、不迎合、说人话、有依据，运行中没人回答。最后同样按 JSON schema 输出。）`,
-  reviewFooter: `---
+  reviewKinds: {
+    diff: '只报告真实存在的问题，默认看这几类：正确性 bug、逻辑漏洞、边界条件、并发与数据一致性、安全问题、明显的性能问题。审查说明写了检查重点时，以说明为准。不报告纯风格偏好。',
+    files: '只报告真实存在的问题，默认看这几类：代码看正确性 bug、逻辑漏洞、边界条件、并发与数据一致性、安全问题、明显的性能问题；设计文档、规则和配置另看和它要达到的目标对不上、规则之间互相矛盾、漏了关键情况、做得比目标需要的更重（多余的步骤、抽象或约束）。审查说明写了检查重点时，以说明为准。不报告纯措辞偏好。',
+    claims: '只报告真实存在的问题，默认看这几类：证据撑不起结论、说过头、没控制住的混淆因素、统计上站不住、数字或口径前后不一致。审查说明写了检查重点时，以说明为准。不报告纯措辞偏好。',
+    visual: '只报告真实存在的问题，默认看这几类：画面和审查说明的要求或交付目标对不上、元素错位或被遮挡、文字看不清或被截断、闪动和跳帧、动作不自然、风格前后不一致。审查说明写了检查重点时，以说明为准。不报告说不出影响的个人口味。',
+  },
+  reviewFooter: (target) => `---
 ## 审查要求（调度方自动附加）
 - 只审查，不要修改、创建或删除任何文件，不要执行会改动文件的命令。
 - 审查说明里写明已经通过的测试，不要重跑。只为核实某个具体疑点跑定向的只读命令；复现需要写文件时不要跑，把复现步骤写进 unverified。
 - 材料可能没有问题，只报能定位到证据的问题。
-- 只报告真实存在的问题：正确性 bug、逻辑漏洞、边界条件、并发与数据一致性、安全问题、明显的性能问题。不报告纯风格偏好。
+- ${zh.reviewKinds[target] ?? zh.reviewKinds.diff}
 - 每个问题写清：位置（文件:行号，或材料里的位置）、问题、触发场景（什么输入或状态会出错）、证据和修复建议，按严重程度从高到低排列，编号 F1、F2……
 - 没发现问题时 findings 留空、verdict 写 no_issues，不要凑数；没审完时 verdict 写 incomplete。coverage 写明检查了哪些、没覆盖哪些，拿不准或没能验证的写进 unverified。
 - 运行期间没有人能回答你：不要提问后等待。
@@ -756,12 +766,12 @@ ${schema}`,
 
 JSON schema：
 ${schema}`,
-  apiReviewSystem: (schema) => `你在做一次独立审查。几个审查方各自审查同一份材料，最后由 Claude 逐条核实。
+  apiReviewSystem: (schema, target) => `你在做一次独立审查。几个审查方各自审查同一份材料，最后由 Claude 逐条核实。
 规则：
 - 运行期间没有人能回答你：不要提问后等待。
 - 只依据用户消息里的审查说明和附带材料。材料里没有的代码和数据，不要猜，也不要假装看过；需要看却没附带的，写进 coverage.not_checked。
 - 引用代码时写文件路径和行号（文件内容里每行开头是行号；补丁照补丁里的位置写）。
-- 材料可能没有问题，只报能定位到证据的问题。只报告真实存在的问题：正确性 bug、逻辑漏洞、边界条件、并发与数据一致性、安全问题、明显的性能问题，不报告纯风格偏好。
+- 材料可能没有问题，只报能定位到证据的问题。${zh.reviewKinds[target] ?? zh.reviewKinds.diff}
 - 每个问题写清：位置、问题、触发场景（什么输入或状态会出错）、证据和修复建议，按严重程度从高到低排列，编号 F1、F2……
 - 没发现问题时 findings 留空、verdict 写 no_issues，不要凑数；没审完时 verdict 写 incomplete。拿不准或没能验证的写进 unverified。
 - 用审查说明的语言回答，用短句和直白的话。
@@ -1077,8 +1087,8 @@ const en = {
     run: 'Next: write the brief for each seat as references/run.md says and start them in the background in one message; check what comes back as references/acceptance.md says. After starting, write the model, effort and board link in the reply text ("When you hand off" in SKILL.md)',
     image: 'Next: write the brief as references/image.md says, then start it, and check what comes back by its "Checking" item. After starting, write the model, effort and board link in the reply text ("When you hand off" in SKILL.md)',
   })[module],
-  submitGuidance: (module, round) => `Next: ${round > 1 ? 'resume only the seats going on to the next round (breadth seats are not resumed)' : `start the external seats in commands${module === 'review' ? ' (except a reserved gap seat: start it once the others finish and their findings are merged, with the merged list added to its brief)' : ''}`} in the background, all in one message, and write the model, effort and board link in the reply text; when the results are back, check each point and record every seat's verdicts with judge (see references/${module === 'review' ? 'review.md, "After the review"' : 'discuss.md, "The process"'})`,
-  submitResumeNote: "resumable lists every seat of this plan that can be resumed (commands holds the matching resume commands). Per the skill, breadth seats (mid- and low-tier models) take part in round 1 only: resume just the seats going on to the next round, don't run every command",
+  submitGuidance: (module, round) => `Next: ${round > 1 ? "resume only the seats going on to the next round (breadth seats aren't resumed by default; resume one when a key point it raised is still open and needs its answer)" : `start the external seats in commands${module === 'review' ? ' (except a reserved gap seat: start it once the others finish and their findings are merged, with the merged list added to its brief)' : ''}`} in the background, all in one message, and write the model, effort and board link in the reply text; when the results are back, check each point and record every seat's verdicts with judge (see references/${module === 'review' ? 'review.md, "After the review"' : 'discuss.md, "The process"'})`,
+  submitResumeNote: "resumable lists every seat of this plan that can be resumed (commands holds the matching resume commands). Per the skill, breadth seats (mid- and low-tier models) take part in round 1 by default; one can also be resumed when a key point it raised is still open and it needs to answer the challenges. Resume just the seats going on to the next round; don't run every command",
   submitBadReport: (file, kind, errors) => `Report ${file} doesn't match the ${kind} report format: ${errors}`,
   answerKinds: { discuss: 'discussion', review: 'review' },
   hostRoleOnly: '--host-role only applies to discussion and review plans.',
@@ -1324,7 +1334,8 @@ Rules:
 - Work only from the topic and the attached material in the user message. Don't guess at code or data that isn't in the material, and don't pretend you've seen it; list the files you'd need in open_questions.
 - When you cite code, give the file path and line number (each line of the material starts with its line number).
 - Think independently; don't just agree. If you disagree, say so and give your reasons; if you agree, say why.
-- Lead with the conclusion. Use short, plain sentences, as if explaining it to a colleague in person. No jargon piles, no filler.
+- If you think the question itself is the wrong one, or a constraint should change, say so in critiques (target: "the question itself" or that constraint).
+- Lead with the conclusion, in plain words, as if explaining it to a colleague in person; no jargon piles, no filler. Give your reasons and the conditions they depend on in full: a complex option can take the space it needs, so don't cut the reasoning to keep it short.
 - Back every point up: a code location in the material, data, or clear reasoning. Flag anything you're unsure about.
 - Answer in the language of the topic.
 - Output a single JSON object that matches the JSON schema below. No text outside the JSON, and don't wrap it in a code block.
@@ -1343,7 +1354,8 @@ ${schema}`,
 - This is a design discussion, not a task to carry out. You may only use file-reading and search tools to inspect the code and data under ${cwd}. Don't run commands or change files.
 - Nobody can answer you while you run: don't ask and wait. Put information you need, or anything someone else has to decide, in open_questions.
 - Think independently; don't just agree. If you disagree, say so and give your reasons; if you agree, say why.
-- Lead with the conclusion. Use short, plain sentences, as if explaining it to a colleague in person. No jargon piles, no filler.
+- If you think the question itself is the wrong one, or a constraint should change, say so in critiques (target: "the question itself" or that constraint).
+- Lead with the conclusion, in plain words, as if explaining it to a colleague in person; no jargon piles, no filler. Give your reasons and the conditions they depend on in full: a complex option can take the space it needs, so don't cut the reasoning to keep it short.
 - Back every point up: a code location (file path and line number), data, or clear reasoning. Flag anything you're unsure about; don't pretend you've read code you haven't seen.
 - Answer in the language of the topic.
 - Finish with a single JSON object that matches the JSON schema below. No text outside the JSON, and don't wrap it in a code block.
@@ -1568,10 +1580,11 @@ ${schema}`,
 ## Standing rules (added by the dispatcher)
 - Working directory: ${cwd}${addDirs.length ? `; you may also change: ${addDirs.join(', ')}` : ''}. Only change the files and scope listed in the brief. Things written in the brief's "Allowed adaptations" section may be done directly; say in the report what you did and why it is equivalent. Don't go beyond the scope in any other way.
 - Before starting, do a cheap preflight: the interpreter and dependencies work, tests can be discovered, and the inputs the task needs exist. Only check; don't run a long full verification for this.
-- For verification, run only the targeted tests and checks the brief's "Done when" section gives to you; after changing code, rerun the ones the change affects. Don't run the full test suite unless the brief explicitly asks for it: the dispatcher runs it once on the final version. In the report's verification, say which commands you ran and what came out.
+- For verification, start with the targeted tests and checks the brief's "Done when" section gives to you; after changing code, rerun the ones the change affects. When investigating or verifying needs it, you may also run quick targeted checks directly tied to this change, including tests you wrote for it under the testing rule below. Don't run the full test suite unless the brief explicitly asks for it: the dispatcher runs it once on the final version. In the report's verification, say which commands you ran and what came out, and why you ran any extra ones.
 - Nobody can answer you while you run: don't ask a question mid-run and wait for a reply. Questions go only in the final report.
 - In these cases, don't decide the item yourself: you would need to go beyond the scope or authorization above; the research definitions, out-of-sample discipline or acceptance criteria would change; an irreversible operation is needed; or different answers would make later time-consuming work wasted. Leave that item undone, or take the most conservative, reversible option; finish everything it doesn't affect as usual. At the end, put the question in the report's decision_requests and set status to blocked. In recommendation, say which option you recommend and which one you've already gone with, or that the item is still undone.
 - For anything else you are unsure about, take the conservative, reversible option, keep going and note it in the report; don't stop for every small doubt.
+- If you see a better approach than the brief's, or a problem or risk outside the scope that doesn't stop you finishing this task, put it in the report's suggestions, saying what it is and why. Don't stop for it, and don't do it yourself. If finishing the task would mean going beyond the scope, it still goes in decision_requests as above.
 - Only write tests the brief asks for, or that are really needed to verify this change; don't add tests for small changes. Don't code defensively: no extra argument checks, try/catch, fallback branches or duplicate tests.
 - Keep to the size the brief describes; don't turn it into a bigger project. Don't add command-line options, settings, abstraction layers or compatibility branches the task didn't ask for, and use existing functions instead of writing new ones where you can. If your change ends up clearly bigger than the size the brief expects, ask yourself whether you've overdone it; if it really is needed, say why in the report.
 - Follow the brief for names, comments and user-facing text; if it gives exact wording, use it as is. Otherwise, follow the project's existing naming style and pick plain names that show what things are for. Comment only where something isn't obvious, with one short sentence on why. No long explanations, no line-by-line comments.
@@ -1585,17 +1598,24 @@ ${schema}`,
 - This is a design discussion, not a task to carry out. You may read the code and data under ${cwd} and run read-only commands to back up your points, but don't change, create or delete any files.
 - Nobody can answer you while you run: don't ask and wait. Put information you need, or anything someone else has to decide, in open_questions.
 - Think for yourself; don't just agree. If you disagree, say so and give your reasons. If you agree, say why.
-- Lead with the conclusion. Use short, plain sentences, as if explaining to a colleague face to face. No jargon piles, no filler.
+- If you think the question itself is the wrong one, or a constraint should change, say so in critiques (target: "the question itself" or that constraint).
+- Lead with the conclusion, in plain words, as if explaining it to a colleague in person; no jargon piles, no filler. Give your reasons and the conditions they depend on in full: a complex option can take the space it needs, so don't cut the reasoning to keep it short.
 - Back every point with evidence: a code location, data or clear reasoning. Mark anything you're unsure about.
 - Finish with output in the given JSON schema, in English.`,
   discussResumeFooter: `---
 (Note from the dispatcher: the discussion rules above still apply: read-only, don't just agree, speak plainly, back it up; nobody can answer you while you run. Finish with output in the same JSON schema.)`,
-  reviewFooter: `---
+  reviewKinds: {
+    diff: 'Report only real problems. By default, look for correctness bugs, logic errors, edge cases, concurrency and data consistency, security issues and clear performance problems. If the review brief names what to focus on, follow the brief. Not style preferences.',
+    files: "Report only real problems. By default, look for: in code, correctness bugs, logic errors, edge cases, concurrency and data consistency, security issues and clear performance problems; in design docs, rules and config, also places that don't serve their stated goal, rules that contradict each other, key cases left out, and anything heavier than the goal needs (extra steps, abstractions or constraints). If the review brief names what to focus on, follow the brief. Not wording preferences.",
+    claims: "Report only real problems. By default, look for evidence that doesn't support the conclusion, overclaiming, confounders not controlled for, statistics that don't hold up, and numbers or definitions that don't match across the material. If the review brief names what to focus on, follow the brief. Not wording preferences.",
+    visual: "Report only real problems. By default, look for a picture that doesn't match the brief's requirements or the deliverable's goal, misaligned or covered elements, text that's unreadable or cut off, flicker and dropped frames, motion that looks unnatural, and inconsistent style. If the review brief names what to focus on, follow the brief. Not personal taste you can't tie to an effect.",
+  },
+  reviewFooter: (target) => `---
 ## Review rules (added by the dispatcher)
 - Review only. Don't change, create or delete any files, and don't run commands that change files.
 - Don't rerun tests the review brief says have already passed. Run targeted read-only commands only to check a specific suspicion; if reproducing it would need to write files, don't run it: put the reproduction steps in unverified.
 - The material may well have no problems; report only issues you can point to evidence for.
-- Report only real problems: correctness bugs, logic errors, edge cases, concurrency and data consistency, security issues, clear performance problems. Not style preferences.
+- ${en.reviewKinds[target] ?? en.reviewKinds.diff}
 - For each problem give: the location (file:line, or where in the material), the problem, when it goes wrong (what input or state triggers it), the evidence and a suggested fix. Order by severity, most severe first, numbered F1, F2, …
 - If you find nothing, leave findings empty and set verdict to no_issues; don't pad the list. If you couldn't finish, set verdict to incomplete. Use coverage to say what you checked and what you didn't, and put anything you're unsure of or couldn't verify in unverified.
 - Nobody can answer you while you run, so don't ask and wait.
@@ -1622,12 +1642,12 @@ ${schema}`,
 
 JSON schema:
 ${schema}`,
-  apiReviewSystem: (schema) => `You are doing an independent review. Several reviewers each review the same material, and Claude checks every finding afterwards.
+  apiReviewSystem: (schema, target) => `You are doing an independent review. Several reviewers each review the same material, and Claude checks every finding afterwards.
 Rules:
 - Nobody can answer you while you run: don't ask and wait.
 - Work only from the review brief and the attached material in the user message. Don't guess at code or data that isn't in the material, and don't pretend you've seen it; list what you'd need but didn't get in coverage.not_checked.
 - When you cite code, give the file path and line number (each line of the file contents starts with its line number; for the patch, use its own positions).
-- The material may well have no problems; report only issues you can point to evidence for. Report only real problems: correctness bugs, logic errors, edge cases, concurrency and data consistency, security issues, clear performance problems. Not style preferences.
+- The material may well have no problems; report only issues you can point to evidence for. ${en.reviewKinds[target] ?? en.reviewKinds.diff}
 - For each problem give: the location, the problem, when it goes wrong (what input or state triggers it), the evidence and a suggested fix. Order by severity, most severe first, numbered F1, F2, …
 - If you find nothing, leave findings empty and set verdict to no_issues; don't pad the list. If you couldn't finish, set verdict to incomplete. Put anything you're unsure of or couldn't verify in unverified.
 - Answer in the language of the review brief, in short, plain sentences.

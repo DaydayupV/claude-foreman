@@ -512,7 +512,7 @@ async function executeCodex(ctx) {
     } else {
       args = ['exec', '--json', '--skip-git-repo-check', ...codexOpts, '-C', cwd, '--output-schema', REVIEW_SCHEMA, '-o', last, '-'];
       const opening = { files: M.reviewPromptFiles, claims: M.reviewPromptClaims, visual: M.reviewPromptVisual }[ctx.reviewTarget];
-      prompt = `${opening ? opening(cwd) : git ? M.reviewPromptGit(cwd, ctx.reviewScope.description) : M.reviewPromptPlain(cwd)}\n\n${brief}${focusFiles(files)}\n\n${M.reviewFooter}\n`;
+      prompt = `${opening ? opening(cwd) : git ? M.reviewPromptGit(cwd, ctx.reviewScope.description) : M.reviewPromptPlain(cwd)}\n\n${brief}${focusFiles(files)}\n\n${M.reviewFooter(ctx.reviewTarget)}\n`;
     }
   }
   return execute({ ...ctx, readonly, nativeReview, id, dir, release, args, prompt, expectReport: !nativeReview }, {

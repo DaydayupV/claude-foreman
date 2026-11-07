@@ -1,7 +1,7 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["status", "summary", "files_changed", "commands_run", "verification", "open_issues", "decision_requests"],
+  "required": ["status", "summary", "files_changed", "commands_run", "verification", "open_issues", "decision_requests", "suggestions"],
   "properties": {
     "status": {
       "type": "string",
@@ -54,6 +54,11 @@
       "type": "array",
       "items": { "type": "string" },
       "description": "Anything not done, not verified, in doubt, or needing the dispatcher's decision"
+    },
+    "suggestions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Better approaches than the brief's, or problems and risks outside the scope that don't stop this task, each saying what and why; doesn't affect status; an empty array if there are none"
     }
   }
 }

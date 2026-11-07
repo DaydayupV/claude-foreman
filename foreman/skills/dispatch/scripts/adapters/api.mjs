@@ -55,7 +55,7 @@ async function executeApi(ctx) {
   const review = ctx.kind === 'review', target = ctx.reviewTarget, scope = ctx.reviewScope;
   const schemaText = fs.readFileSync(review ? REVIEW_SCHEMA : DISCUSS_SCHEMA, 'utf8');
   const schema = JSON.parse(schemaText);
-  let history = [{ role: 'system', content: review ? M.apiReviewSystem(schemaText) : M.apiDiscussSystem(schemaText) }];
+  let history = [{ role: 'system', content: review ? M.apiReviewSystem(schemaText, target) : M.apiDiscussSystem(schemaText) }];
   if (ctx.parent) {
     const file = path.join(ctx.parentDir, 'messages.json');
     if (!fs.existsSync(file)) die(M.apiNoMessages(ctx.parent));

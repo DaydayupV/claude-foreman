@@ -34,7 +34,7 @@ for (const lang of ['zh', 'en']) test(`opencode 审查注入只读 foreman-revie
   assert.ok(call.stdin.startsWith(m.opencodeReviewPrompt(h.cwd, m.reviewScopeUncommitted)));
   assert.ok(call.stdin.includes('重点检查重复扣款'));
   assert.ok(call.stdin.includes(m.reviewMaterial(fileList, patch, '``````')));
-  assert.ok(call.stdin.endsWith(m.reviewFooter + '\n\n' + m.reviewSchemaFooter(read(path.join(ROOT, 'foreman/skills/dispatch/schemas/review.schema.json'))) + '\n')); assert.ok(patch.includes('+review change'));
+  assert.ok(call.stdin.endsWith(m.reviewFooter('diff') + '\n\n' + m.reviewSchemaFooter(read(path.join(ROOT, 'foreman/skills/dispatch/schemas/review.schema.json'))) + '\n')); assert.ok(patch.includes('+review change'));
   assert.equal(read(path.join(r.run_dir, 'brief.md')), call.stdin);
   assert.equal(scope.patch, undefined); assert.equal(scope.files.length, 4);
   assert.deepEqual(r.review_scope, { kind: 'uncommitted', description: m.reviewScopeUncommitted, base: null,
@@ -62,7 +62,7 @@ test('opencode 非 Git 审查必须有 brief，不附材料且 review_scope 为 
   const s = h.scenario({ last_message: '未发现问题' });
   const r = output(await h.bridge(args(h, ['--brief', '-']), { env: s.env, input: '审查 source.txt' }));
   assert.equal(r.review_scope, null);
-  assert.equal(s.calls()[0].stdin, `${M.reviewPromptPlain(h.cwd)}\n\n审查 source.txt\n\n${M.reviewFooter}\n\n${M.reviewSchemaFooter(read(path.join(ROOT, 'foreman/skills/dispatch/schemas/review.schema.json')))}\n`);
+  assert.equal(s.calls()[0].stdin, `${M.reviewPromptPlain(h.cwd)}\n\n审查 source.txt\n\n${M.reviewFooter('diff')}\n\n${M.reviewSchemaFooter(read(path.join(ROOT, 'foreman/skills/dispatch/schemas/review.schema.json')))}\n`);
   assert.equal(r.last_message, '未发现问题'); assert.equal(r.report, null);
   assert.equal(fs.existsSync(path.join(r.run_dir, 'review.patch')), false);
 });

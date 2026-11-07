@@ -1,6 +1,6 @@
 export const report = {
   status: 'completed', summary: '合成任务已完成', files_changed: [], commands_run: [],
-  verification: '合成验证通过', open_issues: [], decision_requests: [],
+  verification: '合成验证通过', open_issues: [], decision_requests: [], suggestions: [],
 };
 export const discussion = {
   position: '先建立回归测试，再拆模块',

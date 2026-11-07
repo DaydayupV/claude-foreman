@@ -19,6 +19,18 @@ function configure(h, agent = 'codex', api) {
 }
 const digest = (v) => createHash('sha256').update(v).digest('hex');
 
+test('中英文审查约束按对象选择默认类别，缺省和未知对象回退 diff', () => {
+  for (const lang of ['zh', 'en']) {
+    const m = MESSAGES[lang];
+    for (const target of ['diff', 'files', 'claims', 'visual']) assert.ok(m.reviewFooter(target).includes(m.reviewKinds[target]), `${lang} ${target}`);
+    assert.equal(m.reviewFooter(), m.reviewFooter('diff'));
+    assert.equal(m.reviewFooter('unknown'), m.reviewFooter('diff'));
+    assert.ok(m.apiReviewSystem(schema, 'claims').includes(m.reviewKinds.claims));
+    assert.equal(m.apiReviewSystem(schema), m.apiReviewSystem(schema, 'diff'));
+    assert.equal(m.apiReviewSystem(schema, 'unknown'), m.apiReviewSystem(schema, 'diff'));
+  }
+});
+
 test('四种审查对象的参数错误在登记和调用前拒绝', async (t) => {
   const h = sandbox(t); configure(h); h.write('source.txt', 'evidence\n'); h.write('shot.PNG', Buffer.from([0, 1]));
   const cases = [
@@ -56,6 +68,7 @@ for (const target of ['files', 'claims']) for (const git of [true, false]) test(
   assert.equal(json(path.join(r.run_dir, 'meta.json')).review_target, target);
   assert.ok(h.calls()[0].stdin.includes(M.focusFiles('- source.txt（第 1–1 行）')));
   assert.ok(h.calls()[0].stdin.includes(target === 'files' ? M.reviewPromptFiles(h.cwd) : M.reviewPromptClaims(h.cwd)));
+  assert.ok(h.calls()[0].stdin.includes(M.reviewKinds[target]));
 });
 
 test('文件指纹保留附件顺序和行范围，选定行之外的变化也使指纹改变', async (t) => {
@@ -71,7 +84,7 @@ for (const agent of ['codex', 'oc', 'pi']) test(`${agent} 的 diff 审查列出�
   const h = sandbox(t); configure(h, agent); h.initGit(); h.write('source.txt', 'changed\n');
   const r = output(await h.bridge(args(h, ['--file', 'source.txt'])));
   const call = h.calls().find((c) => ['run', 'exec'].includes(c.operation));
-  assert.ok(call.stdin.includes(M.focusFiles('- source.txt'))); assert.ok(call.stdin.includes(M.reviewFooter));
+  assert.ok(call.stdin.includes(M.focusFiles('- source.txt'))); assert.ok(call.stdin.includes(M.reviewFooter('diff')));
   assert.deepEqual(r.report, review); assert.equal(r.last_message, undefined); assert.equal(r.stale, false);
   assert.equal(r.review_target, 'diff'); assert.equal(r.readonly, agent === 'codex' ? 'sandbox' : 'tools');
   if (agent === 'codex') {
@@ -118,7 +131,8 @@ for (const target of ['diff', 'files', 'claims']) test(`API ${target} 审查的�
   if (target === 'diff') { h.initGit(); h.write('source.txt', 'change\n'); } else h.write('source.txt', 'evidence\n');
   const r = output(await h.bridge(args(h, ['--target', target, '--file', 'source.txt'])));
   const [system, user] = api.requests[0].body.messages;
-  assert.equal(system.content, M.apiReviewSystem(schema)); assert.ok(user.content.startsWith(M.apiReviewPrompt[target](r.review_scope.description)));
+  assert.equal(system.content, M.apiReviewSystem(schema, target)); assert.ok(user.content.startsWith(M.apiReviewPrompt[target](r.review_scope.description)));
+  assert.ok(system.content.includes(M.reviewKinds[target]));
   assert.ok(user.content.includes('1\t' + (target === 'diff' ? 'change' : 'evidence')));
   assert.equal(user.content.includes('diff --git'), target === 'diff');
   assert.equal(r.kind, 'review'); assert.equal(json(path.join(r.run_dir, 'meta.json')).kind, 'review');

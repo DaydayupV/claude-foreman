@@ -1,7 +1,7 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["status", "summary", "files_changed", "commands_run", "verification", "open_issues", "decision_requests"],
+  "required": ["status", "summary", "files_changed", "commands_run", "verification", "open_issues", "decision_requests", "suggestions"],
   "properties": {
     "status": {
       "type": "string",
@@ -54,6 +54,11 @@
       "type": "array",
       "items": { "type": "string" },
       "description": "未完成、未验证、有疑问或需要调度方决定的事项"
+    },
+    "suggestions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "比任务说明更好的做法，或者不妨碍做完这项任务的范围外问题和风险，每条说清是什么、为什么；不影响 status，没有就为空数组"
     }
   }
 }

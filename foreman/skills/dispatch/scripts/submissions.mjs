@@ -60,7 +60,7 @@ export async function cmdSubmit(o, load) {
           command: `node "${ENTRY}" resume --run ${latest.id} --level ${plan.level} --brief "${M.planPlaceholders.resume}"` }] : [];
     });
     const commands = round === 1 ? startCommands(plan) : resumable.map((seat) => seat.command);
-    // 脚本不知道模型档位：后面几轮把能续接的每一席都列出来，并写明广度席不续接，由 Claude 按档位挑
+    // 脚本不知道模型档位：后面几轮把能续接的每一席都列出来，并写明广度席默认不续接，由 Claude 按档位挑
     result = { run_id: id, plan: plan.plan_id, seat: 0, round, submitted_at, report_sha256, run_dir: dir, commands, guidance: M.submitGuidance(plan.module, round),
       ...(round > 1 ? { resumable: resumable.map(({ command, ...seat }) => seat), note: M.submitResumeNote } : {}) };
   } finally { release(); }
