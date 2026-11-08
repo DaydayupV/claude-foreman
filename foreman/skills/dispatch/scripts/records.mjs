@@ -146,6 +146,9 @@ async function newRunDir(ctx) {
             }
           }
         }
+        // 启动前最后一次检查（比如自动路线的确认开关）：排队期间配置可能变了，按现在的用户配置再查一遍
+        const startRejection = ctx?.startCheck?.();
+        if (typeof startRejection === 'string') { release(); cleanup(); die(startRejection); }
         if (PROFILE) began = performance.now();
         const previous = ctx ? latestDirectoryId : latestId(fs.readdirSync(RUNS_ROOT));
         const { id, dir } = createRunDir(previous);

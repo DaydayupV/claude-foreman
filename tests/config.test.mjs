@@ -20,12 +20,35 @@ test('没有用户配置时生成初始配置并提示首次使用', async (t) =
   assert.equal(c.effective.modules.default.run.normal, 'claude code');
   assert.deepEqual(c.effective.agents, {});
   const saved = json(h.userConfig);
+  assert.deepEqual(c.effective.dispatch.confirm, { roles: 'ask', image: 'ask' });
+  assert.deepEqual(saved.dispatch.confirm, { roles: 'ask', image: 'ask' });
   assert.deepEqual(c.effective.dispatch.watch, { terminal: true, web: false });
   assert.equal(Object.hasOwn(saved.dispatch, 'web'), false);
   assert.deepEqual(saved, c.effective);
   assert.equal(r.stderr.split('\n')[0], `foreman: ${M.starterCreated(h.userConfig, M.starterNoCodex + M.starterNext)}`);
   assert.ok(!(await h.bridge(['config'])).stderr.includes('foreman:'));
   assert.equal(h.calls().length, 0);
+});
+
+test('confirm 缺省和单项配置只在内存补默认值，不改写用户文件', async (t) => {
+  const h = sandbox(t), c = baseConfig();
+  for (const confirm of [undefined, { roles: 'auto' }]) {
+    if (confirm === undefined) delete c.dispatch.confirm; else c.dispatch.confirm = confirm;
+    h.config(c); const before = read(h.userConfig);
+    assert.deepEqual(output(await h.bridge(['config'])).effective.dispatch.confirm, { roles: confirm?.roles ?? 'ask', image: 'ask' });
+    assert.equal(read(h.userConfig), before);
+    assert.equal(fs.existsSync(`${h.userConfig}.bak`), false);
+  }
+});
+
+for (const lang of ['zh', 'en']) test(`confirm 拒绝无效值、未知键和字符串简写 (${lang})`, async (t) => {
+  const h = sandbox(t), c = baseConfig();
+  for (const confirm of [{ roles: true }, { image: 'yes' }, { image_route: 'auto' }, 'auto']) {
+    c.dispatch.confirm = confirm; h.config(c); const before = read(h.userConfig);
+    failed(await h.bridge(['config'], { env: { FOREMAN_LANG: lang } }), MESSAGES[lang].confirmShape);
+    assert.equal(read(h.userConfig), before);
+    assert.equal(fs.existsSync(`${h.userConfig}.bak`), false);
+  }
 });
 
 test('零点十以前的配置自动改写并保留原文备份', async (t) => {

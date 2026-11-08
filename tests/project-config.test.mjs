@@ -40,14 +40,15 @@ test('项目按等级覆盖 default seats/gap，场景块只覆写不同的级�
 });
 
 test('项目不允许的顶层字段和 dispatch 字段忽略并提示，max_seats 不生效', async (t) => {
-  const h = sandbox(t);
-  const ignored = ['agents', 'auto', 'intro', 'dispatch.max_seats', 'dispatch.auto', 'dispatch.watch', 'dispatch.intro', 'dispatch.runs_dir'];
+  const h = sandbox(t), c = baseConfig(); c.dispatch.confirm = { roles: 'auto', image: 'auto' }; h.config(c);
+  const ignored = ['agents', 'auto', 'intro', 'dispatch.max_seats', 'dispatch.auto', 'dispatch.watch', 'dispatch.intro', 'dispatch.runs_dir', 'dispatch.confirm'];
   const file = h.write('.claude/foreman.json', { agents: {}, auto: false, intro: false,
-    dispatch: { max_seats: 1, auto: false, watch: {}, intro: false, runs_dir: 'ignored', timeout_min: 20 } });
+    dispatch: { max_seats: 1, auto: false, watch: {}, intro: false, runs_dir: 'ignored', confirm: { roles: 'ask', image: 'ask' }, timeout_min: 20 } });
   const r = await h.bridge(configArgs(h)), out = output(r);
   assert.ok(r.stderr.includes(M.projectIgnored(M.list(ignored), file)));
   assert.deepEqual(out.summary.warnings.find((w) => w.kind === 'project_ignored_keys'), { kind: 'project_ignored_keys', file, keys: ignored, message: M.projectIgnored(M.list(ignored), file) });
   assert.equal(out.effective.dispatch.timeout_min, 20); assert.equal(out.effective.dispatch.auto, true);
+  assert.deepEqual(out.effective.dispatch.confirm, c.dispatch.confirm);
   assert.equal(Object.hasOwn(out.effective.dispatch, 'max_seats'), false);
   assert.deepEqual(out.project_config.cells, ['dispatch.timeout_min']);
 });

@@ -46,6 +46,19 @@ const scripts = path.join(ROOT, 'foreman/skills/dispatch/scripts');
 const isolated = (h, code, options) => h.start(write(path.join(h.home, 'inspect.mjs'), code), [], options).done;
 const urlOf = (file) => pathToFileURL(path.join(scripts, file)).href;
 
+for (const lang of ['zh', 'en']) test(`总配置先列自动发起和两项确认，三行随用户配置变化 (${lang})`, async (t) => {
+  const h = sandbox(t), c = baseConfig(), m = MESSAGES[lang];
+  const file = h.write('.claude/foreman.json', { dispatch: { timeout_min: 20 } });
+  for (const automatic of [false, true]) {
+    const mode = automatic ? 'auto' : 'ask';
+    c.dispatch.auto = !automatic; c.dispatch.confirm = { roles: mode, image: mode }; h.config(c);
+    const md = await markdown(h, ['config', '--cwd', h.cwd], { env: { FOREMAN_LANG: lang } });
+    assert.deepEqual(md.split('\n\n').slice(0, 3), [m.reportConfigTitle,
+      [m.reportDispatchTitle, `- ${m.reportDispatchAuto(!automatic)}`, `- ${m.reportConfirmRoles(mode)}`, `- ${m.reportConfirmImage(mode)}`].join('\n'),
+      m.reportProjectConfig(file, 'dispatch.timeout_min')]);
+  }
+});
+
 test('config/check md 固定四张格子表、六种派法、权限和合并提醒，JSON 格式选择保持原输出', async (t) => {
   const h = sandbox(t), api = await apiServer(t, [{}], { models: ['fake-api', 'VOICE-TTS', 'embedding', 'asr', 'rerank', 'moderation'] });
   h.config(sampleConfig(api.url)); Object.assign(h.env, h.scenario(catalogs).env, { FOREMAN_TEST_MEMORY: '16,4' });

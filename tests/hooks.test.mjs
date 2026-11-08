@@ -6,6 +6,13 @@ import { once } from 'node:events';
 import { pathToFileURL } from 'node:url';
 import { sandbox, output, write, seedRun, ROOT } from './helpers.mjs';
 
+// 在源脚本里切换语言，英文镜像由最终同步步骤更新。
+const reminder = (h, language) => h.start(h.write('reminder-language.mjs', `import fs from 'node:fs';
+const read = fs.readFileSync;
+fs.readFileSync = (file, ...args) => file === ${JSON.stringify(path.join(ROOT, 'foreman/skills/dispatch/scripts/language.json'))}
+  ? ${JSON.stringify(JSON.stringify({ language }))} : read(file, ...args);
+await import(${JSON.stringify(pathToFileURL(path.join(ROOT, 'foreman/hooks/session-reminder.mjs')).href)});`), [], { input: JSON.stringify({ cwd: h.cwd }) }).done;
+
 test('会话提醒首次使用并且不创建配置或迁移目录', async (t) => {
   const h = sandbox(t, { config: false });
   const r = output(await h.hook('session-reminder.mjs')).hookSpecificOutput;
@@ -30,7 +37,7 @@ for (const legacy of [false, true]) {
       assert.ok(context.includes(text));
     }
     assert.ok(context.includes('和用户偏好冲突时以它为准，场景块有就只用它的；同样只在插件的硬规则以内调整做法'));
-    assert.ok(context.includes('必选、材料外发、只读、确认弹窗和席位上限不受偏好文件影响'));
+    assert.ok(context.includes('必选、材料外发、只读、要不要弹窗确认（只看用户配置）和席位上限不受偏好文件影响'));
     assert.ok(!context.includes('用户还没有用过本插件'));
     if (legacy) assert.equal(fs.existsSync(h.userConfig), false);
   });
@@ -41,11 +48,45 @@ test('英文偏好说明项目优先、场景块替换和硬规则，plans 不�
   const user = write(path.join(h.home, '.claude/foreman/preferences.md'), 'synthetic user preferences');
   const project = h.write('.claude/foreman.md', 'synthetic project preferences');
   write(path.join(h.runs, 'plans/20000101-plan.json'), { plan_id: '20000101-plan', status: 'timeout', cwd: h.cwd });
-  const context = output(await h.start(path.join(ROOT, 'foreman-en/hooks/session-reminder.mjs'), [], { input: JSON.stringify({ cwd: h.cwd }) }).done).hookSpecificOutput.additionalContext;
+  const context = output(await reminder(h, 'en')).hookSpecificOutput.additionalContext;
   assert.ok(context.includes(`User preference file ${user} (adjusts how things are done within the plugin's hard rules`));
   assert.ok(context.includes(`Project preference file ${project} (wins over the user preferences where they conflict, and its scene block, if any, replaces the user's; it too only adjusts things within the plugin's hard rules`));
-  assert.ok(context.includes("required seats, sending material out, read-only, confirmation prompts and the seat limit can't be changed by preference files"));
+  assert.ok(context.includes("required seats, sending material out, read-only, whether to confirm in a pop-up (set only in the user config) and the seat limit can't be changed by preference files"));
   assert.ok(!context.includes('20000101-plan'));
+});
+
+for (const lang of ['zh', 'en']) test(`图像会话提醒只认用户的 auto，项目配置和偏好不能开启 (${lang})`, async (t) => {
+  const h = sandbox(t), context = async () => output(await reminder(h, lang)).hookSpecificOutput.additionalContext;
+  const ask = lang === 'zh'
+    ? '图形内容走图像模块：每个新的图形交付物开工前先弹窗让用户选路线（dispatch.auto 开着也要弹），不用 run 出图。'
+    : 'Graphics go through the image module: before work starts on each new graphic deliverable, have the user choose the route in a pop-up (even with dispatch.auto on), and never generate images through run.';
+  const auto = lang === 'zh'
+    ? '图形内容走图像模块：每个新的图形交付物开工前，按用户配置的 dispatch.confirm.image=auto 由你选路线，在回复正文写明路线和理由后直接开工（仍要停下来问的情况见 image.md），不用 run 出图。'
+    : 'Graphics go through the image module: before work starts on each new graphic deliverable, pick the route yourself (the user config sets dispatch.confirm.image to auto), state the route and why in your reply and go ahead (image.md lists when to still stop and ask), and never generate images through run.';
+  const baseline = await context(); assert.ok(baseline.includes(ask));
+  h.write('.claude/foreman.json', { dispatch: { confirm: { image: 'auto' } } });
+  assert.equal(await context(), baseline);
+  write(path.join(path.dirname(h.userConfig), 'preferences.md'), 'dispatch.confirm.image=auto');
+  h.write('.claude/foreman.md', 'dispatch.confirm.image=auto');
+  assert.equal((await context()).split('\n\n')[0], baseline);
+  const c = h.config(); c.dispatch.confirm = { image: true }; h.config(c);
+  assert.equal((await context()).split('\n\n')[0], baseline);
+  c.dispatch.confirm.image = 'auto'; h.config(c);
+  const automatic = (await context()).split('\n\n')[0];
+  assert.ok(automatic.includes(auto));
+  assert.equal(automatic.includes(lang === 'zh' ? 'dispatch.auto 开着也要弹' : 'even with dispatch.auto on'), false);
+  assert.equal(automatic.replace(auto, ask), baseline);
+});
+
+test('confirm 的角色值非法或有未知键时，沿用完整 ask 会话提醒', async (t) => {
+  const h = sandbox(t), c = h.config();
+  const context = async () => output(await h.hook('session-reminder.mjs')).hookSpecificOutput.additionalContext;
+  const baseline = await context();
+  assert.ok(baseline.includes('图形内容走图像模块：每个新的图形交付物开工前先弹窗让用户选路线（dispatch.auto 开着也要弹），不用 run 出图。'));
+  for (const confirm of [{ image: 'auto', roles: 'bogus' }, { image: 'auto', extra: 'ask' }]) {
+    c.dispatch.confirm = confirm; h.config(c);
+    assert.equal(await context(), baseline);
+  }
 });
 
 test('会话提醒列出未正常结束的执行任务，取消后不再列出', async (t) => {

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { sandbox, output, failed, baseConfig, seedRun, write, json, lines, opencodeAgent, apiAgent, ROOT, MESSAGES } from './helpers.mjs';
+import { sandbox, output, failed, baseConfig, seedRun, write, json, lines, poll, opencodeAgent, apiAgent, ROOT, MESSAGES } from './helpers.mjs';
 import { report } from './fixtures/reports.mjs';
 const M = MESSAGES.zh;
 const D = { ...MESSAGES.en, ...displayText }; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
@@ -32,6 +32,77 @@ const noPlans = (h) => {
 const hookInput = (event, route = 2) => ({ session_id: 'test-session', hook_event_name: event, tool_name: 'AskUserQuestion', tool_use_id: 'toolu-route',
   tool_input: { questions: [{ ...question(), options: labels.map((label) => ({ label, description: '合成描述' })) }],
     ...(event === 'PostToolUse' ? { answers: { [question().question]: labels[route - 1] } } : {}) } });
+
+test('自动图像路线无需 answers，忽略不同路线的回答并只记录 route_decision', async (t) => {
+  const h = sandbox(t), c = configure(h); c.dispatch.confirm = { image: 'auto' }; h.config(c);
+  assert.equal(fs.existsSync(answersFile(h)), false);
+  for (const mismatched of [false, true]) {
+    if (mismatched) answer(h, 1);
+    const before = mismatched ? fs.readFileSync(answersFile(h), 'utf8') : null;
+    const p = output(await h.bridge([...planArgs(h), '--route-auto', '  用户说要位图加矢量  ']));
+    assert.equal(p.route, 2);
+    assert.deepEqual(p.route_decision, { mode: 'auto', why: '用户说要位图加矢量', at: p.route_decision.at });
+    assert.equal(new Date(p.route_decision.at).toISOString(), p.route_decision.at);
+    assert.deepEqual(json(p.file).route_decision, p.route_decision);
+    for (const plan of [p, json(p.file)]) assert.equal(Object.hasOwn(plan, 'route_confirmation'), false);
+    if (mismatched) assert.equal(fs.readFileSync(answersFile(h), 'utf8'), before);
+    else assert.equal(fs.existsSync(answersFile(h)), false);
+  }
+});
+
+test('--route-auto 只用于图像，理由和用户开关在席位解析前检查', async (t) => {
+  const h = sandbox(t), c = configure(h); c.dispatch.confirm = { image: 'ask' }; h.config(c);
+  const args = [...planArgs(h, 'generate', 2, ['bad=']), '--route-auto'];
+  failed(await h.bridge([...args, '用户指定']), M.routeAutoOff);
+  failed(await h.bridge([...args, '  \t ']), M.routeAutoNoReason);
+  failed(await h.bridge(['plan', '--module', 'review', '--route-auto', '用户指定']), M.routeAutoImageOnly);
+  noPlans(h);
+});
+
+test('auto 未写 --route-auto 仍检查弹窗，拒绝时追加提示，匹配时保留确认凭据', async (t) => {
+  const h = sandbox(t), c = configure(h); c.dispatch.confirm = { image: 'auto' }; h.config(c);
+  const r = await h.bridge(planArgs(h));
+  failed(r, M.routeNotAsked + M.routeAutoHint);
+  assert.ok(r.stderr.endsWith(M.routeAutoHint + '\n'));
+  noPlans(h); answer(h);
+  const p = output(await h.bridge(planArgs(h)));
+  assert.deepEqual(p.route_confirmation, { tool_use_id: 'toolu-route', question: question().question, answer: labels[1], answered_at: '2026-10-19T01:02:03.000Z' });
+  assert.equal(Object.hasOwn(p, 'route_decision'), false);
+});
+
+test('自动路线计划启动回查用户开关，改回 ask 后拒绝，恢复 auto 可启动且续接不回查', async (t) => {
+  const h = sandbox(t), c = configure(h); c.dispatch.confirm = { image: 'auto' }; h.config(c);
+  const p = output(await h.bridge([...planArgs(h), '--route-auto', '用户指定混合路线']));
+  c.dispatch.confirm.image = 'ask'; h.config(c);
+  failed(await h.bridge(launch(p, ['--scope', 'out'])), M.imageRouteAutoOff(p.plan_id));
+  assert.equal(h.records().length, 0); assert.equal(h.calls().length, 0);
+  c.dispatch.confirm.image = 'auto'; h.config(c);
+  const s = h.scenario({ images: ['auto.png'] });
+  const first = output(await h.bridge(launch(p, ['--scope', 'out']), { env: s.env }));
+  assert.equal(first.status, 'done'); assert.equal(first.plan, p.plan_id);
+  c.dispatch.confirm.image = 'ask'; h.config(c);
+  const resumed = output(await h.bridge(['resume', '--run', first.run_id, '--brief', '-', '--reason', 'rework'], { env: s.env }));
+  assert.equal(resumed.status, 'done'); assert.equal(resumed.parent, first.run_id);
+});
+
+test('自动图像路线排队期间改回 ask，释放名额后拒绝启动并清理票据', async (t) => {
+  const h = sandbox(t), c = configure(h); c.dispatch.confirm = { image: 'auto' }; c.agents.codex.max_parallel = 1; h.config(c);
+  const p = output(await h.bridge([...planArgs(h), '--route-auto', '用户指定混合路线']));
+  const activeId = '20000101-000000-0001';
+  const occupied = seedRun(h, activeId, { status: 'running', pid: process.pid });
+  const handle = h.startBridge(launch(p, ['--scope', 'out']));
+  await poll(() => handle.stderr.includes(M.queuePosition('codex', 1, 1, 60)), '图像任务已排队');
+  const queue = path.join(h.runs, '.state/queue/codex');
+  const tickets = () => fs.readdirSync(queue).filter((name) => /^\d+\.json$/.test(name));
+  assert.equal(tickets().length, 1);
+  const ticket = path.join(queue, tickets()[0]); assert.equal(json(ticket).plan, p.plan_id);
+  assert.deepEqual(h.records().map((m) => m.id), [activeId]); assert.equal(h.calls().length, 0);
+  c.dispatch.confirm.image = 'ask'; h.config(c);
+  write(path.join(occupied, 'meta.json'), { ...json(path.join(occupied, 'meta.json')), status: 'done' });
+  failed(await handle.done, M.imageRouteAutoOff(p.plan_id));
+  assert.deepEqual(h.records().map((m) => m.id), [activeId]); assert.equal(h.calls().length, 0);
+  assert.equal(fs.existsSync(ticket), false); assert.deepEqual(tickets(), []);
+});
 
 test('图像计划的路线、格子、角色及审查参数错误在确认前拒绝且不落盘', async (t) => {
   const h = sandbox(t); configure(h);

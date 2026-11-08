@@ -33,6 +33,9 @@ for (const module of ['discuss', 'review']) test(`${module} 计划把 Claude Cod
   failed(await h.bridge(simple(['codex'], ['--host-role', '方案'])), M.planRolesLevel1);
   const plain = output(await h.bridge(planArgs(h, module))); assert.equal(plain.host.role, null);
   assert.equal(plain.guidance, M.planGuidance(module));
+  c.dispatch.confirm = { roles: 'auto' }; h.config(c);
+  const automatic = output(await h.bridge(planArgs(h, module, ['codex=质疑'], ['--host-role', '方案'])));
+  assert.equal(automatic.guidance, M.planRolesAuto + M.planGuidance(module));
 });
 
 test('run 计划没有 host，旧计划只数外部席，其他模块不能带 host-role', async (t) => {

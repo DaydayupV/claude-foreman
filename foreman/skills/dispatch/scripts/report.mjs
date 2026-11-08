@@ -158,9 +158,11 @@ const notes = (summary, checks) => {
 };
 
 export const configReport = (cfg, summary, checks = null) => {
-  const blocks = [M.reportConfigTitle, `${M.reportCellsTitle}${M.reportHeadingGap}${M.reportCellsIntro}`];
+  const blocks = [M.reportConfigTitle, [M.reportDispatchTitle,
+    ...[M.reportDispatchAuto(cfg.dispatch.auto), M.reportConfirmRoles(cfg.dispatch.confirm.roles), M.reportConfirmImage(cfg.dispatch.confirm.image)].map((line) => `- ${line}`)].join('\n'),
+    `${M.reportCellsTitle}${M.reportHeadingGap}${M.reportCellsIntro}`];
   const suffix = cfg.scenes.names.length ? M.reportDefaultScene : '';
-  if (cfg.project_config) blocks.splice(1, 0, M.reportProjectConfig(cfg.project_config.path, M.list(cfg.project_config.cells)));
+  if (cfg.project_config) blocks.splice(2, 0, M.reportProjectConfig(cfg.project_config.path, M.list(cfg.project_config.cells)));
   for (const module of modules) blocks.push(M.reportModuleNames[module] + suffix, module === 'image' && !cfg.image_configured
     ? M.reportImageUnconfigured : cellTable(cfg, summary, module, checks));
   blocks.push(`${M.reportSeatsTitle}${suffix}${M.reportHeadingGap}${M.reportSeatsIntro}`, seatsTable(cfg, summary), M.reportSeatsNotes.map((text) => `- ${text}`).join('\n'));
