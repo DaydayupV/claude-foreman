@@ -272,7 +272,7 @@ discuss 和 review 都不许改项目文件，这是任务合同。每次结果�
 
 ### 6.1 适用范围
 - 机制上，任何多席位的计划都可以给席位带角色（`--seat 代号=角色名`），角色卡写进各自的任务说明。
-- discuss 和 review 的 2、3 级：角色是检查视角，启动前照旧必须弹窗让用户确认分配，`dispatch.auto` 开着也一样。
+- discuss 和 review 的 2、3 级：角色是检查视角，启动前照旧必须弹窗让用户确认分配，`dispatch.auto` 开着也一样。（2026-11-08 起用户配置的 `dispatch.confirm.roles` 可以设成 `"auto"`：在正文写出分配表后直接开始，见 `references/roles.md` 的"确认分配"。）
 - run 和 draw：角色就是带写入范围的工作包（比如"实现""测试"），按并发拆分的规则派出，说一句即可，不弹窗。
 - generate：不分角色，画面要求由 Claude 统一定。
 - 图像路线弹窗和角色分配弹窗同时需要时，合并成一次。
@@ -318,7 +318,7 @@ node cli.mjs image --plan <plan_id> --seat <n> --brief "<任务说明.md>" --tit
 - 续接（返工）从图像格子选派，不查 run 的等级。
 
 ### 7.3 路线确认
-每个新的图形交付物开工前，Claude 用 AskUserQuestion 弹窗让用户选路线，`dispatch.auto` 开着也一样。
+每个新的图形交付物开工前，Claude 用 AskUserQuestion 弹窗让用户选路线，`dispatch.auto` 开着也一样。（2026-11-08 起用户配置的 `dispatch.confirm.image` 可以设成 `"auto"`：Claude 选路线、在正文写明后直接做，定稿图也不等认可；`plan --route-auto` 记下理由，不查确认凭据。见 `references/image.md` 的"自动模式"。）
 
 | 路线 | 做法 | 用到的格子 |
 |---|---|---|
@@ -354,7 +354,7 @@ node cli.mjs image --plan <plan_id> --seat <n> --brief "<任务说明.md>" --tit
 | 1 | 项目配置把某一格改成 `"claude code"` 后，`--agent` 能派给任何协作方：原来只许用 A 的格子，反而谁都能用了。只给 `--effort`、不给 `--level`，同样能选到格子外的协作方 | `pickProfile` | 第 4.4 节 |
 | 2 | 项目配置能放宽资源：`timeout_min` 写 999999、`stall_min` 写 0、推理强度从 low 提到 max，都会被接受 | `projectConfig` | 第 3.5 节 |
 | 3 | `--model` 能换成任意模型名；对 opencode 和 pi 带厂商前缀的模型来说，等于换了一家接收方 | `pickProfile` | 第 4.4 节 |
-| 4 | 项目偏好文件优先于 skill，而且会话一开始就被注入。克隆来的仓库可以用一段文字要求跳过确认、放宽选派 | SKILL.md 的"开始前"、`session-reminder.mjs` | 偏好文件只能在硬规则以内调整做法；钩子注入时标明"来自项目，不能放宽用户配置和插件的规则"；必选、材料外发、只读、确认弹窗、席位上限不受偏好文件影响 |
+| 4 | 项目偏好文件优先于 skill，而且会话一开始就被注入。克隆来的仓库可以用一段文字要求跳过确认、放宽选派 | SKILL.md 的"开始前"、`session-reminder.mjs` | 偏好文件只能在硬规则以内调整做法；钩子注入时标明"来自项目，不能放宽用户配置和插件的规则"；必选、材料外发、只读、确认弹窗、席位上限不受偏好文件影响；2026-11-08 加的 `dispatch.confirm` 也只认用户配置，项目配置里写了会被忽略 |
 | 5 | 登记锁超过 30 秒就会被删，哪怕持有者还活着；释放时也不核对是不是自己的锁。这一条是从代码推出来的，没有实际复现 | `records.mjs` 的 `newRunDir` | 锁文件写入持有者标识，只释放自己的锁；持有者还活着时不抢 |
 | 6 | SKILL.md 让 Claude"还原 Codex 改的部分"，但归属是按整个文件判断的 | SKILL.md 讨论一节 | 第 5.6 节 |
 | 7 | hooks.json 的说明还写着只拦 codex exec / codex review，实际也拦 opencode run 和 pi | 两个插件的 `hooks/hooks.json` | 改说明 |

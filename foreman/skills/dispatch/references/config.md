@@ -52,6 +52,7 @@
 | 字段 | 作用 | 默认 |
 |---|---|---|
 | `auto` | Claude 主动发起派活、讨论和审查前要不要先问用户：`true` 直接做并说一句，`false` 先问（见 skill 的"授权"） | `true` |
+| `confirm` | 硬规则 R4 的两项确认要不要弹窗，写成 `{ "roles": "ask", "image": "ask" }`，每项写 `"ask"` 或 `"auto"`，只写一项时另一项按 `"ask"`：<br>`roles`：讨论和审查 2、3 级用角色模式时的分配确认。`"ask"` 弹窗让用户确认；`"auto"` 在回复正文写出完整的分配表后直接开始（`references/roles.md` 的"确认分配"）。<br>`image`：图像路线和定稿图。`"ask"` 弹窗让用户选路线，定稿图等用户认可后再取件；`"auto"` 由 Claude 按用户原话、没说就按推荐选路线，在正文写明后直接做，定稿图自己检查、给用户看过后接着做，不等认可（`references/image.md` 的"自动模式"，那里也写了仍要停下来问的情况）。<br>和 `auto` 互不影响，四种组合都可以。只认用户配置：写在项目配置里会提示并忽略，偏好文件也改不了，免得克隆来的仓库借它跳过确认。环境变量 `FOREMAN_CONFIG` 能换掉用户配置的路径，它和用户目录一样算可信环境 | `{ "roles": "ask", "image": "ask" }` |
 | `watch` | 实时查看的两个开关，写成 `{ "terminal": true, "web": false }`，两项都要写：<br>`terminal`：网页看板关着时的终端实时查看。`web` 为 `false`、`terminal` 为 `true` 时，只要派给了其他模型（执行、续接、讨论、审查），任务启动后就打开一个终端标签页、弹出终端面板；`terminal` 为 `false` 时不主动打开。`web` 为 `true` 时只用网页看板，不主动打开终端实时查看。想在终端里看时，两种情况都可以用 `/foreman:watch`。<br>`web`：网页看板，在浏览器里用星图看本机所有 Claude Code 对话和派发进度。`true` 时每次派出都先在对话里给一个网页链接，再启动任务，由你点开在默认浏览器里看；`/foreman:watch` 也会给。看板服务这台电脑上所有对话共用，第一次用到时在后台启动，30 分钟没人看、也没有任务在跑就自己退出，插件被卸载或更新后也会退出。运行时服务约占 100–130 MB 内存，浏览器标签页约 60–90 MB；`/foreman:setup` 按内存决定开不开（总内存不到 8 GB 或可用不到 2 GB 时关着）。<br>旧版的写法（`watch` 写 `auto` 或 `off`、另有一个 `web`）照样能读，第一次加载时会先备份、再改写成这种写法 | `{ "terminal": true, "web": false }` |
 | `intro` | 新派出的对话第一次打开实时查看时，先放一段启动动画：模型的像素头像、"正在启动"和几句玩笑，单个模型 5 秒、讨论 10 秒，按任意键跳过，任务提前结束会马上收尾。续接（讨论的下一轮、返工）不放。头像按模型名里的关键字认（gpt、deepseek、glm、kimi、qwen、mimo、minimax、gemini、claude 等），认不出的用 ??? 头像。`false` 关掉 | `true` |
 | `discuss_max_rounds` | 一场讨论最多几轮（第 1 轮加上之后的续接），每个参与方各自计数；超出后脚本拒绝续接 | `2` |
@@ -181,7 +182,7 @@
 
 能放进哪一格，按能力表校验：discuss 的候选要能讨论，review 的要能审查；run 的要能执行，opencode 和 pi 还要写了 `run_access`；generate 的要能出图（适配器声明了 `images`，并且实现了出图检测：这一轮新出了哪些图、每次调用传了什么参数；目前只有 codex cli）；draw 的要求和 run 相同。
 
-图像任务的派法：每个新的图形交付物开工前，Claude 先弹窗让用户选路线（① 位图、② 位图 + 矢量混合、③ 纯矢量先出参考图、④ 纯矢量 / 代码），再用 `plan --module image --cell <generate|draw> --route <路线号>` 建计划、`image --plan … --seat …` 启动；路线决定用到哪几格，只建用到的格子的计划，所以没用到的格子里的必选不会触发（比如选了路线 ④，generate 的必选不用到场）。脚本会核对这个会话里最近一次路线弹窗的回答，见 `references/cli.md` 的"plan、image 和 status --plan"。
+图像任务的派法：每个新的图形交付物开工前，Claude 先弹窗让用户选路线（`dispatch.confirm.image` 为 `"auto"` 时由 Claude 选、在正文写明；① 位图、② 位图 + 矢量混合、③ 纯矢量先出参考图、④ 纯矢量 / 代码），再用 `plan --module image --cell <generate|draw> --route <路线号>` 建计划、`image --plan … --seat …` 启动；路线决定用到哪几格，只建用到的格子的计划，所以没用到的格子里的必选不会触发（比如选了路线 ④，generate 的必选不用到场）。脚本会核对这个会话里最近一次路线弹窗的回答（自动模式下用 `--route-auto` 记下理由，不核对），见 `references/cli.md` 的"plan、image 和 status --plan"。
 
 ### 候选和必选
 - 一格有几个候选时，由 Claude 按 `references/seats.md` 的规则挑（排除做不了的、必选全部加入、讨论和审查按不同的基础模型补到配置的席位数、执行每个工作包派一个执行方），每次派出时说一句选了谁、为什么。脚本只检查能机械判断的硬约束。按场景配了的格子，先选场景，再在这个场景的格子里照同样的规则挑，见"场景"。
@@ -325,7 +326,7 @@
 }
 ```
 
-- 只能写 `modules`（任意场景），以及 `dispatch` 的 `discuss_max_rounds`、`timeout_min`、`stall_min`、`busy_ask_min`。`agents`、`auto`、`watch`、`intro`、`runs_dir` 作用于整台机器或整个会话，写在项目配置里会提示并忽略（`summary.warnings` 里有一条 `project_ignored_keys`）。协作方只能引用用户配置 `agents` 里定义过的代号。
+- 只能写 `modules`（任意场景），以及 `dispatch` 的 `discuss_max_rounds`、`timeout_min`、`stall_min`、`busy_ask_min`。`agents`、`auto`、`confirm`、`watch`、`intro`、`runs_dir` 作用于整台机器或整个会话（`confirm` 还关系到确认能不能跳过），写在项目配置里会提示并忽略（`summary.warnings` 里有一条 `project_ignored_keys`）。协作方只能引用用户配置 `agents` 里定义过的代号。
 - 合并方式和用户配置覆盖默认值一样：写了的格子整格替换（要在用户配置的候选上加几个，就把原来那几个也写上），没写的格子沿用用户配置；`seats`、`gap` 按等级覆盖。可以加候选、改必选、调高席位、打开补漏、换推理强度、延长时长。
 - 有场景时按层叠：先算用户配置里这个场景的结果（用户的 `default` 加用户的场景块），再用项目配置里这个场景的结果（项目的 `default` 加项目的场景块）覆盖。所以项目的 `default` 也会盖过用户配置的场景块。
 - 合并后整体校验，写错时报错会指出是项目配置文件；席位数、补漏的报错里，值来自项目配置时也会写明。项目配置还是平铺写法时，按 `default` 读，并提示改成新写法（`summary.warnings` 里有一条 `project_modules_flat`）。
@@ -336,6 +337,7 @@
 - 每个协作方的并发上限按它自己正在运行的任务算，不分任务组、不分会话；达到上限时派发命令默认按先来后到排队：在记录目录的 `.state/queue/<协作方>/` 下领一张票据，每秒检查一次，排到最前面并且有空名额时启动；stderr 写出排在第几位和最多还等几分钟。`--queue-timeout <分钟>` 改最长等待时间（默认 60，最多 1440），写 0 时不排队、名额满了立即拒绝，报错里列出占着名额的任务。排队的进程被结束时票据随之删掉；被强制结束留下的票据，由下一个检查者按进程是否还在、票据是否过期回收。`status` 列出排队中的票据。派发计划本身不占名额。
 - 同组任务的写入范围不能重叠，这条只查会写文件的任务（执行），讨论和审查不查。
 - 沙箱不是 `read-only` / `workspace-write` 时（比如 `danger-full-access`），Codex 能写任何目录，`--cwd` 只决定它从哪里开始工作，**不限制写入范围**。这时范围只能靠任务说明约束，再靠事后审查 diff 把关。
+- `config` 输出的 JSON 很长（几十 KB，大头是 `summary` 和 `effective`），派活前只需要 skill 列的那几项：`effective.dispatch` 里的 `auto`、`confirm`、`watch`，`scenes` 是场景定义和对不上的地方，`agents_status` 是各协作方的能力和 API key 是否已设置，`summary.warnings` 是没有价格或档位的在用模型、明文 key 等提醒。要看排好的总配置时用 `config --format md`（几 KB），`summary` 的内容都在里面，开头一段写明 `auto` 和 `confirm` 的当前设置。
 - 用户改了配置，改完运行 `config` 确认：
   - `resolved_modules` 列出 `default` 里每一格最终有哪些候选，每个候选的模型、推理强度和是否必选；
   - `resolved_scenes` 按场景列出和 `default` 不同的格子、`seats` 和 `gap`（没有场景时为空对象）；

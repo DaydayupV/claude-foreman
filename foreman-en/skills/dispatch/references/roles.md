@@ -66,8 +66,8 @@ External participants can only come from this cell's candidates (`resolved_modul
 
 Participants configured for the level but given no seat this time are shown in the pop-up as "not in this discussion", with the reason (such as no seats left, or the tools can't do it).
 
-## The confirmation pop-up (always)
-Before starting role mode, always have the user confirm, even when `dispatch.auto` is `true`. When the user asked for role mode themselves, they still confirm the assignment.
+## Confirming the assignment
+Before starting role mode, have the user confirm the assignment, even when `dispatch.auto` is `true`, and also when the user asked for role mode themselves. How it is confirmed depends on `dispatch.confirm.roles` in the user config: the default `"ask"` uses a pop-up, as described below; `"auto"` uses no pop-up, see "Automatic mode" at the end of this section. Preference files can't change this.
 
 First list the full assignment in the message: seat number, model (tier), role, what the role checks, why it went to that model (tool access, tier or strengths), whether it's a breadth seat and which roles are core, including participants not in this discussion. Once the pop-up is open the user may not see the message, and in some interfaces `preview` only shows after an extra click, so **write the assignment into the pop-up's own text**, not only into `preview`. Ask one question with AskUserQuestion:
 
@@ -88,7 +88,9 @@ First list the full assignment in the message: seat number, model (tier), role, 
 - Option three, "Use a normal discussion instead".
 
 - Adjustments apply to this discussion only. Write them into the preference files only when the user says to keep doing it that way.
-- When AskUserQuestion isn't available (for example when running without interaction), list the assignment in the chat, ask there and wait for the answer. Never skip the confirmation.
+- When AskUserQuestion isn't available (for example when running without interaction), list the assignment in the chat, ask there and wait for the answer. With `"ask"`, never skip the confirmation.
+
+**Automatic mode** (`dispatch.confirm.roles` is `"auto"`): whether to use role mode is still decided by "Choosing the mode" in `references/discuss.md`. When role mode is used, write the full assignment table in the reply as required above (the same content the pop-up would have), add one line saying it starts directly under dispatch.confirm.roles=auto and the user can ask for changes at any time, then create the plan and start, without a pop-up. If the user asked in this conversation to see the assignment first, show the pop-up anyway. If the user asks for changes after the start, stop the seats that haven't reported yet with `cancel --run <run_id>`, adjust as in "Adjust" and create a new plan.
 
 ## Starting it
 - First create a plan with `plan --module discuss --cell <level> --group <name>`, one `--seat <agent>=<role>` per external seat (a model playing two roles is written twice), the Claude Code seat's role as `--host-role "<role>"`, and the reasons for the assignment in `--why`.

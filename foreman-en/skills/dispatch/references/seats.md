@@ -20,10 +20,10 @@ When you pick several seats, first create a dispatch plan with `plan`, with the 
 
 ## Roles on seats
 Any plan with several seats can give its seats roles (`--seat <agent>=<role>`), with the role card written into that seat's brief. What that means differs by module:
-- Levels 2 and 3 of discussions and reviews: a role is an angle to check from, assigned by `references/roles.md` (tool access is a hard gate, tiers are only a guide, core roles are never merged, as many external seats as the level's configured `seats`). The Claude Code seat is assigned by the same rules and gets its role with `plan --host-role "<role>"`. Before starting, always show a pop-up for the user to confirm the assignment, even when `dispatch.auto` is `true`. Level 1 takes no roles. A review's gap seat is written `=gap`, but it isn't an angle to check from and never triggers the pop-up.
+- Levels 2 and 3 of discussions and reviews: a role is an angle to check from, assigned by `references/roles.md` (tool access is a hard gate, tiers are only a guide, core roles are never merged, as many external seats as the level's configured `seats`). The Claude Code seat is assigned by the same rules and gets its role with `plan --host-role "<role>"`. Before starting, have the user confirm the assignment as "Confirming the assignment" in `references/roles.md` says (even when `dispatch.auto` is `true`; with `dispatch.confirm.roles` set to `"auto"`, state it in the reply and start). Level 1 takes no roles. A review's gap seat is written `=gap`, but it isn't an angle to check from and never triggers the pop-up.
 - Run and draw: a role is a work package with its own write scope (such as "implementation" and "tests"), sent out by "Splitting work to run in parallel" in `references/run.md`; tell the user in one sentence how it was split, with no pop-up.
 - Generate: no roles; Claude sets what the picture needs as a whole.
-- When the image-route pop-up and the role-assignment pop-up are both due, combine them into one.
+- When the image-route pop-up and the role-assignment pop-up are both due, combine them into one; when `dispatch.confirm` sets one of them to `"auto"`, show only the other pop-up and state the automatic one in the reply.
 
 ## Four kinds of participants: what each can see
 This applies to discussions and reviews alike.
