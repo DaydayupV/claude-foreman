@@ -104,7 +104,7 @@ function normalizeModules(cfg) {
   return { ...cfg, modules };
 }
 const DEFAULT_CONFIG = {
-  dispatch: { auto: true, watch: { terminal: true, web: false }, intro: true, discuss_max_rounds: 2, timeout_min: 480, stall_min: 40, busy_ask_min: 2, runs_dir: null },
+  dispatch: { auto: true, confirm: { roles: 'ask', image: 'ask' }, watch: { terminal: true, web: false }, intro: true, discuss_max_rounds: 2, timeout_min: 480, stall_min: 40, busy_ask_min: 2, runs_dir: null },
   agents: {},
   modules: { ...Object.fromEntries(MODES.map((mode) => [mode, Object.fromEntries(LEVELS.map((lv) => [lv, CLAUDE_CODE]))])), image: { generate: null, draw: null } },
 };
@@ -181,6 +181,8 @@ function mergeConfig(base, extra) {
     if (!extra || !(k in extra)) continue;
     const v = extra[k];
     out[k] = isObject(v) ? { ...base[k], ...v } : v;
+    // dispatch.confirm 只写了一项时，另一项沿用默认的 "ask"
+    if (k === 'dispatch' && isObject(v?.confirm)) out.dispatch.confirm = { ...base.dispatch.confirm, ...v.confirm };
     if (k === 'modules' && isObject(v)) {
       for (const { module, cell, value } of eachCell(base.modules)) {
         if (isObject(out.modules[module]) && !Object.hasOwn(out.modules[module], cell)) out.modules[module] = { ...out.modules[module], [cell]: value };
@@ -473,6 +475,8 @@ function validateConfig(cfg, adapters, fail = die, prefix = 'modules', own = nul
   const text = (v) => typeof v === 'string' && !!v.trim();
   for (const key of ['dispatch', 'agents', 'modules']) check(isObject(cfg[key]), key, why.object);
   check(typeof cfg.dispatch.auto === 'boolean', 'dispatch.auto', why.boolean);
+  if (!isObject(cfg.dispatch.confirm) || Object.keys(cfg.dispatch.confirm).length !== 2
+    || !['roles', 'image'].every((key) => ['ask', 'auto'].includes(cfg.dispatch.confirm[key]))) fail(M.confirmShape);
   if (!isObject(cfg.dispatch.watch) || Object.keys(cfg.dispatch.watch).length !== 2
     || !['terminal', 'web'].every((key) => typeof cfg.dispatch.watch[key] === 'boolean')) fail(M.watchShape);
   check(typeof cfg.dispatch.intro === 'boolean', 'dispatch.intro', why.boolean);

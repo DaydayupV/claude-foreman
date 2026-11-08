@@ -48,7 +48,7 @@ if (process.argv[2] === 'layout') {
 }
 
 // 其余模块在 --help 之后才加载：config.mjs 一加载就会迁移旧版的配置和偏好文件，--help 不该写任何文件。
-const { USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, agentMaxParallel, CLAUDE_CODE, cellList, eachEntry, mapCells, sceneView, selectScene, isScened, resolveAgentAlias, detectEnvironment, projectFile, loadConfig, resolveProfile, validatePlan, unknownAgentError } = await import('./config.mjs');
+const { USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, agentMaxParallel, CLAUDE_CODE, cellList, eachEntry, mapCells, sceneView, selectScene, isScened, resolveAgentAlias, detectEnvironment, projectFile, loadConfig, readRawConfig, resolveProfile, validatePlan, unknownAgentError } = await import('./config.mjs');
 const { cmdPlan, readPlan, loadPlan } = await import('./plan.mjs');
 const { buildSummary: summarize } = await import('./summary.mjs');
 const { modelIdentity } = await import('./models.mjs');
@@ -165,10 +165,15 @@ async function cmdImage(o) {
   if (!o.plan) die(M.imageNeedsPlan);
   if (o.level != null) die(M.imageNoLevel);
   const { cwd, cfg, profile, plan } = dispatchProfile(o, 'image');
+  // 路线是按 dispatch.confirm.image=auto 自动选的，用户后来改回了 ask：要先弹窗，不启动。返工续接（resume）不查
+  if (plan.route_decision?.mode === 'auto' && cfg.dispatch.confirm.image !== 'auto') die(M.imageRouteAutoOff(plan.plan_id));
   if (!o.scope.length) die(M.imageNeedsScope);
   const addDirs = o['add-dir'].map(resolveDir);
   const brief = readBrief(o);
-  return adapters[profile.agent.type].execute({ cfg, ...profile, mode: 'run', kind: 'exec', step: profile.cell, route: plan.route, cwd, brief, addDirs, title: o.title, opts: o });
+  const startCheck = plan.route_decision?.mode === 'auto' ? () => (
+    readRawConfig(USER_CONFIG)?.dispatch?.confirm?.image === 'auto' ? null : M.imageRouteAutoOff(plan.plan_id)
+  ) : undefined;
+  return adapters[profile.agent.type].execute({ cfg, ...profile, mode: 'run', kind: 'exec', step: profile.cell, route: plan.route, cwd, brief, addDirs, title: o.title, opts: o, startCheck });
 }
 
 async function cmdDiscuss(o) {

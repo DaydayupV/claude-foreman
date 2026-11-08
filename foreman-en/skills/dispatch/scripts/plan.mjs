@@ -21,11 +21,12 @@ const readPlan = (id) => loadPlan(id) ?? die(M.planNotFound(id));
 const ROUTE_MARKER = /图像路线|image route/i;
 
 // 最近一次路线弹窗必须已回答，并且明确选中了这份计划的路线。
-function routeConfirmation(sessionId, route) {
-  if (!/^[A-Za-z0-9._-]{1,128}$/.test(sessionId || '')) die(M.routeNoSession);
+// hint：用户配置了 dispatch.confirm.image=auto 时，提示可以改用 --route-auto
+function routeConfirmation(sessionId, route, hint = '') {
+  if (!/^[A-Za-z0-9._-]{1,128}$/.test(sessionId || '')) die(M.routeNoSession + hint);
   let text;
   try { text = fs.readFileSync(path.join(path.dirname(USER_CONFIG), 'answers', `${sessionId}.jsonl`), 'utf8'); }
-  catch { die(M.routeNotAsked); }
+  catch { die(M.routeNotAsked + hint); }
   // 弹窗的先后按每个 tool_use_id 第一次出现的位置算：迟到或重复的回答不改顺序，钩子漏记了提问时由回答补上。
   // 没有 tool_use_id 的记录配不上对，各算一次弹窗。
   const groups = new Map();
@@ -39,23 +40,23 @@ function routeConfirmation(sessionId, route) {
     if (!groups.has(id)) { groups.set(id, []); latest = id; }
     groups.get(id).push(record);
   });
-  if (latest === null) die(M.routeNotAsked);
+  if (latest === null) die(M.routeNotAsked + hint);
   // 同一次弹窗有几条回答时只认最后一条。
   const answered = groups.get(latest).filter((r) => r.event === 'answered').slice(-1);
   const replies = answered.flatMap((r) => r.questions.filter(marked).flatMap((q) => {
     const answer = r.answers?.[q.question];
     return typeof answer === 'string' && answer.trim() ? [{ r, q, answer }] : [];
   }));
-  if (!replies.length) die(M.routeNotAnswered);
+  if (!replies.length) die(M.routeNotAnswered + hint);
   const chosen = replies.flatMap(({ r, q, answer }) => {
     if (q.multiSelect === true) return [];
     const label = (Array.isArray(q.options) ? q.options : []).find((value) => typeof value === 'string' && value.trim() === answer.trim());
     const number = label && '①②③④'.indexOf(label.trim()[0]) + 1;
     return number ? [{ route: number, tool_use_id: r.tool_use_id ?? null, question: q.question, answer, answered_at: r.at }] : [];
   });
-  if (!chosen.length) die(M.routeNotChosen(replies.map((r) => r.answer).join(' / ').slice(0, 80)));
+  if (!chosen.length) die(M.routeNotChosen(replies.map((r) => r.answer).join(' / ').slice(0, 80)) + hint);
   const match = chosen.find((r) => r.route === route);
-  if (!match) die(M.routeMismatch(M.list([...new Set(chosen.map((r) => '①②③④'[r.route - 1]))]), route));
+  if (!match) die(M.routeMismatch(M.list([...new Set(chosen.map((r) => '①②③④'[r.route - 1]))]), route) + hint);
   const { route: _, ...confirmation } = match;
   return confirmation;
 }
@@ -69,9 +70,14 @@ function cmdPlan(o, load, adapters) {
     if (o.route == null) die(M.planRouteRequired);
     if (!['1', '2', '3', '4'].includes(o.route)) die(M.planRouteChoices(o.route));
   } else if (o.route != null) die(M.planRouteImageOnly);
+  if (o.module !== 'image' && o['route-auto'] != null) die(M.routeAutoImageOnly);
   if (!MODULE_CELLS[o.module].includes(o.cell)) die(M.planCellChoices(o.module, M.list(MODULE_CELLS[o.module])));
   const cwd = resolveDir(need(o, 'cwd')), group = need(o, 'group'), original = load(cwd);
   const cfg = selectScene(original, o.module, o.cell, o);
+  if (o['route-auto'] != null) {
+    if (!o['route-auto'].trim()) die(M.routeAutoNoReason);
+    if (cfg.dispatch.confirm.image !== 'auto') die(M.routeAutoOff);
+  }
   if (!o.seat.length) die(M.planNoSeats);
   const seats = o.seat.map((value, i) => {
     const match = /^([A-Za-z0-9][A-Za-z0-9._-]*)(?:=([^=]+))?$/.exec(value);
@@ -149,7 +155,10 @@ function cmdPlan(o, load, adapters) {
       }
     }
   }
-  if (o.module === 'image') plan.route_confirmation = routeConfirmation(CLAUDE_SESSION, plan.route);
+  if (o.module === 'image') {
+    if (o['route-auto'] != null) plan.route_decision = { mode: 'auto', why: o['route-auto'].trim(), at: new Date().toISOString() };
+    else plan.route_confirmation = routeConfirmation(CLAUDE_SESSION, plan.route, cfg.dispatch.confirm.image === 'auto' ? M.routeAutoHint : '');
+  }
   Object.assign(plan, { created_at: new Date().toISOString(), claude_session: CLAUDE_SESSION, cwd,
     level: o.module === 'image' ? null : o.cell, group, required: cell.required, why: o.why ?? null });
   const dropped = resolveCell(original, o.module, o.cell).required.filter((agent) => !cell.required.includes(agent));
@@ -171,10 +180,10 @@ function cmdPlan(o, load, adapters) {
   }
   const commands = startCommands(plan);
   if (plan.host) commands.unshift(`node "${ENTRY}" submit --plan ${plan.plan_id} --report "${M.planPlaceholders.answer}" --model "${M.planPlaceholders.model}"`);
-  // 讨论和审查的席位带了角色（补漏席不算）：启动前一定要弹窗让用户确认分配（硬规则 R4），写在下一步的最前面
+  // 讨论和审查的席位带了角色（补漏席不算）：启动前要让用户确认分配（硬规则 R4），用户配置了 dispatch.confirm.roles=auto 时改为在正文写明分配后直接开始；写在下一步的最前面
   const roles = ['discuss', 'review'].includes(plan.module)
     && (!!plan.host?.role || plan.seats.some((seat) => seat.role && !['补漏', 'gap'].includes(seat.role.trim().toLowerCase())));
-  process.stdout.write(JSON.stringify({ ...plan, file, commands, guidance: (roles ? M.planRolesFirst : '') + M.planGuidance(plan.module) }, null, 2) + '\n');
+  process.stdout.write(JSON.stringify({ ...plan, file, commands, guidance: (roles ? cfg.dispatch.confirm.roles === 'auto' ? M.planRolesAuto : M.planRolesFirst : '') + M.planGuidance(plan.module) }, null, 2) + '\n');
 }
 
 function startCommands(plan) {
