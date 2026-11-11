@@ -83,7 +83,7 @@ async function executeApi(ctx) {
   fs.writeFileSync(path.join(dir, 'brief.md'), prompt);
   fs.writeFileSync(path.join(dir, 'messages.json'), JSON.stringify(history, null, 2));
   process.stderr.write(`foreman: ${D.started(mode, modelLabel(meta), level, dir)}\n`);
-  announceBoard(cfg);
+  announceBoard(cfg, mode, modelLabel(meta), level);
   // 提醒 Claude 在后台启动排队检查：服务繁忙时好及时问用户要不要终止这一方
   if (cfg.dispatch.busy_ask_min > 0) {
     const target = meta.group != null ? `--group ${meta.group}` : `--run ${id}`;

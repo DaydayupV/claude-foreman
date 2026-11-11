@@ -1,7 +1,8 @@
 // 记录目录、启动登记锁、准入、活动状态和 watch 启动器。
 import fs from 'node:fs';
 import path from 'node:path';
-import { ENTRY, defaultRunsRoot, runsMovedNow, resolveAgentAlias, agentMaxParallel } from './config.mjs';
+import { spawn, spawnSync } from 'node:child_process';
+import { ENTRY, USER_CONFIG, defaultRunsRoot, runsMovedNow, resolveAgentAlias, agentMaxParallel } from './config.mjs';
 import { M, die, notice, pidExists, processStartTimes, sleep, pathKey, clip, oneLine, plainCommand, retryBusy, replaceFile, PROFILE, profile, LANGUAGE } from './util.mjs';
 import { D } from './format.mjs';
 import { acquireLock } from './locks.mjs';
@@ -55,24 +56,108 @@ await import(pathToFileURL(candidates.find((p) => fs.existsSync(p)) ?? candidate
 // 网页看板的地址：直接进入这个对话（session 为空时进宇宙）
 const boardUrl = (lock, session = CLAUDE_SESSION) =>
   `http://127.0.0.1:${lock.port}/${lock.token}/?level=all&lang=${encodeURIComponent(LANGUAGE)}${session ? `&s=${encodeURIComponent(session)}` : ''}`;
-// 派出时附带的看板地址：只读锁文件、看进程在不在，不等也不启动服务（钩子在派出前已经用 board 启动好了），没在跑就不给
+// 只读锁文件、看进程在不在；结果和 status 取地址时不启动服务。
 function liveBoardUrl() {
   try {
     const lock = JSON.parse(fs.readFileSync(path.join(RUNS_ROOT, 'board.lock.json'), 'utf8'));
     return lock.port > 0 && lock.token && Number.isInteger(lock.pid) && pidExists(lock.pid) ? boardUrl(lock) : null;
   } catch { return null; }
 }
+// 只装饰打印的结果，不把服务每次启动都会换的口令写进记录。
+function withBoardUrl(cfg, value) {
+  const board = cfg?.dispatch?.watch?.web ? liveBoardUrl() : null;
+  if (!board) return value;
+  const { run_id, ...rest } = value;
+  return { ...(run_id === undefined ? {} : { run_id }), board_url: board, ...rest };
+}
+
+// 按对话 id 放在用户配置目录下的标记文件（board-dispatched、board-opened）；没有可用的对话 id 时为 null
+const sessionMark = (kind) => (/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(CLAUDE_SESSION || '') ? path.join(path.dirname(USER_CONFIG), kind, CLAUDE_SESSION) : null);
+const touch = (file) => { const now = new Date(); fs.utimesSync(file, now, now); };
+// 清掉同一个目录里闲置超过 days 天的标记
+function sweepMarks(dir, days) {
+  try {
+    for (const name of fs.readdirSync(dir)) {
+      const file = path.join(dir, name);
+      if (Date.now() - fs.statSync(file).mtimeMs > days * 24 * 3600000) fs.rmSync(file, { force: true });
+    }
+  } catch { /* 清不掉下次再清 */ }
+}
+
+// 派出命令一运行就在 board-dispatched/<对话 id> 上留下时间，排队中、还没建记录目录时也有。
+// 钩子（board-link.mjs）在一轮结束时拿它和这一轮的起点比，判断这一轮里这个对话派出过没有，不用认命令是怎么写的
+function markDispatched() {
+  const file = sessionMark('board-dispatched');
+  if (!file) return;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    try { touch(file); } catch { fs.writeFileSync(file, ''); sweepMarks(path.dirname(file), 1); }
+  } catch { /* 留不下标记只是少一层兜底 */ }
+}
+
+// web_open 每个对话只开一次：抢到标记返回它的路径。标记已经在时刷新它的时间，还在派活的对话不会被清掉；闲置一周的才清
+function claimBoardOpen() {
+  const file = sessionMark('board-opened');
+  if (!file) return null;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.closeSync(fs.openSync(file, 'wx'));
+  } catch {
+    try { touch(file); } catch { /* 标记目录写不了 */ }
+    return null;
+  }
+  sweepMarks(path.dirname(file), 7);
+  return file;
+}
+
+function openBoard(url, mark) {
+  // 没打开成：去掉刚抢到的标记，下次派出再试
+  const failed = () => { try { fs.rmSync(mark, { force: true }); } catch { /* 下次照样试 */ } };
+  try {
+    // 只给测试用：记录地址，避免真的打开浏览器。
+    if (process.env.FOREMAN_TEST_OPEN !== undefined) {
+      fs.appendFileSync(process.env.FOREMAN_TEST_OPEN, `${url}\n`);
+      notice(M.boardOpened);
+      return;
+    }
+    const [command, args] = process.platform === 'win32' ? ['rundll32', ['url.dll,FileProtocolHandler', url]]
+      : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
+    const child = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: true });
+    child.once('error', failed);
+    child.once('spawn', () => notice(M.boardOpened));
+    child.unref();
+  } catch { failed(); }
+}
 // 网页看板开着时紧接着开工行给出这个对话的看板地址：Claude Code 写"已派出"那句话时照着附上（钩子显示的那条在桌面版里是折起来的）。
 // 各类协作方的开工行写在不同的地方，都调这一个
-function announceBoard(cfg) {
-  const board = cfg?.dispatch?.watch?.web ? liveBoardUrl() : null;
-  if (board) process.stderr.write(`foreman: ${D.boardLine(board)}\n`);
+function announceBoard(cfg, mode, who, level, image = null) {
+  if (!cfg?.dispatch?.watch?.web) return;
+  let board = liveBoardUrl();
+  // 看板服务没在跑（钩子没认出这条命令、没提前启动）：自己用 board 子命令启动，和钩子是同一条路
+  if (!board) {
+    try {
+      const result = spawnSync(process.execPath, [ENTRY, 'board'], {
+        encoding: 'utf8', timeout: 12000, windowsHide: true, env: process.env, stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      if (result.status === 0) board = JSON.parse(result.stdout).url;
+    } catch { /* 下面给提示 */ }
+  }
+  // 没启动起来（超时、端口、内存）：说一声，Claude Code 稍后用 board 取链接，不用对着输出等那两行
+  if (!board) { process.stderr.write(`foreman: ${M.boardNotReady}\n`); return; }
+  process.stderr.write(`foreman: ${D.boardLine(board)}\n`);
+  process.stderr.write(`foreman: ${image ? M.boardHandoffImage(mode, who, image.cell, image.mark, board) : M.boardHandoff(mode, who, level, board)}\n`);
+  if (cfg.dispatch.watch.web_open === true) {
+    const mark = claimBoardOpen();
+    if (mark) openBoard(board, mark);
+  }
 }
 
 // 并发上限按协作方算，任何任务（分不分组、哪个会话）都要在锁内登记并做准入检查，调用方用完 release。
 async function newRunDir(ctx) {
   fs.mkdirSync(path.join(RUNS_ROOT, '.locks'), { recursive: true });
   const candidate = ctx?.cfg ? { ...ctx, agent: ctx.agentName, group: ctx.opts.group ?? null, scope: ctx.opts.scope } : null;
+  // 派出（不含 Claude Code 自己登记报告的 submit）：排队之前就留下这个对话的派出标记
+  if (candidate) markDispatched();
   const timeout = Number(ctx?.opts?.['queue-timeout'] ?? 60);
   let ticket = null, position = null, queuedBegan = 0;
   const cleanup = () => {
@@ -752,4 +837,4 @@ function isRunning(m, { query = true } = {}) {
 }
 const UNVERIFIED_LIMIT_MS = 25 * 3600000;
 
-export { RUNS_ROOT, boardUrl, liveBoardUrl, announceBoard, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, saveMeta, metaWriteWarning, settleMeta, findRun, describeActivity, groupRuns, checkAdmission, precheckAdmission, readRunsLocked, runEnd, runOutcome, resumeVerdict, resultValid, resumedRuns, groupTally, groupSummary, groupScopeOwner, absolute, readMeta, checkRunners, isRunning, writesFiles };
+export { RUNS_ROOT, boardUrl, liveBoardUrl, withBoardUrl, announceBoard, initializeRecords, CANCEL_FILE, UNFINISHED_STATUSES, CLAUDE_SESSION, isCancelled, requestCancel, cancelSource, writeWatchLauncher, newRunDir, listRuns, saveMeta, metaWriteWarning, settleMeta, findRun, describeActivity, groupRuns, checkAdmission, precheckAdmission, readRunsLocked, runEnd, runOutcome, resumeVerdict, resultValid, resumedRuns, groupTally, groupSummary, groupScopeOwner, absolute, readMeta, checkRunners, isRunning, writesFiles };
