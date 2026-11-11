@@ -412,7 +412,7 @@ ${brief}`,
   projectOldFormat: (file) => `项目配置 ${file} 是旧写法，已按新结构读取；建议改成新写法（见 README 的"配置"一节）`,
   configInvalid: (key, reason) => `配置 ${key} 无效：${reason}`,
   unknownEntryField: (key) => `配置 ${key} 不是条目认得的字段，已忽略（只认 agent、effort、required、model，是不是拼错了？）`,
-  watchShape: 'dispatch.watch 要写成 { "terminal": true 或 false, "web": true 或 false }',
+  watchShape: 'dispatch.watch 要写成 { "terminal": true 或 false, "web": true 或 false }，还可以加 "web_open": true 或 false',
   confirmShape: 'dispatch.confirm 要写成 { "roles": "ask" 或 "auto", "image": "ask" 或 "auto" }，只写一项时另一项按 "ask"',
   // 配置校验的报错原因，接在 configInvalid 后面
   invalid: {
@@ -816,6 +816,10 @@ ${schema}`,
   // 实时查看、status 和开工那一行的显示文字，中英两个插件都用 en 里那一套（format.mjs 的 D），这里不再重复；
   // 下面是报错、提醒和启动动画用的。
   modeNames: { run: '执行', resume: '续接', discuss: '讨论', review: '审查', image: '图像' },
+  boardHandoff: (mode, who, level, url) => `告诉用户（写进回复正文；几个任务一起派出时合成一句，链接写一次）：${mode === 'resume' ? '已续接' : '已派出'}：${who}${level ? `，等级 ${level}` : ''} · [网页看板](${url})`,
+  boardHandoffImage: (mode, who, cell, mark, url) => `告诉用户（写进回复正文；几个任务一起派出时合成一句，链接写一次）：${mode === 'resume' ? '已续接' : '已派出'}：${who}，${cell} 路线 ${mark} · [网页看板](${url})`,
+  boardOpened: '已在默认浏览器打开网页看板（dispatch.watch.web_open，每个对话只开一次）',
+  boardNotReady: '网页看板还没启动好，这次没有看板地址：稍后运行 board 子命令取链接，取到后照常告诉用户',
   duration: (sec) => {
     const s = Math.round(sec), m = Math.floor(s / 60);
     return s < 60 ? `${s} 秒` : m < 60 ? `${m} 分 ${s % 60} 秒` : `${Math.floor(m / 60)} 小时 ${m % 60} 分`;
@@ -1283,7 +1287,7 @@ ${brief}`,
   projectOldFormat: (file) => `Project config ${file} uses the old layout; it was converted when read. Consider updating it (see "Configuration" in the README)`,
   configInvalid: (key, reason) => `Invalid config ${key}: ${reason}`,
   unknownEntryField: (key) => `Config ${key} isn't a field entries know, so it is ignored (only agent, effort, required and model; a typo?)`,
-  watchShape: 'dispatch.watch must be { "terminal": true or false, "web": true or false }',
+  watchShape: 'dispatch.watch must be { "terminal": true or false, "web": true or false }, optionally with "web_open": true or false',
   confirmShape: 'dispatch.confirm must be { "roles": "ask" or "auto", "image": "ask" or "auto" }; a key left out stays "ask"',
   // Reasons for config validation errors, appended to configInvalid
   invalid: {
@@ -1571,6 +1575,10 @@ ${schema}`,
   started: (mode, who, level, dir) =>
     `${mode} started · ${who} · ${level ?? 'effort set directly'} · run dir ${dir}`,
   boardLine: (url) => `web board ${url}`,
+  boardHandoff: (mode, who, level, url) => `tell the user (in your reply text; for several handoffs at once, one sentence with the link once): ${mode === 'resume' ? 'Resumed' : 'Handed off'}: ${who}${level ? `, level ${level}` : ''} · [web board](${url})`,
+  boardHandoffImage: (mode, who, cell, mark, url) => `tell the user (in your reply text; for several handoffs at once, one sentence with the link once): ${mode === 'resume' ? 'Resumed' : 'Handed off'}: ${who}, ${cell} route ${mark} · [web board](${url})`,
+  boardOpened: 'opened the web board in the default browser (dispatch.watch.web_open, once per conversation)',
+  boardNotReady: "the web board isn't ready yet, so there is no board address this time: run the board subcommand later for the link, then tell the user as usual",
   trackingUnavailable: (err) => `Change tracking unavailable: ${err}`,
   trackingFailed: (err) => `Change tracking failed: ${err}`,
   snapshotDeadline: 'The snapshot reached its 60-second total deadline',

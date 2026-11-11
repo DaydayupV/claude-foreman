@@ -39,6 +39,15 @@ export async function poll(check, description, timeout = 12000) {
   assert.fail(`等待超时：${description}`);
 }
 
+export async function stopBoard(h) {
+  const file = path.join(h.runs, 'board.lock.json');
+  if (!fs.existsSync(file)) return;
+  const { pid } = json(file);
+  process.kill(pid);
+  await poll(() => { try { process.kill(pid, 0); return false; } catch { return true; } }, '看板服务退出');
+  fs.rmSync(file, { force: true });
+}
+
 const gitName = process.platform === 'win32' ? 'git.exe' : 'git';
 const git = (process.env.PATH || '').split(path.delimiter)
   .map((dir) => path.join(dir.replace(/^"|"$/g, ''), gitName)).find(fs.existsSync);

@@ -202,7 +202,7 @@ async function executeAgy(ctx) {
   run.meta.effort = split.effort ?? (ctx.effort === 'default' ? null : ctx.effort);
   run.writeMeta();
   process.stderr.write(`foreman: ${D.started(ctx.mode, modelLabel(run.meta), ctx.level, dir)}\n`);
-  announceBoard(ctx.cfg);
+  announceBoard(ctx.cfg, ctx.mode, modelLabel(run.meta), ctx.level);
   return finishDiscussion(run, { ...await agySession(run, schema, promptFor), files, changesNote: M.agyNoChanges, sandbox: run.meta.sandbox });
 }
 // agy 重试的原因归到 API 重试已有的几类，状态和看板沿用同样的文字；认不出的照原文显示

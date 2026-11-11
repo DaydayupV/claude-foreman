@@ -74,6 +74,8 @@
 | 6 同组并发及 await-busy | discuss.test.mjs | 同组多方并发，await-busy 列出超过阈值的 API 参与方 |
 | 7 status 列表与汇总 | status-watch.test.mjs | status 列表按记录排序并汇总当前会话的组 |
 | 7 status 活动 | status-watch.test.mjs | status 对正在运行的任务给出当前命令和活动时间 |
+| 7 看板派出提示 | board-announce.test.mjs | 派出命令留下对话的派出标记（建计划不留），自行启动看板，开工行后按模型、等级或图像路线给中英文现成句子，续接用已续接；结果与 status 的实时 board_url 只加到输出，关闭或服务已停时不带地址 |
+| 7 看板自动打开 | board-announce.test.mjs | web_open 可选布尔值、只认用户配置，每个安全对话用 wx 标记只打开一次，再派出时刷新标记的时间，清理闲置一周的标记；通过 FOREMAN_TEST_OPEN 记录打开地址，不启动真实浏览器 |
 | 7 watch 单任务文本 | status-watch.test.mjs | watch --run 非 TTY 的Codex 执行输出与期望一致；watch --run 非 TTY 的API 讨论输出与期望一致；watch --run 非 TTY 的opencode 讨论输出与期望一致；watch --run 非 TTY 的失败任务输出与期望一致 |
 | 7 watch 组文本 | status-watch.test.mjs | watch --group 非 TTY 的四类任务汇总与期望一致 |
 | 7 取消已结束任务 | status-watch.test.mjs | cancel 对已完成任务不改结果，对未正常结束任务标记已处理 |

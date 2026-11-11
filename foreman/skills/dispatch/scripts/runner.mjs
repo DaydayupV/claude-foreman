@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { RUNS_ROOT, CLAUDE_SESSION, announceBoard, registerRun, concurrentExecRuns, absolute, isCancelled, cancelSource, saveMeta, metaWriteWarning, readMeta } from './records.mjs';
+import { RUNS_ROOT, CLAUDE_SESSION, announceBoard, withBoardUrl, registerRun, concurrentExecRuns, absolute, isCancelled, cancelSource, saveMeta, metaWriteWarning, readMeta } from './records.mjs';
 import { makeTracker } from './tracker.mjs';
 import { computeReviewMaterial } from './review-scope.mjs';
 import { M, LANGUAGE, die, notice, relativePath, pathKey, modelOf, replaceFile, killTree, looksLikeQuestion, looksLikeInputPrompt, looksLikeFinalQuestion, needsDecision } from './util.mjs';
@@ -169,7 +169,7 @@ function finishRun(run, result, code = result.exit_code, observed = {}) {
   fs.writeFileSync(`${resultFile}.tmp`, JSON.stringify(result, null, 2));
   replaceFile(`${resultFile}.tmp`, resultFile);
   if (!saveMeta(run.ctx.dir, run.meta, { final: true })) result.warnings.push(metaWriteWarning(run.ctx.dir)); // 结果已经落盘，提示只加到 stdout
-  process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+  process.stdout.write(JSON.stringify(withBoardUrl(run.ctx.cfg, result), null, 2) + '\n');
   process.exitCode = code;
   return result;
 }
@@ -288,7 +288,7 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
   const { meta, writeMeta } = run;
   fs.writeFileSync(path.join(dir, 'brief.md'), prompt);
   process.stderr.write(`foreman: ${ctx.module === 'image' ? D.startedImage(mode === 'resume' ? 'resume' : 'image', modelLabel(meta, { source: true }), ctx.cell, '①②③④'[ctx.route - 1], dir) : D.started(mode, modelLabel(meta, { source: true }), level, dir)}\n`);
-  announceBoard(ctx.cfg);
+  announceBoard(ctx.cfg, mode, modelLabel(meta, { source: true }), level, ctx.module === 'image' ? { cell: ctx.cell, mark: '①②③④'[ctx.route - 1] } : null);
   if (snapshotRequired) notice(M.unsandboxedRun(agent.run_access));
 
   const warnings = [];

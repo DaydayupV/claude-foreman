@@ -185,7 +185,7 @@ async function executeOpencode(ctx) {
   const run = startRun(context);
   fs.writeFileSync(path.join(dir, 'brief.md'), prompt);
   process.stderr.write(`foreman: ${D.started(mode, modelLabel(run.meta), level, dir)}\n`);
-  announceBoard(ctx.cfg);
+  announceBoard(ctx.cfg, mode, modelLabel(run.meta), level);
   return finishDiscussion(run, { ...await opencodeSession(run, schema, agentId), files, changesNote: M.opencodeNoChanges });
 }
 

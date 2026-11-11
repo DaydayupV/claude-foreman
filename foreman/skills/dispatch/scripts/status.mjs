@@ -1,14 +1,15 @@
 // 状态列表、终止任务和排队检查；会话统计由入口提供只读函数。
 import fs from 'node:fs';
 import path from 'node:path';
-import { RUNS_ROOT, UNFINISHED_STATUSES, requestCancel, listRuns, findRun, readMeta, checkRunners, isRunning, runEnd, runOutcome, resumedRuns, groupRuns, groupSummary, describeActivity, saveMeta, metaWriteWarning, queuedRuns } from './records.mjs';
+import { RUNS_ROOT, UNFINISHED_STATUSES, requestCancel, listRuns, findRun, readMeta, checkRunners, isRunning, runEnd, runOutcome, resumedRuns, groupRuns, groupSummary, describeActivity, saveMeta, metaWriteWarning, queuedRuns, withBoardUrl } from './records.mjs';
 import { M, die, need, pidExists, processStartedAt, killTreeIfSame, sleep, modelOf, agentTypeOf, replaceFile } from './util.mjs';
 import { D, C, padWidth, visibleWidth, modelLabel, clock, took, outcomeStyle, usageLine, outsideCwdText, paintPlanWord } from './format.mjs';
 import { planStatus, describePlans } from './plan.mjs';
 import { costOf, loadPrices } from './prices.mjs';
 
-function cmdStatus(o, sessionStats) {
-  if (o.plan) { process.stdout.write(JSON.stringify(planStatus(o.plan), null, 2) + '\n'); return; }
+function cmdStatus(o, sessionStats, cfg) {
+  const print = (value) => process.stdout.write(JSON.stringify(withBoardUrl(cfg, value), null, 2) + '\n');
+  if (o.plan) { print(planStatus(o.plan)); return; }
   if (o.run && o.group == null) {
     let run = findRun(o.run, { tolerateUnreadable: true });
     const file = path.join(run.dir, 'result.json');
@@ -17,15 +18,20 @@ function cmdStatus(o, sessionStats) {
       try { result = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* 没有可读结果时保留原来的元数据报错 */ }
       if (result) {
         (result.warnings ??= []).push(M.metaUnreadableUsedResult(path.join(run.dir, 'meta.json')));
-        process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+        print(result);
         return;
       }
       run = findRun(o.run);
     }
-    if (fs.existsSync(file)) process.stdout.write(fs.readFileSync(file, 'utf8') + '\n');
-    else {
+    if (fs.existsSync(file)) {
+      // 结果文件解析不了时照原文打印，不因为加看板地址而报错
+      const text = fs.readFileSync(file, 'utf8');
+      let result = null;
+      try { result = JSON.parse(text); } catch { /* 照原文打印 */ }
+      if (result) print(result); else process.stdout.write(text + '\n');
+    } else {
       if (run.meta.status === 'running' && !isRunning(run.meta)) run.meta.status = 'interrupted';
-      process.stdout.write(JSON.stringify({ ...run.meta, activity: describeActivity(run.dir) }, null, 2) + '\n');
+      print({ ...run.meta, activity: describeActivity(run.dir) });
     }
     return;
   }

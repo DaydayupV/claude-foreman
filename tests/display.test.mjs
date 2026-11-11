@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { sandbox, taskArgs, failed, seedRun, expected, normalize, json, write, poll, baseConfig, MESSAGES } from './helpers.mjs';
+import { sandbox, taskArgs, failed, seedRun, expected, normalize, json, write, poll, stopBoard, baseConfig, MESSAGES } from './helpers.mjs';
 import { command, discussion } from './fixtures/reports.mjs';
 import { liveGroup, frameOf, steadyClock } from './fixtures/watch-live.mjs';
 import { wrapAtDots, createTimeline } from '../foreman/skills/dispatch/scripts/watch-timeline.mjs';
@@ -333,15 +333,21 @@ test('开工那一行中英两个插件都写 <模式> started · <模型> <强�
   }
 });
 
-test('网页看板开着、看板服务在跑时，开工那一行后面紧跟这个对话的看板地址；看板关着或服务没在跑时不给', async (t) => {
+test('网页看板开着时，开工行后面紧跟看板地址，服务没在跑时自行启动；看板关着时不给', async (t) => {
   const h = sandbox(t), config = baseConfig(), lock = path.join(h.runs, 'board.lock.json');
   const boardLine = (r) => r.stderr.split('\n').find((line) => line.startsWith('foreman: web board ')) ?? null;
   config.dispatch.watch = { terminal: true, web: true };
   h.config(config);
-  // 没有锁文件，或者锁里的进程已经不在：不给
-  assert.equal(boardLine(await h.bridge(taskArgs(h))), null);
-  write(lock, { pid: 2 ** 22 + 7, port: 4321, token: 'deadbeef' });
-  assert.equal(boardLine(await h.bridge(taskArgs(h))), null);
+  // 没有锁文件，或者锁里的进程已经不在：派出自己启动服务。
+  for (const stale of [false, true]) {
+    if (stale) write(lock, { pid: 2 ** 22 + 7, port: 4321, token: 'deadbeef' });
+    try {
+      const r = await h.bridge(taskArgs(h));
+      assert.equal(r.code, 0, r.stderr);
+      assert.match(boardLine(r), /^foreman: web board http:\/\/127\.0\.0\.1:\d+\//);
+      assert.doesNotThrow(() => process.kill(json(lock).pid, 0));
+    } finally { await stopBoard(h); }
+  }
   // 服务在跑（锁里是活着的进程）：紧跟在开工那一行后面，带上这个对话的 id
   write(lock, { pid: process.pid, port: 4321, token: 'deadbeef' });
   const r = await h.bridge(taskArgs(h)), lines = r.stderr.split('\n');

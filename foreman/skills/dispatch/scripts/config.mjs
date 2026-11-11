@@ -477,8 +477,9 @@ function validateConfig(cfg, adapters, fail = die, prefix = 'modules', own = nul
   check(typeof cfg.dispatch.auto === 'boolean', 'dispatch.auto', why.boolean);
   if (!isObject(cfg.dispatch.confirm) || Object.keys(cfg.dispatch.confirm).length !== 2
     || !['roles', 'image'].every((key) => ['ask', 'auto'].includes(cfg.dispatch.confirm[key]))) fail(M.confirmShape);
-  if (!isObject(cfg.dispatch.watch) || Object.keys(cfg.dispatch.watch).length !== 2
-    || !['terminal', 'web'].every((key) => typeof cfg.dispatch.watch[key] === 'boolean')) fail(M.watchShape);
+  if (!isObject(cfg.dispatch.watch) || Object.keys(cfg.dispatch.watch).some((key) => !['terminal', 'web', 'web_open'].includes(key))
+    || !['terminal', 'web'].every((key) => typeof cfg.dispatch.watch[key] === 'boolean')
+    || Object.hasOwn(cfg.dispatch.watch, 'web_open') && typeof cfg.dispatch.watch.web_open !== 'boolean') fail(M.watchShape);
   check(typeof cfg.dispatch.intro === 'boolean', 'dispatch.intro', why.boolean);
   check(Number.isInteger(cfg.dispatch.discuss_max_rounds) && cfg.dispatch.discuss_max_rounds >= 1, 'dispatch.discuss_max_rounds', why.positiveInt);
   for (const key of ['timeout_min', 'stall_min', 'busy_ask_min']) check(Number.isFinite(cfg.dispatch[key]) && (key === 'timeout_min' ? cfg.dispatch[key] > 0 : cfg.dispatch[key] >= 0), `dispatch.${key}`, why.minutes);

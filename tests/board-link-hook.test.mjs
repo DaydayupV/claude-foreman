@@ -25,6 +25,36 @@ test('认出用 cli.mjs 派出任务的命令和命令里写的 FOREMAN_CONFIG',
     `cat <<'EOF'\nnode ${cli} run\nEOF`, `echo "node ${cli} run"`]) assert.equal(dispatchOf(command), null, command);
 });
 
+test('还原字面变量和最近一次目录切换，不求值命令替换', () => {
+  for (const command of [
+    `CLI=${cli}; node $CLI run`, `CLI="${cli}" && node "\${CLI}" resume`, `CLI='${cli}'\nnode "$CLI" discuss`,
+    `export CLI="${cli}"; node $CLI review`, `CLI="${cli}" node "$CLI" image`,
+    `D="C:/x/plugin/skills/dispatch/scripts"; CLI="$D/cli.mjs"; node "$CLI" run`,
+    `D='/x/skills/dispatch/scripts'; node "$D/cli.mjs" run`,
+    `$name = "${cli}"\r\nnode $name run`, `$name = '${cli}'; & node $name resume`, `$name = "${cli}"; node "$name" review`,
+    `cd "C:/x/skills/dispatch" && node scripts/cli.mjs run`, `cd C:/x/skills/dispatch/scripts; node cli.mjs resume`,
+    `pushd '/x/skills/dispatch'; node ./scripts/cli.mjs discuss`, `Set-Location 'C:\\x\\skills\\dispatch'; & node scripts\\cli.mjs image`,
+    `cd /other; cd /x/skills/dispatch; node scripts/cli.mjs review`,
+    `D='/x/skills/dispatch'; cd "$D"; cd scripts; node cli.mjs run`,
+    `cd dispatch; node scripts/cli.mjs run`,
+    // 没切换过目录的相对路径照原样判断：带着完整的 dispatch/scripts/cli.mjs 就认
+    `node ./skills/dispatch/scripts/cli.mjs run`, `node foreman\\skills\\dispatch\\scripts\\cli.mjs resume`,
+    // 没在这条命令里赋过值的环境变量原样留着，路径后半段是字面的就认
+    `node "$HOME/x/skills/dispatch/scripts/cli.mjs" run`, `node "\${CLAUDE_PLUGIN_ROOT}/skills/dispatch/scripts/cli.mjs" resume`,
+    `& node "$env:CLAUDE_PLUGIN_ROOT\\skills\\dispatch\\scripts\\cli.mjs" review`, `CLI="$UNKNOWN/dispatch/scripts/cli.mjs"; node "$CLI" run`,
+  ]) assert.deepEqual(dispatchOf(command), { config: undefined }, command);
+  assert.deepEqual(dispatchOf(`export FOREMAN_CONFIG="/c.json"; CLI='${cli}'; node "$CLI" run`), { config: '/c.json' });
+  assert.deepEqual(dispatchOf(`CLI='${cli}'; FOREMAN_CONFIG="/a b.json" node "$CLI" run`), { config: '/a b.json' });
+  for (const command of [
+    `CLI="$(echo '${cli}')"; node "$CLI" run`, `CLI=\`echo ${cli}\`; node "$CLI" run`,
+    `$name = "$(Get-Content path.txt)"; node $name run`, `CLI='${cli}'; echo "$CLI run"`,
+    `$name = '${cli}'; $name = Get-Content path.txt; node $name run`, `$name = '${cli}' + '.bak'; node $name run`,
+    `CLI='${cli}'; node '$CLI' run`, `node "$CLI" run`, `cd "$(pwd)/dispatch"; node scripts/cli.mjs run`,
+    `node scripts/cli.mjs run`, `node ./other/scripts/cli.mjs run`,
+    `cd /x/skills/dispatch; cd /elsewhere; node scripts/cli.mjs run`, `CLI='${cli}'; node "$CLI" run --help`,
+  ]) assert.equal(dispatchOf(command), null, command);
+});
+
 test('后台任务的完成通知、其他会话的进展、检查结果和只有提醒的消息不算用户发的新消息', () => {
   for (const prompt of ['<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>',
     '<system-reminder>\nThe session you started finished a turn.\n</system-reminder>\n<side-sessions-event>None of the sessions is working now.</side-sessions-event>',
@@ -107,6 +137,51 @@ test('网页看板开着时显示带对话 id 的链接（服务没在跑就启�
     config.dispatch.watch = { terminal: true, web: true };
     h.config(config); h.write('.claude/foreman.json', { dispatch: { watch: { web: false } } });
     assert.match((await run('s5')).stdout, /&s=s5"/);
+    // 派出标记兜底不看命令怎么写：派出命令一运行就在 board-dispatched/<对话 id> 上留下时间（前台跑的、排队中的也有），
+    // 这个时间落在这一轮里、整轮正文又没有链接时拦
+    const since = '2026-11-11T00:00:00.000Z';
+    const mark = path.join(path.dirname(h.userConfig), 'board-dispatched', 's1');
+    const markAt = (iso, file = mark) => {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, '');
+      fs.utimesSync(file, new Date(iso), new Date(iso));
+    };
+    const turnRows = [
+      { type: 'progress', timestamp: since },
+      { type: 'user', timestamp: since, message: { content: '派出去吧' } },
+      { type: 'assistant', timestamp: '2026-11-11T00:00:02.000Z', message: { content: [
+        { type: 'tool_use', name: 'Bash', input: { command: 'bash dispatch.sh' } },
+        { type: 'thinking', thinking: '[网页看板](http://127.0.0.1:1234/token/?level=all)' },
+      ] } },
+      { type: 'user', timestamp: '2026-11-11T00:00:03.000Z', message: { content: [{ type: 'tool_result', content: 'done' }] } },
+    ];
+    const save = () => fs.writeFileSync(transcript, turnRows.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    save();
+    // 没有标记、标记早于这一轮的起点、只有别的对话的标记：不拦
+    assert.equal((await stop()).stdout, '');
+    markAt('2026-11-10T23:59:59.000Z');
+    assert.equal((await stop()).stdout, '');
+    markAt('2026-11-11T00:00:01.000Z', path.join(path.dirname(mark), 'another'));
+    assert.equal((await stop()).stdout, '');
+    // 标记落在这一轮里：拦，理由里带这个对话的链接（思考里写的链接不算）；拦过一次不再拦
+    markAt('2026-11-11T00:00:01.000Z');
+    const fallback = await stop();
+    assert.equal(fallback.code, 0, fallback.stderr);
+    assert.equal(JSON.parse(fallback.stdout).decision, 'block');
+    assert.ok(JSON.parse(fallback.stdout).reason.includes(`&s=s1)`));
+    assert.equal((await stop(true)).stdout, '');
+    turnRows[2].message.content.unshift({ type: 'text', text: '[web board](http://127.0.0.1:1234/token/?level=all)' });
+    save();
+    assert.equal((await stop()).stdout, '');
+    turnRows[2].message.content.shift();
+    // 末尾这段记录里找不到这一轮的起点：从这段的第一条记录算起
+    turnRows.splice(1, 1);
+    save();
+    assert.equal(JSON.parse((await stop()).stdout).decision, 'block');
+    // 看板关着：不看标记
+    config.dispatch.watch.web = false;
+    h.config(config);
+    assert.equal((await stop()).stdout, '');
   } finally {
     if (fs.existsSync(lockFile)) {
       const { pid } = json(lockFile);
