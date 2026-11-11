@@ -95,6 +95,7 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
 
 ## 结果字段
 `run`、`image`、`resume`、`discuss`、`review` 的结果以 JSON 打印到 stdout，主要字段：
+- `board_url`：这个对话的网页看板地址，紧跟在 `run_id` 后面，`status --run` 和 `status --plan` 的输出里也有。只在网页看板开着、看板服务在跑时有；只在打印出来的输出里，`result.json` 里没有（地址里的口令每次服务启动都会变）。还有任务在跑时每一轮结束要写的那行看板链接、最终汇报里的看板链接，用它就行，见 `references/watch.md`。
 - `report`：协作方的结构化报告：执行报告、讨论报告或审查报告。审查报告有 `verdict`（`issues_found` / `no_issues` / `incomplete`）、`findings`（每条有 `id`、`location`、`issue`、`trigger`、`severity`、`evidence`、`suggestion`，为空是合法结果）、`coverage`（`checked`、`not_checked`）和 `unverified`。Codex 原生审查（审 `diff`、不带说明也不带 `--file`）没有结构化报告：`report` 为 `null`，意见是 `last_message` 里的英文文字。报告不是合法 JSON 时（opencode、pi、API 修复一次后仍不合格），也只有 `last_message`。
 - `last_message`：没有 `report` 时，协作方最后一条回复的原文，只保留前 8000 字，全文在 `run_dir/last-message.txt`。
 - `changes`：脚本追踪到的工作目录内改动。每个文件标有 `by`：`agent` 表示有工具事件证明是执行的协作方改的（改名前的记录里写作 `codex`）；`reported` 表示只有它在报告里自称改过，常见于用命令或脚本写的文件；`unknown` 表示两样都没有。报告里写成目录的（以 `/` 结尾，或者在磁盘上是目录）按前缀算，目录下被追踪的文件都记 `reported`；只有这个前缀下一个被追踪的文件都没有时，`notes` 才提示它不在追踪范围内（工作目录本身不算）。标了 `group_run` 的落在同一工作目录下另一个执行任务的写入范围里（不分组和会话），不在这个任务自己的范围和 `--track` 里，而且那个任务的运行时间和这个任务有重叠（区间是开始到结束，还在跑的算到现在，旧记录没有结束时间的按最后活动时间算；这个任务开始前就结束了的不认领）；两边的范围都覆盖、或者有几个别的任务都覆盖的，仍记 `unknown`；同一席的几轮（续接、同一计划同一席重启）算一个任务，记到它最新的一轮上。个数在 `group_total`；实时查看的结束行和组面板不把它们算进"of unknown origin"，另写"N from other runs in the group"。快照按文件的原始字节比较：不按项目 `.gitattributes` 转换换行，也不跑 clean 过滤和 ident 等，所以项目改了这些设置时，字节没变的文件不算改动，`diff.patch` 里的换行和磁盘上一致。
