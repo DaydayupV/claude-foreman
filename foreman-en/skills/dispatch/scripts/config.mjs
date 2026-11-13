@@ -371,7 +371,7 @@ function renameAgentsByModel(config, adapters) {
     return id;
   };
   const add = (name, agent) => {
-    const base = nameOf(name, agent), suffix = { 'codex cli': 'codex', 'opencode cli': 'opencode', 'pi cli': 'pi', 'agy cli': 'agy', api: 'api' }[agent.type];
+    const base = nameOf(name, agent), suffix = { 'codex cli': 'codex', 'opencode cli': 'opencode', 'pi cli': 'pi', 'agy cli': 'agy', 'codebuddy cli': 'codebuddy', api: 'api' }[agent.type];
     let id = base;
     for (let n = 1; Object.hasOwn(agents, id); n++) {
       if (isDeepStrictEqual(agents[id], agent)) return id;
@@ -634,12 +634,17 @@ function detectEnvironment(adapters, agents = {}) {
   const piModels = piFound ? call('pi cli', adapters['pi cli'].listModelsArgs) : null;
   const agy = call('agy cli', ['--version']), agyFound = !agy.error && agy.status === 0;
   const agyModels = agyFound ? call('agy cli', ['models']) : null;
+  const cb = call('codebuddy cli', ['--version']), cbFound = !cb.error && cb.status === 0;
+  const cbHelp = cbFound ? call('codebuddy cli', adapters['codebuddy cli'].listModelsArgs) : null;
+  // codebuddy 把可用模型写在 --help 的 "Currently supported: (...)" 里，用逗号隔开。
+  const cbList = cbHelp?.status === 0 ? /Currently supported:\s*\(([^)]+)\)/i.exec(cbHelp.stdout || '')?.[1] : null;
   return { codex: { found, logged_in: !!login && !login.error && login.status === 0 && /logged in/i.test(`${login.stdout}${login.stderr}`) && !/not logged in/i.test(`${login.stdout}${login.stderr}`) },
     opencode: { found: ocFound, models: models?.status === 0 ? new Set(models.stdout.split(/\s+/).filter((s) => s.includes('/'))).size : 0 },
     // pi --list-models 输出一张表：第一行是表头，之后每行一个模型。
     // 一个模型都没有（还没登录）时只打印一句提示和几行文档路径，不是表
     pi: { found: piFound, models: piModels?.status === 0 && !/No models available/i.test(piModels.stdout) ? Math.max(0, piModels.stdout.trim().split(/\r?\n/).filter(Boolean).length - 1) : 0 },
     agy: { found: agyFound, models: agyModels?.status === 0 ? agyModels.stdout.trim().split(/\r?\n/).filter((s) => s.includes('\t')).length : 0 },
+    codebuddy: { found: cbFound, models: cbList ? cbList.split(',').map((s) => s.trim()).filter(Boolean).length : 0 },
     api_keys: ['DEEPSEEK_API_KEY', 'KIMI_API_KEY', 'MOONSHOT_API_KEY', 'MIMO_API_KEY'].filter((key) => !!process.env[key]) };
 }
 
@@ -682,6 +687,7 @@ function loadConfig(cwd, adapters) {
       let parts = environment.codex.logged_in ? M.starterCodex('gpt-6.1-sol', 'gpt-6-astra') : M.starterNoCodex;
       if (environment.opencode.models) parts += M.starterOpencode(environment.opencode.models);
       if (environment.pi.models) parts += M.starterPi(environment.pi.models);
+      if (environment.codebuddy?.models) parts += M.starterCodebuddy(environment.codebuddy.models);
       const names = API_STARTERS.filter(([, , , model]) => starter.agents[model]).map(([name]) => name);
       if (names.length) parts += M.starterApi(M.list(names));
       notice(M.starterCreated(USER_CONFIG, parts + M.starterNext));

@@ -9,7 +9,7 @@
 
 ![Claude Code × all models: Claude Code commands GPT, Claude, DeepSeek, Gemini and more](docs/images/banner.en.png)
 
-A Claude Code plugin that makes Claude Code the foreman: it plans, decides and checks the results, and hands off hands-on coding work to CLI agents such as Codex, opencode and pi according to your config. It can also ask them for independent code reviews, or gather several models to weigh in on a complex design before Claude Code decides.
+A Claude Code plugin that makes Claude Code the foreman: it plans, decides and checks the results, and hands off hands-on coding work to CLI agents such as Codex, opencode, pi and CodeBuddy according to your config. It can also ask them for independent code reviews, or gather several models to weigh in on a complex design before Claude Code decides.
 
 - **Claude Code checks the work**: Claude Code reviews every diff an agent hands back, runs it to verify, and sends it back for rework if needed. In discussions, the other models' views are input only; Claude Code accepts or rejects each point on its merits.
 - **Your own quota**: agents run on your Codex plan, opencode subscription or API credit, not on your Claude Code quota.
@@ -307,7 +307,7 @@ A minimal example: Codex does complex hands-on work and every review, complex di
 
 A flat `modules` from before (with `discuss`, `run` and so on directly under it) still works: the first time the plugin reads it, it moves it unchanged into `modules.default`, backing up the original first. The old `levels` form still works too: the first time the plugin reads it, it rewrites it as `modules`, keeping every cell's agents, efforts and order, and backs up the original as `config.json.bak`. One thing changes: the models at a discussion level used to all take part, and after the rewrite they're candidates Claude Code picks from. To keep everyone taking part, mark them all `"required": true`; `/foreman-en:setup` can mark them, and it adds the two image cells too.
 
-### The five kinds of agents
+### The six kinds of agents
 
 | `type` | What it is | Tasks it can do | Reads code itself | Isolation | Whose quota |
 |---|---|---|---|---|---|
@@ -315,6 +315,7 @@ A flat `modules` from before (with `discuss`, `run` and so on directly under it)
 | `opencode cli` | opencode on this machine, with the models it can reach | Reviews and discussions; hands-on work once `run_access` is set | Yes | Limited tools only, no OS sandbox | Providers you signed in to in opencode, or an OpenCode Go subscription |
 | `pi cli` | pi on this machine, with the models it can reach | Same as opencode | Yes | Same as opencode, with file paths checked by a guard the plugin injects | Providers you signed in to in pi |
 | `agy cli` | Agy CLI (Google Antigravity CLI) on this machine | Reviews, discussions | Yes | A guard the plugin installs in agy's global hooks; read-only commands run in agy's sandbox | The Google account you signed in to in agy |
+| `codebuddy cli` | CodeBuddy CLI (Tencent Cloud's coding assistant) on this machine, with the models it can reach | Reviews and discussions; hands-on work once `run_access` is set | Yes | Project-trusted reads and project-only edit writes; shell has no OS sandbox | The Tencent Cloud account you signed in to in codebuddy |
 | `api` | A model with an OpenAI-compatible API | Discussions, reviews (text only) | No; Claude Code attaches the relevant files | Not applicable | The provider's API balance |
 
 You can have several agents of one type, each with a different model. Codex isn't required.
@@ -366,6 +367,17 @@ With pi installed (`npm install -g @earendil-works/pi-coding-agent`), it works l
 - The effort is pi's thinking level (`off` to `max`), and each model supports its own set. **If you set a level the model doesn't support, pi doesn't report an error; it quietly switches to the nearest one**, so run `check` after a change: it says which level would be used instead.
 - pi has no permission system of its own. Every call from the plugin enables only the tools the task needs and injects a guard extension that keeps file reads and writes inside the project directory; your own extensions, skills and MCP servers aren't loaded. The project's AGENTS.md / CLAUDE.md are read as usual, and sessions stay in pi's default location.
 
+### Adding CodeBuddy
+
+With the CodeBuddy CLI installed (`npm install -g @tencent-ai/codebuddy-code`, command `codebuddy` or `cbc`) and signed in, any model it lists can join discussions and reviews.
+
+1. **Sign in**: run `codebuddy` in a terminal and sign in with `/login`, then run `codebuddy --help` and look at the models under "Currently supported".
+2. **Add them to the config**: one entry per model, `{ "type": "codebuddy cli", "model": "deepseek-v4.1-flash" }`. Add `"run_access": "edit"` (or `"shell"`) if you also want hands-on work, then list it in the cells you want.
+
+- Discussions and reviews use `dontAsk` and user settings, so project settings and hooks aren't loaded; reads stay under CodeBuddy's trusted project-directory rules. Hands-on `edit` uses `acceptEdits` for project-local `Write`/`Edit` tools. `shell` also runs commands and has no OS sandbox. `--strict-mcp-config` keeps MCP servers out.
+- Reports go through codebuddy's native `--json-schema` structured output; if the service still returns an invalid report, the script makes one repair round in the same session.
+- `effort` is `minimal` to `max`, passed as `--effort`. `codebuddy --help` lists models but not levels, so `check` can only confirm the level is one of the six; a level a model doesn't really support may be mapped to the nearest one.
+
 ### Adding agy
 
 If Agy CLI (Google Antigravity CLI, command `agy`) is installed and signed in, it can take part in discussions and reviews. Only Windows 11 has been verified so far, and hands-on work isn't supported yet.
@@ -391,7 +403,7 @@ Both take a change snapshot first, and Claude Code reviews the diff file by file
 ### A complete example
 
 <details>
-<summary>Expand: a complete config using all four kinds of agents</summary>
+<summary>Expand: a complete config using several kinds of agents</summary>
 
 ```json
 {

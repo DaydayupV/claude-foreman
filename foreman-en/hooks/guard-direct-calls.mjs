@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// PreToolUse 钩子：拦下直接调用 codex exec / codex review / opencode run / pi / agy 跑模型的 Bash 和 PowerShell 命令，
+// PreToolUse 钩子：拦下直接调用 codex exec / codex review / opencode run / pi / agy / codebuddy 跑模型的 Bash 和 PowerShell 命令，
 // 要求改走 cli.mjs。退出码 2 会阻止这次调用，并把 stderr 的内容反馈给 Claude。
 
 import fs from 'node:fs';
@@ -11,11 +11,11 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.join(HERE, '..', 'skills', 'dispatch', 'scripts', 'cli.mjs');
 
 const MESSAGES = {
-  zh: `已拦截：不要直接调用 codex exec / codex review / opencode run / pi / agy。协作方的调用都必须通过 foreman 插件的脚本：
+  zh: `已拦截：不要直接调用 codex exec / codex review / opencode run / pi / agy / codebuddy。协作方的调用都必须通过 foreman 插件的脚本：
   node "${SCRIPT}" <run|discuss|review|resume|plan|submit|image> ...
 用法见 foreman:dispatch skill。测试、验收和一次性问答也一样，只读问答用 discuss。
 如果是脚本本身满足不了的需求（比如沙箱导致协作方无法运行），停下来把情况告诉用户，由用户决定，不要设法绕过。`,
-  en: `Blocked: don't call codex exec / codex review / opencode run / pi / agy directly. Every call to an agent must go through the foreman-en plugin's script:
+  en: `Blocked: don't call codex exec / codex review / opencode run / pi / agy / codebuddy directly. Every call to an agent must go through the foreman-en plugin's script:
   node "${SCRIPT}" <run|discuss|review|resume|plan|submit|image> ...
 See the foreman-en:dispatch skill. This applies to tests, checks and one-off questions too; use discuss for read-only questions.
 If the script can't do what's needed (for example a sandbox stops an agent from running), stop and tell the user so they can decide. Don't look for a way around it.`,
@@ -30,6 +30,30 @@ const PI_VALUE_OPTIONS = new Set(['--provider', '--model', '--api-key', '--syste
   '--fork', '--session-dir', '--name', '-n', '--models', '--tools', '-t', '--exclude-tools', '-xt', '--thinking', '--extension', '-e', '--skill',
   '--prompt-template', '--theme', '--use-theme', '--tui-mode']);
 const PI_ENTRY = /pi-coding-agent[\\/]dist[\\/](bundle[\\/])?cli\.js$/i;
+const CB_ENTRY = /@tencent-ai[\\/]codebuddy-code[\\/]bin[\\/](codebuddy|cbc)$/i;
+// codebuddy 也一样：查询类参数和管理类子命令不算跑模型，其余都算（-p 是最常见的跑模型的写法）。
+const CB_QUERY_FLAGS = new Set(['--version', '-V', '-v', '--help', '-h']);
+const CB_ADMIN = new Set(['config', 'mcp', 'sandbox', 'plugin', 'project', 'doctor', 'update', 'install', 'cleanup', 'daemon',
+  'ps', 'logs', 'attach', 'kill', 'stop', 'rm', 'respawn', 'agents', 'auto-mode']);
+const CB_VALUE_OPTIONS = new Set(['--output-format', '--input-format', '--json-schema', '--model', '--fallback-model', '--effort',
+  '--session-id', '--max-turns', '--system-prompt', '--system-prompt-file', '--append-system-prompt', '--prompt-vars-file',
+  '--setting-sources', '--settings', '--mcp-config', '--plugin-dir', '--add-dir', '--permission-mode',
+  '--permission-mode-before-plan', '--subagent-permission-mode', '--tools', '--allowedTools', '--disallowedTools',
+  '--channels', '--dangerously-load-development-channels', '--text-to-image-model', '--image-to-image-model',
+  '--sandbox-id', '--teleport', '--name', '--exec', '--port', '--host', '--base-path', '--auth', '--header',
+  '--acp-transport', '--max-budget-usd', '--autocompact', '-H', '-w', '-r', '-c']);
+
+function codebuddyRunsModel(words) {
+  if (CB_ADMIN.has(words[0])) return false;
+  if (/\.(?:mps|lp)$/i.test(words[0] || '') && words.some((word) => word.toLowerCase() === '-solve')) return false;
+  for (let n = 0; n < words.length; n++) {
+    const w = words[n];
+    if (w === '--') return true; // 后面都是提示词
+    if (CB_VALUE_OPTIONS.has(w)) { n++; continue; }
+    if (CB_QUERY_FLAGS.has(w)) return false;
+  }
+  return true;
+}
 
 function piRunsModel(words) {
   if (PI_ADMIN.has(words[0])) return false;
@@ -93,7 +117,7 @@ function callsAgentDirectly(command) {
     if (glued) tokens.splice(i, 1, glued[1], glued[2]);
     const first = base(tokens[i] || '');
     let rest;
-    let opencode = false, pi = false, agy = false;
+    let opencode = false, pi = false, agy = false, codebuddy = false;
     const npx = /^npx(\.cmd)?$/.test(first) ? npxPackage(tokens, i) : null;
     if (npx?.call && callsAgentDirectly(npx.call)) return true;
     const npxRuns = (pattern) => !!npx && npx.pkgs.some((pkg) => pattern.test(pkg));
@@ -106,9 +130,13 @@ function callsAgentDirectly(command) {
     else if (/^node(\.exe)?$/.test(first) && PI_ENTRY.test((tokens[i + 1] || '').replace(/^["']|["']$/g, ''))) { rest = tokens.slice(i + 2); pi = true; }
     else if (npxRuns(/^@earendil-works\/pi-coding-agent(@.*)?$/)) { rest = tokens.slice(npx.rest); pi = true; }
     else if (/^agy(\.exe|\.cmd|\.ps1)?$/.test(first)) { rest = tokens.slice(i + 1); agy = true; }
+    else if (/^(?:codebuddy|cbc)(?:-code|-lowmem|-prewarm)?(?:\.exe|\.cmd|\.ps1)?$/.test(first)) { rest = tokens.slice(i + 1); codebuddy = true; }
+    else if (/^node(\.exe)?$/.test(first) && CB_ENTRY.test((tokens[i + 1] || '').replace(/^["']|["']$/g, ''))) { rest = tokens.slice(i + 2); codebuddy = true; }
+    else if (npxRuns(/^@tencent-ai\/codebuddy-code(@.*)?$/)) { rest = tokens.slice(npx.rest); codebuddy = true; }
     else continue;
     const words = dropRedirects(rest).map((t) => t.replace(/^["']|["']$/g, ''));
     if (agy) { if (agyRunsModel(words)) return true; continue; }
+    if (codebuddy) { if (codebuddyRunsModel(words)) return true; continue; }
     if (pi) {
       if (piRunsModel(words)) return true;
       continue;

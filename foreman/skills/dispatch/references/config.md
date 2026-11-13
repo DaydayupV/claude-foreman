@@ -65,7 +65,7 @@
 
 - 键是协作方的**代号**，`modules` 和 `--agent` 用它引用。建议直接用模型名。
 - 代号只能用字母、数字、`.`、`-`、`_`，以字母或数字开头；不能叫 `claude` 或 `claude code`。
-- `type` 决定怎么连接、要填哪些字段，只有四种。同一种可以配多个，各用不同的模型。
+- `type` 决定怎么连接、要填哪些字段，只有六种。同一种可以配多个，各用不同的模型。
 - Codex 不是必需的，一个协作方都不配也行：那样所有任务都由 Claude 自己做。
 
 **`type: "codex cli"`**（本机的 Codex CLI）
@@ -137,6 +137,25 @@
 - 启动前去掉密钥类环境变量（只留 agy 自己登录可能用到的 `GEMINI_API_KEY`）；运行期间在 foreman 状态目录写启动标记，同一目录里没有带策略的 agy 会被守卫拒绝工具调用；守卫的每次决定记在 `run_dir` 的 `agy-guard.jsonl`，用了工具却没有决定记录的一轮判失败；
 - 用户自己的 GEMINI.md、skill 照常加载，全局 MCP 服务器会启动但工具被拒绝；会话出现在 agy 的历史里。
 
+**`type: "codebuddy cli"`**（本机的 CodeBuddy CLI，即腾讯云代码助手，npm 包 `@tencent-ai/codebuddy-code`，命令 `codebuddy` / `cbc`）
+
+| 字段 | 作用 |
+|---|---|
+| `model` | 必填，`codebuddy --help` 里 "Currently supported" 列出的模型 ID，比如 `deepseek-v4.1-flash` |
+| `bin` | 可选，codebuddy 可执行文件或 npm 包里 `bin/codebuddy` 的路径。默认自动查找 |
+| `max_parallel` | 可选，默认 `4` |
+| `run_access` | 可选，和 opencode 一样：`"edit"` 或 `"shell"`，只能写在用户配置里。不写就只能参加讨论和审查，不能放进 `run` 和 `draw` 格子，也不能被点名派执行 |
+
+登录和可用模型由 codebuddy 自己的账号管（在 codebuddy 里 `/login`），插件不碰。讨论和审查用 `dontAsk` 加用户级设置；执行的 `edit` 用 `acceptEdits` 模式开放项目内文件工具；`shell` 没有系统沙箱。脚本每次调用都：
+- 只开放这次任务需要的工具：讨论和审查只有 `Read`、`Glob`、`Grep`；执行的 `edit` 档再加 `Write`、`Edit`，`shell` 档再加 `Bash`、`PowerShell`；
+- 讨论和审查的读操作遵守 CodeBuddy 的项目可信目录权限，`edit` 的写操作只允许当前项目目录（`Write(./**)`、`Edit(./**)`）；
+- 用 `--strict-mcp-config` 不加载任何 MCP 服务器，所以模型看不到你配的那些工具；
+- 用 `--setting-sources user` 不加载项目和本地 settings，也不加载其中的 hooks；
+- 报告走它原生的 `--json-schema` 结构化输出（`StructuredOutput` 工具只在这一轮要输出报告时放进白名单）；如果服务端仍返回无效报告，脚本会按通用流程在同一会话再修一次；
+- 会话存在 codebuddy 自己的历史里，续接用 `--resume`。
+
+`edit` 和 `shell` 都必须先拍改动快照才开始；`shell` 的命令仍以当前账户权限运行。
+
 **`type: "api"`**（兼容 OpenAI 接口的模型）
 
 | 字段 | 作用 |
@@ -151,16 +170,16 @@
 ### 能做什么（能力表）
 `config` 输出的 `agents_status.<代号>.capabilities` 列出每个协作方能做什么。配置校验也按它来：把协作方放进它做不了的格子，会报错。
 
-| | codex cli | opencode cli | pi cli | agy cli | api |
-|---|---|---|---|---|---|
-| 能做的任务（`modes`） | 执行、审查、讨论 | 执行（要写 `run_access`）、审查、讨论 | 执行（要写 `run_access`）、审查、讨论 | 审查、讨论 | 讨论、审查（只审文本材料） |
-| 隔离（`isolation`） | 系统沙箱（`os`），看沙箱配置 | 只有工具权限（`tools`） | 只有工具权限加守卫扩展（`tools`） | 全局钩子里的守卫（`tools`）；只读命令在 agy 沙箱里 | 无（`none`），只收发文字 |
-| 自己读代码（`reads_code`） | 能 | 能 | 能 | 能 | 不能，靠附带文件 |
-| 原生格式约束（`native_schema`） | 有 | 没有，靠提示词加一次修复 | 没有，同左 | 没有，同左 | 没有，同左 |
-| 原生审查（`native_review`） | 有 | 没有 | 没有 | 没有 | 没有 |
-| 出图（`images`） | 能 | 不能 | 不能 | 不能 | 不能 |
-| 看图（`reads_images`），决定能不能做 `visual` 审查 | 能（view_image） | 先记为不能（还没验证） | 先记为不能（还没验证） | 先记为不能（还没验证） | 不能 |
-| 讨论和审查的只读保障（结果的 `readonly`） | `sandbox`（配了 `read-only` 沙箱）或 `audited` | `tools` | `tools` | `tools` | `tools` |
+| | codex cli | opencode cli | pi cli | agy cli | codebuddy cli | api |
+|---|---|---|---|---|---|---|
+| 能做的任务（`modes`） | 执行、审查、讨论 | 执行（要写 `run_access`）、审查、讨论 | 执行（要写 `run_access`）、审查、讨论 | 审查、讨论 | 执行（要写 `run_access`）、审查、讨论 | 讨论、审查（只审文本材料） |
+| 隔离（`isolation`） | 系统沙箱（`os`），看沙箱配置 | 只有工具权限（`tools`） | 只有工具权限加守卫扩展（`tools`） | 全局钩子里的守卫（`tools`）；只读命令在 agy 沙箱里 | 只有工具权限（`tools`） | 无（`none`），只收发文字 |
+| 自己读代码（`reads_code`） | 能 | 能 | 能 | 能 | 能 | 不能，靠附带文件 |
+| 原生格式约束（`native_schema`） | 有 | 没有，靠提示词加一次修复 | 没有，同左 | 没有，同左 | 有（`--json-schema`） | 没有，同左 |
+| 原生审查（`native_review`） | 有 | 没有 | 没有 | 没有 | 没有 | 没有 |
+| 出图（`images`） | 能 | 不能 | 不能 | 不能 | 不能 | 不能 |
+| 看图（`reads_images`），决定能不能做 `visual` 审查 | 能（view_image） | 先记为不能（还没验证） | 先记为不能（还没验证） | 先记为不能（还没验证） | 先记为不能（还没验证） | 不能 |
+| 讨论和审查的只读保障（结果的 `readonly`） | `sandbox`（配了 `read-only` 沙箱）或 `audited` | `tools` | `tools` | `tools` | `tools` | `tools` |
 
 ## modules
 
@@ -208,6 +227,7 @@
 - `opencode cli`：模型的 variant（比如 `high`），拼成 `-m 模型#variant` 传给 opencode；`null` 表示用模型的默认设置。各模型有哪些 variant 不一样（比如免费的 DeepSeek 模型接受 `low`、`high`、`max`，不接受 `medium`），写错了 opencode 会报错。写 `default` 和不写一样。改完运行 `check`：opencode 的模型清单里没有的 variant 直接报出，其余逐个试一遍。
 - `pi cli`：`off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，作为 `--thinking` 传给 pi。每个模型支持哪些不一样（比如 deepseek-flash 是 off / low / high / max），以 pi 的模型清单为准。**写了不支持的档位，pi 不会报错，会悄悄换成最接近的一档**（先往高处找，所以可能更贵），改完一定要运行 `check`，它按清单核对。
 - `agy cli`：`minimal`、`low`、`medium`、`high`、`xhigh`、`max` 里这个模型有的档位（`models` 列出，比如 gemini-3.8-flash 是 low / medium / high），派出时拼成 `<模型>-<档位>` 传给 agy。只有一档的模型不写就用那一档，没有档位的（比如 claude-sonnet-4-6）不写；有几档的必须写，否则 `check` 和派出时报错。`model` 已经写了带档位的完整 ID 时不能再写 `effort`。
+- `codebuddy cli`：`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，作为 `--effort` 传给 codebuddy。各模型支持哪些档位不同，但 `codebuddy --help` 只列模型、不列档位，`models` 和 `check` 只能按这六个档位核对，实测不支持的档位可能被换成最接近的一档，所以拿不准时先按模型厂商的说法写。
 
 向用户汇报时，不写和 `null` 都说成"推理强度：默认"。
 
