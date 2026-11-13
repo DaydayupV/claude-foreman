@@ -1,9 +1,11 @@
 {
   "schema_version": 1,
-  "as_of": "2026-10-27",
+  "as_of": "2026-11-13",
   "note": "模型身份表：键是规范 id（modelKey 归一化后的写法），aliases 是官方说明或确认过的同一个模型的其他名字（包括同一模型的加速版、免费版、contributor 端点；加速版按同一模型算，宁可把同一模型并成一个，也不把它当成独立证据）。比较不同的基础模型、stats 分行都按这里归并。同价不等于同一个模型（Fable 和 Mythos 各是一条）。family 只用于档位兜底和展示，不当身份。board_names 是评测榜上和 display 不同的名字。",
   "models": {
-    "claude-fable-5-1": { "display": "Claude Fable 5.1", "family": "claude", "vendor": "anthropic", "aliases": [] },
+    "claude-fable-5-2": { "display": "Claude Fable 5.2", "family": "claude", "vendor": "anthropic", "aliases": [], "board_names": ["Claude Fable 5.2 (xhigh)"] },
+    "claude-mythos-5-2": { "display": "Claude Mythos 5.2", "family": "claude", "vendor": "anthropic", "aliases": [] },
+    "claude-fable-5-1":{ "display": "Claude Fable 5.1", "family": "claude", "vendor": "anthropic", "aliases": [] },
     "claude-mythos-5-1": { "display": "Claude Mythos 5.1", "family": "claude", "vendor": "anthropic", "aliases": [] },
     "claude-fable-5": { "display": "Claude Fable 5", "family": "claude", "vendor": "anthropic", "aliases": [] },
     "claude-mythos-5": { "display": "Claude Mythos 5", "family": "claude", "vendor": "anthropic", "aliases": [] },
@@ -46,7 +48,9 @@
     "glm-5.3-flashx": { "display": "GLM-5.3 FlashX", "family": "glm", "vendor": "zhipu", "aliases": [] },
     "glm-5.2": { "display": "GLM-5.2", "family": "glm", "vendor": "zhipu", "aliases": [] },
 
+    "gemini-4-carbon": { "display": "Gemini 4 Carbon", "family": "gemini", "vendor": "google", "aliases": [] },
     "gemini-4-argon": { "display": "Gemini 4 Argon", "family": "gemini", "vendor": "google", "aliases": ["gemini-4-argon-contributor"] },
+    "gemini-4-hydrogen": { "display": "Gemini 4 Hydrogen", "family": "gemini", "vendor": "google", "aliases": [] },
     "gemini-3.8-flash": { "display": "Gemini 3.8 Flash", "family": "gemini", "vendor": "google", "aliases": [] },
     "gemini-3.5-flash-lite": { "display": "Gemini 3.5 Flash-Lite", "family": "gemini", "vendor": "google", "aliases": [] },
     "gemini-3.1-pro": { "display": "Gemini 3.1 Pro", "family": "gemini", "vendor": "google", "aliases": ["gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools"] },
