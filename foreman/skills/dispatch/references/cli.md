@@ -30,7 +30,7 @@ node "<脚本路径>" stats  [--module discuss|run|review|image] [--since <天�
 node "<脚本路径>" assets <template|cut|check|diff|layers|patch|trace|capture|playback> …（各命令的参数见 references/assets-cli.md）
 ```
 
-- 执行单席直派时，`--agent <协作方>` 只能从这一格的候选里选。不写时：这一格只有一个候选就用它，有一个必选就用它，否则必须写。这一格还有别的必选时，单席派发会被拒绝，要先建计划。格子是 `"claude code"` 时，可以用 `--agent` 点名派出（结果标 `outside_cell`）；讨论和审查遇到这种格子时，用户点名的协作方照样写进计划的 `--seat`，计划标 `outside_cell`，推理强度用内置默认值。每个协作方能做哪些任务看 `capabilities.modes`：`api` 协作方能参加 `discuss` 和 `review`（只审文本，不能审 `visual`）；`opencode cli` 和 `pi cli` 能做 `review` 和 `discuss`，配置里写了 `run_access` 的还能做 `run`；`agy cli` 只能做 `review` 和 `discuss`。升级前的旧代号（比如 `codex`）照样认，脚本会提示新代号。
+- 执行单席直派时，`--agent <协作方>` 只能从这一格的候选里选。不写时：这一格只有一个候选就用它，有一个必选就用它，否则必须写。这一格还有别的必选时，单席派发会被拒绝，要先建计划。格子是 `"claude code"` 时，可以用 `--agent` 点名派出（结果标 `outside_cell`）；讨论和审查遇到这种格子时，用户点名的协作方照样写进计划的 `--seat`，计划标 `outside_cell`，推理强度用内置默认值。每个协作方能做哪些任务看 `capabilities.modes`：`api` 协作方能参加 `discuss` 和 `review`（只审文本，不能审 `visual`）；`opencode cli`、`pi cli` 和 `codebuddy cli` 能做 `review` 和 `discuss`，配置里写了 `run_access` 的还能做 `run`；`agy cli` 只能做 `review` 和 `discuss`。升级前的旧代号（比如 `codex`）照样认，脚本会提示新代号。
 - 用户点名要某个推理强度（比如"用 ultra 跑"）时，照常写 `--level`，再加 `--effort <强度>`：它只换推理强度，协作方还是按格子选。
 - 用户点名要某个模型时，加 `--model <模型>`。只能换同一个提供方的模型：`codex cli` 和 `api` 协作方可以换成任意模型，`opencode cli` 和 `pi cli` 的新模型要和原来的有同一个 `提供方/` 前缀；换了模型的结果标 `model_overridden`。
 - 交给谁、模型、推理强度、沙箱、审批、超时由配置文件决定；Codex 没有配置的项沿用它自己的 `~/.codex/config.toml`。拿不准当前设置时先运行 `config --cwd "<项目目录>"`。
@@ -42,6 +42,7 @@ node "<脚本路径>" assets <template|cut|check|diff|layers|patch|trace|capture
 - **API**：key 是否设置，并发一个很小的请求确认能连通。
 - **opencode**：能否启动、`opencode models` 里有没有这个模型，并发一个很小的请求确认能用；各格子给它配置了推理强度（variant）的，先按 opencode 的模型清单核对，清单里没有的直接判不通过，其余每个档位再各发一个小请求，结果列在 `variants` 里。
 - **pi**：能否启动、模型清单里有没有这个模型，并发一个很小的请求确认能用；推理强度只按清单核对（pi 遇到模型不支持的档位不报错，会悄悄换成最接近的一档，发请求试不出来），结果列在 `efforts` 里。
+- **codebuddy**：能否启动、`codebuddy --help` 的 "Currently supported" 里有没有这个模型，并发一个很小的请求确认能用；推理强度按六个通用档位核对（`--help` 不按模型列档位），结果列在 `efforts` 里。
 - **agy**：能否启动、`agy models` 里有没有这个模型；守卫自检（项目和全局配置、守卫文件、agy 实际加载的钩子）；沙箱探针（同一 agy 版本、系统和磁盘只测一次，结果缓存；测出不可用的结果 24 小时后过期，过期后下一次 check 或派出时重测，`--reprobe` 不等过期、这次就重测）；再发一个请求，让模型用 `read_file` 读一个临时文件并原样回复，确认守卫放行并留下了决定记录；最后读额度，任一额度桶剩余不到 10% 时提醒。会在 agy 的历史里留下会话。守卫没装、文件不一致或有别的钩子时，`fix` 会写明处理办法；沙箱不可用时 `fix` 写明原因：沙箱没拦住哪些写入或读取（重测结果不会变）、沙箱起不来、或者检测时没联网（联网后用 `--reprobe` 重测）。
 
 `agy-guard install` 在 `~/.gemini/config/` 下装守卫（先备份 `hooks.json`），`uninstall` 删掉条目和文件，`status` 只读、报告装没装、文件是否一致和正在运行的 agy 任务。装和卸会拿一把跨进程的锁，有 agy 任务在运行时拒绝。**只在用户同意后运行 `install`**（`/foreman:setup` 的弹窗，或者用户明确要求），它改的是用户目录里 agy 的全局配置。
@@ -91,7 +92,7 @@ node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generat
 - 补漏席是角色为 `补漏`（英文插件写 `gap`）的席位。它用的协作方没标必选、计划里又有必选席时，`state` 只看必选席，补漏席还没跑完计划也会显示 `complete`。所以另有 `gap_unfinished`：还没交回有效结果的补漏席（没启动、还在运行、失败或结果无效），每项是 `seat`、`agent`、`status`，没有时为空数组；实时查看和 `status --group` 在计划那一行加一句"gap seat not finished: …"，写明是哪一席、处于什么状态（not started、running、no valid result，或者 failed 这类状态词）。
 
 ## models
-列出本机 Codex、opencode、pi、agy 自带的模型清单（含每个模型支持的推理强度；agy 的档位从模型 ID 的后缀拆出来），以及每个 API 协作方的接口列出的模型名（不含推理强度），并核对配置里的模型在不在清单里、不在时给出最接近的写法。只读，不发模型请求。用户问有哪些模型可选、或者要换模型和推理强度时用。
+列出本机 Codex、opencode、pi、agy、codebuddy 自带的模型清单（含每个模型支持的推理强度；agy 的档位从模型 ID 的后缀拆出来），以及每个 API 协作方的接口列出的模型名（不含推理强度），并核对配置里的模型在不在清单里、不在时给出最接近的写法。只读，不发模型请求。用户问有哪些模型可选、或者要换模型和推理强度时用。
 
 ## 结果字段
 `run`、`image`、`resume`、`discuss`、`review` 的结果以 JSON 打印到 stdout，主要字段：

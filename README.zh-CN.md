@@ -9,7 +9,7 @@
 
 ![用 CC 实现全模型协作：Claude Code 指挥 GPT、Claude、DeepSeek、Gemini 等模型](docs/images/banner.zh.png)
 
-一个 Claude Code 插件，让 Claude Code 当"工头"：它负责规划、决策和验收，把动手的编码工作按你的配置派给 Codex、opencode、pi 等 CLI 工具，也能请它们独立审查代码，或者在复杂方案上召集几个模型一起讨论，最后由 Claude Code 裁决。
+一个 Claude Code 插件，让 Claude Code 当"工头"：它负责规划、决策和验收，把动手的编码工作按你的配置派给 Codex、opencode、pi、CodeBuddy 等 CLI 工具，也能请它们独立审查代码，或者在复杂方案上召集几个模型一起讨论，最后由 Claude Code 裁决。
 
 - **Claude Code 把关**：协作方交回的改动，Claude Code 逐个看 diff、实际运行验证，不合格就返工；讨论里各方的意见只作参考，接受还是拒绝由 Claude Code 按论据决定。
 - **用你自己的额度**：协作方用的是你的 Codex 订阅、opencode 订阅或 API 余额，不占 Claude Code 的额度。
@@ -307,7 +307,7 @@ flowchart TD
 
 以前平铺的 `modules`（下面直接是 `discuss`、`run` 等）照常能读：第一次读到时插件把它原样放进 `modules.default`，原文件先备份。旧的 `levels` 写法也照常能读：第一次读到时，插件把它改写成 `modules`，每一格的协作方、推理强度和顺序都不变，原文件备份为 `config.json.bak`。注意一处变化：以前讨论一级里写的模型全部参加，改写后它们是候选、由 Claude Code 挑；想保留全员参加，就给它们都标上 `"required": true`，`/foreman:setup` 可以帮着标，也会帮你加上图像两格。
 
-### 五种协作方
+### 六种协作方
 
 | `type` | 是什么 | 能做的任务 | 自己读代码 | 隔离 | 用谁的额度 |
 |---|---|---|---|---|---|
@@ -315,6 +315,7 @@ flowchart TD
 | `opencode cli` | 本机的 opencode，接入它支持的各家模型 | 审查、讨论；写了 `run_access` 还能执行 | 能 | 只限定工具，没有系统沙箱 | 在 opencode 里登录的厂商，或 OpenCode Go 订阅 |
 | `pi cli` | 本机的 pi，接入它支持的各家模型 | 同 opencode | 能 | 同 opencode，读写路径由插件注入的守卫检查 | 在 pi 里登录的厂商 |
 | `agy cli` | 本机的 Agy CLI（Google Antigravity CLI） | 审查、讨论 | 能 | 插件装在 agy 全局钩子里的守卫；只读命令跑在 agy 的沙箱里 | 在 agy 里登录的 Google 账号 |
+| `codebuddy cli` | 本机的 CodeBuddy CLI（腾讯云代码助手），接入它支持的各家模型 | 审查、讨论；写了 `run_access` 还能执行 | 能 | 项目内路径由权限规则限制；`shell` 无系统沙箱 | 在 codebuddy 里登录的腾讯云账号 |
 | `api` | 兼容 OpenAI 接口的模型 | 讨论、审查（只审文本） | 不能，Claude Code 把相关文件附过去 | 不涉及 | 厂商的 API 余额 |
 
 同一种可以配多个，各用不同模型。Codex 不是必需的。
@@ -366,6 +367,17 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 - 推理强度是 pi 的 thinking 档位（`off` 到 `max`），每个模型支持的不一样。**写了模型不支持的档位，pi 不报错，会悄悄换成最接近的一档**，所以改完运行一次 `check`，它会说明会被换成哪一档。
 - pi 本身没有权限系统。插件每次只开放这次任务需要的工具，注入守卫扩展让读写路径不出项目目录，也不加载你自己装的扩展、skill 和 MCP。项目的 AGENTS.md / CLAUDE.md 照常读，会话存在 pi 的默认位置。
 
+### 接入 CodeBuddy
+
+装了 CodeBuddy CLI（`npm install -g @tencent-ai/codebuddy-code`，命令是 `codebuddy` 或 `cbc`）并登录后，它能用的模型都能参加讨论和审查。
+
+1. **登录**：在终端运行 `codebuddy`，用 `/login` 登录，再运行 `codebuddy --help`，看 "Currently supported" 里有哪些模型。
+2. **加进配置**：一个模型一条，`{ "type": "codebuddy cli", "model": "deepseek-v4.1-flash" }`。想让它也能执行，再加 `"run_access": "edit"`（或 `"shell"`），然后把代号写进要用的格子。
+
+- 讨论和审查用 `dontAsk` 权限模式与用户级设置，不加载项目配置和 hooks；读文件遵守项目目录权限。执行的 `edit` 用 `acceptEdits` 模式开放项目内的 `Write`/`Edit`，`shell` 还能运行命令且没有系统沙箱。`--strict-mcp-config` 不加载 MCP 服务器。
+- 报告走 codebuddy 原生的 `--json-schema` 结构化输出；若服务端仍返回无效报告，脚本会在同一会话里按通用流程修复一次。
+- `effort` 是 `minimal` 到 `max`，作为 `--effort` 传进去。`codebuddy --help` 只列模型、不列档位，所以 `check` 只能核对是不是这六档之一；模型实际不支持的档位可能被换成最接近的一档。
+
 ### 接入 agy
 
 装了 Agy CLI（Google Antigravity CLI，命令 `agy`）并登录好账号的话，可以让它参加讨论和审查。目前只验证了 Windows 11；执行任务还不支持。
@@ -391,7 +403,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 ### 完整示例
 
 <details>
-<summary>展开：四种协作方都用上的一份完整配置</summary>
+<summary>展开：几种协作方都用上的一份完整配置</summary>
 
 ```json
 {

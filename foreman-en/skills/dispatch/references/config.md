@@ -65,7 +65,7 @@ Where the text below says "a cell", "`seats`" or "`gap`", it means what is writt
 
 - Each key is the agent's **ID**, used by `modules` and `--agent`. Naming it after its model works best.
 - IDs may only use letters, digits, `.`, `-` and `_`, must start with a letter or digit, and can't be `claude` or `claude code`.
-- `type` decides how it's reached and which settings it takes. There are four types, and you can have several agents of one type, each with a different model.
+- `type` decides how it's reached and which settings it takes. There are six types, and you can have several agents of one type, each with a different model.
 - Codex isn't required. With no agents at all, Claude does everything itself.
 
 **`type: "codex cli"`** (the Codex CLI on this machine)
@@ -137,6 +137,25 @@ It can only take part in discussions and reviews: `run_access` isn't accepted, a
 - Secret-like environment variables are removed before starting agy (except `GEMINI_API_KEY`, which agy may use to sign in); during a run, a launch marker in the foreman state folder makes the guard block tool calls from agy without a policy in that folder; every guard decision goes to `agy-guard.jsonl` in the `run_dir`, and a round that used tools without any decision record fails;
 - The user's own GEMINI.md and skills load as usual, and global MCP servers start but their tools are blocked; sessions show up in agy's history.
 
+**`type: "codebuddy cli"`** (the CodeBuddy CLI on this machine, that is Tencent Cloud's coding assistant, npm package `@tencent-ai/codebuddy-code`, command `codebuddy` or `cbc`)
+
+| Field | Meaning |
+|---|---|
+| `model` | Required: a model ID from "Currently supported" in `codebuddy --help`, for example `deepseek-v4.1-flash` |
+| `bin` | Optional path to the codebuddy executable, or to `bin/codebuddy` inside the npm package. Found automatically by default |
+| `max_parallel` | Optional; `4` by default |
+| `run_access` | Optional, same as opencode: `"edit"` or `"shell"`, only in the user config. Without it the agent can only take part in discussions and reviews and can't go in `run` or `draw` cells or be named for hands-on work |
+
+Signing in and the model list are up to codebuddy's own account (`/login` inside codebuddy); the plugin doesn't touch them. Discussions and reviews use `dontAsk` with user settings; hands-on `edit` uses `acceptEdits` for project-local file tools; `shell` has no OS sandbox. Every call the script makes:
+- opens only the tools this task needs: `Read`, `Glob` and `Grep` for discussions and reviews; `Write` and `Edit` added for `edit`, plus `Bash` and `PowerShell` for `shell`;
+- keeps discussion and review reads under CodeBuddy's trusted project-directory rules, and allows `edit` writes only under the current project (`Write(./**)`, `Edit(./**)`);
+- passes `--strict-mcp-config`, so no MCP servers load and the model can't reach the tools you configured there;
+- passes `--setting-sources user`, so project and local settings and their hooks aren't loaded;
+- gets the report through codebuddy's native `--json-schema` structured output (the `StructuredOutput` tool goes into the allowlist only on a round that has to produce a report); if the service still returns an invalid report, the script uses the common one repair round in the same session;
+- keeps the session in codebuddy's own history; resume uses `--resume`.
+
+Both hands-on levels take a change snapshot before they start; `shell` commands still run with the current account's permissions.
+
 **`type: "api"`** (models with an OpenAI-compatible API)
 
 | Setting | What it does |
@@ -151,16 +170,16 @@ It can only take part in discussions and reviews: `run_access` isn't accepted, a
 ### What each type can do
 `agents_status.<ID>.capabilities` in the `config` output lists what each agent can do, and config checks use it: putting an agent in a cell it can't do is an error.
 
-| | codex cli | opencode cli | pi cli | agy cli | api |
-|---|---|---|---|---|---|
-| Tasks (`modes`) | hands-on work, reviews, discussions | hands-on work (needs `run_access`), reviews, discussions | hands-on work (needs `run_access`), reviews, discussions | reviews, discussions | discussions, reviews (text material only) |
-| Isolation (`isolation`) | OS sandbox (`os`), per the sandbox setting | tool permissions only (`tools`) | tool permissions plus a guard extension (`tools`) | a guard in the global hooks (`tools`); read-only commands in agy's sandbox | none (`none`); text in and out only |
-| Reads code itself (`reads_code`) | yes | yes | yes | yes | no; relies on attached files |
-| Native report format (`native_schema`) | yes | no; prompt plus one repair | no; same | no; same | no; same |
-| Native review (`native_review`) | yes | no | no | no | no |
-| Images (`images`) | yes | no | no | no | no |
-| Reads images (`reads_images`), which decides who can do a `visual` review | yes (view_image) | no for now (not verified yet) | no for now (not verified yet) | no for now (not verified yet) | no |
-| How discussions and reviews stay read-only (the result's `readonly`) | `sandbox` (with a `read-only` sandbox) or `audited` | `tools` | `tools` | `tools` | `tools` |
+| | codex cli | opencode cli | pi cli | agy cli | codebuddy cli | api |
+|---|---|---|---|---|---|---|
+| Tasks (`modes`) | hands-on work, reviews, discussions | hands-on work (needs `run_access`), reviews, discussions | hands-on work (needs `run_access`), reviews, discussions | reviews, discussions | hands-on work (needs `run_access`), reviews, discussions | discussions, reviews (text material only) |
+| Isolation (`isolation`) | OS sandbox (`os`), per the sandbox setting | tool permissions only (`tools`) | tool permissions plus a guard extension (`tools`) | a guard in the global hooks (`tools`); read-only commands in agy's sandbox | tool permissions only (`tools`) | none (`none`); text in and out only |
+| Reads code itself (`reads_code`) | yes | yes | yes | yes | yes | no; relies on attached files |
+| Native report format (`native_schema`) | yes | no; prompt plus one repair | no; same | no; same | yes (`--json-schema`) | no; same |
+| Native review (`native_review`) | yes | no | no | no | no | no |
+| Images (`images`) | yes | no | no | no | no | no |
+| Reads images (`reads_images`), which decides who can do a `visual` review | yes (view_image) | no for now (not verified yet) | no for now (not verified yet) | no for now (not verified yet) | no for now (not verified yet) | no |
+| How discussions and reviews stay read-only (the result's `readonly`) | `sandbox` (with a `read-only` sandbox) or `audited` | `tools` | `tools` | `tools` | `tools` | `tools` |
 
 ## modules
 
@@ -208,6 +227,7 @@ How image tasks go out: before work starts on each new graphic deliverable, Clau
 - `opencode cli`: the model's variant (for example `high`), passed to opencode as `-m model#variant`; `null` means the model's default. Each model has its own variants (the free DeepSeek model, for example, takes `low`, `high` and `max` but not `medium`), and opencode reports an error for a wrong one. `default` is the same as leaving it out. After a change, run `check`: variants missing from opencode's model list are reported at once, and the rest are tried one by one.
 - `pi cli`: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, passed to pi as `--thinking`. Each model supports its own set (deepseek-flash, for example, takes off / low / high / max), as pi's model list says. **pi doesn't report an unsupported level; it quietly switches to the nearest one** (looking upward first, so it may cost more). Always run `check` after a change; it checks against the list.
 - `agy cli`: whichever of `minimal`, `low`, `medium`, `high`, `xhigh`, `max` the model has (`models` lists them; gemini-3.8-flash has low / medium / high), sent to agy as `<model>-<level>`. A model with one level uses it when `effort` is left out, a model with none (such as claude-sonnet-4-6) takes no `effort`, and a model with several needs it, or `check` and dispatch report an error. When `model` is already a full ID with a level, `effort` can't be set too.
+- `codebuddy cli`: `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, passed to codebuddy as `--effort`. Which ones a model supports varies, but `codebuddy --help` lists models only and not levels, so `models` and `check` can only check against these six; a level the model doesn't really support may be quietly mapped to the nearest one, so follow the model vendor's documentation when unsure.
 
 When reporting to the user, describe a missing or `null` effort as "effort: default".
 
