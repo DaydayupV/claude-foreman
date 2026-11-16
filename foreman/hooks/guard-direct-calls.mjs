@@ -41,18 +41,20 @@ const CB_VALUE_OPTIONS = new Set(['--output-format', '--input-format', '--json-s
   '--permission-mode-before-plan', '--subagent-permission-mode', '--tools', '--allowedTools', '--disallowedTools',
   '--channels', '--dangerously-load-development-channels', '--text-to-image-model', '--image-to-image-model',
   '--sandbox-id', '--teleport', '--name', '--exec', '--port', '--host', '--base-path', '--auth', '--header',
-  '--acp-transport', '--max-budget-usd', '--autocompact', '-H', '-w', '-r', '-c']);
+  '--acp-transport', '--max-budget-usd', '--autocompact', '--resume', '--worktree', '-H', '-w', '-r']);
 
-function codebuddyRunsModel(words) {
+function codebuddyRunsModel(words, bareCbc = false) {
   if (CB_ADMIN.has(words[0])) return false;
-  if (/\.(?:mps|lp)$/i.test(words[0] || '') && words.some((word) => word.toLowerCase() === '-solve')) return false;
+  let codebuddyOption = false;
   for (let n = 0; n < words.length; n++) {
     const w = words[n];
-    if (w === '--') return true; // 后面都是提示词
+    if (w === '--') return true; // 后面都是提示词，不当选项解析
+    // COIN-OR CBC uses single-dash keywords; only its bare executable gets this exemption.
+    if (w.startsWith('--') || /^-[pcyrwH]/.test(w)) codebuddyOption = true;
     if (CB_VALUE_OPTIONS.has(w)) { n++; continue; }
     if (CB_QUERY_FLAGS.has(w)) return false;
   }
-  return true;
+  return !bareCbc || codebuddyOption;
 }
 
 function piRunsModel(words) {
@@ -136,7 +138,7 @@ function callsAgentDirectly(command) {
     else continue;
     const words = dropRedirects(rest).map((t) => t.replace(/^["']|["']$/g, ''));
     if (agy) { if (agyRunsModel(words)) return true; continue; }
-    if (codebuddy) { if (codebuddyRunsModel(words)) return true; continue; }
+    if (codebuddy) { if (codebuddyRunsModel(words, /^cbc(?:\.exe|\.cmd|\.ps1)?$/.test(first))) return true; continue; }
     if (pi) {
       if (piRunsModel(words)) return true;
       continue;

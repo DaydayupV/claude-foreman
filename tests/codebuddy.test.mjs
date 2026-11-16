@@ -66,7 +66,7 @@ test('讨论：只读工具白名单、MCP 隔离、事件翻译、用量和费�
   assert.equal(r.readonly, 'tools');
   assert.equal(r.changes.available, false);
   assert.equal(r.changes.note, M.codebuddyNoChanges);
-  // result.usage is the per-call total; assistant fragments are only a fallback.
+  // On a new session result.usage is also the first call's total.
   assert.deepEqual(r.usage, { input_tokens: 30, cached_input_tokens: 9, output_tokens: 15, reasoning_output_tokens: 0 });
   assert.equal(r.cost_usd, null);
   assert.equal(r.cost_source, 'unknown');
@@ -104,6 +104,38 @@ test('讨论：没有最终用量快照时按 assistant message id 去重', asyn
   ] });
   const r = output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'cb']), { env: s.env, input: '议题' }));
   assert.deepEqual(r.usage, { input_tokens: 10, cached_input_tokens: 3, output_tokens: 5, reasoning_output_tokens: 0 });
+  assert.equal(h.events(r.run_id).filter(e => e.type === 'step.usage').length, 1);
+});
+
+test('续接：没有 turnUsage 时忽略 session 总用量，只算本轮 assistant', async (t) => {
+  const h = sandbox(t);
+  configure(h, {}, (c) => { c.modules.default.discuss.complex = [{ agent: 'cb' }]; });
+  const s = h.scenario({ resumed_result_usage: { input_tokens: 10000, cache_read_input_tokens: 5000, output_tokens: 900 } });
+  const first = output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'cb']), { env: s.env, input: '第一轮' }));
+  const resumed = output(await h.bridge(['resume', '--run', first.run_id, '--level', 'complex', '--brief', '-'], { env: s.env, input: '第二轮' }));
+  assert.equal(argsOf(runs(s)[1], '--resume'), 'synthetic-codebuddy-session');
+  assert.deepEqual(resumed.usage, first.usage);
+  assert.equal(resumed.usage_scope, 'this_run');
+});
+
+test('用量：turnUsage 快照优先于 session 总量和 assistant 片段', async (t) => {
+  const h = sandbox(t);
+  configure(h, {}, (c) => { c.modules.default.discuss.complex = [{ agent: 'cb' }]; });
+  const s = h.scenario({ result_usage: { input_tokens: 10000, output_tokens: 900 }, turn_usage: { input_tokens: 17, cache_read_input_tokens: 4, output_tokens: 8 } });
+  const r = output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'cb']), { env: s.env, input: '议题' }));
+  assert.deepEqual(r.usage, { input_tokens: 17, cached_input_tokens: 4, output_tokens: 8, reasoning_output_tokens: 0 });
+});
+
+test('实时用量：同一消息先发零用量 thinking，随后工具片段补齐用量，只发送一次', async (t) => {
+  const h = sandbox(t);
+  configure(h, {}, c => { c.modules.default.discuss.complex = [{ agent: 'cb' }]; });
+  const s = h.scenario({ thinking_fragments: true, tool_calls: [{ type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: 'a.txt' } }] });
+  const r = output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'cb']), { env: s.env, input: '议题' }));
+  const steps = h.events(r.run_id).filter(e => e.type === 'step.usage');
+  assert.equal(steps.length, 2);
+  assert.deepEqual(steps.map(e => e.usage.input_tokens), [10, 10]);
+  assert.equal(steps[0].final, undefined);
+  assert.equal(steps[1].final, true);
 });
 
 test('审查：补丁材料、只读工具，审查不能续接', async (t) => {
@@ -152,9 +184,13 @@ for (const access of ['edit', 'shell']) test(`执行（${access}）：工具白�
   const r = output(execution), call = runs(s)[0];
   assert.equal(call.args[call.args.indexOf('--tools') + 1], (access === 'shell' ? shellTools : editTools).join(','));
   if (access === 'edit') {
-    assert.equal(argsOf(call, '--permission-mode'), 'acceptEdits');
+    assert.equal(argsOf(call, '--permission-mode'), 'dontAsk');
     assert.equal(argsOf(call, '--allowedTools'), 'Write(./**),Edit(./**)');
     assert.ok(!call.args.includes('-y'));
+    const hooks = JSON.parse(argsOf(call, '--settings')).hooks.PreToolUse;
+    assert.equal(hooks[0].matcher, 'Write|Edit');
+    assert.ok(hooks[0].hooks[0].command.includes('codebuddy-guard.mjs'));
+    assert.ok(hooks[0].hooks[0].command.includes(h.cwd.replaceAll('\\', '/')));
   }
   if (access === 'shell') assert.ok(call.args.includes('-y'));
   assert.equal(r.status, 'done');
@@ -192,7 +228,7 @@ test('执行：失败的 Write 带调用 ID 和失败码，不获得改动归属
 test('执行报告不合格时，同一会话、不给工具修复一次，用量累加', async (t) => {
   const h = sandbox(t);
   configure(h, { run_access: 'edit' }, (c) => { c.modules.default.run.complex = { agent: 'cb' }; });
-  const s = h.scenario({ calls: [{ last_message: 'not json', no_structured: true }, { structured: report }] });
+  const s = h.scenario({ calls: [{ last_message: 'not json', no_structured: true }, { structured: report, result_usage: { input_tokens: 20, output_tokens: 10 } }] });
   const r = output(await h.bridge(taskArgs(h), { env: s.env, input: '任务' }));
   assert.deepEqual(r.report, report);
   const [first, second] = runs(s);
@@ -225,6 +261,100 @@ test('取消：运行中的 CodeBuddy 子进程会响应 cancel 标记', async (
   const cancelled = await h.bridge(['cancel', '--run', meta.id]);
   assert.equal(output(cancelled, cancelled.code).status, 'cancelled');
   assert.equal(output(await running.done, 1).status, 'cancelled');
+});
+
+test('额度用尽映射 quota_exhausted；超时会终止运行中的 CLI', async (t) => {
+  const h = sandbox(t);
+  configure(h, {}, (c) => { c.modules.default.discuss.complex = [{ agent: 'cb' }]; });
+  const quota = output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'cb']), { env: h.scenario({ quota_exhausted: true }).env, input: '议题' }), 1);
+  assert.equal(quota.status, 'quota_exhausted');
+  const timed = output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'cb', '--timeout', '0.02']), { env: h.scenario({ hold: true }, 'timeout').env, input: '议题' }), 1);
+  assert.equal(timed.status, 'timeout');
+});
+
+for (const [label, settings] of Object.entries({
+  allow: { permissions: { allow: ['Read(~/outside/**)'] } },
+  additionalDirectories: { permissions: { additionalDirectories: ['../outside'] } },
+  hooks: { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo unsafe' }] }] } },
+  malformed: '{broken',
+})) test(`用户设置（${label}）：拒绝扩大目录边界，报错包含文件路径`, async (t) => {
+  const h = sandbox(t);
+  configure(h, {}, (c) => { c.modules.default.discuss.complex = [{ agent: 'cb' }]; });
+  const file = path.join(h.home, '.codebuddy/settings.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, typeof settings === 'string' ? settings : JSON.stringify(settings));
+  const s = h.scenario();
+  const r = output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'cb']), { env: s.env, input: '议题' }), 1);
+  assert.equal(r.status, 'failed');
+  assert.ok(r.errors.some(error => error.includes(file)), JSON.stringify(r.errors));
+  assert.equal(runs(s).length, 0);
+  const checked = output(await h.bridge(['check', '--agent', 'cb'], { env: s.env }), 1);
+  assert.equal(checked.agents.cb.ok, false);
+  assert.ok(checked.agents.cb.error.includes(file));
+});
+
+test('独立 CodeBuddy 配置目录同样检查；空权限规则和 deny 可正常运行', async (t) => {
+  const h = sandbox(t);
+  configure(h, {}, (c) => { c.modules.default.discuss.complex = [{ agent: 'cb' }]; });
+  const custom = path.join(h.home, 'custom-codebuddy');
+  fs.mkdirSync(custom);
+  const file = path.join(custom, 'settings.json');
+  fs.writeFileSync(file, JSON.stringify({ permissions: { additionalDirectories: ['/outside'] } }));
+  const s = h.scenario();
+  const env = { ...s.env, CODEBUDDY_CONFIG_DIR: custom };
+  const refused = output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'cb']), { env, input: '议题' }), 1);
+  assert.ok(refused.errors.some(error => error.includes(file)));
+  fs.writeFileSync(file, JSON.stringify({ permissions: { allow: [], additionalDirectories: [], deny: ['Read(./secret)'] }, hooks: {} }));
+  assert.equal(output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'cb']), { env, input: '议题' })).status, 'done');
+});
+
+test('显式 bin：npm 无扩展入口和 node shebang 用 node，原生文件直接启动', async (t) => {
+  const h = sandbox(t);
+  const { default: adapter } = await import(pathToFileURL(path.join(SCRIPTS, 'adapters/codebuddy-cli.mjs')));
+  const entry = path.join(h.home, 'node_modules/@tencent-ai/codebuddy-code/bin/codebuddy');
+  assert.deepEqual(adapter.locate({ bin: entry }), { file: process.execPath, pre: [entry] });
+  const shebang = path.join(h.home, 'custom-codebuddy');
+  fs.writeFileSync(shebang, '#!/usr/bin/env node\nconsole.log("ok");\n');
+  assert.deepEqual(adapter.locate({ bin: shebang }), { file: process.execPath, pre: [shebang] });
+  const native = path.join(h.home, 'native-codebuddy');
+  fs.writeFileSync(native, Buffer.from([0x7f, 0x45, 0x4c, 0x46]));
+  assert.deepEqual(adapter.locate({ bin: native }), { file: native, pre: [] });
+});
+
+test('edit 守卫：限制真实路径，拒绝目录穿越、junction、坏链接和权限配置写入', async (t) => {
+  const h = sandbox(t);
+  const { editDecision } = await import(pathToFileURL(path.join(SCRIPTS, 'adapters/codebuddy-guard.mjs')));
+  const decide = file => editDecision(h.cwd, { tool_name: 'Write', tool_input: { file_path: file } }).allow;
+  assert.equal(decide('new.txt'), true);
+  assert.equal(decide(path.join(h.cwd, 'nested/new.txt')), true);
+  assert.equal(decide('../outside.txt'), false);
+  assert.equal(decide(path.join(h.home, 'outside.txt')), false);
+  assert.equal(decide('.git/config'), false);
+  assert.equal(decide('.codebuddy/settings.json'), false);
+  assert.equal(decide(''), false);
+  assert.equal(editDecision(null, {}).allow, false);
+  const outside = path.join(h.home, 'outside');
+  fs.mkdirSync(outside);
+  fs.symlinkSync(outside, path.join(h.cwd, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
+  assert.equal(decide('escape/new.txt'), false);
+  fs.mkdirSync(path.join(h.cwd, '.codebuddy'));
+  fs.symlinkSync(path.join(h.cwd, '.codebuddy'), path.join(h.cwd, 'settings-alias'), process.platform === 'win32' ? 'junction' : 'dir');
+  assert.equal(decide('settings-alias/settings.json'), false);
+  fs.symlinkSync(path.join(h.home, 'not-created'), path.join(h.cwd, 'dangling'), process.platform === 'win32' ? 'junction' : 'dir');
+  assert.equal(decide('dangling/new.txt'), false);
+});
+
+for (const rule of ['deny', 'ask']) test(`edit 守卫不会覆盖用户 ${rule} 规则`, async (t) => {
+  const h = sandbox(t);
+  configure(h, { run_access: 'edit' }, c => { c.modules.default.run.complex = [{ agent: 'cb' }]; });
+  const file = path.join(h.home, '.codebuddy/settings.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ permissions: { [rule]: ['Edit(./private/**)'] } }));
+  const s = h.scenario();
+  const r = output(await h.bridge(taskArgs(h), { env: s.env, input: '任务' }), 1);
+  assert.equal(r.status, 'failed');
+  assert.ok(r.errors.some(error => error.includes(file) && error.includes(`permissions.${rule}`)));
+  assert.equal(runs(s).length, 0);
 });
 
 test('check：版本、清单、最小请求，推理强度按清单核对', async (t) => {
@@ -270,9 +400,12 @@ test('models 列出 codebuddy 的清单并核对配置', async (t) => {
 test('拦截钩子：拦下直接用 codebuddy 跑任务，放行查询和管理子命令', async (t) => {
   const h = sandbox(t);
   for (const command of ['codebuddy -p "review the diff"', 'cbc -p hi', 'codebuddy --model fake-1 hi', 'codebuddy --append-system-prompt "--help" -p hi', 'npx @tencent-ai/codebuddy-code -p hi',
-    'node "$APPDATA/npm/node_modules/@tencent-ai/codebuddy-code/bin/codebuddy" -p hi', 'codebuddy > out.txt -p hi'])
+    'node "$APPDATA/npm/node_modules/@tencent-ai/codebuddy-code/bin/codebuddy" -p hi', 'codebuddy > out.txt -p hi',
+    "codebuddy model.lp --append-system-prompt '-solve' -p", "cbc model.lp --append-system-prompt '-solve' -p",
+    'codebuddy model.lp -solve', 'npx @tencent-ai/codebuddy-code model.lp -solve',
+    'node /npm/node_modules/@tencent-ai/codebuddy-code/bin/codebuddy model.lp -solve', 'cbc -- "run a task"'])
     assert.equal((await h.hook('guard-direct-calls.mjs', { tool_input: { command } })).code, 2, command);
-  for (const command of ['codebuddy --version', 'codebuddy --help', 'cbc config set -g theme dark', 'codebuddy update', 'codebuddy mcp list', 'cbc model.mps -solve', 'echo codebuddy -p hi'])
+  for (const command of ['codebuddy --version', 'codebuddy --help', 'codebuddy -c --help', 'cbc config set -g theme dark', 'codebuddy update', 'codebuddy mcp list', 'cbc model.mps -solve', 'cbc -import model.mps -solve', 'cbc model.mps.gz -solve', 'echo codebuddy -p hi'])
     assert.equal((await h.hook('guard-direct-calls.mjs', { tool_input: { command } })).code, 0, command);
 });
 

@@ -146,13 +146,16 @@ It can only take part in discussions and reviews: `run_access` isn't accepted, a
 | `max_parallel` | Optional; `4` by default |
 | `run_access` | Optional, same as opencode: `"edit"` or `"shell"`, only in the user config. Without it the agent can only take part in discussions and reviews and can't go in `run` or `draw` cells or be named for hands-on work |
 
-Signing in and the model list are up to codebuddy's own account (`/login` inside codebuddy); the plugin doesn't touch them. Discussions and reviews use `dontAsk` with user settings; hands-on `edit` uses `acceptEdits` for project-local file tools; `shell` has no OS sandbox. Every call the script makes:
+Signing in and the model list are up to codebuddy's own account (`/login` inside codebuddy); the plugin doesn't touch them. Discussions, reviews and `edit` use `dontAsk`, independently of `acceptEdits`; `shell` has no OS sandbox. Every call the script makes:
 - opens only the tools this task needs: `Read`, `Glob` and `Grep` for discussions and reviews; `Write` and `Edit` added for `edit`, plus `Bash` and `PowerShell` for `shell`;
-- keeps discussion and review reads under CodeBuddy's trusted project-directory rules, and allows `edit` writes only under the current project (`Write(./**)`, `Edit(./**)`);
+- confines discussion and review `Read`, `Grep` and `Glob` to the project. `edit` adds `Write(./**)`, `Edit(./**)` and an injected `PreToolUse` path guard: both the lexical path and resolved real path must stay inside the project; new files are checked through their nearest real parent. Changes to `.git` and `.codebuddy` are not authorized;
 - passes `--strict-mcp-config`, so no MCP servers load and the model can't reach the tools you configured there;
 - passes `--setting-sources user`, so project and local settings and their hooks aren't loaded;
+- checks `~/.codebuddy/settings.json` before calling the model (or `settings.json` under `CODEBUDDY_CONFIG_DIR`). Non-empty `permissions.allow`, `permissions.additionalDirectories`, or `hooks`, and unreadable settings, refuse startup with the file path. Because edit hook approvals precede native permission rules, `edit` also refuses non-empty `permissions.deny` and `permissions.ask` rather than overriding the user's restrictions. Use a clean separate CodeBuddy config or another agent; do not modify these files for the user;
 - gets the report through codebuddy's native `--json-schema` structured output (the `StructuredOutput` tool goes into the allowlist only on a round that has to produce a report); if the service still returns an invalid report, the script uses the common one repair round in the same session;
 - keeps the session in codebuddy's own history; resume uses `--resume`.
+
+Real 2.180.0 probes found that empty `--setting-sources ""` falls back to the default scopes and cannot disable user settings. On Windows the scoped allow rules alone also deny project-local writes, so the guard explicitly approves safe edit paths while retaining `dontAsk` and those rules. A failed guard grants no additional approval. Resumed and report-repair calls use per-turn `turnUsage`, falling back to deduplicated assistant messages, never the cumulative `result.usage`.
 
 Both hands-on levels take a change snapshot before they start; `shell` commands still run with the current account's permissions.
 

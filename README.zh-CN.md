@@ -374,7 +374,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 1. **登录**：在终端运行 `codebuddy`，用 `/login` 登录，再运行 `codebuddy --help`，看 "Currently supported" 里有哪些模型。
 2. **加进配置**：一个模型一条，`{ "type": "codebuddy cli", "model": "deepseek-v4.1-flash" }`。想让它也能执行，再加 `"run_access": "edit"`（或 `"shell"`），然后把代号写进要用的格子。
 
-- 讨论和审查用 `dontAsk` 权限模式与用户级设置，不加载项目配置和 hooks；读文件遵守项目目录权限。执行的 `edit` 用 `acceptEdits` 模式开放项目内的 `Write`/`Edit`，`shell` 还能运行命令且没有系统沙箱。`--strict-mcp-config` 不加载 MCP 服务器。
+- 讨论、审查和 `edit` 都用 `dontAsk`，不加载项目和本地设置及 hooks。用户设置有权限 allow 规则、额外可信目录或 hooks 时拒绝启动，并写明配置文件路径。只能读项目内文件；`edit` 用项目内 `Write`/`Edit` 规则加路径守卫，展开符号链接后只批准项目内编辑，保护 `.git` 和 `.codebuddy`。`edit` 还会拒绝用户 deny/ask 规则，避免钩子批准覆盖这些限制。`shell` 还能运行命令且没有系统沙箱。`--strict-mcp-config` 不加载 MCP 服务器。
 - 报告走 codebuddy 原生的 `--json-schema` 结构化输出；若服务端仍返回无效报告，脚本会在同一会话里按通用流程修复一次。
 - `effort` 是 `minimal` 到 `max`，作为 `--effort` 传进去。`codebuddy --help` 只列模型、不列档位，所以 `check` 只能核对是不是这六档之一；模型实际不支持的档位可能被换成最接近的一档。
 

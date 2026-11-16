@@ -146,13 +146,16 @@
 | `max_parallel` | 可选，默认 `4` |
 | `run_access` | 可选，和 opencode 一样：`"edit"` 或 `"shell"`，只能写在用户配置里。不写就只能参加讨论和审查，不能放进 `run` 和 `draw` 格子，也不能被点名派执行 |
 
-登录和可用模型由 codebuddy 自己的账号管（在 codebuddy 里 `/login`），插件不碰。讨论和审查用 `dontAsk` 加用户级设置；执行的 `edit` 用 `acceptEdits` 模式开放项目内文件工具；`shell` 没有系统沙箱。脚本每次调用都：
+登录和可用模型由 codebuddy 自己的账号管（在 codebuddy 里 `/login`），插件不碰。讨论、审查和 `edit` 都用 `dontAsk`，不依赖 `acceptEdits`；`shell` 没有系统沙箱。脚本每次调用都：
 - 只开放这次任务需要的工具：讨论和审查只有 `Read`、`Glob`、`Grep`；执行的 `edit` 档再加 `Write`、`Edit`，`shell` 档再加 `Bash`、`PowerShell`；
-- 讨论和审查的读操作遵守 CodeBuddy 的项目可信目录权限，`edit` 的写操作只允许当前项目目录（`Write(./**)`、`Edit(./**)`）；
+- 讨论和审查的 `Read`、`Grep`、`Glob` 只允许当前项目。`edit` 用 `Write(./**)`、`Edit(./**)` 加注入的 `PreToolUse` 路径守卫；只有词法路径和展开符号链接后的真实路径都在项目内才批准，尚未存在的文件按最近的真实父目录检查；不批准 `.git`、`.codebuddy` 的修改；
 - 用 `--strict-mcp-config` 不加载任何 MCP 服务器，所以模型看不到你配的那些工具；
 - 用 `--setting-sources user` 不加载项目和本地 settings，也不加载其中的 hooks；
+- 启动模型前检查 `~/.codebuddy/settings.json`（设置了 `CODEBUDDY_CONFIG_DIR` 时检查其中的 `settings.json`）；有非空 `permissions.allow`、`permissions.additionalDirectories` 或 `hooks`，或文件无法解析时拒绝启动并写明路径。`edit` 的守卫批准先于原生权限规则，因此还会拒绝非空 `permissions.deny`、`permissions.ask`，避免覆盖用户的额外限制。换用干净的独立 CodeBuddy 配置或其他协作方，不要替用户修改这些文件；
 - 报告走它原生的 `--json-schema` 结构化输出（`StructuredOutput` 工具只在这一轮要输出报告时放进白名单）；如果服务端仍返回无效报告，脚本会按通用流程在同一会话再修一次；
 - 会话存在 codebuddy 自己的历史里，续接用 `--resume`。
+
+CodeBuddy 2.180.0 实测：空 `--setting-sources ""` 会回退到默认作用域，不能用来禁用用户设置；Windows 上仅靠 `Write(./**)`、`Edit(./**)` 会连项目内写入一起拒绝，所以 `edit` 由守卫明确批准合法路径，仍保持 `dontAsk` 和路径规则。守卫失败时没有额外批准，不会放宽规则。续接和修复报告的用量优先按本轮 `turnUsage` 统计；缺少时按去重的 assistant 消息统计，不使用累计的 `result.usage`。
 
 `edit` 和 `shell` 都必须先拍改动快照才开始；`shell` 的命令仍以当前账户权限运行。
 

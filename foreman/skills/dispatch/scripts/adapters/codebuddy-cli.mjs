@@ -2,6 +2,8 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA } from '../config.mjs';
 import { MAX_REVIEW_CHARS, reviewPatchText } from '../review-scope.mjs';
 import { newRunDir, isCancelled, cancelSource, announceBoard } from '../records.mjs';
@@ -13,11 +15,39 @@ import { D, modelLabel, toolLabel } from '../format.mjs';
 function codebuddyCommand(agent = {}) {
   if (agent.bin) {
     if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(agent.bin)) return binCommand(agent.bin);
-    return /\.[cm]?js$/i.test(agent.bin) ? { file: process.execPath, pre: [agent.bin] } : binCommand(agent.bin);
+    return nodeEntry(agent.bin) ? { file: process.execPath, pre: [agent.bin] } : binCommand(agent.bin);
   }
   const entry = npmEntry('@tencent-ai', 'codebuddy-code', 'bin', 'codebuddy');
   if (entry) return { file: process.execPath, pre: [entry] };
   return pathCommand('codebuddy');
+}
+
+function nodeEntry(file) {
+  if (/\.[cm]?js$/i.test(file) || /(?:^|\/)@tencent-ai\/codebuddy-code\/bin\/codebuddy$/i.test(file.replaceAll('\\', '/'))) return true;
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const head = Buffer.alloc(256);
+    const size = fs.readSync(fd, head, 0, head.length, 0);
+    return /^#![^\r\n]*\bnode(?:\s|$)/.test(head.toString('utf8', 0, size).split('\n')[0]);
+  } catch { return false; }
+  finally { if (fd != null) fs.closeSync(fd); }
+}
+
+// An empty --setting-sources falls back to all scopes in 2.180.0. Keep user sign-in/settings,
+// but refuse rules or hooks that could widen the project boundary before starting the CLI.
+function unsafeUserSettings(edit = false) {
+  const file = path.resolve(process.env.CODEBUDDY_CONFIG_DIR || path.join(os.homedir(), '.codebuddy'), 'settings.json');
+  let settings;
+  try { settings = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
+  catch (error) { return error.code === 'ENOENT' ? null : M.codebuddyUnsafeSettings(file, 'unreadable settings'); }
+  const present = (value) => value != null && (Array.isArray(value) ? value.length > 0 : isObject(value) ? Object.keys(value).length > 0 : !!value);
+  const rules = ['allow', 'additionalDirectories'].filter(key => present(settings?.permissions?.[key])).map(key => `permissions.${key}`);
+  // Hook approvals precede the CLI's deny/ask rules. Refuse these on edit calls
+  // rather than silently overriding a user's more restrictive file policy.
+  if (edit) for (const key of ['deny', 'ask']) if (present(settings?.permissions?.[key])) rules.push(`permissions.${key}`);
+  if (present(settings?.hooks)) rules.push('hooks');
+  return rules.length ? M.codebuddyUnsafeSettings(file, rules.join(', ')) : null;
 }
 
 const LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -30,14 +60,20 @@ const capabilities = { modes: ['run', 'review', 'discuss'], isolation: 'tools', 
   native_review: false, images: false, resume: true, command_start_events: false };
 
 // --json-schema 只在结构化输出工具可用时才生效：不把它放进白名单，模型拿不到这个工具，只会把 JSON 写在正文里。
-function codebuddyArgs({ model, effort, access, session, schema, ephemeral = false }) {
+function codebuddyArgs({ model, effort, access, session, schema, ephemeral = false, cwd }) {
   const args = ['-p', '--output-format', 'stream-json', '--strict-mcp-config', '--setting-sources', 'user'];
   if (model) args.push('--model', model);
   if (effort != null && effort !== 'default') args.push('--effort', effort);
   if (schema) args.push('--json-schema', typeof schema === 'string' ? schema : JSON.stringify(schema));
   args.push('--tools', [...new Set([...(TOOLS[access] ?? TOOLS.read), ...(schema ? ['StructuredOutput'] : [])])].join(','));
   if (access === 'shell') args.push('-y');
-  else if (access === 'edit') args.push('--permission-mode', 'acceptEdits', '--allowedTools', 'Write(./**),Edit(./**)');
+  else if (access === 'edit') {
+    args.push('--permission-mode', 'dontAsk', '--allowedTools', 'Write(./**),Edit(./**)');
+    const quote = value => "'" + value.replaceAll('\\', '/').replaceAll("'", "'\\''") + "'";
+    const guard = fileURLToPath(new URL('./codebuddy-guard.mjs', import.meta.url));
+    const command = [process.execPath, guard, cwd].map(quote).join(' ');
+    args.push('--settings', JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Write|Edit', hooks: [{ type: 'command', command }] }] } }));
+  }
   else args.push('--permission-mode', 'dontAsk');
   if (session) args.push('--resume', session);
   if (ephemeral) args.push('--no-session-persistence');
@@ -50,6 +86,8 @@ function runCodebuddy({ agent, args, cwd, prompt = '', timeoutMs = 120000, stall
     const out = { code: null, status: null, stdout: '', stderrTail: '', text: '', errors: [], events: 0, messages: [], questions: [],
       usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 }, cost: 0,
       structured: null, sessionId: null, isError: false };
+    const settingsError = args.includes('-p') ? unsafeUserSettings(args.includes('--settings')) : null;
+    if (settingsError) { out.status = 'failed'; out.errors.push(settingsError); resolve(out); return; }
     const assistantUsage = new Map(), usageStages = new Map();
     let usageSnapshot = null, anonymousUsageId = 0, stopped = false, child;
     const deadline = Date.now() + Math.max(1, timeoutMs);
@@ -100,7 +138,9 @@ function runCodebuddy({ agent, args, cwd, prompt = '', timeoutMs = 120000, stall
       } else if (ev.type === 'result') {
         out.isError = ev.is_error === true || (ev.subtype != null && ev.subtype !== 'success');
         if (isObject(ev.structured_output)) out.structured = ev.structured_output;
-        if (isObject(ev.usage)) {
+        // result.usage is session-cumulative; on resume only per-turn events or
+        // assistant messages belong to this call (including report-repair rounds).
+        if (!args.includes('--resume') && isObject(ev.usage)) {
           usageSnapshot = ev.usage;
           refreshUsage();
         }
@@ -235,7 +275,8 @@ async function codebuddySession(run, schema, access) {
   const usage = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 };
   const fileChanges = new Set();
   const pendingTools = new Map(), deniedTools = new Set();
-  let anonymousToolId = 0;
+  const emittedUsage = new Set(), pendingUsage = new Map();
+  let anonymousToolId = 0, anonymousStepId = 0;
   let cost = 0, commands = 0, repairing = false, last = '';
 
   const completeTool = (id, call, result, denied = false) => {
@@ -279,6 +320,18 @@ async function codebuddySession(run, schema, access) {
     pendingTools.clear();
   };
 
+  // Thinking fragments in 2.180.0 carry zero usage; the later tool/text fragment
+  // with the same id has the final numbers. Emit only after that message ends.
+  const flushUsage = (except) => {
+    for (const [id, value] of pendingUsage) {
+      if (id === except) continue;
+      pendingUsage.delete(id);
+      if (emittedUsage.has(id)) continue;
+      emittedUsage.add(id);
+      event({ type: 'step.usage', ...(value.tools ? {} : { final: true }), usage: sumUsage([value.usage]) });
+    }
+  };
+
   const translate = (ev) => {
     if (ev.session_id && !meta.session_id) {
       meta.session_id = ev.session_id;
@@ -287,6 +340,8 @@ async function codebuddySession(run, schema, access) {
     }
     if (ev.type === 'assistant') {
       const blocks = ev.message?.content || [];
+      const usageId = ev.message?.id || `anonymous-${++anonymousStepId}`;
+      flushUsage(usageId);
       for (const block of blocks) {
         if (block.type === 'thinking' && block.thinking) event({ type: 'item.completed', item: { type: 'reasoning', text: block.thinking } });
         if (block.type === 'text' && block.text) { last = block.text; event({ type: 'item.completed', item: { type: 'agent_message', text: block.text } }); }
@@ -296,12 +351,9 @@ async function codebuddySession(run, schema, access) {
         }
       }
       const u = ev.message?.usage;
-      if (u) event({ type: 'step.usage', ...(blocks.some((b) => b.type === 'tool_use') ? {} : { final: true }),
-        usage: { input_tokens: u.input_tokens ?? ((u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0)),
-          cached_input_tokens: u.cache_read_input_tokens || 0,
-          ...(u.cache_creation_input_tokens ? { cache_write_input_tokens: u.cache_creation_input_tokens } : {}),
-          output_tokens: u.output_tokens || 0, reasoning_output_tokens: 0 } });
+      if (u) pendingUsage.set(usageId, { usage: u, tools: pendingUsage.get(usageId)?.tools || blocks.some(b => b.type === 'tool_use') });
     } else if (ev.type === 'user') {
+      flushUsage();
       for (const result of ev.message?.content || []) {
         if (result.type !== 'tool_result') continue;
         const id = String(result.tool_use_id ?? '');
@@ -311,6 +363,7 @@ async function codebuddySession(run, schema, access) {
         completeTool(id, call, result);
       }
     } else if (ev.type === 'result') {
+      flushUsage();
       for (const denial of ev.permission_denials || []) {
         const id = String(denial.tool_use_id || '');
         deniedTools.add(id);
@@ -329,8 +382,11 @@ async function codebuddySession(run, schema, access) {
     if (Date.now() >= deadline) { meta.status = 'timeout'; return null; }
     // 修报告格式时沿用同一个会话，但不给任何读文件的工具。
     const current = repairing ? 'none' : access;
-    const out = await runCodebuddy({ agent, args: codebuddyArgs({ model, effort, access: current, session: meta.session_id, schema }),
+    emittedUsage.clear();
+    pendingUsage.clear();
+    const out = await runCodebuddy({ agent, args: codebuddyArgs({ model, effort, access: current, session: meta.session_id, schema, cwd }),
       cwd, prompt: nextPrompt, runDir: dir, onEvent: translate, timeoutMs: deadline - Date.now(), stallMin });
+    flushUsage();
     finishPendingTools();
     errors.push(...out.errors);
     observed.questions.push(...out.questions);

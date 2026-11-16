@@ -12,9 +12,11 @@ const turnUsage = () => ({ input_tokens: s.usage?.input ?? 10, output_tokens: s.
 let assistantCount = 0;
 const assistant = (content) => {
   assistantCount++;
-  emit({ type: 'assistant', message: { role: 'assistant', id: s.assistant_id || `assistant-${assistantCount}`, content, usage: turnUsage() } });
+  const id = s.assistant_id || `assistant-${assistantCount}`;
+  if (s.thinking_fragments) emit({ type: 'assistant', message: { role: 'assistant', id, content: [{ type: 'thinking', thinking: 'synthetic thinking' }], usage: { input_tokens: 0, output_tokens: 0 } } });
+  emit({ type: 'assistant', message: { role: 'assistant', id, content, usage: turnUsage() } });
 };
-const totalUsage = () => s.result_usage === null ? null : s.result_usage || {
+const totalUsage = () => s.result_usage === null ? null : s.result_usage || (args.includes('--resume') ? s.resumed_result_usage : null) || {
   input_tokens: (turnUsage().input_tokens || 0) * assistantCount,
   output_tokens: (turnUsage().output_tokens || 0) * assistantCount,
   cache_read_input_tokens: (turnUsage().cache_read_input_tokens || 0) * assistantCount,
@@ -31,6 +33,8 @@ else if (operation === 'help') {
     emit({ type: 'result', subtype: 'error_during_execution', is_error: true, result: '429 synthetic: request reached max organization concurrency: 1',
       usage: turnUsage(), errors: ['429 synthetic: request reached max organization concurrency: 1'], permission_denials: [] });
     process.exitCode = s.exit_code ?? 0;
+  } else if (s.quota_exhausted) {
+    emit({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['RESOURCE_EXHAUSTED: quota exhausted'], permission_denials: [] });
   } else {
     emit({ type: 'system', subtype: 'init', tools: ['Read', 'Glob', 'Grep'] });
     await replay(s.steps);
@@ -51,6 +55,7 @@ else if (operation === 'help') {
       const text = s.last_message ?? (structured ? JSON.stringify(structured) : 'OK');
       assistant([{ type: 'text', text }]);
       emit({ type: 'result', subtype: 'success', is_error: false, result: text, ...(totalUsage() ? { usage: totalUsage() } : {}),
+        ...(s.turn_usage ? { _meta: { 'codebuddy.ai/turnUsage': { kind: 'snapshot', total: { usage: s.turn_usage } } } } : {}),
         ...(structured ? { structured_output: structured } : {}),
         permission_denials: (s.denied || []).map((denial, index) => ({ tool_name: denial.tool, tool_use_id: denial.id || `denied-${index}`,
           tool_input: denial.input || {} })) });
