@@ -13,15 +13,16 @@ node server.mjs [--runs <dir>] [--port <n>] [--idle-min <m>]
 - Prints exactly one line to stdout, then keeps serving:
   `board: http://127.0.0.1:<port>/<token>/?<query>` where `<query>` carries the scope options given (`group=…`, `run=…`, `replay=…&speed=…&maxgap=…`), empty for the default scope.
 - One server per machine. Lock file `<runs>/board.lock.json`: `{ "v": 1, "pid", "port", "token", "started_at", "build" }`, created with exclusive create and mode 0600; the port is filled in later by writing a temporary file and renaming it over the lock. `build` is the first 16 hex digits of a sha256 over the board files (`build-id.mjs`), so two installs with the same files share one server and an upgraded plugin can tell an old server apart. A second start that finds a lock whose server answers `GET /<token>/health` prints the same line with that port and token followed by ` (reused pid <pid>)` and exits 0.
+- Address file `<runs>/board.address.json`: `{ "v": 1, "port", "token", "created_at" }`, mode 0600. A live server started without `--port` reads it right after creating the lock and reuses its port and token, so links stay the same across restarts. A missing file, unparsable content or bad fields count as no address; any other read error fails the start. When the saved port can't be used (`EADDRINUSE`, or `EACCES` for a port in a range Windows reserves), the server takes a free port and a new token, since the old links can't reach it anyway and whoever holds the old port may have collected the old token from pages reconnecting to it. Once it listens and still holds the lock, the server writes the file (temporary file renamed over it) if it differs from the port and token in use, and every self-check that can read the lock and finds it still its own writes the file again when it holds anything else. With `--port` the file is neither read nor written.
 - A lock is stale when its pid is dead, when its port refuses connections, when it can't be parsed and is older than 3 s, or when its server has not answered for 15 s (a server busy reading records for a few seconds is not stale). Stale locks are removed by renaming them to a unique name first and checking the content; a lock another process just wrote is put back (by hard link, or by renaming back on drives without hard links).
 - Every 15 s the server checks that the lock is still its own: if the lock is gone it writes it again, and if another server's lock is there it exits. So a server that was taken over while busy, or lost its lock in a race, leaves within 15 s and one server remains.
 - If the server fails to start it writes `{"pid", "error"}` to `<runs>/board.err`; `board` reports the error only when the pid is the one it started. `board` removes the file before starting a server, and a successful start removes it too.
-- `--port` defaults to 0 (a free port). `--idle-min` defaults to 5.
+- Without `--port` the server uses the saved port, or a free port when there is none. `--idle-min` defaults to 5.
 
 ## Security
 
 - Listen on `127.0.0.1` only.
-- Token: 32 hex characters (`crypto.randomBytes(16)`). Every route is under `/<token>/`; any other path answers 404 with an empty body.
+- Token: 32 hex characters (`crypto.randomBytes(16)`), kept across restarts in `board.address.json` (see Starting); deleting that file while no server runs gives the next start a new port and token. Every route is under `/<token>/`; any other path answers 404 with an empty body.
 - The `Host` header must be `127.0.0.1:<port>` or `localhost:<port>`; otherwise 403 (guards against DNS rebinding).
 - Only `GET` and `HEAD`; anything else answers 405. No CORS headers.
 - Every response: `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`.
