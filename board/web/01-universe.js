@@ -91,8 +91,8 @@ function connectUniverse() {
   on('project', uProject);
   on('agents', uAgents);
   on('done', () => { U.done = true; U.version++; });
-  es.onopen = () => { U.error = null; U.lostAt = null; U.lostNoticed = false; };
-  // 记下从什么时候开始连不上：服务退出了、或者被新服务接替（地址和口令都变了）时，浏览器会一直重连旧地址
+  es.onopen = () => { U.error = null; U.lostAt = null; U.lostNoticed = false; clearLostNotice(); };
+  // 记下从什么时候开始连不上：服务退出了（下次在同一个地址启动，浏览器会自己重连上），或者换了端口（原来的端口被占）时，浏览器会一直重连旧地址
   es.onerror = () => { U.error = es.readyState === 2 ? 'closed' : 'reconnecting'; U.lostAt ??= performance.now(); };
 }
 

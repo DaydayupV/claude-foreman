@@ -11,4 +11,5 @@ Thumbs.db
 .claude/settings.local.json
 
 tests/fixtures/board/**/board.lock.json
+tests/fixtures/board/**/board.address.json
 tests/fixtures/board/runs-multi/

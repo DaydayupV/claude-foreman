@@ -149,7 +149,134 @@ test('畸形请求返回 400 且服务仍可响应 health', (t) => withBoard(t, 
   assert.equal((await fetch(new URL('health', url))).status, 200);
 }));
 
-test('build 不同的旧服务被结束并替换，链接随之改变', (t) => withBoard(t, async (h, children, lockFile) => {
+test('服务重启后沿用同一个地址', (t) => withBoard(t, async (h, children, lockFile) => {
+  const first = output(await h.bridge(['board'])), addressFile = path.join(h.runs, 'board.address.json');
+  assert.equal(first.started, true);
+  const saved = json(addressFile), mtime = fs.statSync(addressFile).mtimeMs, pid = json(lockFile).pid;
+  assert.deepEqual(output(await h.bridge(['board', '--stop'])), { stopped: true, pid });
+  assert.deepEqual(json(addressFile), saved);
+  const second = output(await h.bridge(['board']));
+  assert.equal(second.started, true);
+  assert.equal(second.url, first.url);
+  const address = json(addressFile), url = new URL(second.url);
+  assert.equal(address.v, 1);
+  assert.equal(address.port, Number(url.port));
+  assert.equal(url.pathname, `/${address.token}/`);
+  assert.deepEqual(address, saved);
+  assert.equal(fs.statSync(addressFile).mtimeMs, mtime);
+}));
+
+test('记下的端口被占时换一个端口和口令，并记下新地址', (t) => withBoard(t, async (h) => {
+  const occupied = http.createServer(), addressFile = path.join(h.runs, 'board.address.json');
+  try {
+    await new Promise((resolve) => occupied.listen(0, '127.0.0.1', resolve));
+    const saved = { v: 1, port: occupied.address().port, token: 'a'.repeat(32), created_at: '2026-10-21T02:21:00.000Z' };
+    write(addressFile, saved);
+    const started = Date.now(), result = output(await h.bridge(['board'])), url = new URL(result.url), address = json(addressFile);
+    assert.equal(result.started, true);
+    assert.notEqual(url.pathname, `/${saved.token}/`);
+    assert.notEqual(Number(url.port), saved.port);
+    assert.match(address.token, /^[a-f0-9]{32}$/);
+    assert.deepEqual(address, { v: 1, port: Number(url.port), token: url.pathname.slice(1, -1), created_at: address.created_at });
+    assert.notEqual(address.created_at, saved.created_at);
+    assert.ok(Date.parse(address.created_at) >= started && Date.parse(address.created_at) <= Date.now());
+    assert.equal((await fetch(new URL('health', url))).status, 200);
+  } finally { await new Promise((resolve) => occupied.close(resolve)); }
+}));
+
+test('地址文件写坏时重新生成', (t) => withBoard(t, async (h) => {
+  const addressFile = path.join(h.runs, 'board.address.json');
+  write(addressFile, '{');
+  const result = output(await h.bridge(['board'])), url = new URL(result.url), address = json(addressFile);
+  assert.equal(result.started, true);
+  assert.equal(address.v, 1);
+  assert.equal(address.port, Number(url.port));
+  assert.match(address.token, /^[a-f0-9]{32}$/);
+  assert.equal(url.pathname, `/${address.token}/`);
+  assert.equal(new Date(address.created_at).toISOString(), address.created_at);
+  assert.equal((await fetch(new URL('health', url))).status, 200);
+}));
+
+test('读不了地址文件时启动失败，不换口令，也不留下空锁', (t) => withBoard(t, async (h, children, lockFile) => {
+  const addressFile = path.join(h.runs, 'board.address.json');
+  write(addressFile, { v: 1, port: 12345, token: 'a'.repeat(32), created_at: '2026-10-21T02:21:00.000Z' });
+  const before = read(addressFile), reason = `cannot read the board address file ${addressFile}: synthetic address read failure`;
+  const preload = write(path.join(h.home, 'busy-address.mjs'), `
+    import fs from 'node:fs';
+    import path from 'node:path';
+    if (path.basename(process.argv[1]) === 'server.mjs') {
+      const read = fs.readFileSync;
+      fs.readFileSync = (file, ...rest) => {
+        if (file === ${JSON.stringify(addressFile)}) throw Object.assign(new Error('synthetic address read failure'), { code: 'EBUSY' });
+        return read(file, ...rest);
+      };
+    }`);
+  const result = await h.bridge(['board'], { env: { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` } });
+  assert.equal(json(path.join(h.runs, 'board.err')).error, reason);
+  failed(result, MESSAGES.zh.boardStartFailed(reason));
+  assert.equal(read(addressFile), before);
+  assert.equal(fs.existsSync(lockFile), false);
+}));
+
+test('显式 --port 不读也不写地址文件', (t) => withBoard(t, async (h, children, lockFile) => {
+  const addressFile = path.join(h.runs, 'board.address.json');
+  const saved = { v: 1, port: 12345, token: 'a'.repeat(32), created_at: '2026-10-21T02:21:00.000Z' };
+  write(addressFile, saved);
+  const before = read(addressFile);
+  const preload = write(path.join(h.home, 'no-read-address.mjs'), `
+    import fs from 'node:fs';
+    const read = fs.readFileSync;
+    fs.readFileSync = (file, ...rest) => {
+      if (file === ${JSON.stringify(addressFile)}) throw new Error('must not read the board address');
+      return read(file, ...rest);
+    };`);
+  const server = startServer(h, children, { env: { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` } }, undefined, ['--port', '0']);
+  await ready(server);
+  const url = new URL(server.stdout.trim().slice('board: '.length));
+  assert.notEqual(url.pathname, `/${saved.token}/`);
+  assert.equal(url.pathname, `/${json(lockFile).token}/`);
+  assert.equal(read(addressFile), before);
+  assert.equal((await fetch(new URL('health', url))).status, 200);
+}));
+
+test('被别人改写的地址文件在自查时写回', (t) => withBoard(t, async (h, children, lockFile) => {
+  const server = startServer(h, children, { env: { FOREMAN_TEST_BOARD_TICK_MS: '100' } });
+  await ready(server);
+  const addressFile = path.join(h.runs, 'board.address.json'), saved = json(addressFile), lock = json(lockFile);
+  write(addressFile, { ...saved, port: 1, token: 'f'.repeat(32), created_at: '2000-01-01T00:00:00.000Z' });
+  await poll(() => { const address = json(addressFile); return address.port === lock.port && address.token === lock.token; }, '地址文件恢复为当前服务');
+  assert.deepEqual(json(addressFile), saved);
+  assert.equal(server.child.exitCode, null);
+}));
+
+test('读不到锁时自查不改写地址文件，读到以后照常写回', (t) => withBoard(t, async (h, children, lockFile) => {
+  const marker = path.join(h.home, 'lock-busy'), addressFile = path.join(h.runs, 'board.address.json');
+  const preload = write(path.join(h.home, 'busy-lock.mjs'), `
+    import fs from 'node:fs';
+    const read = fs.readFileSync;
+    fs.readFileSync = (file, ...rest) => {
+      if (file === ${JSON.stringify(lockFile)} && fs.existsSync(${JSON.stringify(marker)})) throw Object.assign(new Error('synthetic lock read failure'), { code: 'EBUSY' });
+      return read(file, ...rest);
+    };`);
+  const server = startServer(h, children, { env: { FOREMAN_TEST_BOARD_TICK_MS: '100', NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` } });
+  await ready(server);
+  const saved = json(addressFile), other = { ...saved, port: 1, token: 'f'.repeat(32) };
+  write(marker, '');
+  write(addressFile, other);
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  assert.deepEqual(json(addressFile), other);
+  assert.equal(server.child.exitCode, null);
+  fs.rmSync(marker);
+  await poll(() => json(addressFile).token === saved.token, '地址文件恢复为当前服务');
+  assert.deepEqual(json(addressFile), saved);
+}));
+
+test('页面带上服务的 build', (t) => withBoard(t, async (h, children, lockFile) => {
+  const result = output(await h.bridge(['board'])), html = await (await fetch(result.url)).text();
+  assert.ok(html.includes(`window.__BOARD_BUILD__ = '${json(lockFile).build}';`));
+}));
+
+test('build 不同的旧服务被结束并替换，链接不变', (t) => withBoard(t, async (h, children, lockFile) => {
   const oldDir = path.join(h.home, 'old-scripts/board');
   // 保留旧服务的实际依赖树，避免共用显示模块新增后只复制入口导致启动失败。
   fs.cpSync(path.dirname(boardDir), path.dirname(oldDir), { recursive: true });
@@ -165,7 +292,8 @@ test('build 不同的旧服务被结束并替换，链接随之改变', (t) => w
   await old.done;
   assert.equal(result.started, true);
   assert.ok(old.child.exitCode !== null || old.child.signalCode !== null);
-  assert.notEqual(new URL(result.url).pathname, `/${previous.token}/`);
+  assert.equal(Number(new URL(result.url).port), previous.port);
+  assert.equal(new URL(result.url).pathname, `/${previous.token}/`);
   assert.notEqual(json(lockFile).pid, previous.pid);
   assert.equal(json(lockFile).build, buildId(boardDir));
 }));

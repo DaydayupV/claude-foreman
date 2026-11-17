@@ -303,6 +303,15 @@ function scopeQuery() {
 
 const STREAM_STUCK_MS = 8000, STREAM_ASK_MS = 2000;
 let streamsReleased = false;
+// 页面第一次连上以后，每次再连上（断线重连、在后台让出后回到前台、换看别的对话）都问一次服务的 build：
+// 可能是插件更新后在同一个地址启动的新版服务，页面脚本和它不配套，build 不一样就重新加载页面。同一时刻只问一次
+let streamOpened = false, buildCheck = null;
+function checkBoardBuild() {
+  if (buildCheck) return;
+  buildCheck = fetch('health').then((res) => res.json()).then(({ build }) => {
+    if (typeof build === 'string' && build && window.__BOARD_BUILD__ && build !== window.__BOARD_BUILD__) location.reload();
+  }).catch(() => {}).finally(() => { buildCheck = null; });
+}
 // 同主机连接被别的标签页占满时不一定触发 error，初次连接和断线重连都要计时。
 function watchStream(state, es) {
   const wait = () => {
@@ -319,7 +328,10 @@ function watchStream(state, es) {
       }
     }, STREAM_STUCK_MS);
   };
-  es.addEventListener('open', () => { clearTimeout(state.stuckTimer); clearTimeout(state.askTimer); state.stuckTimer = state.askTimer = null; state.stuckNoticed = false; });
+  es.addEventListener('open', () => {
+    clearTimeout(state.stuckTimer); clearTimeout(state.askTimer); state.stuckTimer = state.askTimer = null; state.stuckNoticed = false; clearLostNotice();
+    if (streamOpened) checkBoardBuild(); else streamOpened = true;
+  });
   es.addEventListener('error', wait);
   wait();
 }

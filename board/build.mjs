@@ -13,7 +13,7 @@ const scripts = fs.readdirSync(web).filter((f) => /^\d\d-.+\.js$/.test(f)).sort(
 const avatarDir = path.join(here, 'avatars');
 const avatars = Object.fromEntries(fs.readdirSync(avatarDir).filter((f) => f.endsWith('.png'))
   .map((f) => [f.slice(0, -4), `data:image/png;base64,${fs.readFileSync(path.join(avatarDir, f)).toString('base64')}`]));
-const prelude = `window.__LANG__ = 'zh';\nwindow.__BOARD_MODE__ = 'live';\nwindow.__AVATARS__ = ${JSON.stringify(avatars)};\n`;
+const prelude = `window.__LANG__ = 'zh';\nwindow.__BOARD_MODE__ = 'live';\nwindow.__BOARD_BUILD__ = '';\nwindow.__AVATARS__ = ${JSON.stringify(avatars)};\n`;
 const display = fs.readFileSync(path.join(here, '../foreman/skills/dispatch/scripts/display.mjs'), 'utf8');
 const names = /export \{([\s\S]*?)\};/.exec(display)[1];
 // 独立对象避免页面原有工具函数重名；构建产物不再需要模块加载器。

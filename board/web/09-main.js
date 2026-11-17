@@ -53,7 +53,7 @@ function step() {
   lastFrame = nowMs;
   UV.fitCache = null; UV.frame++;
   viewBox(); // 先量视图，这一帧后面写 DOM 以后不再量（05-world.js）
-  // 连不上看板服务超过 20 秒：多半是服务退出了或者换了新地址，重连旧地址没有用，提示去拿新链接（只说一次，连上后重置）。
+  // 连不上看板服务超过 20 秒：多半是服务退出了（下次在同一个地址启动，页面会自己连上），也可能换了端口（原来的端口被占，这一页连不回来）：提示怎么办（只说一次，连上后重置）。
   // 每帧都查：飞进看板以后星图那一层不再画，也要能提示
   // 已经确认服务退出、显示着一直留着的提示时，不拿这条会淡出的盖掉
   if (U.lostAt != null && !U.lostNoticed && !U.done && nowMs - U.lostAt > 20000) { U.lostNoticed = true; if (!showNotice.kept) showNotice(TEXT.serverLost); }
@@ -139,12 +139,19 @@ function uniFrame(alone = true) {
 // 图片的原生拖动一律不要（CSS 管不到的浏览器靠这里）
 addEventListener('dragstart', (e) => { if (e.target instanceof HTMLImageElement) e.preventDefault(); });
 history.scrollRestoration = 'manual'; // 每次打开都停在星图和用量面板的位置
-// 页头下方的一行提示，12 秒后淡出；keep 为 true 时一直留着（看板服务已经退出）
+// 页头下方的一行提示，12 秒后淡出；keep 为 true 时一直留着，直到数据流重新连上（看板服务已经退出）
 function showNotice(text, keep = false) {
   const el = $('notice');
   el.textContent = text; el.classList.remove('faded');
   clearTimeout(showNotice.timer); showNotice.timer = keep ? null : setTimeout(() => el.classList.add('faded'), 12000);
   showNotice.kept = keep;
+}
+// 数据流又连上了（看板服务在同一个地址重新启动）：去掉连不上、已经退出这几条提示，别的提示不动
+function clearLostNotice() {
+  const el = $('notice');
+  if (![TEXT.serverLost, TEXT.boardGone, TEXT.streamStuck].includes(el.textContent)) return;
+  clearTimeout(showNotice.timer); showNotice.timer = null; showNotice.kept = false;
+  el.classList.add('faded');
 }
 
 // 后台满 10 分钟取消订阅，省下服务和浏览器的计算；直连流也会腾出同主机最多 6 条的连接。
