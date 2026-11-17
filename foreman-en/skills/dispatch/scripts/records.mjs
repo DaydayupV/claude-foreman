@@ -63,7 +63,7 @@ function liveBoardUrl() {
     return lock.port > 0 && lock.token && Number.isInteger(lock.pid) && pidExists(lock.pid) ? boardUrl(lock) : null;
   } catch { return null; }
 }
-// 只装饰打印的结果，不把服务每次启动都会换的口令写进记录。
+// 只装饰打印的结果，不把看板地址写进记录：端口被占时地址会变，口令也不该落进运行记录
 function withBoardUrl(cfg, value) {
   const board = cfg?.dispatch?.watch?.web ? liveBoardUrl() : null;
   if (!board) return value;

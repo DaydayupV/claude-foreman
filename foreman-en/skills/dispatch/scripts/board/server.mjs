@@ -16,8 +16,28 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const LANG = process.env.FOREMAN_LANG || (() => { try { return JSON.parse(fs.readFileSync(path.join(here, '..', 'language.json'), 'utf8')).language; } catch { return 'zh'; } })();
 const keys = ['runs', 'port', 'idle-min', 'group', 'run', 'replay', 'speed', 'maxgap', 'transcript', 'session', 'claude-dir', 'lead', 'tail', 'prices', 'window-h', 'config'];
 const replayMode = process.argv.slice(2).some((arg) => arg === '--replay' || arg.startsWith('--replay='));
-let lockFile, owner, ownerRaw, server, runsRoot, build, stamp;
+let lockFile, addressFile, savedAddress, addressCreatedAt, owner, ownerRaw, server, runsRoot, build, stamp;
 const short = (e) => String(e.message || e).replace(/\s+/g, ' ');
+// 看板的地址（端口和口令）记在记录目录的 board.address.json 里，服务重启时沿用：对话里早先给出的链接在下一次启动后照样能打开，开着的页面也会自己连回来。
+// 端口被占时换一个端口，口令也换新的
+function readAddress() {
+  let raw;
+  try { raw = retryFile(() => fs.readFileSync(addressFile, 'utf8')); }
+  catch (e) { if (e.code === 'ENOENT') return null; throw new Error(`cannot read the board address file ${addressFile}: ${short(e)}`); }
+  let value;
+  try { value = JSON.parse(raw); } catch { return null; }
+  return value?.v === 1 && Number.isInteger(value.port) && value.port >= 1 && value.port <= 65535
+    && typeof value.token === 'string' && /^[a-f0-9]{32}$/.test(value.token) ? value : null;
+}
+function saveAddress(current = savedAddress) {
+  if (current?.port === owner.port && current?.token === owner.token) return;
+  const temp = `${addressFile}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(temp, JSON.stringify({ v: 1, port: owner.port, token: owner.token,
+      created_at: addressCreatedAt }), { flag: 'wx', mode: 0o600 });
+    retryFile(() => fs.renameSync(temp, addressFile));
+  } finally { retryFile(() => fs.rmSync(temp, { force: true })); }
+}
 function readLock() {
   let raw, mtime;
   try { raw = retryFile(() => fs.readFileSync(lockFile, 'utf8')); mtime = fs.statSync(lockFile).mtimeMs; }
@@ -75,10 +95,15 @@ async function claim() {
     try { fd = retryFile(() => fs.openSync(lockFile, 'wx', 0o600)); }
     catch (e) { if (e.code !== 'EEXIST') throw e; }
     if (fd !== undefined) {
-      owner = { v: 1, pid: process.pid, port: 0, token: randomBytes(16).toString('hex'), started_at: new Date().toISOString(), build };
-      ownerRaw = JSON.stringify(owner);
-      process.once('exit', cleanup);
-      try { fs.writeFileSync(fd, ownerRaw); } finally { fs.closeSync(fd); }
+      try {
+        // 读地址文件出错时这次启动失败：退出时删掉这把还空着的锁，下次启动不用等它的宽限期
+        ownerRaw = ''; process.once('exit', cleanup);
+        if (addressFile) savedAddress = readAddress();
+        owner = { v: 1, pid: process.pid, port: 0, token: savedAddress?.token ?? randomBytes(16).toString('hex'), started_at: new Date().toISOString(), build };
+        addressCreatedAt = savedAddress ? savedAddress.created_at : owner.started_at;
+        ownerRaw = JSON.stringify(owner);
+        fs.writeFileSync(fd, ownerRaw);
+      } finally { fs.closeSync(fd); }
       return null;
     }
     const existing = readLock();
@@ -201,7 +226,11 @@ async function main() {
   stamp = buildStamp(here); build = buildId(here);
   let reused;
   if (replayMode) owner = { pid: process.pid, port: 0, token: randomBytes(16).toString('hex') };
-  else { lockFile = path.join(root, 'board.lock.json'); reused = await claim(); }
+  else {
+    lockFile = path.join(root, 'board.lock.json');
+    if (values.port == null) addressFile = path.join(root, 'board.address.json');
+    reused = await claim();
+  }
   // 直播地址只传飞入范围，回放地址由独立服务构建成功后输出。
   const query = new URLSearchParams({ level: 'all' });
   for (const key of ['group', 'run']) if (values[key] != null) query.set(key, values[key]);
@@ -361,7 +390,8 @@ async function main() {
         const requested = url.searchParams.get('lang'), lang = ['zh', 'en'].includes(requested) ? requested : LANG;
         html = html.replace(/<html lang="(?:zh-CN|en)">/, `<html lang="${lang === 'en' ? 'en' : 'zh-CN'}">`)
           .replace(/window\.__LANG__ = '(?:zh|en)';/, `window.__LANG__ = '${lang === 'en' ? 'en' : 'zh'}';`)
-          .replace("window.__BOARD_MODE__ = 'live';", `window.__BOARD_MODE__ = '${replayMode ? 'replay' : 'live'}';`);
+          .replace("window.__BOARD_MODE__ = 'live';", `window.__BOARD_MODE__ = '${replayMode ? 'replay' : 'live'}';`)
+          .replace("window.__BOARD_BUILD__ = '';", `window.__BOARD_BUILD__ = '${build}';`);
         return end(200, 'text/html; charset=utf-8', html);
       }
       if (route === 'stream-worker.js') {
@@ -475,7 +505,19 @@ async function main() {
       if (res.headersSent) res.destroy(); else end(500);
     }
   });
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(replayMode ? 0 : port, '127.0.0.1', resolve); });
+  const listen = (port) => new Promise((resolve, reject) => {
+    const onError = (e) => { server.removeListener('listening', onListening); reject(e); };
+    const onListening = () => { server.removeListener('error', onError); resolve(); };
+    server.once('error', onError); server.once('listening', onListening);
+    server.listen(port, '127.0.0.1');
+  });
+  try { await listen(replayMode ? 0 : values.port != null ? port : savedAddress?.port ?? 0); }
+  catch (e) {
+    if (replayMode || values.port != null || !savedAddress || !['EADDRINUSE', 'EACCES'].includes(e.code)) throw e;
+    // 记下的端口被别的程序占了，或者落进了系统保留的端口段（Windows 上报 EACCES）：换一个随机端口，口令也换新的。端口一变旧链接本来就打不开，占着旧端口的程序却可能从还在重连的看板页收到旧口令
+    savedAddress = null; owner.token = randomBytes(16).toString('hex'); addressCreatedAt = new Date().toISOString();
+    await listen(0);
+  }
   owner.port = server.address().port;
   if (replayMode) {
     const q = new URLSearchParams({ level: 'all', replay: 'all', lang: LANG });
@@ -491,12 +533,16 @@ async function main() {
       retryFile(() => fs.renameSync(temp, lockFile));
       ownerRaw = raw;
     } finally { retryFile(() => fs.rmSync(temp, { force: true })); }
+    if (addressFile) try { saveAddress(); } catch (e) { process.stderr.write(`board: cannot save the board address: ${short(e)}\n`); }
     fs.rmSync(path.join(root, 'board.err'), { force: true });
     process.stdout.write(`${address(owner)}\n`);
   }
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => process.exit(0));
   setInterval(() => {
     if (!replayMode && !holdsLock()) quitLostLock();
+    // 地址文件不是自己的端口和口令（被接管前的旧服务改写过，或者被删了）：写回自己的，和锁一样每次自查都核对。
+    // 只在读到锁、确认锁还是自己的时候写：读不到锁时归属不明，丢了锁的旧服务不能借机改掉现任服务的地址
+    if (addressFile) try { if (readLock()?.raw === ownerRaw) saveAddress(readAddress()); } catch {}
     // 插件被卸载或更新：自己的文件已经删掉或换成别的版本，不再留在后台（下一次 board 会启动新版）
     const current = buildStamp(here);
     if (current !== stamp) {
