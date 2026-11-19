@@ -286,7 +286,8 @@ test('agy 标记按真实子进程的启动时间拒绝或清理，查不到保�
   const started = moduleCall(h, 'util.mjs', `console.log(JSON.stringify(x.processStartedAt(${child.child.pid})));`);
   assert.ok(Number.isFinite(started));
   const file = path.join(stateDir(h), 'agy-markers/live.json'), capture = path.join(h.home, 'process-query.jsonl');
-  const marker = { cwd: h.cwd, run_dir: h.cwd, pid: child.child.pid, started_at: started, expires_at: new Date(Date.now() + 60000).toISOString() };
+  // 标记的有效期和子进程一样长：查询慢时整个测试会超过一分钟，标记一过期守卫就不再拦截，后面的拒绝断言会看到 ask。
+  const marker = { cwd: h.cwd, run_dir: h.cwd, pid: child.child.pid, started_at: started, expires_at: new Date(Date.now() + 180000).toISOString() };
   const fixture = h.write('process-query.mjs', `import fs from 'node:fs';import cp from 'node:child_process';import {syncBuiltinESMExports} from 'node:module';
 const spawn=cp.spawnSync;cp.spawnSync=(file,args,opts)=>{const began=performance.now(),result=spawn(file,args,opts);
 if(file==='ps'||file.endsWith('powershell.exe'))fs.appendFileSync(${JSON.stringify(capture)},JSON.stringify({ms:performance.now()-began,timeout:opts.timeout})+'\\n');return result};syncBuiltinESMExports();`);
@@ -1068,7 +1069,9 @@ test('agy 默认并发准入、排队、status 和看板 channel 共用接线', 
 
 test('agy 运行时 install/uninstall/刷新拒绝；取消、超时和异常退出都删启动标记', async (t) => {
   const h = sandbox(t); configure(h); await install(h);
-  h.scenario({ hold: true }); const child = h.startBridge(taskArgs(h, 'discuss', ['--agent', 'agy']));
+  // 挂起的子进程要活到下面取消它为止：取消前的 install、uninstall、status 和刷新共要启动十来次 PowerShell 查进程启动时间
+  // （Windows 上每次 1–2 秒，系统更新后 .NET 原生映像还没重建时更慢），合计会超过助手默认的 20 秒，子进程就在取消之前被助手结束了。
+  h.scenario({ hold: true }); const child = h.startBridge(taskArgs(h, 'discuss', ['--agent', 'agy']), { timeout: 180000 });
   const meta = await h.running();
   await poll(() => h.calls().some((c) => c.operation === 'run'), 'agy 真运行');
   for (const action of ['install', 'uninstall']) failed(await h.bridge(['agy-guard', action]), 'agy');
@@ -1088,7 +1091,8 @@ test('agy 工具运行时不判卡死，空转会卡死，进程信号后清理�
   assert.equal(output(await run(h, ['--stall', '0.001'])).status, 'done');
   h.scenario({ steps: [{ delay_ms: 1500 }] }); assert.equal(output(await run(h, ['--stall', '0.001']), 1).status, 'stalled');
   const before = h.calls().filter((c) => c.operation === 'run').length;
-  h.scenario({ hold: true }); const child = h.startBridge(taskArgs(h, 'discuss', ['--agent', 'agy']));
+  // 挂起的子进程同样要活到本测试自己结束它，不能让助手默认的 20 秒先到。
+  h.scenario({ hold: true }); const child = h.startBridge(taskArgs(h, 'discuss', ['--agent', 'agy']), { timeout: 180000 });
   await poll(() => h.calls().filter((c) => c.operation === 'run').length > before, '启动标记');
   // Windows 的强制终止不能运行 JS 收尾；由前面的 cancel 测试验证可捕获的结束路径。
   if (process.platform !== 'win32') { child.child.kill('SIGTERM'); output(await child.done, 1); }
