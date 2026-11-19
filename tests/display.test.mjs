@@ -163,7 +163,8 @@ test('真实派活时快照的两条事件留在 events.jsonl 开头，协作方
   assert.deepEqual(events.slice(0, 2).map((e) => [e.type, e.phase]), [['foreman.snapshot', 'start'], ['foreman.snapshot', 'done']]);
   assert.ok(events.length > 2 && events.slice(2).every((e) => e.type !== 'foreman.snapshot'), JSON.stringify(events.map((e) => e.type)));
   const watched = await h.bridge(['watch', '--run', run.run_id]);
-  assert.ok(watched.stdout.includes(D.watchSnapshotStart.slice(0, 30)) && watched.stdout.includes(D.watchSnapshotDone('0s')), watched.stdout);
+  // 时长按快照事件里记下的秒数核对：机器忙时快照会超过 1 秒，不能写死 0s。
+  assert.ok(watched.stdout.includes(D.watchSnapshotStart.slice(0, 30)) && watched.stdout.includes(D.watchSnapshotDone(D.duration(events[1].seconds ?? 0))), watched.stdout);
 });
 
 test('窄窗口里折叠行也不越界、单复数正确；拍快照的提示不折叠', async (t) => {

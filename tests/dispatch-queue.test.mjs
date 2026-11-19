@@ -109,7 +109,8 @@ test('status 按协作方显示位次、标题、会话和等待时长，--group
   const h = sandbox(t); full(h);
   const handles = [];
   for (const group of ['alpha', 'beta']) {
-    handles.push(h.startBridge(args(h, `queued-${group}`, ['--group', group, '--scope', group]), { env: { CLAUDE_CODE_SESSION_ID: `session-${group}` } }));
+    // 排队的两个任务要活到本测试自己结束它们；机器忙时两次 status 和等新位次加起来会超过助手默认的 20 秒。
+    handles.push(h.startBridge(args(h, `queued-${group}`, ['--group', group, '--scope', group]), { env: { CLAUDE_CODE_SESSION_ID: `session-${group}` }, timeout: 180000 }));
     await poll(() => tickets(h).length === handles.length, '按顺序领票');
   }
   const all = await h.bridge(['status']); assert.equal(all.code, 0, all.stderr);

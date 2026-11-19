@@ -116,7 +116,7 @@ test('会话提醒以已退出任务的结果为准，没有结果仍提醒中�
 });
 
 test('会话提醒批量识别复用进程号的旧 running，保留当前 runner 且不回写记录', async (t) => {
-  const h = sandbox(t), sleeper = h.start('-e', ['setInterval(() => {}, 1000)']);
+  const h = sandbox(t), sleeper = h.start('-e', ['setInterval(() => {}, 1000)'], { timeout: 180000 });
   await once(sleeper.child, 'spawn');
   const meta = { status: 'running', pid: sleeper.child.pid, ended_at: undefined };
   const started_at = new Date(Date.now() - 3600000).toISOString();
@@ -125,7 +125,25 @@ test('会话提醒批量识别复用进程号的旧 running，保留当前 runne
   seedRun(h, 'finished-runner', { ...meta, started_at }, { status: 'done' });
   seedRun(h, 'other-project-runner', { ...meta, started_at, cwd: path.join(h.home, 'other') });
   const before = dirs.map((dir) => fs.readFileSync(path.join(dir, 'meta.json'), 'utf8'));
-  const context = output(await h.hook('session-reminder.mjs', { cwd: h.cwd }, { timeout: 10000 })).hookSpecificOutput.additionalContext;
+  // 进程查询照样走真实的 PowerShell 或 ps，只在这里放宽钩子的 3 秒上限（上限由下一个测试核对）：测试并发跑满时
+  // 一次查询会超过 3 秒，钩子就认不出复用的进程号。顺带核对这一批记录只查了一次。
+  const capture = path.join(h.home, 'process-queries.json');
+  const script = h.write('hook-batch.mjs', `import fs from 'node:fs';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+const spawn = childProcess.spawnSync, queries = [];
+childProcess.spawnSync = (file, args, options) => {
+  if (file === 'ps' || String(file).endsWith('powershell.exe')) {
+    queries.push(options.timeout);
+    fs.writeFileSync(${JSON.stringify(capture)}, JSON.stringify(queries));
+    options = { ...options, timeout: 60000 };
+  }
+  return spawn(file, args, options);
+};
+syncBuiltinESMExports();
+await import(${JSON.stringify(pathToFileURL(path.join(ROOT, 'foreman/hooks/session-reminder.mjs')).href)});`);
+  const context = output(await h.start(script, [], { input: JSON.stringify({ cwd: h.cwd }), timeout: 90000 }).done).hookSpecificOutput.additionalContext;
+  assert.deepEqual(JSON.parse(fs.readFileSync(capture, 'utf8')), [3000]);
   for (const id of ['old-runner-a', 'old-runner-b']) assert.ok(context.includes(`${id}｜run｜合成任务｜调度进程已退出，没有结果`));
   for (const id of ['current-runner', 'finished-runner', 'other-project-runner']) assert.equal(context.includes(id), false);
   assert.deepEqual(dirs.map((dir) => fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')), before);

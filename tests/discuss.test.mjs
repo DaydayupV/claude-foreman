@@ -264,7 +264,8 @@ test('同组多方并发，await-busy 列出超过阈值的 API 参与方', asyn
   configure(h, { api: apiAgent(api.url), oc: opencodeAgent() });
   const gate = path.join(h.home, 'release-tools');
   const s = h.scenario({ steps: [{ wait_for: gate }], last_message: discussion });
-  const handles = ['codex', 'api', 'oc'].map((name) => h.startBridge(discussArgs(h, name, ['--group', 'discussion-group', '--no-snapshot']), { env: s.env }));
+  // 三席都挂在闸门后面，要活到本测试放行为止；机器忙时登记和 await-busy 加起来会超过助手默认的 20 秒。
+  const handles = ['codex', 'api', 'oc'].map((name) => h.startBridge(discussArgs(h, name, ['--group', 'discussion-group', '--no-snapshot']), { env: s.env, timeout: 180000 }));
   await poll(() => h.records().filter((m) => m.status === 'running').length === 3, '同组所有参与方登记');
   const apiMeta = await h.running((m) => m.agent === 'api');
   await poll(() => h.events(apiMeta.id).some((e) => e.type === 'api.queued'), 'API 参与方排队');
