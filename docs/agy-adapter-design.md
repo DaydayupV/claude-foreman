@@ -137,7 +137,7 @@
   守卫只放行盘符绝对路径（以及 UNC 路径，求真实路径后再判断）和 `file:///` 地址（先解码成路径再检查），其余形式一律拒绝。解析逻辑打进守卫脚本（3.1）。
 - **只读 shell**：没有 shell 时模型列不了目录、搜不了代码，讨论和审查的质量会明显下降（实测模型在乱猜文件名）。所以 read 档在终端沙箱确认可用时放行命令，并且：
   - **探针**（`check` 时跑，也在缓存失效后第一次派只读席前跑）：用专门的 `probe` 策略，让探针命令越过守卫的日志核对，只测沙箱本身。canary 都由 foreman 创建并在 finally 里清理：项目内一个文件（写入应被拒）；一个既不在项目里、也不在系统临时目录里的 foreman 目录（写入应被拒）；用户主目录下一个 foreman 建的可读文件（读取应被拒）。另外测一次网络访问和环境变量是否可见，结果记下来，在文档和结果里如实说明。命令失败的原因要区分是沙箱拒绝、守卫拒绝，还是文件不存在，只有沙箱拒绝才算通过。
-  - **缓存**：按 agy 版本、系统版本和项目所在的卷缓存。agy 会自动升级，升级后重新探测。
+  - **缓存**：按 agy 版本、系统版本和项目所在的卷缓存。Windows 还按项目及附加目录的真实路径区分缓存。agy 会自动升级，升级后重新探测。
     - 附加目录和项目不在同一个卷上时不探测、不放行命令（探针只测项目所在的卷）。
     - 本机断网时不启动探针，这次不放行命令，也不写缓存。
     - "不可用"的结论 24 小时后过期，"可用"的不过期；`check --reprobe` 删掉本机这一条后重测。
@@ -154,7 +154,7 @@
 
 ## 5. 调用与事件翻译
 
-**命令**：`agy -p= --input-format stream-json --output-format stream-json --model <id> --dangerously-skip-permissions --disable-slash-commands --log-file <run_dir>/agy.log`，按需再加 `[--sandbox] [--conversation <id>] [--add-dir <dir>]…`。工作目录是项目目录。提示从 stdin 写一行后关闭。超时和卡死由 foreman 管，不用 `--print-timeout`，要停时整棵进程树结束。
+**命令**：`agy -p= --input-format stream-json --output-format stream-json --model <id> --dangerously-skip-permissions --disable-slash-commands --log-file <run_dir>/agy.log`，按需再加 `[--sandbox] [--conversation <id>] [--add-dir <dir>]…`。Windows 的沙箱探测和只读命令会话用会话级 `--settings` 设置 `proceed-in-sandbox`、禁止写文件和联网，替代 `--dangerously-skip-permissions`。工作目录是项目目录。提示从 stdin 写一行后关闭。超时和卡死由 foreman 管，不用 `--print-timeout`，要停时整棵进程树结束。
 
 **翻译**（照 pi-cli.mjs 的 `translate`）：
 

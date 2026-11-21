@@ -21,7 +21,11 @@ import { EventEmitter } from 'node:events';
 let index=0, current={};
 const scenario=()=>JSON.parse(fs.readFileSync(process.env.FAKE_SCENARIO,'utf8'));
 const record=(stage,target)=>{const file=scenario().network_capture;if(file)fs.appendFileSync(file,JSON.stringify({stage,target,index})+'\\n');};
-dns.Resolver=class{cancel(){}async resolve4(host){current=scenario().network_controls?.[index++]||{};record('dns',host);if(current.dns_hang)return new Promise(()=>{});if(current.dns_error)throw Object.assign(new Error(current.dns_error),{code:current.dns_error});return ['127.0.0.1'];}};
+async function resolveFixture(host){current=scenario().network_controls?.[index++]||{};record('dns',host);if(current.dns_hang)return new Promise(()=>{});if(current.dns_error)throw Object.assign(new Error(current.dns_error),{code:current.dns_error});return ['127.0.0.1'];}
+if(process.platform==='win32'){
+  dns.lookup=async(host)=> (await resolveFixture(host)).map(address=>({address,family:4}));
+  dns.Resolver=class{constructor(){throw Error('expected Windows system resolver')}};
+}else dns.Resolver=class{cancel(){}resolve4(host){return resolveFixture(host)}};
 https.get=(url,options,callback)=>{const req=new EventEmitter();req.destroy=()=>{};record('https',url);queueMicrotask(()=>{if(current.https_error)req.emit('error',Object.assign(new Error(current.https_error),{code:current.https_error}));else{const response=new EventEmitter();response.resume=()=>{if(current.response_error)queueMicrotask(()=>response.emit('error',new Error('closed')));};callback(response);}});return req;};
 `);
   h.env.NODE_OPTIONS = `--import=${pathToFileURL(network).href}`;
@@ -597,7 +601,15 @@ test('agy 下一轮、回答和报告修复续接同一会话，修复用 none�
 
 test('agy 沙箱探针失败不给 shell、附文件清单，缓存按版本失效且 canary 清理', async (t) => {
   const h = sandbox(t); configure(h); await install(h); h.initGit();
-  h.scenario({ sandbox: false }); const first = output(await run(h));
+  h.scenario({ sandbox: false, global_deny: ['read_file(private)', 'read_url(*)'] }); const first = output(await run(h));
+  if (process.platform === 'win32') {
+    const { args } = modelCalls(h).find((c) => c.operation === 'probe');
+    assert.ok(args.includes('--sandbox'));
+    assert.equal(args.includes('--dangerously-skip-permissions'), false);
+    assert.deepEqual(JSON.parse(args[args.indexOf('--settings') + 1]), {
+      agentMode: '', toolPermission: 'proceed-in-sandbox', permissions: { deny: ['read_file(private)', 'read_url(*)', 'write_file(*)'] },
+    });
+  }
   assert.equal(first.sandbox, 'files-only'); assert.equal(JSON.parse(read(path.join(first.run_dir, 'meta.json'))).sandbox, first.sandbox);
   assert.ok(first.notes.includes(M.agyNoSandbox(M.agySandboxLeakyReason(M.list(Object.values(M.agySandboxItems)))))); assert.match(read(path.join(first.run_dir, 'brief.md')), /source.txt/);
   const checked = output(await h.bridge(['check', '--agent', 'agy'])).agents.agy, items = M.list(Object.values(M.agySandboxItems));
@@ -615,6 +627,16 @@ test('agy 沙箱探针失败不给 shell、附文件清单，缓存按版本失�
   assert.equal(fs.readdirSync(h.cwd).some((f) => f.startsWith('.foreman-agy-probe-')), false);
   assert.equal(fs.readdirSync(h.home).some((f) => f.startsWith('.foreman-agy-probe-')), false);
   assert.equal(fs.readdirSync(stateDir(h)).some((f) => f.startsWith('agy-probe-')), false);
+  if (process.platform === 'win32') {
+    const other = path.join(h.home, 'other-project');
+    fs.mkdirSync(other);
+    for (const [cwd, addDirs] of [[other, []], [h.cwd, [other]]]) {
+      const fresh = moduleCall(h, 'adapters/agy-setup.mjs', `console.log(JSON.stringify(await x.probeSandbox({
+        cwd:${JSON.stringify(cwd)},addDirs:${JSON.stringify(addDirs)},version:'1.4.8',run:async()=>({status:'failed',tools:[]})
+      })));`);
+      assert.equal(fresh.tested, true);
+    }
+  }
   const layout = moduleCall(h, 'adapters/agy-setup.mjs', `console.log(JSON.stringify(await x.probeSandbox({agent:{},cwd:${JSON.stringify(h.home)},version:'1.4.9',run:()=>{throw new Error('probe must not start')}})));`);
   assert.equal(layout.available, false); assert.equal(layout.results.layout, 'unavailable');
   h.scenario({ sandbox: false, version: '1.4.8', quota: { response: 'invalid quota' } });

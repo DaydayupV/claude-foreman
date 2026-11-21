@@ -9,7 +9,7 @@ const args = process.argv.slice(2), value = (key) => args[args.indexOf(key) + 1]
 let policy;
 try { policy = JSON.parse(process.env.FOREMAN_AGY_GUARD); } catch { /* 测丢失策略 */ }
 const operation = args.includes('--version') ? 'version' : args[0] === 'models' ? 'catalog'
-  : args.includes('/hooks') ? 'hooks' : args.includes('/quota') ? 'quota' : policy?.access === 'probe' ? 'probe' : 'run';
+  : args.includes('/hooks') ? 'hooks' : args.includes('/permissions') ? 'permissions' : args.includes('/quota') ? 'quota' : policy?.access === 'probe' ? 'probe' : 'run';
 const { scenario: s, input } = await setup('agy', operation, args);
 const sid = s.conversation_id || (args.includes('--conversation') ? value('--conversation') : 'synthetic-agy-session');
 const emit = (event, body) => console.log(JSON.stringify({ event, ...(event === 'init' ? { conversation_id: sid } : {}), [event]: body }));
@@ -147,6 +147,8 @@ else if (operation === 'catalog') {
   console.log(s.hooks_output ?? JSON.stringify({ conversation_id: '', status: 'SUCCESS', duration_seconds: 0, num_turns: 0, usage: {},
     response: hooks.flatMap((hook) => hook.actions.map((a) => [hook.name, hook.enabled ? 'enabled' : 'disabled', a.event, a.matcher || '', a.type, a.command].join('\t'))).join('\n') + '\n',
     command: { name: 'hooks', data: { hooks } } }));
+} else if (operation === 'permissions') {
+  console.log(JSON.stringify({ command: { name: 'permissions', data: { permissions: [{ scope: 'global', deny: s.global_deny }] } } }));
 } else if (operation === 'quota') console.log(JSON.stringify(s.quota || { conversation_id: '', status: 'SUCCESS', response: 'Gemini Models\tweekly\t96%\n',
   command: { name: 'usage', data: { groups: [{ name: 'Gemini Models', buckets: [
     { name: 'Weekly Limit Remaining', window: 'weekly', remaining_fraction: 0.96, reset_time: '2026-11-02T00:00:00Z' },
