@@ -21,7 +21,7 @@ function codexOptions(agent, { model, effort, mode }) {
   return args;
 }
 
-function codexCommand(agent) {
+export function codexCommand(agent) {
   if (process.env.CODEX_BIN || agent?.bin) return binCommand(process.env.CODEX_BIN || agent.bin);
   if (process.platform !== 'win32') return pathCommand('codex');
   // Windows 的 npm 包装不能直接 spawn，改用包内入口，避开 shell 引号问题。
