@@ -4,6 +4,10 @@ import { setup, replay, write, finish } from './common.mjs';
 import { report, review } from '../fixtures/reports.mjs';
 
 const args = process.argv.slice(2);
+if (args[0] === 'app-server') {
+  await import('./codex-app-server.mjs');
+  process.exit(process.exitCode ?? 0);
+}
 const operation = args[0] === '--version' ? 'version' : args[0] === 'login' ? 'login' : args[0] === 'debug' ? 'catalog' : args[0] === 'sandbox' ? 'sandbox' : 'exec';
 const { scenario: s, input } = await setup('codex', operation, args);
 if (operation === 'version') {
