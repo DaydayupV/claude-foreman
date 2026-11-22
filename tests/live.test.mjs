@@ -24,6 +24,7 @@ async function start(h, turns, options = []) {
   const cmd = (action, ...args) => h.bridge(['live', action, '--run', id, ...args]);
   return { proc, dir, id, cmd,
     events: (args = [], env = {}) => h.startBridge(['live', 'events', '--run', id, ...args], { env, timeout: 45000 }),
+    calls: () => fake.calls(),
     requests: (method) => fake.calls().filter((c) => c.msg?.method === method),
     response: (rpcId) => fake.calls().find((c) => c.msg?.id === rpcId && Object.hasOwn(c.msg, 'result'))?.msg.result,
     log: () => lines(path.join(dir, 'live.jsonl')),
@@ -117,6 +118,48 @@ test('interrupt 打断进行中的一轮并推送 interrupted', async (t) => {
   assert.equal(ok(await s.cmd('interrupt')).trim(), '已请求打断');
   await printed(stream, /一轮结束 turn=turn-1 状态=interrupted/);
   assert.deepEqual(s.requests('turn/interrupt')[0].msg.params, { threadId: 'thread-live', turnId: 'turn-1' });
+  // 打断后先清掉后台终端，再推送这一轮结束
+  assert.deepEqual(s.requests('thread/backgroundTerminals/clean').map((c) => c.msg.params), [{ threadId: 'thread-live' }]);
+  assert.equal(JSON.parse(ok(await s.cmd('status'))).state, 'idle');
+  await s.close();
+  ok(await stream.done);
+});
+
+test('app-server 先退出、留下的子进程还拿着管道时，清理它并照常推送关闭', async (t) => {
+  const s = await start(sandbox(t), [{ orphan: 9 }]);
+  const stream = s.events();
+  assert.equal((await s.proc.done).code, 1);
+  assert.match(ok(await stream.done), /#\d+ 出错：.*9.*\n#\d+ 已关闭：app_server_exit\n$/);
+  const left = s.calls().find((c) => c.orphan).orphan;
+  await poll(() => { try { process.kill(left, 0); return false; } catch (e) { return e.code === 'ESRCH'; } }, '留下的子进程已结束');
+});
+
+test('会自动重试的错误不推送，失败的一轮在推送里带上原因', async (t) => {
+  const s = await start(sandbox(t), [{ status: 'failed', error: '额度用完', items: [agentMessage('做了一半')],
+    notify: [{ method: 'error', params: { error: { message: '连接断开', codexErrorInfo: null, additionalDetails: null }, willRetry: true } }] }]);
+  const stream = s.events(), all = s.events(['--all']);
+  await printed(stream, /一轮结束 turn=turn-1 状态=failed（原因：额度用完）：做了一半/);
+  await s.close();
+  const filtered = ok(await stream.done), full = ok(await all.done);
+  assert.doesNotMatch(filtered, /重试中|出错/);
+  assert.match(full, /#\d+ 重试中：连接断开\n/);
+});
+
+test('自带提问工具：重复的问题 id 只问一次，保密问题自动回绝，全部答完才回复', async (t) => {
+  const q = (id, question, extra = {}) => ({ id, header: id, question, isOther: false, isSecret: false, options: null, ...extra });
+  const s = await start(sandbox(t), [{ items: [agentMessage('好')], user_input: [
+    q('lang', '用哪种语言？', { options: [{ label: '中文', description: '' }, { label: '英文', description: '' }] }),
+    q('lang', '重复的问题'), q('token', '给我令牌', { isSecret: true })] }]);
+  const stream = s.events();
+  await printed(stream, /#\d+ 提问 call=item-ui:lang：用哪种语言？（选项：中文 \/ 英文）\n/);
+  assert.equal(s.response('server-request-1'), undefined);
+  assert.deepEqual(JSON.parse(ok(await s.cmd('status'))).pending_calls, ['item-ui:lang']);
+  ok(await s.cmd('answer', '--call', 'item-ui:lang', '--text', '中文'));
+  await printed(stream, /一轮结束 turn=turn-1 状态=completed/);
+  assert.deepEqual(s.response('server-request-1'), { answers: { lang: { answers: ['中文'] },
+    token: { answers: ['实时会话不传递保密信息。请换一种不需要保密值的做法，或者在最后的回复里写明需要用户自己提供什么。'] } } });
+  assert.equal(s.log().filter((e) => e.type === 'question').length, 1);
+  assert.equal(s.log().find((e) => e.type === 'answered' && e.by === 'secret').call, 'item-ui:token');
   await s.close();
   ok(await stream.done);
 });

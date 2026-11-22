@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import readline from 'node:readline';
 import { replay } from './common.mjs';
@@ -9,9 +10,10 @@ let count = 0, active = null, pending = null;
 const send = (msg) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...msg }) + '\n');
 const notify = (method, params) => send({ method, params });
 
-function finish(turn, status = 'completed') {
+function finish(turn, status = turn.spec.status ?? 'completed') {
   if (active !== turn) return;
-  if (status === 'completed') {
+  if (status === 'failed') turn.data.error = { message: turn.spec.error, codexErrorInfo: null, additionalDetails: null };
+  if (status !== 'interrupted') {
     for (const [i, item] of (turn.spec.items ?? []).entries()) {
       const completed = { id: 'item-' + i, ...item };
       turn.data.items.push(completed);
@@ -27,6 +29,14 @@ async function play(turn) {
   const { spec, data } = turn;
   if (spec.wait_for) await replay([{ wait_for: spec.wait_for }]);
   if (active !== turn) return;
+  for (const n of spec.notify ?? []) notify(n.method, { threadId, turnId: data.id, ...n.params });
+  if (spec.orphan) {
+    // 留下一个拿着同一组 stdio 的子进程再退出：模拟包装进程先走、Codex 还活着。
+    // Windows 上 Node 的子进程默认随父进程的作业对象一起结束，要 detached 才留得下；其他平台留在同一个进程组里。
+    const left = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit', detached: process.platform === 'win32' });
+    fs.appendFileSync(script.capture, JSON.stringify({ orphan: left.pid }) + '\n');
+    process.exit(spec.orphan);
+  }
   if (spec.crash) {
     process.stderr.write(spec.stderr, () => process.exit(spec.crash));
     return;
@@ -35,6 +45,10 @@ async function play(turn) {
     pending = 'server-request-' + count;
     send({ id: pending, method: 'item/tool/call', params: { threadId, turnId: data.id, callId: 'call-' + count,
       namespace: null, tool: 'ask_foreman', arguments: spec.ask } });
+  } else if (spec.user_input) {
+    pending = 'server-request-' + count;
+    send({ id: pending, method: 'item/tool/requestUserInput', params: { threadId, turnId: data.id, itemId: 'item-ui',
+      questions: spec.user_input, isBlocking: true, autoResolutionMs: null } });
   } else if (!spec.hold && !spec.until_steer) finish(turn);
 }
 
@@ -68,6 +82,8 @@ for await (const line of readline.createInterface({ input: process.stdin, crlfDe
       reply({ turnId: active.data.id });
       if (active.spec.until_steer) finish(active);
     }
+  } else if (method === 'thread/backgroundTerminals/clean') {
+    reply({});
   } else if (!method && pending != null && id === pending) {
     finish(active);
   } else if (method) send({ id, error: { code: -32601, message: 'Method not found' } });
