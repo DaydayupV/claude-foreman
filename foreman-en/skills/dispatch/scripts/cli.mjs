@@ -11,7 +11,8 @@ import { HERE, M, die, need, notice, resolveDir, readBrief, isGitRepo, isAscii, 
 
 // 只输出结果的子命令接到 head 这类提前关掉管道的命令上时，写 stdout 会抛 EPIPE：读的一方已经够了，安静退出，
 // 不打 Node 的堆栈。会派活、会改记录的子命令不这样处理（中途退出会丢掉收尾）
-if (['status', 'stats', 'config', 'tiers'].includes(process.argv[2])) {
+if (['status', 'stats', 'config', 'tiers'].includes(process.argv[2])
+  || process.argv[2] === 'live' && ['events', 'status'].includes(process.argv[3])) {
   process.on('uncaughtException', (e) => {
     if (e?.code === 'EPIPE') process.exit(0);
     console.error(e);
@@ -28,7 +29,7 @@ const FLAGS = new Set(['uncommitted', 'no-snapshot', 'verbose', 'no-intro', 'sna
 const isHelp = (arg) => arg === '--help' || arg === '-h';
 function helpText([cmd, ...rest]) {
   if (isHelp(cmd)) return M.usage;
-  const action = ['assets', 'agy-guard'].includes(cmd) && rest[0] && !rest[0].startsWith('-') ? rest.shift() : null;
+  const action = ['assets', 'agy-guard', 'live'].includes(cmd) && rest[0] && !rest[0].startsWith('-') ? rest.shift() : null;
   let asked = false;
   for (let i = 0; i < rest.length && !asked; i++) {
     asked = isHelp(rest[i]);
@@ -66,7 +67,7 @@ const { loadTiers, tierOf } = await import('./tiers.mjs');
 // 先加载配置，再迁移记录和重写启动器；这些步骤仍在解析参数之前完成。
 // assets 例外：它只在本机处理图片，用不到配置和记录目录，所以两步都跳过，配置缺失或写坏了也照样能用。
 const load = (cwd) => loadConfig(cwd, adapters);
-const CONFIG = ['assets', 'agy-guard'].includes(process.argv[2]) ? null : load(null);
+const CONFIG = ['assets', 'agy-guard', 'live'].includes(process.argv[2]) ? null : load(null);
 if (CONFIG) records.initializeRecords(CONFIG);
 const { RUNS_ROOT, CLAUDE_SESSION, findRun, isRunning } = records; // 记录目录在 initializeRecords 之后才定下来
 
@@ -85,7 +86,7 @@ function parseArgs(argv) {
   const JUDGE_LISTS = ['accept', 'partial', 'reject', 'same', 'clear'];
   const opts = { 'add-dir': [], track: [], scope: [], file: [], ...(cmd === 'plan' ? { seat: [] } : {}) };
   // assets 的第一个参数是动作（template、cut 等），不是选项。
-  if (['assets', 'agy-guard'].includes(cmd) && rest[0] && !rest[0].startsWith('--')) opts.action = rest.shift();
+  if (['assets', 'agy-guard', 'live'].includes(cmd) && rest[0] && !rest[0].startsWith('--')) opts.action = rest.shift();
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (!a.startsWith('--')) die(M.badArg(a));
@@ -651,5 +652,6 @@ if (['config', 'check', 'models', 'tiers'].includes(cmd) && opts.format !== unde
 if (['run', 'discuss', 'resume', 'review', 'image', 'plan'].includes(cmd) && opts.group != null && !/^[A-Za-z0-9._-]{1,64}$/.test(opts.group)) die(M.badGroupName(opts.group));
 const statsOf = (meta) => adapters[agentTypeOf(meta)]?.stats?.(meta.session_id, meta.started_at);
 const commands = { run: cmdRun, discuss: cmdDiscuss, resume: cmdResume, review: cmdReview, image: cmdImage, plan: (o) => cmdPlan(o, load, adapters), submit: (o) => cmdSubmit(o, load), judge: cmdJudge, stats: (o) => cmdStats(o, statsOf), tiers: cmdTiers, status: (o) => cmdStatus(o, statsOf, CONFIG), watch: (o) => cmdWatch(o, load), board: cmdBoard, config: cmdConfig, check: cmdCheck, models: cmdModels, cancel: (o) => cmdCancel(o, statsOf), 'await-busy': (o) => cmdAwaitBusy(o, CONFIG, load), assets: cmdAssets };
+commands.live = async (o) => (await import('./live.mjs')).cmdLive(o, { dispatchProfile });
 if (!commands[cmd]) die(M.usage);
 await commands[cmd](opts);
