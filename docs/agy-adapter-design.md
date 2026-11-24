@@ -93,14 +93,15 @@
   - 运行结束时删掉标记。代价是 foreman 运行期间，用户在同一目录里自己用 agy 会被拦，拒绝理由里说明原因、运行 id 和标记的过期时间（用户已接受，第 11 节）。
   - foreman 进程强制结束、标记没删时：守卫看到 pid 已经不在就删掉标记。pid 被别的程序复用时，靠标记里记的 foreman 进程启动时间（`started_at`）识别：守卫只在要因标记拒绝时查一次这个 pid 现在的启动时间，明显晚于记录值（超过 2 秒）才算复用、删掉标记；查不到、记录值不是数字或时间更早都继续拒绝。曾经试过用修改时间做心跳，审查指出 foreman 挂起或睡眠超过阈值时会把仍在运行的标记删掉、让丢了策略的 agy 被放行，已去掉（2026-10-29）。
 - 每次守卫放行或拒绝都往 `run_dir` 追加一行决定记录。运行结束时，如果有工具步骤、却没有任何一条决定记录，这一轮判失败：说明钩子没在这次运行里生效。
-- 去掉跳过权限的办法不可行（第 0b 期）：不带跳过权限时，钩子返回 `allow` 加 `permissionOverrides` 放不行命令。通配写法 `command(*)` 被直接拒绝；精确写法 `command(echo hi)` 让命令跑了，但这一轮仍记下被拒的操作、以空回复结束。所以保留跳过权限，靠上面的启动标记和决定记录兜底。
+- 去掉跳过权限的办法不可行（第 0b 期）：不带跳过权限时，钩子返回 `allow` 加 `permissionOverrides` 放不行命令。通配写法 `command(*)` 被直接拒绝；精确写法 `command(echo hi)` 让命令跑了，但这一轮仍记下被拒的操作、以空回复结束。所以默认保留跳过权限，靠上面的启动标记和决定记录兜底。
+- 例外是 Windows 上的沙箱探针和沙箱里的只读会话：agy 1.5.x 带着跳过权限时，沙箱已经不再隔离文件（第 12 节 2026-11-24 的实测）。所以这两种运行改用会话级 `--settings`（见第 5 节），不带跳过权限；钩子照样逐个工具判断、记下决定，日志核对也不变。
 
 ### 3.3 对平时使用 agy 的影响
 - 每次工具调用多起一个启动器加 node 进程，在 Windows 上实测 75–105 毫秒。
 - 交互模式下返回 `ask` 不会多弹确认（默认模式和 accept-edits 模式验证过）。自动模式在本机没能开起来（`--mode auto` 后状态栏不显示 auto）；有钩子和没钩子时，跑 `git --version` 都会问，行为相同。
 
 ### 3.4 每次派出前的自检
-跳过权限之后，钩子是唯一的闸门。按下面的顺序检查，**在启动任何 agy 进程之前**先做完静态检查：
+带着跳过权限时，钩子是唯一的闸门（Windows 的沙箱会话另有会话级 deny 规则）。按下面的顺序检查，**在启动任何 agy 进程之前**先做完静态检查：
 1. **扫描项目配置**（不启动 agy）：工作目录往上到仓库根，以及每个 `--add-dir`（实测 add-dir 里的 `.agents/` 会被加载）往上到它所在的仓库根。实测 agy 不加载仓库根以上、或没有仓库时工作目录以上的目录，这里多查到文件系统根，只当保险。每一层看 `.agents/`、`.agent/`、`_agents/`、`_agent/`（不区分大小写）下有没有 `hooks.json`、`mcp_config.json`、`plugins.json`、`skills.json` 和 `plugins/` 子目录。有 `hooks.json`、`mcp_config.json`、`plugins.json` 或 `plugins/` 下的任何插件，就拒绝派出：
    - 项目钩子能改写参数、截掉守卫，或执行任意命令；
    - 项目 MCP 服务器和插件在会话启动时就会运行，不经过工具调用。
@@ -136,11 +137,13 @@
 
   守卫只放行盘符绝对路径（以及 UNC 路径，求真实路径后再判断）和 `file:///` 地址（先解码成路径再检查），其余形式一律拒绝。解析逻辑打进守卫脚本（3.1）。
 - **只读 shell**：没有 shell 时模型列不了目录、搜不了代码，讨论和审查的质量会明显下降（实测模型在乱猜文件名）。所以 read 档在终端沙箱确认可用时放行命令，并且：
-  - **探针**（`check` 时跑，也在缓存失效后第一次派只读席前跑）：用专门的 `probe` 策略，让探针命令越过守卫的日志核对，只测沙箱本身。canary 都由 foreman 创建并在 finally 里清理：项目内一个文件（写入应被拒）；一个既不在项目里、也不在系统临时目录里的 foreman 目录（写入应被拒）；用户主目录下一个 foreman 建的可读文件（读取应被拒）。另外测一次网络访问和环境变量是否可见，结果记下来，在文档和结果里如实说明。命令失败的原因要区分是沙箱拒绝、守卫拒绝，还是文件不存在，只有沙箱拒绝才算通过。
-  - **缓存**：按 agy 版本、系统版本和项目所在的卷缓存。Windows 还按项目及附加目录的真实路径区分缓存。agy 会自动升级，升级后重新探测。
+  - **探针**（`check` 时跑，也在缓存失效后第一次派只读席前跑）：用专门的 `probe` 策略，让探针命令越过守卫的日志核对，只测沙箱本身。canary 都由 foreman 创建并在 finally 里清理：项目内一个文件（写入应被拒）；一个既不在项目里、也不在系统临时目录里的 foreman 目录（写入应被拒）；用户主目录下一个 foreman 建的可读文件（读取应被拒）。Windows 上再在 `%ProgramData%` 下放一个 foreman 建的可读文件（读取应被拒）：agy 的 Windows 沙箱不拦用户目录以外的读取，这一项读得到就不放行命令，否则只读席能用命令读到别的项目、别的盘上的文件。另外测一次网络访问和环境变量是否可见，结果记下来，在文档和结果里如实说明。命令失败的原因要区分是沙箱拒绝、守卫拒绝，还是文件不存在，只有沙箱拒绝才算通过。
+  - **缓存**：按 agy 版本、系统版本和项目所在的卷缓存。Windows 还按项目及附加目录的真实路径区分缓存（路径不分大小写），键里带 `readonly-session-v2` 标记，探针项有变化时换标记，旧结论就全部重测。所以 Windows 上每个项目、每一组附加目录第一次派 agy 时都要测一次，可能要几分钟。agy 会自动升级，升级后重新探测。
+    - Windows 上整个探针最多 360 秒，其中跑命令的那一轮最多 330 秒；探针后的宿主网络对照失败时，隔 2 秒重试一次再下结论（经代理上网时偶尔超时）。
+    - 读不出 agy 的权限设置（`/permissions` 失败或格式不对）时，记成 `settings_error`，按"不可用"写缓存（24 小时后过期）；缓存是"可用"、而派席位或 `check` 时读不出权限设置，这一次按只读文件处理，不改缓存。
     - 附加目录和项目不在同一个卷上时不探测、不放行命令（探针只测项目所在的卷）。
     - 本机断网时不启动探针，这次不放行命令，也不写缓存。
-    - "不可用"的结论 24 小时后过期，"可用"的不过期；`check --reprobe` 删掉本机这一条后重测。
+    - "不可用"的结论 24 小时后过期，"可用"的不过期；沙箱没拦住某一项的结论也不过期（重测结果不会变，agy 升级后缓存键会变，自然重测）；`check --reprobe` 删掉本机这一条后重测，Windows 上删掉同一项目的所有条目（不论附加目录和 agy 版本）。
     - 探针没跑完的结论不写缓存，例外是命令没能启动：工具输出的状态行里有 `Command failed to run:`、一个探针结果都没收到时，把原文（最多 300 字符）记成 `start_error`，探针就此结束，按"不可用"写缓存（照样 24 小时后过期）。见第 12 节 agy 1.4.10 的实测。
     - 写缓存在锁内重读再合并；锁忙时这次不写。例外：缓存里留着"可用"、而这次要撤销它（强制重测或测出不可用）却写不进去时报错，不派 agy。
   - **每次运行再核对日志**：守卫第一次放行 `run_command` 前，确认 `log_file` 里有 `enabling terminal sandbox`，而且没有关闭沙箱或退回询问一类的行。退回时的日志措辞还没见过，所以以探针结果为主，日志只作补充；探针没通过的系统，read 档一律不放行命令。
@@ -154,7 +157,7 @@
 
 ## 5. 调用与事件翻译
 
-**命令**：`agy -p= --input-format stream-json --output-format stream-json --model <id> --dangerously-skip-permissions --disable-slash-commands --log-file <run_dir>/agy.log`，按需再加 `[--sandbox] [--conversation <id>] [--add-dir <dir>]…`。Windows 的沙箱探测和只读命令会话用会话级 `--settings` 设置 `proceed-in-sandbox`、禁止写文件和联网，替代 `--dangerously-skip-permissions`。工作目录是项目目录。提示从 stdin 写一行后关闭。超时和卡死由 foreman 管，不用 `--print-timeout`，要停时整棵进程树结束。
+**命令**：`agy -p= --input-format stream-json --output-format stream-json --model <id> --dangerously-skip-permissions --disable-slash-commands --log-file <run_dir>/agy.log`，按需再加 `[--sandbox] [--conversation <id>] [--add-dir <dir>]…`。Windows 的沙箱探测和只读命令会话用会话级 `--settings` 替代 `--dangerously-skip-permissions`：`agentMode` 为空、`toolPermission` 为 `proceed-in-sandbox`，`permissions` 的 `allow` 和 `ask` 固定为空，`deny` 是全局 deny 规则加上 `write_file(*)`、`read_url(*)`。启动前先用 `agy -p /permissions --output-format json` 读出全局 deny 规则，因为会话设置会整组替换这几个数组。工作目录是项目目录。提示从 stdin 写一行后关闭。超时和卡死由 foreman 管，不用 `--print-timeout`，要停时整棵进程树结束。
 
 **翻译**（照 pi-cli.mjs 的 `translate`）：
 
@@ -329,3 +332,13 @@ stream-json 输入下，模型名无效时退出码是 1（不是 3），`result
 - **回复之后的报错**：实测有一次模型已经交回完整回复，agy 之后的一次请求被接口以 400 拒绝，result 记为 ERROR。回复还在时照常采用，错误记进 notes，回复合不合格交给报告校验。
 - **命令输出的格式**：`run_command` 的 `tool_info.output` 开头常有一行 `A pre-tool hook changed the arguments of this tool call before it ran. Changed: CommandLine.`（守卫每次都改写命令行），然后是状态行 `Command exited with code N.`，`Command output:` 之后才是命令自己打印的内容。退出码和"没能启动"都只在 `Command output:` 之前找。
 - **agy 1.4.10 的沙箱起不来**（2026-10-29 自动升级后，Windows 11）：`--sandbox` 下每条命令都没能启动，步骤仍是 `DONE`，状态行是 `Command failed to run: exebox: creating sandbox: CreateProcessSecurityEnvironment: The system cannot find the path specified..`，换 ASCII 路径的目录也一样，1.4.9 上同一台机器正常。模型每次失败后要想 10–50 秒再换写法重试（还会试 `run_command` 的新参数 `BypassSandbox`，被守卫按不认识的参数拒绝），探针会拖过 120 秒时限，所以探针遇到第一条没能启动的命令就结束（见第 4 节缓存规则）。
+
+### 2026-11-24 的实测补充（Windows 11，agy 1.5.16）
+- **带跳过权限时沙箱不隔离**：agy 1.5.9–1.5.13 带 `--dangerously-skip-permissions` 跑探针，项目内写入、项目外写入、读主目录三项都是 `allowed`，只读席一直只能读文件。
+- **会话设置**：改用 `--settings` 后，四项都是 `sandbox_denied`。agy 日志里有一行 `CLI settings initialized: permissions=&{Allow:[…] Deny:[…] Ask:[…]}, toolPermission=…`，记的是这次会话实际生效的规则。
+- **替换还是合并**：会话设置里写了的数组，整组替换全局的；没写的沿用全局的。只写 deny 时，全局 `settings.json` 里的 allow 照样生效。
+- **放行规则就是沙箱的挂载**：全局 allow 里的 `read_file(<目录>)` 会把那个目录只读挂进沙箱，命令能读到原本读不到的、用户目录下的文件。路径写错时，每条命令都报 `sandbox configuration error: readonly …: non-absolute file path`，没能启动。会话设置把 allow 和 ask 固定为空之后，日志里的 Allow 是空的，那个目录又读不到了。
+- **用户目录以外的文件**：沙箱里的命令能读用户目录以外的文件（另一个盘上项目外的文件被读到了），agy 文档也是这样写的。所以 Windows 的探针加了 `%ProgramData%` 下的读取检查；agy 的 Windows 沙箱改掉这一点之前，Windows 上的 agy 只读文件、不跑命令。
+- **守卫照常生效**：`--settings` 会话里每次工具调用都有一条守卫决定，读项目外的文件被守卫拒绝；`proceed-in-sandbox` 下 `read_file` 不需要审批。`agentMode` 为空就是非 auto 模式。
+- **`/permissions`**：用户没配任何全局规则时，也正好返回一个 global 作用域。
+- **宿主网络对照**：经 TUN 代理上网时（DNS 返回代理分配的地址），探针后的 HTTPS 对照有一次超过了 12 秒，结论成了 `unconfirmed`，所以对照失败时会重试一次。
