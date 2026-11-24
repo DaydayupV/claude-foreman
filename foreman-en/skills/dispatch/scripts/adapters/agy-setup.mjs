@@ -10,9 +10,11 @@ import { isDeepStrictEqual } from 'node:util';
 import { acquireLock } from '../locks.mjs';
 import { foremanStateDir, readRawConfig, ENTRY } from '../config.mjs';
 import { RUNS_ROOT, readMeta, isRunning } from '../records.mjs';
-import { M, binCommand, pathCommand, replaceFile, pidExists, retryBusy, processStartTimes, pathKey, sleep } from '../util.mjs';
+import { M, binCommand, pathCommand, replaceFile, pidExists, retryBusy, processStartTimes, pathKey } from '../util.mjs';
 
 const windows = process.platform === 'win32';
+// 只给测试用，打开后照常探测，用来覆盖保留下来的 Windows 沙箱路径。
+const testWindowsSandbox = process.env.FOREMAN_TEST_AGY_WINDOWS_SANDBOX === '1';
 // Windows 启动沙箱命令较慢。给探针命令留出时间，并保留宿主网络复测的时间。
 const probeCommandBudget = windows ? 330000 : 120000;
 const probeBudget = windows ? 360000 : 120000;
@@ -380,6 +382,7 @@ function sameVolume(a, b) {
 // 第 4 节：版本、系统版本和项目卷共同构成缓存身份，升级后重新测。
 export function agySandboxInfo(name, sandbox) {
   const results = sandbox.results || {};
+  if (results.platform === 'windows') return { fix: M.fixAgySandboxWindows, reason: M.agySandboxWindowsReason };
   if (results.layout === 'unavailable') return { fix: M.fixAgySandboxLayout, reason: M.agySandboxUnconfirmedReason };
   if (results.start_error) return { fix: M.fixAgySandboxStart(results.start_error), reason: M.agySandboxStartReason };
   if (results.settings_error) return { fix: M.fixAgySandboxSettings(name, results.settings_error), reason: M.agySandboxSettingsReason };
@@ -392,12 +395,14 @@ export function agySandboxInfo(name, sandbox) {
 export async function probeSandbox({ agent, cwd, addDirs = [], version, run, force = false, deadline = Date.now() + probeBudget }) {
   if (windows) deadline = Math.min(deadline, Date.now() + probeBudget);
   timeLeft(deadline);
-  const cacheFile = path.join(foremanStateDir(), 'agy-sandbox.json');
   const project = windows ? pathKey(fs.realpathSync.native(cwd)) : fs.realpathSync(cwd);
   const volume = [version, process.platform, os.release(), path.parse(project).root, fs.statSync(cwd).dev];
   // Windows 的沙箱权限与工作区有关；旧的卷级缓存无法证明这个项目也只读。
   const key = JSON.stringify(windows ? [...volume, readonlySessionCacheMarker, project,
     [...new Set(addDirs.map((dir) => pathKey(fs.realpathSync.native(dir))))].sort()] : volume);
+  // agy 的 Windows 沙箱不拦用户目录以外的读取，Windows 上不给 shell，也不探测；下面的探测逻辑留给以后 agy 改掉这一点时用。
+  if (windows && !testWindowsSandbox) return { key, available: false, results: { platform: 'windows' }, at: new Date().toISOString() };
+  const cacheFile = path.join(foremanStateDir(), 'agy-sandbox.json');
   if (addDirs.some((dir) => !sameVolume(cwd, dir))) return { key, available: false, results: { layout: 'cross_volume' }, at: new Date().toISOString() };
   const contains = (root, dir) => {
     const rel = path.relative(fs.realpathSync(root), fs.realpathSync(dir));
@@ -479,12 +484,7 @@ export async function probeSandbox({ agent, cwd, addDirs = [], version, run, for
     const out = await run({ access: 'probe', runDir: dir, sandbox: true, probeCommands: commands, stopOnStartFailure: true,
       prompt: M.agyProbePrompt(commands), timeoutMs: timeLeft(deadline, probeCommandBudget), deadline });
     timeLeft(deadline);
-    let after = await networkControl(deadline);
-    // 经代理上网时探针后的对照偶尔超时，重试一次再下结论。
-    if (!after.dns || !after.https) {
-      await sleep(timeLeft(deadline, 2000));
-      after = await networkControl(deadline);
-    }
+    const after = await networkControl(deadline);
     timeLeft(deadline);
     const results = {};
     for (const item of out.tools || []) {
@@ -507,17 +507,19 @@ export async function probeSandbox({ agent, cwd, addDirs = [], version, run, for
     else if (/^error:(ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH)$/.test(networkError)) {
       results.network = [before, after].every((c) => c.dns && c.https) ? 'sandbox_denied' : 'unconfirmed';
     }
-    // 超时、连接被重置这类说不清是沙箱慢还是网络抖动的错误：这次不给 shell，也不写缓存，下次重测。
+    // 超时、连接被重置这类说不清是沙箱慢还是网络抖动的错误按未确认处理。
     else if (networkError?.startsWith('error:')) results.network = 'unconfirmed';
     if (networkError) results.network_error = networkError;
     const unchanged = canaryFiles.every((file) => fs.existsSync(file) && fs.readFileSync(file, 'utf8') === canary);
+    const allowed = Object.keys(M.agySandboxItems).some((n) => results[n] === 'allowed');
     // environment 只记录环境变量可见性，不参与可用判定；完整探针仍要求它返回。
-    cache = { key, available: out.status === 'done' && unchanged && accessChecks.every((n) => results[n] === 'sandbox_denied'),
+    cache = { key, available: !allowed && out.status === 'done' && unchanged && accessChecks.every((n) => results[n] === 'sandbox_denied'),
       results, at: new Date().toISOString() };
-    // 探针这一轮没跑完（断流、钩子出错、模型没照做）时结论不可靠：这次按没有沙箱处理，但不写缓存，下次再测。
+    // 探针这一轮没跑完（断流、钩子出错、模型没照做）时，默认不写缓存，下次再测。
     // 命令启动失败或读不出权限设置时，结论已经定了，照样写缓存（不可用，24 小时后过期）。
     const complete = out.status === 'done' && resultNames.every((n) => n in results);
-    if (results.network !== 'unconfirmed' && (results.start_error || results.settings_error || complete || !unchanged)) {
+    // 有一项读得到或写得进去，沙箱就肯定没拦住，探针没跑完也不影响结论。
+    if (allowed || (results.network !== 'unconfirmed' && (results.start_error || results.settings_error || complete || !unchanged))) {
       // 缓存只是省下一次探针；锁忙不影响本次结论，但总时限仍要生效。
       try { await locked(() => {
         const store = readStore();
