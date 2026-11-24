@@ -10,7 +10,7 @@ import { M, die, killTree, readAttachments, filesOutside, focusFiles, relativePa
 import { D, modelLabel, toolLabel } from '../format.mjs';
 import { defaultMaxParallel } from './parallel.mjs';
 import { AGY_EFFORTS, splitAgyModel, agyFamilies, agyModelId } from './agy-models.mjs';
-import { agyCommand, guardEnvironment, policyFor, prepareAgyRun, preflightAgy, scanProject, queryAgy, probeSandbox, agySandboxInfo, workDir, removeWorkDir, timeLeft } from './agy-setup.mjs';
+import { agyCommand, guardEnvironment, policyFor, prepareAgyRun, preflightAgy, scanProject, queryAgy, probeSandbox, agySandboxInfo, windowsSandboxSettings, workDir, removeWorkDir, timeLeft } from './agy-setup.mjs';
 import { spawnSync } from 'node:child_process';
 
 const capabilities = { modes: ['discuss', 'review'], isolation: 'tools', reads_code: true, reads_images: false, native_schema: false,
@@ -61,7 +61,7 @@ async function runOnce({ agent, model = agent.model, cwd, addDirs = [], access =
   const policy = policyFor({ cwd, addDirs, access, runDir, sandbox, probeCommands });
   let prepared;
   try { prepared = await prepareAgyRun(agent, policy, deadline); out.notes.push(...prepared.notes); }
-  catch (e) { return { ...out, status: e.code === 'ETIMEDOUT' || Date.now() >= deadline ? 'timeout' : 'failed', errors: [e.message] }; }
+  catch (e) { return { ...out, status: e.code === 'ETIMEDOUT' || Date.now() >= deadline ? 'timeout' : 'failed', errors: [e.message], errorCode: e.code }; }
   timeoutMs = deadline - Date.now();
   if (timeoutMs <= 0) { prepared.cleanup(); return { ...out, status: 'timeout' }; }
   const decisions = path.join(runDir, 'agy-guard.jsonl');
@@ -290,12 +290,17 @@ async function agySession(run, schema, promptFor) {
     const probe = await probeSandbox({ agent, cwd, addDirs, version: version.stdout.trim(), run: lowLevel, deadline });
     timeLeft(deadline);
     sandbox = probe.available;
+    let sandboxReason;
+    if (process.platform === 'win32' && sandbox) {
+      try { windowsSandboxSettings(agent, deadline); }
+      catch { sandbox = false; sandboxReason = M.agySandboxSettingsReason; }
+    }
     meta.sandbox = sandbox ? 'agy-sandbox' : 'files-only';
     writeMeta();
     if (probe.tested) notes.push(probe.results.start_error ? M.agySandboxStartResult(probe.results.start_error) : M.agySandboxResult(probe.results));
     nextPrompt = promptFor(sandbox);
     if (!sandbox) {
-      notes.push(M.agyNoSandbox(agySandboxInfo(agentName, probe).reason));
+      notes.push(M.agyNoSandbox(sandboxReason ?? agySandboxInfo(agentName, probe).reason));
       if (probe.results.layout === 'cross_volume') notes.push(M.agyNoShellCrossVolume);
       if (probe.results.network === 'host_offline') notes.push(M.agyNoShellOffline);
       const list = spawnSync('git', ['ls-files'], { cwd, encoding: 'utf8', windowsHide: true, timeout: timeLeft(deadline, 60000) });
@@ -360,6 +365,12 @@ async function checkAgy(name, agent, efforts = [], catalog = () => agyCatalog(ag
     out.notes.push(...await preflightAgy(policyFor({ cwd, runDir: dir }), Date.now() + 120000));
     const run = (options) => runAgy({ agent, model, cwd, ...options });
     out.sandbox = await probeSandbox({ agent, cwd, version: out.version, run, force });
+    if (process.platform === 'win32' && out.sandbox.available) {
+      try { windowsSandboxSettings(agent); }
+      catch (e) {
+        out.sandbox = { ...out.sandbox, available: false, results: { ...out.sandbox.results, settings_error: e.message.slice(0, 300) } };
+      }
+    }
     if (!out.sandbox.available) {
       const { fix, reason } = agySandboxInfo(name, out.sandbox);
       out.fix = fix; out.notes.push(M.agyNoShellCheck(reason));
