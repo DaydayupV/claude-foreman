@@ -148,7 +148,9 @@ else if (operation === 'catalog') {
     response: hooks.flatMap((hook) => hook.actions.map((a) => [hook.name, hook.enabled ? 'enabled' : 'disabled', a.event, a.matcher || '', a.type, a.command].join('\t'))).join('\n') + '\n',
     command: { name: 'hooks', data: { hooks } } }));
 } else if (operation === 'permissions') {
-  console.log(JSON.stringify({ command: { name: 'permissions', data: { permissions: [{ scope: 'global', deny: s.global_deny }] } } }));
+  const permissions = [{ scope: 'global', deny: s.global_deny }];
+  process.stdout.write(s.permissions_output ?? `${JSON.stringify({ command: { name: 'permissions', data: { permissions } } })}\n`);
+  process.exitCode = s.permissions_exit ?? 0;
 } else if (operation === 'quota') console.log(JSON.stringify(s.quota || { conversation_id: '', status: 'SUCCESS', response: 'Gemini Models\tweekly\t96%\n',
   command: { name: 'usage', data: { groups: [{ name: 'Gemini Models', buckets: [
     { name: 'Weekly Limit Remaining', window: 'weekly', remaining_fraction: 0.96, reset_time: '2026-11-02T00:00:00Z' },

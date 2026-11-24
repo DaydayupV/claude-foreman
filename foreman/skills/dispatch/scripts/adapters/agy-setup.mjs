@@ -10,12 +10,13 @@ import { isDeepStrictEqual } from 'node:util';
 import { acquireLock } from '../locks.mjs';
 import { foremanStateDir, readRawConfig, ENTRY } from '../config.mjs';
 import { RUNS_ROOT, readMeta, isRunning } from '../records.mjs';
-import { M, binCommand, pathCommand, replaceFile, pidExists, retryBusy, processStartTimes, pathKey } from '../util.mjs';
+import { M, binCommand, pathCommand, replaceFile, pidExists, retryBusy, processStartTimes, pathKey, sleep } from '../util.mjs';
 
 const windows = process.platform === 'win32';
-// Windows 启动沙箱命令较慢。给五条命令单独留出时间，并保留宿主网络复测的时间。
+// Windows 启动沙箱命令较慢。给探针命令留出时间，并保留宿主网络复测的时间。
 const probeCommandBudget = windows ? 330000 : 120000;
 const probeBudget = windows ? 360000 : 120000;
+const readonlySessionCacheMarker = 'readonly-session-v2';
 const SOURCE = new URL('./agy-guard.mjs', import.meta.url);
 const HASH = (s) => createHash('sha256').update(s).digest('hex');
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -302,17 +303,20 @@ function globalMcpNotes() {
   return notes;
 }
 // 会话设置会替换全局 deny 数组，先从 agy 读取当前生效的全局规则。
-function windowsSandboxSettings(agent, deadline) {
-  const result = queryAgy(agent, ['-p', '/permissions', '--output-format', 'json'], 60000, deadline);
-  if (result.status !== 0 || result.error) throw new Error(M.agyQueryFailed('/permissions', result.error?.message || result.stderr));
-  const { command } = strictJson(result.stdout);
-  const scopes = command?.name === 'permissions' && command.data?.permissions;
-  const globalScopes = Array.isArray(scopes) ? scopes.filter((scope) => scope?.scope === 'global') : [];
-  if (globalScopes.length !== 1) throw new Error(M.agyQueryFailed('/permissions', 'command.data.permissions.global'));
-  const { deny = [] } = globalScopes[0];
-  if (!Array.isArray(deny) || !deny.every((rule) => typeof rule === 'string')) throw new Error(M.agyQueryFailed('/permissions', 'permissions.deny'));
-  return { agentMode: '', toolPermission: 'proceed-in-sandbox',
-    permissions: { deny: [...new Set([...deny, 'write_file(*)', 'read_url(*)'])] } };
+export function windowsSandboxSettings(agent, deadline) {
+  try {
+    const result = queryAgy(agent, ['-p', '/permissions', '--output-format', 'json'], 60000, deadline);
+    if (result.status !== 0 || result.error) throw new Error(result.error?.message || result.stderr || `exit ${result.status}`);
+    const { command } = strictJson(result.stdout);
+    const scopes = command?.name === 'permissions' && command.data?.permissions;
+    const globalScopes = Array.isArray(scopes) ? scopes.filter((scope) => scope?.scope === 'global') : [];
+    if (globalScopes.length !== 1) throw new Error('command.data.permissions.global');
+    const { deny = [] } = globalScopes[0];
+    if (!Array.isArray(deny) || !deny.every((rule) => typeof rule === 'string')) throw new Error('permissions.deny');
+    return { agentMode: '', toolPermission: 'proceed-in-sandbox',
+      // allow 和 ask 固定为空，因为 agy 的放行规则会放宽沙箱的挂载和出站范围，只读席不需要任何放行。
+      permissions: { allow: [], deny: [...new Set([...deny, 'write_file(*)', 'read_url(*)'])], ask: [] } };
+  } catch (e) { throw Object.assign(new Error(M.agyQueryFailed('/permissions', e.message)), { code: 'AGY_SETTINGS' }); }
 }
 
 export async function prepareAgyRun(agent, policy, deadline) {
@@ -378,6 +382,7 @@ export function agySandboxInfo(name, sandbox) {
   const results = sandbox.results || {};
   if (results.layout === 'unavailable') return { fix: M.fixAgySandboxLayout, reason: M.agySandboxUnconfirmedReason };
   if (results.start_error) return { fix: M.fixAgySandboxStart(results.start_error), reason: M.agySandboxStartReason };
+  if (results.settings_error) return { fix: M.fixAgySandboxSettings(name, results.settings_error), reason: M.agySandboxSettingsReason };
   if (results.network === 'host_offline') return { fix: M.fixAgySandboxOffline(name), reason: M.agySandboxOfflineReason };
   const items = M.list(Object.keys(M.agySandboxItems).filter((key) => results[key] === 'allowed').map((key) => M.agySandboxItems[key]));
   if (items) return { fix: M.fixAgySandboxLeaky(name, items), reason: M.agySandboxLeakyReason(items), leaky: true };
@@ -385,13 +390,14 @@ export function agySandboxInfo(name, sandbox) {
 }
 
 export async function probeSandbox({ agent, cwd, addDirs = [], version, run, force = false, deadline = Date.now() + probeBudget }) {
+  if (windows) deadline = Math.min(deadline, Date.now() + probeBudget);
   timeLeft(deadline);
   const cacheFile = path.join(foremanStateDir(), 'agy-sandbox.json');
-  const project = fs.realpathSync(cwd);
+  const project = windows ? pathKey(fs.realpathSync.native(cwd)) : fs.realpathSync(cwd);
   const volume = [version, process.platform, os.release(), path.parse(project).root, fs.statSync(cwd).dev];
   // Windows 的沙箱权限与工作区有关；旧的卷级缓存无法证明这个项目也只读。
-  const key = JSON.stringify(windows ? [...volume, 'readonly-session-v1', project,
-    [...new Set(addDirs.map((dir) => fs.realpathSync(dir)))].sort()] : volume);
+  const key = JSON.stringify(windows ? [...volume, readonlySessionCacheMarker, project,
+    [...new Set(addDirs.map((dir) => pathKey(fs.realpathSync.native(dir))))].sort()] : volume);
   if (addDirs.some((dir) => !sameVolume(cwd, dir))) return { key, available: false, results: { layout: 'cross_volume' }, at: new Date().toISOString() };
   const contains = (root, dir) => {
     const rel = path.relative(fs.realpathSync(root), fs.realpathSync(dir));
@@ -406,46 +412,79 @@ export async function probeSandbox({ agent, cwd, addDirs = [], version, run, for
     catch (e) { if (e.code !== 'ENOENT' && !(e instanceof SyntaxError)) throw e; return { entries: {} }; }
   };
   // 缓存写不进去时一般只是少省一次探针；但留下的旧结论是"可用"、而这次要撤销它时，不能让下一轮继续借它放行命令。
-  const keepNoStalePositive = (e) => {
-    if (readStore().entries[key]?.available === true) throw new Error(M.agyCacheStale(cacheFile, e.message));
+  const keepNoStalePositive = (e, keys = () => [key]) => {
+    const { entries } = readStore();
+    if (keys(entries).some((k) => entries[k]?.available === true)) throw new Error(M.agyCacheStale(cacheFile, e.message));
   };
   let cache;
   if (force) {
+    const staleKeys = (entries) => {
+      if (!windows) return entries[key] ? [key] : [];
+      return Object.keys(entries).filter((k) => {
+        let parts;
+        try { parts = JSON.parse(k); } catch { return false; }
+        return parts?.[5] === readonlySessionCacheMarker && typeof parts[6] === 'string' && pathKey(parts[6]) === project;
+      });
+    };
     try { await locked(() => {
       const store = readStore();
-      if (store.entries[key]) {
-        delete store.entries[key];
+      const keys = staleKeys(store.entries);
+      if (keys.length) {
+        for (const k of keys) delete store.entries[k];
         atomic(cacheFile, JSON.stringify(store, null, 2) + '\n');
       }
     }, deadline); }
-    catch (e) { if (e.code === 'ETIMEDOUT') throw e; keepNoStalePositive(e); }
+    catch (e) { if (e.code === 'ETIMEDOUT') throw e; keepNoStalePositive(e, staleKeys); }
   }
   else cache = readStore().entries[key];
   // 旧缓存没有宿主网络对照，不能继续用来证明沙箱禁网。
-  if (cache?.results?.network_control && !(cache.available === false && Date.parse(cache.at) < Date.now() - 86400000)) return cache;
+  // 沙箱没拦住某一项时，重测结果也不会变，不按 24 小时过期；agy 升级后缓存键会变，自然重测。
+  const leaky = Object.keys(M.agySandboxItems).some((n) => cache?.results?.[n] === 'allowed');
+  if (cache?.results?.network_control && !(cache.available === false && !leaky && Date.parse(cache.at) < Date.now() - 86400000)) return cache;
   const before = await networkControl(deadline);
   timeLeft(deadline);
   if (!before.dns || !before.https) return { key, available: false,
     results: { network: 'host_offline', network_control: { before } }, at: new Date().toISOString(), tested: true };
   const nonce = randomUUID(), dir = fs.mkdtempSync(path.join(foremanStateDir(), 'agy-probe-'));
   const inside = path.join(cwd, `.foreman-agy-probe-${nonce}`), outside = path.join(dir, 'outside'), home = path.join(os.homedir(), `.foreman-agy-probe-${nonce}`);
+  // agy 的 Windows 沙箱不拦用户目录以外的读取，读得到就不给 shell。
+  const outsideReadFile = windows ? path.join(process.env.ProgramData || 'C:\\ProgramData', `foreman-agy-probe-${nonce}`, 'read.txt') : null;
+  const canaryFiles = [inside, outside, home];
   const prefix = `FOREMAN_AGY_PROBE:${nonce}:`, canary = `foreman ${nonce}`;
   const tasks = { write_project: `fs.writeFileSync(${JSON.stringify(inside)}, 'changed')`, write_outside: `fs.writeFileSync(${JSON.stringify(outside)}, 'changed')`,
     read_home: `fs.readFileSync(${JSON.stringify(home)}, 'utf8')` };
+  if (outsideReadFile) {
+    canaryFiles.push(outsideReadFile);
+    tasks.read_outside = `fs.readFileSync(${JSON.stringify(outsideReadFile)}, 'utf8')`;
+  }
+  const accessChecks = [...Object.keys(tasks), 'network'], resultNames = [...accessChecks, 'environment'];
   const commands = Object.entries(tasks).map(([name, op]) => {
     const code = `const fs=require('node:fs');let value;try{${op};value='allowed'}catch(e){value=['EACCES','EPERM'].includes(e.code)?'sandbox_denied':'error:'+e.code}console.log(${JSON.stringify(prefix)}+JSON.stringify({name:${JSON.stringify(name)},value}))`;
     return probeCommand(code);
   });
   commands.push(probeCommand(`require('node:https').get('https://example.com',r=>{r.resume();console.log(${JSON.stringify(prefix)}+JSON.stringify({name:'network',value:'allowed'}))}).on('error',e=>console.log(${JSON.stringify(prefix)}+JSON.stringify({name:'network',value:'error:'+e.code}))).setTimeout(5000,function(){this.destroy(Object.assign(new Error('timeout'),{code:'ETIMEDOUT'}))})`));
   commands.push(probeCommand(`console.log(${JSON.stringify(prefix)}+JSON.stringify({name:'environment',value:!!process.env.FOREMAN_AGY_GUARD}))`));
+  let outsideReadDir;
   try {
-    // 项目目录不可写（只读挂载、ACL）时放不了探针文件：按沙箱没确认处理，不给 shell、不写缓存，讨论照常走只读文件。
-    try { for (const file of [inside, outside, home]) fs.writeFileSync(file, canary, { flag: 'wx' }); }
+    // 放不了探针文件（只读挂载、ACL）时按沙箱没确认处理，不给 shell、不写缓存，讨论照常走只读文件。
+    try {
+      if (outsideReadFile) {
+        const folder = path.dirname(outsideReadFile);
+        fs.mkdirSync(folder);
+        outsideReadDir = folder;
+      }
+      for (const file of canaryFiles) fs.writeFileSync(file, canary, { flag: 'wx' });
+    }
     catch (e) { return { key, available: false, results: { canary: `error:${e.code || e.message}` }, at: new Date().toISOString(), tested: true }; }
     const out = await run({ access: 'probe', runDir: dir, sandbox: true, probeCommands: commands, stopOnStartFailure: true,
       prompt: M.agyProbePrompt(commands), timeoutMs: timeLeft(deadline, probeCommandBudget), deadline });
     timeLeft(deadline);
-    const after = await networkControl(deadline);
+    let after = await networkControl(deadline);
+    // 经代理上网时探针后的对照偶尔超时，重试一次再下结论。
+    if (!after.dns || !after.https) {
+      await sleep(timeLeft(deadline, 2000));
+      after = await networkControl(deadline);
+    }
     timeLeft(deadline);
     const results = {};
     for (const item of out.tools || []) {
@@ -459,8 +498,9 @@ export async function probeSandbox({ agent, cwd, addDirs = [], version, run, for
     }
     // agy 自己的沙箱起不来时每条命令都跑不起来：记下原文、缓存不可用结论，免得每次派出都重测。
     const startError = (out.tools || []).find((item) => item.tool === 'run_command' && item.error?.startsWith('Command failed to run:'))?.error;
-    if (!['write_project', 'write_outside', 'read_home', 'network', 'environment'].some((n) => n in results) && startError)
+    if (!resultNames.some((n) => n in results) && startError)
       results.start_error = startError.slice('Command failed to run:'.length).trim().slice(0, 300);
+    if (out.errorCode === 'AGY_SETTINGS') results.settings_error = out.errors[0].slice(0, 300);
     const networkError = results.network;
     results.network_control = { before, after };
     if (/^error:(EPERM|EACCES)$/.test(networkError)) results.network = 'sandbox_denied';
@@ -470,14 +510,14 @@ export async function probeSandbox({ agent, cwd, addDirs = [], version, run, for
     // 超时、连接被重置这类说不清是沙箱慢还是网络抖动的错误：这次不给 shell，也不写缓存，下次重测。
     else if (networkError?.startsWith('error:')) results.network = 'unconfirmed';
     if (networkError) results.network_error = networkError;
-    const unchanged = [inside, outside, home].every((file) => fs.existsSync(file) && fs.readFileSync(file, 'utf8') === canary);
+    const unchanged = canaryFiles.every((file) => fs.existsSync(file) && fs.readFileSync(file, 'utf8') === canary);
     // environment 只记录环境变量可见性，不参与可用判定；完整探针仍要求它返回。
-    cache = { key, available: out.status === 'done' && unchanged && ['write_project', 'write_outside', 'read_home', 'network'].every((n) => results[n] === 'sandbox_denied'),
+    cache = { key, available: out.status === 'done' && unchanged && accessChecks.every((n) => results[n] === 'sandbox_denied'),
       results, at: new Date().toISOString() };
     // 探针这一轮没跑完（断流、钩子出错、模型没照做）时结论不可靠：这次按没有沙箱处理，但不写缓存，下次再测。
-    // 例外是 start_error：命令确实没能启动，结论已经定了，照样写缓存（不可用，24 小时后过期）。
-    const complete = out.status === 'done' && ['write_project', 'write_outside', 'read_home', 'network', 'environment'].every((n) => n in results);
-    if (results.network !== 'unconfirmed' && (results.start_error || complete || !unchanged)) {
+    // 命令启动失败或读不出权限设置时，结论已经定了，照样写缓存（不可用，24 小时后过期）。
+    const complete = out.status === 'done' && resultNames.every((n) => n in results);
+    if (results.network !== 'unconfirmed' && (results.start_error || results.settings_error || complete || !unchanged)) {
       // 缓存只是省下一次探针；锁忙不影响本次结论，但总时限仍要生效。
       try { await locked(() => {
         const store = readStore();
@@ -488,6 +528,7 @@ export async function probeSandbox({ agent, cwd, addDirs = [], version, run, for
     }
     return { ...cache, tested: true };
   } finally {
+    if (outsideReadDir) removeWorkDir(outsideReadDir);
     for (const file of [inside, home]) fs.rmSync(file, { force: true });
     removeWorkDir(dir);
   }

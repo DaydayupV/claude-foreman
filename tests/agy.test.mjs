@@ -10,9 +10,14 @@ import { AGY_EFFORTS, splitAgyModel, agyFamilies, agyModelId } from '../foreman/
 
 const SCRIPTS = path.join(ROOT, 'foreman/skills/dispatch/scripts'), GUARD = path.join(SCRIPTS, 'adapters/agy-guard.mjs'), M = MESSAGES.zh;
 const agent = () => ({ type: 'agy cli', model: 'gemini-3.8-flash', bin: AGY });
+const permissionsOutput = (permissions) => JSON.stringify({ command: { name: 'permissions', data: { permissions } } });
 const configure = (h, change = () => {}) => {
   const tmp = path.join(h.home, 'tmp'); fs.mkdirSync(tmp, { recursive: true });
   Object.assign(h.env, { TMP: tmp, TEMP: tmp, TMPDIR: tmp });
+  if (process.platform === 'win32') {
+    h.env.ProgramData = path.join(h.home, 'ProgramData');
+    fs.mkdirSync(h.env.ProgramData, { recursive: true });
+  }
   // 宿主网络对照也隔离：只模拟 DNS/HTTPS，不让测试访问公网。
   const network = h.write('network-fixture.mjs', `import fs from 'node:fs';
 import dns from 'node:dns/promises';
@@ -608,12 +613,13 @@ test('agy 沙箱探针失败不给 shell、附文件清单，缓存按版本失�
     assert.ok(args.includes('--sandbox'));
     assert.equal(args.includes('--dangerously-skip-permissions'), false);
     assert.deepEqual(JSON.parse(args[args.indexOf('--settings') + 1]), {
-      agentMode: '', toolPermission: 'proceed-in-sandbox', permissions: { deny: ['read_file(private)', 'read_url(*)', 'write_file(*)'] },
+      agentMode: '', toolPermission: 'proceed-in-sandbox', permissions: { allow: [], deny: ['read_file(private)', 'read_url(*)', 'write_file(*)'], ask: [] },
     });
   }
   assert.equal(first.sandbox, 'files-only'); assert.equal(JSON.parse(read(path.join(first.run_dir, 'meta.json'))).sandbox, first.sandbox);
-  assert.ok(first.notes.includes(M.agyNoSandbox(M.agySandboxLeakyReason(M.list(Object.values(M.agySandboxItems)))))); assert.match(read(path.join(first.run_dir, 'brief.md')), /source.txt/);
-  const checked = output(await h.bridge(['check', '--agent', 'agy'])).agents.agy, items = M.list(Object.values(M.agySandboxItems));
+  const items = M.list(Object.entries(M.agySandboxItems).filter(([name]) => name !== 'read_outside' || process.platform === 'win32').map(([, label]) => label));
+  assert.ok(first.notes.includes(M.agyNoSandbox(M.agySandboxLeakyReason(items)))); assert.match(read(path.join(first.run_dir, 'brief.md')), /source.txt/);
+  const checked = output(await h.bridge(['check', '--agent', 'agy'])).agents.agy;
   assert.equal(checked.fix, M.fixAgySandboxLeaky('agy', items));
   assert.ok(checked.notes.includes(M.agyNoShellCheck(M.agySandboxLeakyReason(items))));
   assert.equal(checked.notes.includes(M.agyNoSandbox(M.agySandboxLeakyReason(items))), false);
@@ -645,20 +651,105 @@ test('agy 沙箱探针失败不给 shell、附文件清单，缓存按版本失�
   assert.equal(unavailable.error, M.agyQuotaInvalid); assert.equal(unavailable.fix, M.fixAgySandboxLeaky('agy', items));
 });
 
-test('agy 沙箱的原因和修法共用 results 分类，中英覆盖布局、启动、离线、不隔离和未完成', (t) => {
-  const h = sandbox(t), results = [{ layout: 'unavailable' }, { start_error: 'synthetic-start' }, { network: 'host_offline', read_home: 'allowed' },
-    { write_project: 'allowed', write_outside: 'allowed', read_home: 'allowed', network: 'allowed' }, { network: 'unconfirmed' }];
+test('agy Windows 主目录外读取探针决定 shell 权限、清理 canary 并使旧缓存失效', async (t) => {
+  if (process.platform === 'win32') {
+    const h = sandbox(t); configure(h); await install(h);
+    const args = ['check', '--agent', 'agy'], cache = path.join(stateDir(h), 'agy-sandbox.json');
+    const isolated = output(await h.bridge(args)).agents.agy.sandbox;
+    assert.equal(isolated.available, true);
+    for (const name of ['write_project', 'write_outside', 'read_home', 'read_outside', 'network']) {
+      assert.equal(isolated.results[name], 'sandbox_denied');
+    }
+    const entry = JSON.parse(read(cache)).entries[isolated.key], keyParts = JSON.parse(entry.key);
+    assert.equal(keyParts[5], 'readonly-session-v2');
+    keyParts[5] = 'readonly-session-v1';
+    const oldKey = JSON.stringify(keyParts);
+    delete entry.results.read_outside;
+    write(cache, { entries: { [oldKey]: { ...entry, key: oldKey } } });
+
+    const ready = path.join(h.home, 'probe-ready'), release = path.join(h.home, 'probe-release');
+    h.scenario({ probe_errors: { read_outside: 'allowed' }, probe_ready: ready, probe_wait_for: release });
+    const check = h.startBridge(args);
+    await poll(() => fs.existsSync(ready), '主目录外读取探针启动');
+    const dirs = fs.readdirSync(h.env.ProgramData);
+    assert.equal(dirs.length, 1);
+    const [dir] = dirs;
+    assert.match(dir, /^foreman-agy-probe-/);
+    assert.equal(read(path.join(h.env.ProgramData, dir, 'read.txt')), `foreman ${dir.slice('foreman-agy-probe-'.length)}`);
+    write(release, 'ready');
+    const leaky = output(await check.done).agents.agy, item = '读主目录以外的文件';
+    assert.equal(leaky.sandbox.tested, true);
+    assert.equal(leaky.sandbox.results.read_outside, 'allowed');
+    assert.equal(leaky.sandbox.available, false);
+    assert.equal(leaky.fix, M.fixAgySandboxLeaky('agy', item));
+    assert.ok(leaky.notes.includes(M.agyNoShellCheck(M.agySandboxLeakyReason(item))));
+    assert.deepEqual(fs.readdirSync(h.env.ProgramData), []);
+  } else t.skip('仅 Windows 探测主目录外读取');
+});
+
+test('agy 沙箱的原因和修法共用 results 分类，中英覆盖布局、启动、权限设置、离线、不隔离和未完成', (t) => {
+  const h = sandbox(t), results = [{ layout: 'unavailable' }, { start_error: 'synthetic-start', settings_error: 'synthetic-settings' },
+    { settings_error: 'synthetic-settings' }, { network: 'host_offline', read_home: 'allowed' },
+    { write_project: 'allowed', write_outside: 'allowed', read_home: 'allowed', read_outside: 'allowed', network: 'allowed' }, { network: 'unconfirmed' }];
   for (const lang of ['zh', 'en']) {
     const m = MESSAGES[lang], items = m.list(Object.values(m.agySandboxItems));
     const out = moduleCall({ ...h, env: { ...h.env, FOREMAN_LANG: lang } }, 'adapters/agy-setup.mjs',
       `console.log(JSON.stringify(${JSON.stringify(results)}.map(results=>x.agySandboxInfo('chosen', {available:false,results}))));`);
     assert.deepEqual(out, [
       { fix: m.fixAgySandboxLayout, reason: m.agySandboxUnconfirmedReason }, { fix: m.fixAgySandboxStart('synthetic-start'), reason: m.agySandboxStartReason },
+      { fix: m.fixAgySandboxSettings('chosen', 'synthetic-settings'), reason: m.agySandboxSettingsReason },
       { fix: m.fixAgySandboxOffline('chosen'), reason: m.agySandboxOfflineReason },
       { fix: m.fixAgySandboxLeaky('chosen', items), reason: m.agySandboxLeakyReason(items), leaky: true },
       { fix: m.fixAgySandboxRetry('chosen'), reason: m.agySandboxUnconfirmedReason },
     ]);
   }
+});
+
+test('agy /permissions 异常时探针缓存不可用并给出修法', { skip: process.platform !== 'win32' }, async (t) => {
+  const h = sandbox(t); configure(h); await install(h);
+  const cache = path.join(stateDir(h), 'agy-sandbox.json');
+  const cases = [
+    ['非零退出', { permissions_exit: 7 }, 'exit 7'],
+    ['没有 global', { permissions_output: permissionsOutput([{ scope: 'project' }]) }, 'command.data.permissions.global'],
+    ['两个 global', { permissions_output: permissionsOutput([{ scope: 'global' }, { scope: 'global' }]) }, 'command.data.permissions.global'],
+    ['deny 不是字符串数组', { permissions_output: permissionsOutput([{ scope: 'global', deny: ['read_file(private)', 7] }]) }, 'permissions.deny'],
+  ];
+  for (const [i, [label, scenario, detail]] of cases.entries()) {
+    h.scenario({ ...scenario, version: `settings-${i}` });
+    const checked = output(await h.bridge(['check', '--agent', 'agy'])).agents.agy;
+    const error = M.agyQueryFailed('/permissions', detail), { tested, ...entry } = checked.sandbox;
+    assert.equal(tested, true, label);
+    assert.equal(entry.available, false, label);
+    assert.equal(entry.results.settings_error, error, label);
+    assert.equal(checked.fix, M.fixAgySandboxSettings('agy', error), label);
+    assert.ok(checked.notes.includes(M.agyNoShellCheck(M.agySandboxSettingsReason)), label);
+    assert.deepEqual(JSON.parse(read(cache)).entries[entry.key], entry, label);
+  }
+  assert.equal(h.calls().filter((c) => c.operation === 'permissions').length, cases.length);
+  assert.equal(modelCalls(h).some((c) => c.operation === 'probe'), false);
+});
+
+test('agy 命中可用缓存后权限查询失败时派席改用只读文件，check 报不可用', { skip: process.platform !== 'win32' }, async (t) => {
+  const h = sandbox(t); configure(h); await install(h); h.initGit();
+  assert.equal(output(await run(h)).sandbox, 'agy-sandbox');
+  const cache = path.join(stateDir(h), 'agy-sandbox.json'), before = read(cache), callsBefore = h.calls().length;
+  h.scenario({ permissions_exit: 7 });
+  const seat = output(await run(h));
+  assert.equal(seat.status, 'done'); assert.equal(seat.sandbox, 'files-only');
+  assert.equal(JSON.parse(read(path.join(seat.run_dir, 'meta.json'))).sandbox, 'files-only');
+  assert.ok(seat.notes.includes(M.agyNoSandbox(M.agySandboxSettingsReason)));
+  const request = h.calls().slice(callsBefore).find((c) => c.operation === 'run');
+  assert.equal(request.args.includes('--sandbox'), false);
+  assert.ok(JSON.parse(request.stdin).message.content.includes(M.agyFileList(h.git(['ls-files']))));
+  const checked = output(await h.bridge(['check', '--agent', 'agy'])).agents.agy;
+  const error = M.agyQueryFailed('/permissions', 'exit 7');
+  assert.equal(checked.sandbox.tested, undefined);
+  assert.equal(checked.sandbox.available, false); assert.equal(checked.sandbox.results.settings_error, error);
+  assert.equal(checked.fix, M.fixAgySandboxSettings('agy', error));
+  assert.ok(checked.notes.includes(M.agyNoShellCheck(M.agySandboxSettingsReason)));
+  assert.equal(h.calls().slice(callsBefore).filter((c) => c.operation === 'permissions').length, 2);
+  assert.equal(modelCalls(h).filter((c) => c.operation === 'probe').length, 1);
+  assert.equal(read(cache), before);
 });
 
 test('agy 沙箱启动失败缓存原文且再次派出不重测，DONE 命令退出码为 1，中英 check 显示故障', async (t) => {
@@ -706,6 +797,7 @@ test('agy 探针首条启动失败即结束，短时限内缓存结论且不发�
 test('agy 部分探针有结果不记 start_error，全部启动失败只记首条并截到 300 字符', (t) => {
   const h = sandbox(t); configure(h); fs.mkdirSync(stateDir(h), { recursive: true });
   const error = `  exebox: ${'x'.repeat(320)}  `, names = ['write_project', 'write_outside', 'read_home', 'network', 'environment'];
+  if (process.platform === 'win32') names.push('read_outside');
   const results = moduleCall(h, 'adapters/agy-setup.mjs', `const results=[];
 for(const received of ${JSON.stringify([null, ...names])}) results.push(await x.probeSandbox({cwd:${JSON.stringify(h.cwd)},version:'start-'+received,
 run:async({probeCommands})=>({status:'done',tools:probeCommands.map((command,i)=>{
@@ -727,21 +819,25 @@ test('agy 网络探针对照区分权限拒绝、普通断网和超时，未确�
   const h = sandbox(t); configure(h); fs.mkdirSync(stateDir(h), { recursive: true });
   const capture = path.join(h.home, 'network-controls.jsonl');
   const cases = [
-    ['error:EPERM', [{}, { https_error: 'ECONNREFUSED' }], 'sandbox_denied', true],
+    ['error:EPERM', [{}, { https_error: 'ECONNREFUSED' }, { https_error: 'ECONNREFUSED' }], 'sandbox_denied', true],
     ['error:EACCES', [{}, { response_error: true }], 'sandbox_denied', true],
     ...['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ENETUNREACH', 'EHOSTUNREACH'].map((code) => [`error:${code}`, [{}, {}], 'sandbox_denied', true]),
-    ['error:ENOTFOUND', [{}, { dns_error: 'ENOTFOUND' }], 'unconfirmed', false],
-    ['error:ECONNREFUSED', [{}, { https_error: 'ECONNREFUSED' }], 'unconfirmed', false],
+    ['error:ENOTFOUND', [{}, { dns_error: 'ENOTFOUND' }, { dns_error: 'ENOTFOUND' }], 'unconfirmed', false],
+    ['error:ECONNREFUSED', [{}, { https_error: 'ECONNREFUSED' }, { https_error: 'ECONNREFUSED' }], 'unconfirmed', false],
+    ['error:ECONNREFUSED', [{}, { https_error: 'ETIMEDOUT' }, {}], 'sandbox_denied', true],
     // 超时这类说不清原因的错误按 unconfirmed：不给 shell，也不写缓存。
     ['error:ETIMEDOUT', [{}, {}], 'unconfirmed', false], ['error:ECONNRESET', [{}, {}], 'unconfirmed', false], ['allowed', [{}, {}], 'allowed', false],
   ];
   const probe = (network, version) => moduleCall(h, 'adapters/agy-setup.mjs', `console.log(JSON.stringify(await x.probeSandbox({cwd:${JSON.stringify(h.cwd)},version:${JSON.stringify(version)},run:async(options)=>({status:'done',tools:options.probeCommands.map(command=>{const code=Buffer.from(/Buffer\\.from\\('([^']+)'/.exec(command)[1],'base64').toString();const prefix=/FOREMAN_AGY_PROBE:[^"']+:/.exec(code)[0];const name=/name:["']([^"']+)["']/.exec(code)[1];return {tool:'run_command',output:prefix+JSON.stringify({name,value:name==='network'?${JSON.stringify(network)}:name==='environment'?true:'sandbox_denied'})};})})})));`);
   for (const [i, [network, controls, expected, available]] of cases.entries()) {
     h.scenario({ network_controls: controls, network_capture: capture });
+    const capturedBefore = lines(capture).length, after = controls.at(-1);
     const result = probe(network, `network-${i}`);
     assert.equal(result.results.network, expected); assert.equal(result.available, available); assert.equal(result.results.network_error, network);
     assert.equal(result.tested, true); assert.equal(result.results.network_control.before.dns, !controls[0].dns_error);
-    assert.equal(result.results.network_control.after.https, !controls[1].dns_error && !controls[1].https_error);
+    assert.equal(result.results.network_control.after.dns, !after.dns_error);
+    assert.equal(result.results.network_control.after.https, !after.dns_error && !after.https_error);
+    assert.deepEqual(lines(capture).slice(capturedBefore).filter((c) => c.stage === 'dns').map((c) => c.index), controls.map((_, j) => j + 1));
     const store = fs.existsSync(path.join(stateDir(h), 'agy-sandbox.json')) ? JSON.parse(read(path.join(stateDir(h), 'agy-sandbox.json'))) : { entries: {} };
     assert.equal(!!store.entries[result.key], expected !== 'unconfirmed');
     if (expected !== 'unconfirmed') {
@@ -775,13 +871,20 @@ ${kind === 'dev' ? "fs.statSync=(file,...args)=>{const s=stat(file,...args);if(f
   assert.equal(modelCalls(h).length, probes + 2);
 });
 
-test('agy 同目录的大小写盘符不算跨盘', { skip: process.platform !== 'win32' }, (t) => {
+test('agy 同目录的大小写盘符不算跨盘，项目和附加目录命中同一个缓存键', { skip: process.platform !== 'win32' }, (t) => {
   const h = sandbox(t); configure(h); fs.mkdirSync(stateDir(h), { recursive: true });
   const upper = h.cwd[0].toUpperCase() + h.cwd.slice(1), lower = h.cwd[0].toLowerCase() + h.cwd.slice(1);
-  const result = moduleCall(h, 'adapters/agy-setup.mjs', `import fs from 'node:fs';const real=fs.realpathSync;
-fs.realpathSync=Object.assign((file,...args)=>{const p=real(file,...args);return file===${JSON.stringify(lower)}?p[0].toLowerCase()+p.slice(1):p[0].toUpperCase()+p.slice(1)},real);
-console.log(JSON.stringify(await x.probeSandbox({cwd:${JSON.stringify(upper)},addDirs:[${JSON.stringify(lower)}],version:'case',run:async()=>({status:'done',tools:[]})})));`);
-  assert.equal(result.tested, true); assert.equal(result.results.layout, undefined);
+  const { first, warm } = moduleCall(h, 'adapters/agy-setup.mjs', `import fs from 'node:fs';const real=fs.realpathSync;
+const [upper,lower]=${JSON.stringify([upper, lower])};
+fs.realpathSync=Object.assign((file,...args)=>{const p=real(file,...args);return file===lower?p[0].toLowerCase()+p.slice(1):p[0].toUpperCase()+p.slice(1)},real);
+fs.realpathSync.native=(file,...args)=>file===lower?real.native(file,...args).toLowerCase():real.native(file,...args).toUpperCase();
+const first=await x.probeSandbox({cwd:upper,addDirs:[upper,lower],version:'case',run:async()=>({status:'failed',tools:[{tool:'run_command',error:'Command failed to run: synthetic'}]})});
+const warm=await x.probeSandbox({cwd:lower,addDirs:[lower],version:'case',run:()=>{throw Error('cache miss')}});
+console.log(JSON.stringify({first,warm}));`);
+  assert.equal(first.tested, true); assert.equal(first.results.layout, undefined);
+  assert.equal(warm.key, first.key); assert.equal(warm.tested, undefined);
+  const project = fs.realpathSync.native(h.cwd).toLowerCase();
+  assert.deepEqual(JSON.parse(first.key).slice(-2), [project, [project]]);
 });
 
 test('agy 宿主 DNS 或 HTTPS 断网时不放 canary、不启动探针、不写缓存，联网后重测', async (t) => {
@@ -804,18 +907,34 @@ console.log(JSON.stringify(await x.probeSandbox({cwd:${JSON.stringify(h.cwd)},ve
   assert.equal(h.calls().filter((c) => c.operation === 'probe').length, 1); assert.equal(fs.existsSync(cache), true);
 });
 
-test('agy 不可用缓存 24 小时后重测，可用缓存不过期，check --reprobe 只删除本键再测', async (t) => {
+test('agy 不可用缓存 24 小时后重测，可用缓存不过期，check --reprobe 按平台清理缓存', async (t) => {
   const h = sandbox(t); configure(h); await install(h); h.scenario({ sandbox: false });
   const check = async (args = []) => output(await h.bridge(['check', '--agent', 'agy', ...args])).agents.agy.sandbox;
   const first = await check(), cache = path.join(stateDir(h), 'agy-sandbox.json'), store = JSON.parse(read(cache));
   h.scenario({}); assert.equal((await check()).tested, undefined);
+  // 没拦住某一项的结论（假 agy 在 sandbox:false 时各项都放行）不按 24 小时过期。
   store.entries[first.key].at = new Date(Date.now() - 86400001).toISOString(); write(cache, store);
+  assert.equal((await check()).tested, undefined); assert.equal(h.calls().filter((c) => c.operation === 'probe').length, 1);
+  // 其余不可用的结论（这里换成沙箱起不来）24 小时后重测。
+  store.entries[first.key].results = { start_error: 'synthetic', network_control: store.entries[first.key].results.network_control }; write(cache, store);
   assert.equal((await check()).available, true); assert.equal(h.calls().filter((c) => c.operation === 'probe').length, 2);
   const positive = JSON.parse(read(cache)); positive.entries[first.key].at = '2000-01-01T00:00:00Z'; write(cache, positive);
   assert.equal((await check()).tested, undefined); assert.equal(h.calls().filter((c) => c.operation === 'probe').length, 2);
-  const other = { ...positive.entries[first.key], key: 'other' }; positive.entries.other = other; write(cache, positive);
-  h.scenario({ sandbox: false }); assert.equal((await check(['--reprobe'])).available, false);
-  assert.equal(h.calls().filter((c) => c.operation === 'probe').length, 3); assert.deepEqual(JSON.parse(read(cache)).entries.other, other);
+  const kept = { other: { ...positive.entries[first.key], key: 'other' } };
+  if (process.platform === 'win32') {
+    const [version, platform, release, root, dev, mode, project] = JSON.parse(first.key);
+    const cacheKey = (v, p, dirs) => JSON.stringify([v, platform, release, root, dev, mode, p, dirs]);
+    for (const key of [cacheKey(version, project, [path.join(project, 'extra')]), cacheKey('older', project.toUpperCase(), [])]) {
+      positive.entries[key] = { ...positive.entries[first.key], key };
+    }
+    const key = cacheKey(version, path.join(path.dirname(project), 'other-project'), []);
+    kept[key] = { ...positive.entries[first.key], key };
+  }
+  Object.assign(positive.entries, kept); write(cache, positive);
+  h.scenario({ sandbox: false }); const reprobe = await check(['--reprobe']);
+  assert.equal(reprobe.available, false); assert.equal(h.calls().filter((c) => c.operation === 'probe').length, 3);
+  const { [reprobe.key]: refreshed, ...remaining } = JSON.parse(read(cache)).entries;
+  assert.equal(refreshed.available, false); assert.deepEqual(remaining, kept);
   h.scenario({}); output(await h.bridge(['check', '--agent', 'codex', '--reprobe']));
   assert.equal(h.calls().filter((c) => c.operation === 'probe').length, 3);
   for (const locale of ['zh', 'en']) assert.equal((await h.bridge(['check', '--reprobe', '--help'], { env: { FOREMAN_LANG: locale } })).stdout.trim(), MESSAGES[locale].help.check);
@@ -824,7 +943,8 @@ test('agy 不可用缓存 24 小时后重测，可用缓存不过期，check --r
 test('agy 缓存锁忙仍返回探针结论，force 删除失败仍重测，总时限不能吞掉', (t) => {
   const h = sandbox(t); configure(h); fs.mkdirSync(stateDir(h), { recursive: true });
   const result = moduleCall(h, 'adapters/agy-setup.mjs', `import fs from 'node:fs';import {acquireLock} from ${JSON.stringify(pathToFileURL(path.join(SCRIPTS, 'locks.mjs')).href)};
-let runs=0;const options={cwd:${JSON.stringify(h.cwd)},version:'locked',deadline:Infinity,run:async({probeCommands})=>{runs++;return {status:'done',tools:probeCommands.map(command=>{
+let runs=0,probeTime;const options={cwd:${JSON.stringify(h.cwd)},version:'locked',deadline:Infinity,run:async({probeCommands,deadline,timeoutMs})=>{
+if(runs++===0)probeTime={remaining:deadline-Date.now(),timeoutMs};return {status:'done',tools:probeCommands.map(command=>{
 const code=Buffer.from(/Buffer\\.from\\('([^']+)'/.exec(command)[1],'base64').toString(),prefix=/FOREMAN_AGY_PROBE:[^"']+:/.exec(code)[0],name=/name:["']([^"']+)["']/.exec(code)[1];
 return {tool:'run_command',output:prefix+JSON.stringify({name,value:name==='environment'?true:'sandbox_denied'})}})}}};
 await x.probeSandbox(options);const cache=${JSON.stringify(path.join(stateDir(h), 'agy-sandbox.json'))},before=fs.readFileSync(cache,'utf8');
@@ -833,11 +953,16 @@ const lock=await acquireLock(${JSON.stringify(path.join(stateDir(h), 'agy-guard.
 Date.now=()=>now()+offset;fs.readFileSync=(file,...args)=>{const text=read(file,...args);if(file===lock.file)offset+=61000;return text};
 try{const fresh=await x.probeSandbox({...options,version:'uncached'});let forced;try{forced=await x.probeSandbox({...options,force:true})}catch(e){forced={error:e.message}}const completed=runs,expired=[];
 for(const force of [false,true])try{await x.probeSandbox({...options,version:force?'locked':'expired',force,deadline:Date.now()+30000})}catch(e){expired.push(e.code)}
-console.log(JSON.stringify({fresh:fresh.available,forced:forced.error,runs:completed,unchanged:read(cache,'utf8')===before,expired}));
+console.log(JSON.stringify({fresh:fresh.available,forced:forced.error,runs:completed,unchanged:read(cache,'utf8')===before,expired,probeTime}));
 }finally{Date.now=now;fs.readFileSync=read;lock.release()}`);
+  const { probeTime, ...conclusion } = result;
+  if (process.platform === 'win32') {
+    assert.ok(probeTime.remaining > 0 && probeTime.remaining <= 360000);
+    assert.equal(probeTime.timeoutMs, 330000);
+  } else assert.deepEqual(probeTime, { remaining: null, timeoutMs: 120000 });
   // 旧的可用结论删不掉时，强制重测直接报错，不能让它继续留着放行命令。
-  assert.ok(result.forced.startsWith(M.agyCacheStale(path.join(stateDir(h), 'agy-sandbox.json'), '').trimEnd()));
-  assert.deepEqual({ ...result, forced: undefined }, { fresh: true, forced: undefined, runs: 2, unchanged: true, expired: ['ETIMEDOUT', 'ETIMEDOUT'] });
+  assert.ok(conclusion.forced.startsWith(M.agyCacheStale(path.join(stateDir(h), 'agy-sandbox.json'), '').trimEnd()));
+  assert.deepEqual({ ...conclusion, forced: undefined }, { fresh: true, forced: undefined, runs: 2, unchanged: true, expired: ['ETIMEDOUT', 'ETIMEDOUT'] });
 });
 
 test('agy 两个并发探针写缓存时锁内重读，保留两个版本的键且探针本身不占锁', async (t) => {
@@ -901,20 +1026,32 @@ test('agy check 按 --cwd 扫描和探针，令牌读取仍在 agy-work', async 
 
 test('agy 提示词在探针后选择读命令权限，讨论和审查无 shell 都附清单', async (t) => {
   const h = sandbox(t); configure(h); await install(h); h.initGit(); h.write('source.txt', 'review this change\n');
+  const permissions_output = permissionsOutput([{ scope: 'global', allow: ['read_file(extra)', 'read_url(example.invalid)'],
+    deny: ['read_file(private)', 'read_url(*)', 'read_file(private)'], ask: ['command(synthetic)'] }]);
   for (const shell of [true, false]) {
-    h.scenario({ sandbox: shell, version: shell ? 'prompt-shell' : 'prompt-no-shell' });
+    h.scenario({ sandbox: shell, version: shell ? 'prompt-shell' : 'prompt-no-shell', permissions_output });
     for (const mode of ['discuss', 'review']) {
       const result = output(await h.bridge(taskArgs(h, mode, ['--agent', 'agy'])));
       const prompt = read(path.join(result.run_dir, 'brief.md'));
       const request = h.calls().filter((c) => c.operation === 'run').at(-1);
       assert.equal(JSON.parse(request.stdin).message.content, prompt);
       assert.equal(request.args.includes('--sandbox'), shell);
+      if (process.platform === 'win32' && shell) {
+        assert.equal(request.args.includes('--dangerously-skip-permissions'), false);
+        assert.deepEqual(JSON.parse(request.args[request.args.indexOf('--settings') + 1]), {
+          agentMode: '', toolPermission: 'proceed-in-sandbox', permissions: { allow: [], deny: ['read_file(private)', 'read_url(*)', 'write_file(*)'], ask: [] },
+        });
+      }
       if (mode === 'discuss') assert.ok(prompt.includes(M.agyDiscussFooter(h.cwd, read(path.join(SCRIPTS, '../schemas/discuss.schema.json')), shell)));
       else assert.ok(prompt.includes(shell ? '也可以用 run_command 在 agy 的沙箱里跑只读命令' : '这次不能运行命令，也没有搜索工具'));
       assert.equal(prompt.includes('你只能用读文件和搜索工具'), false);
       assert.equal(prompt.includes('项目的 git ls-files 清单'), !shell);
       if (!shell) assert.ok(prompt.endsWith('source.txt'));
     }
+  }
+  if (process.platform !== 'win32') {
+    assert.equal(h.calls().some((c) => c.operation === 'permissions'), false);
+    assert.ok(modelCalls(h).every((c) => c.args.includes('--dangerously-skip-permissions') && !c.args.includes('--settings')));
   }
   for (const locale of ['zh', 'en']) {
     const text = MESSAGES[locale];
