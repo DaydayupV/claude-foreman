@@ -58,12 +58,12 @@ Judging something that already exists isn't a discussion: evidence reviews of re
 **Review** (by the risk of what's under review, whether an agent or Claude made the change)
 | Level | How to tell |
 |---|---|
-| Level 0 | Small changes, docs, comments, styling, copy, pure configuration; one-off scripts or prototypes already run and checked; low-risk changes with test coverage. Claude's check is enough; no outside review |
+| Level 0 | Small changes, docs, comments, styling, copy, pure configuration; one-off scripts or prototypes already run and checked; low-risk changes with test coverage; research conclusions that are cheap to get wrong. Claude's check is enough; no outside review |
 | Level 1 `simple` | Large but mechanical changes, such as bulk renames and replacements or folder migrations |
-| Level 2 `normal` | Larger ordinary features and fixes (roughly 300 lines or 5 files or more); level 3 hands-on work Claude did itself (including when the config gives that level to Claude); evidence reviews before ordinary research conclusions are recorded |
-| Level 3 `complex` | Changes that alter high-risk behaviour, or whose effect on it can't be ruled out: money and billing, deleting or migrating data, concurrency, auth and security, irreversible operations; evidence reviews of research conclusions that such decisions will rest on |
+| Level 2 `normal` | Larger ordinary features and fixes (roughly 300 lines or 5 files or more); level 3 hands-on work Claude did itself (including when the config gives that level to Claude); evidence reviews of research conclusions that wouldn't be cheap to get wrong |
+| Level 3 `complex` | Changes that alter high-risk behaviour, or whose effect on it can't be ruled out: money and billing, deleting or migrating data, concurrency, auth and security, external actions that can't be undone; evidence reviews of research conclusions that such decisions will rest on |
 
-When several levels fit, take the highest. A review goes only by the material under review: it doesn't inherit the hands-on level, who made the change, or how hard the cause was to find. A design critique goes by how costly a wrong choice would be (as for discussions), a visual check by how much the deliverable matters.
+When several levels fit, take the highest. A review goes only by the material under review: it doesn't inherit the hands-on level, who made the change, or how hard the cause was to find. A design critique covers only the decisions the discussion didn't settle and goes by how costly a wrong choice would be (as for discussions), a visual check by how much the deliverable matters.
 
 ## Hard rules
 These hold whatever the preference files say; the script can only enforce some of them.
