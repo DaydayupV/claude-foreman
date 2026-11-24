@@ -316,7 +316,7 @@ flowchart TD
 | `codex cli` | 本机的 Codex CLI | 执行、审查、讨论、生成图片 | 能 | Codex 自己的沙箱 | Codex 订阅或 OpenAI API |
 | `opencode cli` | 本机的 opencode，接入它支持的各家模型 | 审查、讨论；写了 `run_access` 还能执行 | 能 | 只限定工具，没有系统沙箱 | 在 opencode 里登录的厂商，或 OpenCode Go 订阅 |
 | `pi cli` | 本机的 pi，接入它支持的各家模型 | 同 opencode | 能 | 同 opencode，读写路径由插件注入的守卫检查 | 在 pi 里登录的厂商 |
-| `agy cli` | 本机的 Agy CLI（Google Antigravity CLI） | 审查、讨论 | 能 | 插件装在 agy 全局钩子里的守卫；沙箱通过插件的检测时，只读命令跑在 agy 的沙箱里（Windows 上目前通不过） | 在 agy 里登录的 Google 账号 |
+| `agy cli` | 本机的 Agy CLI（Google Antigravity CLI） | 审查、讨论 | 能 | 插件装在 agy 全局钩子里的守卫；沙箱通过插件的检测时，只读命令跑在 agy 的沙箱里（Windows 上暂时不给） | 在 agy 里登录的 Google 账号 |
 | `api` | 兼容 OpenAI 接口的模型 | 讨论、审查（只审文本） | 不能，Claude Code 把相关文件附过去 | 不涉及 | 厂商的 API 余额 |
 
 同一种可以配多个，各用不同模型。Codex 不是必需的。
@@ -377,7 +377,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 
 - **守卫对你平时用 agy 的影响**：没有 foreman 运行时，守卫对每次工具调用都回答"按 agy 自己的设置来"，平时用 agy 的体验不变，每次工具调用多约 0.1 秒。foreman 在某个目录里运行 agy 期间，你在同一目录里自己用 agy 会被拦下工具调用，拒绝理由里写明原因和什么时候结束。
 - **哪些情况不派 agy**：项目里（包括 `.agents/` 等目录）有 agy 的钩子、MCP 或插件配置，或者全局 `hooks.json` 里除了 foreman 的条目还有别的钩子时，插件管不住它们，这次不派 agy，结果里写明是哪个文件挡住的。
-- **能读什么、能跑什么**：讨论和审查时只放行读文件，路径限定在项目目录和 `--add-dir` 指定的目录里。agy 的沙箱在本机通过插件的检测时，还能在沙箱里跑只读的命令：检测要求沙箱里的命令改不了项目内外的文件、读不了主目录、上不了网，Windows 上还要读不了用户目录以外的文件。系统临时目录仍然可写，所以它保证的是项目文件不变、不能联网，不是整台机器只读。agy 的 Windows 沙箱目前不拦用户目录以外的读取，所以 Windows 上的 agy 暂时没有 shell。没有 shell 时，插件附上项目的文件清单代替。Windows 上每个项目（以及每一组 `--add-dir` 目录）第一次派 agy 时都会先检测一次，可能要几分钟；`check --agent <名字> --reprobe` 可以重新检测。启动 agy 前，插件会去掉 API key 之类的环境变量（agy 自己登录可能用到的 `GEMINI_API_KEY` 保留，沙箱里的命令也看得到它）。
+- **能读什么、能跑什么**：讨论和审查时只放行读文件，路径限定在项目目录和 `--add-dir` 指定的目录里。agy 的沙箱在本机通过插件的检测时，还能在沙箱里跑只读的命令：检测要求沙箱里的命令改不了项目内外的文件、读不了主目录、上不了网。系统临时目录仍然可写，所以它保证的是项目文件不变、不能联网，不是整台机器只读。Windows 上，agy 的沙箱目前不拦用户目录以外的读取，所以插件在 Windows 上不检测，agy 没有 shell；等 agy 改掉以后会跟着更新。没有 shell 时，插件附上项目的文件清单代替。启动 agy 前，插件会去掉 API key 之类的环境变量（agy 自己登录可能用到的 `GEMINI_API_KEY` 保留，沙箱里的命令也看得到它）。
 - 你自己的 GEMINI.md 和 skill 照常加载，全局配置的 MCP 服务器也会启动，但它们的工具会被守卫拒绝。agy 的会话会出现在它的历史里。
 - **卸载**：让 Claude Code 运行 `agy-guard uninstall`，它删掉钩子条目和守卫文件。插件已经卸掉、没法运行这个命令时，手动打开 `~/.gemini/config/hooks.json` 删掉名为 `foreman-guard` 的条目（只剩它时可以删掉整个文件），再删掉同目录下的 `foreman-agy-guard.mjs`、`foreman-agy-guard.cmd` 和 `foreman-agy-guard.sh`。只删文件不删条目的话，agy 的每次工具调用都会被拦下。
 
