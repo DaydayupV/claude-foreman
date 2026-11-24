@@ -36,9 +36,10 @@ function toolInfo(ev, tool) {
   return { args: ev.tool_info?.parameters || {}, output, error,
     exit_code: error ? 1 : Number(/^Command exited with code (-?\d+)\./m.exec(status)?.[1] ?? 0) };
 }
-function agyArgs({ model, session, sandbox, runDir, addDirs = [] }) {
+function agyArgs({ model, session, sandbox, sandboxSettings, runDir, addDirs = [] }) {
   return ['-p=', '--input-format', 'stream-json', '--output-format', 'stream-json', '--model', model,
-    '--dangerously-skip-permissions', '--disable-slash-commands', '--log-file', path.join(runDir, 'agy.log'),
+    ...(sandboxSettings ? ['--settings', JSON.stringify(sandboxSettings)] : ['--dangerously-skip-permissions']),
+    '--disable-slash-commands', '--log-file', path.join(runDir, 'agy.log'),
     ...(sandbox ? ['--sandbox'] : []), ...(session ? ['--conversation', session] : []), ...addDirs.flatMap((d) => ['--add-dir', d])];
 }
 
@@ -70,7 +71,7 @@ async function runOnce({ agent, model = agent.model, cwd, addDirs = [], access =
   return new Promise((resolve) => {
     const running = new Map(), done = new Set();
     const { file, pre } = agyCommand(agent);
-    const child = spawnCli(file, [...pre, ...agyArgs({ model, session, sandbox, runDir, addDirs })], {
+    const child = spawnCli(file, [...pre, ...agyArgs({ model, session, sandbox, sandboxSettings: prepared.sandboxSettings, runDir, addDirs })], {
       cwd, env: guardEnvironment(policy), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32',
     }, { busy: () => running.size > 0, onInput: (line, min) => { out.errors.push(M.inputWaitDetected(min, line)); stop('needs_input'); } });
     const stop = (status) => { if (out.status) return; out.status = status; if (child.pid) killTree(child.pid); };

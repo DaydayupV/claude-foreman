@@ -12,6 +12,10 @@ import { foremanStateDir, readRawConfig, ENTRY } from '../config.mjs';
 import { RUNS_ROOT, readMeta, isRunning } from '../records.mjs';
 import { M, binCommand, pathCommand, replaceFile, pidExists, retryBusy, processStartTimes, pathKey } from '../util.mjs';
 
+const windows = process.platform === 'win32';
+// Windows 启动沙箱命令较慢。给五条命令单独留出时间，并保留宿主网络复测的时间。
+const probeCommandBudget = windows ? 330000 : 120000;
+const probeBudget = windows ? 360000 : 120000;
 const SOURCE = new URL('./agy-guard.mjs', import.meta.url);
 const HASH = (s) => createHash('sha256').update(s).digest('hex');
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -297,6 +301,20 @@ function globalMcpNotes() {
   }
   return notes;
 }
+// 会话设置会替换全局 deny 数组，先从 agy 读取当前生效的全局规则。
+function windowsSandboxSettings(agent, deadline) {
+  const result = queryAgy(agent, ['-p', '/permissions', '--output-format', 'json'], 60000, deadline);
+  if (result.status !== 0 || result.error) throw new Error(M.agyQueryFailed('/permissions', result.error?.message || result.stderr));
+  const { command } = strictJson(result.stdout);
+  const scopes = command?.name === 'permissions' && command.data?.permissions;
+  const globalScopes = Array.isArray(scopes) ? scopes.filter((scope) => scope?.scope === 'global') : [];
+  if (globalScopes.length !== 1) throw new Error(M.agyQueryFailed('/permissions', 'command.data.permissions.global'));
+  const { deny = [] } = globalScopes[0];
+  if (!Array.isArray(deny) || !deny.every((rule) => typeof rule === 'string')) throw new Error(M.agyQueryFailed('/permissions', 'permissions.deny'));
+  return { agentMode: '', toolPermission: 'proceed-in-sandbox',
+    permissions: { deny: [...new Set([...deny, 'write_file(*)', 'read_url(*)'])] } };
+}
+
 export async function prepareAgyRun(agent, policy, deadline) {
   timeLeft(deadline);
   const notes = scanProject(policy.root, policy.add_dirs);
@@ -310,37 +328,42 @@ export async function prepareAgyRun(agent, policy, deadline) {
     timeLeft(deadline);
     if (result.status !== 0 || result.error) throw new Error(M.agyQueryFailed('/hooks', result.error?.message || result.stderr));
     loadedHooks(result.stdout);
+    const sandboxSettings = windows && policy.sandbox ? windowsSandboxSettings(agent, deadline) : null;
     await locked(() => {
       if (!matchingFiles() || guardSnapshot() !== snapshot) throw new Error(M.agyGuardInvalid);
     }, deadline);
     notes.push(...globalMcpNotes());
     timeLeft(deadline);
-    return { notes, cleanup };
+    return { notes, cleanup, sandboxSettings };
   } catch (e) { cleanup(); throw e; }
 }
 
 // 宿主对照和沙箱命令使用相同域名；两侧 DNS、HTTPS 都成功才足以排除普通断网。
 export function networkControl(deadline) {
-  const timeout = timeLeft(deadline, 5000);
+  const timeout = timeLeft(deadline, windows ? 12000 : 5000);
   return new Promise((resolve) => {
     const result = { dns: false, https: false, error: null };
-    const resolver = new dns.Resolver();
+    const resolver = windows ? null : new dns.Resolver();
     let request, ended = false;
     const finish = (error) => {
       if (ended) return;
       ended = true; clearTimeout(timer);
       if (error) result.error = error.code || error.message;
-      resolver.cancel();
+      resolver?.cancel();
       request?.destroy();
       resolve(result);
     };
     const timer = setTimeout(() => finish({ code: 'ETIMEDOUT' }), timeout);
-    resolver.resolve4('example.com').then((addresses) => {
+    // Windows 上与沙箱的 HTTPS 请求一样走系统解析器，避免 c-ares 误选回环 DNS。
+    const addressesForHost = windows
+      ? dns.lookup('example.com', { all: true })
+      : resolver.resolve4('example.com').then((ips) => ips.map((address) => ({ address, family: 4 })));
+    addressesForHost.then((addresses) => {
       if (ended) return;
       result.dns = true;
       // HTTPS 使用刚解析的地址，保留域名和 TLS 校验，不再发起无法取消的第二次 lookup。
       request = https.get('https://example.com', { lookup: (_host, options, callback) => options.all
-        ? callback(null, addresses.map((address) => ({ address, family: 4 }))) : callback(null, addresses[0], 4) },
+        ? callback(null, addresses) : callback(null, addresses[0].address, addresses[0].family) },
       (response) => { response.on('error', finish); response.resume(); result.https = true; finish(); });
       request.on('error', finish);
     }, finish);
@@ -361,10 +384,14 @@ export function agySandboxInfo(name, sandbox) {
   return { fix: M.fixAgySandboxRetry(name), reason: M.agySandboxUnconfirmedReason };
 }
 
-export async function probeSandbox({ agent, cwd, addDirs = [], version, run, force = false, deadline = Date.now() + 120000 }) {
+export async function probeSandbox({ agent, cwd, addDirs = [], version, run, force = false, deadline = Date.now() + probeBudget }) {
   timeLeft(deadline);
   const cacheFile = path.join(foremanStateDir(), 'agy-sandbox.json');
-  const key = JSON.stringify([version, process.platform, os.release(), path.parse(fs.realpathSync(cwd)).root, fs.statSync(cwd).dev]);
+  const project = fs.realpathSync(cwd);
+  const volume = [version, process.platform, os.release(), path.parse(project).root, fs.statSync(cwd).dev];
+  // Windows 的沙箱权限与工作区有关；旧的卷级缓存无法证明这个项目也只读。
+  const key = JSON.stringify(windows ? [...volume, 'readonly-session-v1', project,
+    [...new Set(addDirs.map((dir) => fs.realpathSync(dir)))].sort()] : volume);
   if (addDirs.some((dir) => !sameVolume(cwd, dir))) return { key, available: false, results: { layout: 'cross_volume' }, at: new Date().toISOString() };
   const contains = (root, dir) => {
     const rel = path.relative(fs.realpathSync(root), fs.realpathSync(dir));
@@ -416,7 +443,7 @@ export async function probeSandbox({ agent, cwd, addDirs = [], version, run, for
     try { for (const file of [inside, outside, home]) fs.writeFileSync(file, canary, { flag: 'wx' }); }
     catch (e) { return { key, available: false, results: { canary: `error:${e.code || e.message}` }, at: new Date().toISOString(), tested: true }; }
     const out = await run({ access: 'probe', runDir: dir, sandbox: true, probeCommands: commands, stopOnStartFailure: true,
-      prompt: M.agyProbePrompt(commands), timeoutMs: timeLeft(deadline, 120000), deadline });
+      prompt: M.agyProbePrompt(commands), timeoutMs: timeLeft(deadline, probeCommandBudget), deadline });
     timeLeft(deadline);
     const after = await networkControl(deadline);
     timeLeft(deadline);
