@@ -47,7 +47,7 @@ function drawBundle(c, lane, p, I, live, surge = null) {
 // 一束从宽到窄的光：from 一侧的点列到 to 一侧的点列一一对应连线（paths 给出每条线的三次贝塞尔）。
 // 底下一层淡光，上面一束细线，再叠流动的光段和闪烁的亮块；pulses 里的产出事件让一道亮带沿光束走过去
 function drawCone(paths, color, I, live, seed, pulseAges) {
-  const sec = performance.now() / 1000, rand = rng(seed), act = live ? 0.45 + 0.55 * I : 0.25;
+  const sec = animMs() / 1000, rand = rng(seed), act = live ? 0.45 + 0.55 * I : 0.25;
   ctx.save();
   // 细线：近卡片一端亮、中间淡下去，到产出框收拢时又亮起来
   const [a0, a1] = [paths[0][0], paths[0][3]];
@@ -141,13 +141,13 @@ function drawLink(c, lane, cc, p, t, pulses) {
     ctx.strokeStyle = HI(base * 0.6 * k); ctx.lineWidth = 0.6 * FX.lw; ctx.stroke();
     if (boost > 0) {
       ctx.lineCap = 'round'; ctx.setLineDash([0.01, 12 * FX.lw]);
-      ctx.lineDashOffset = ((back ? 1 : -1) * performance.now() / 45) * FX.lw;
+      ctx.lineDashOffset = ((back ? 1 : -1) * animMs() / 45) * FX.lw;
       ctx.strokeStyle = HI(0.75 * boost * k); ctx.lineWidth = 1.9 * FX.lw; ctx.stroke();
       ctx.lineCap = 'butt';
     }
   } else {
     ctx.setLineDash([5 * FX.lw, 7 * FX.lw]);
-    ctx.lineDashOffset = boost > 0 ? ((back ? 1 : -1) * performance.now() / 45) * FX.lw : 0;
+    ctx.lineDashOffset = boost > 0 ? ((back ? 1 : -1) * animMs() / 45) * FX.lw : 0;
     ctx.strokeStyle = HI((base + 0.6 * boost) * k); ctx.lineWidth = 0.8 * FX.lw; ctx.stroke();
   }
   ctx.setLineDash([]);

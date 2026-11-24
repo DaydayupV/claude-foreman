@@ -1,12 +1,12 @@
-// 合成一个长对话给网页看板量飞入：node long.mjs <root> [hours=10] [groups=35] [seats=3]
+// 合成一个长对话给网页看板量飞入：node long.mjs <root> [hours=10] [groups=35] [seats=3] [running=1]
 // 规模对齐真实的长对话：Claude Code 对话记录每 2 秒一条，几十组任务在这段时间里交错开始、互相重叠，
-// 每席每 2–6 秒一条动作、隔一条一次用量，最后一组还在跑；另有 3 个短对话，宇宙里不止一个星系。
+// 每席每 2–6 秒一条动作、隔一条一次用量，最后一组还在跑（running 写 0 时也已经结束，量空闲的看板）；另有 3 个短对话，宇宙里不止一个星系。
 // 内容用固定种子生成，同样的参数每次结构相同（时刻按当前时间往前排，直播看板只显示最近的对话）。
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-const [root, hours = 10, groups = 35, seats = 3] = process.argv.slice(2).map((v, i) => i ? Number(v) : v);
+const [root, hours = 10, groups = 35, seats = 3, running = 1] = process.argv.slice(2).map((v, i) => i ? Number(v) : v);
 // 开头会清空目标目录：只允许系统临时目录里的路径
 const inside = root && path.relative(os.tmpdir(), path.resolve(root));
 if (!inside || inside.startsWith('..') || path.isAbsolute(inside)) {
@@ -68,10 +68,11 @@ function run(session, cwd, group, seat, start, end) {
 
 // 长对话：各组在整段时间里交错开始，每组 6–20 分钟，后一组常在前一组结束前开始；最后一组还在跑
 const long = 'long', cwd = 'C:/demo-lab/long';
-const rows = transcript(long, cwd, T0, now - 5000, 'long conversation for fly-in timing');
+// running 写 0 时 Claude Code 的最后一条动作也排在两分钟前：看板把一分钟内有动作的车道算成在跑，刚生成的数据量出来的就不是空闲
+const rows = transcript(long, cwd, T0, now - (running ? 5000 : 120000), 'long conversation for fly-in timing');
 let events = 0;
 for (let g = 0; g < groups; g++) {
-  const start = T0 + 60000 + (g / groups) * (hours * 3600000 - 30 * 60000) + Math.floor(rand() * 300000), last = g === groups - 1;
+  const start = T0 + 60000 + (g / groups) * (hours * 3600000 - 30 * 60000) + Math.floor(rand() * 300000), last = running && g === groups - 1;
   for (let s = 1; s <= seats; s++) {
     const begin = start + Math.floor(rand() * 60000), end = last ? null : begin + 360000 + Math.floor(rand() * 840000);
     events += run(long, cwd, `long-${pad(g)}`, s, begin, end);

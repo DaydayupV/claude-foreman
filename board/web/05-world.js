@@ -23,9 +23,10 @@ function fitRange(H) {
 function stepReel(nowMs) {
   const dt = Math.min(0.1, (nowMs - (REEL.last || nowMs)) / 1000);
   REEL.last = nowMs;
-  if (REEL.overflow && !REEL.hover && !drag.on && VIEW.k <= kFit() * 1.25) REEL.s += REEL.speed * dt;
-  // 放得下时：滚出去的卡片在鼠标移开后自动回到竖直居中
-  if (!REEL.overflow && !REEL.hover && !drag.on) { REEL.off *= Math.exp(-dt / 0.45); if (Math.abs(REEL.off) < 0.3) REEL.off = 0; }
+  // 减少动态效果时不自己滚（在刻度带上用滚轮照样能滚）
+  if (REEL.overflow && !REEL.hover && !drag.on && !reduceMotion.matches && VIEW.k <= kFit() * 1.25) REEL.s += REEL.speed * dt;
+  // 放得下时：滚出去的卡片在鼠标移开后自动回到竖直居中（减少动态效果时直接回去，不缓动）
+  if (!REEL.overflow && !REEL.hover && !drag.on) { REEL.off *= reduceMotion.matches ? 0 : Math.exp(-dt / 0.45); if (Math.abs(REEL.off) < 0.3) REEL.off = 0; }
 }
 // 鼠标在不在刻度带上（不论放大到多少，在刻度带上滚轮都是滚动卡片）。刻度带还没出现（没有席位卡片）时不算，那里照常缩放
 function reelZone(sx) {

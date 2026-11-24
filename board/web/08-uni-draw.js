@@ -18,7 +18,7 @@ const UNI_STARS = (() => {
   return out;
 })();
 function drawUniStars(w, h) {
-  const sec = performance.now() / 1000, px = UV.tx * 0.04, py = UV.ty * 0.04;
+  const sec = animMs() / 1000, px = UV.tx * 0.04, py = UV.ty * 0.04;
   for (const s of UNI_STARS) {
     const x = ((s.x * w + px) % w + w) % w, y = ((s.y * h + py) % h + h) % h;
     const a = s.tw ? s.a * (0.5 + 0.5 * Math.sin(sec * s.tw + s.ph)) : s.a;
@@ -55,7 +55,7 @@ function drawNebulaOf(p) {
 
 // charge：飞入前的蓄能（0–1），亮核变大变亮，外面多一圈柔光
 function drawCoreOf(g, alpha, charge = 0) {
-  const s = g.s, sec = performance.now() / 1000;
+  const s = g.s, sec = animMs() / 1000;
   const pulse = s.state === 'thinking' ? 1 + 0.18 * Math.sin(sec * 3.4 + g.seed % 7) : 1;
   const r = 4.2 * pulse * (1 + 1.4 * charge), c = (a) => rgba('claude', a);
   if (charge > 0) {
@@ -120,8 +120,8 @@ function drawUniverseOn(L) {
   drawUniStars(w, h);
   ctx.setTransform(dpr * UV.k, 0, 0, dpr * UV.k, dpr * UV.tx, dpr * UV.ty);
   FX.lw = 1 / UV.k * uniFitGoal().k;
-  // 光效（08-uni-glow.js）：亮星和亮核的柔光画进辉光层，标签之前叠回来
-  if (ULOOK.on) glowBegin(ctx);
+  // 光效（08-uni-glow.js）：亮星和亮核的柔光记进辉光，标签之前一起叠上去
+  if (ULOOK.on) glowBegin('uni');
   // 屏幕外的星云和星系不画（放大以后大部分都在外面）；亮度照常平滑，飞回来时不会从 0 闪出
   const seen = (x, y, r) => x * UV.k + UV.tx > -r * UV.k && x * UV.k + UV.tx < w + r * UV.k && y * UV.k + UV.ty > -r * UV.k && y * UV.k + UV.ty < h + r * UV.k;
   for (const p of L.projects) if (seen(p.x, p.y, p.r * 1.3)) drawNebulaOf(p);
@@ -143,6 +143,6 @@ function drawUniverseOn(L) {
     ctx.lineWidth = upx(1.2); ctx.strokeStyle = markOf(hover.s.id, 0.75);
     ctx.beginPath(); ctx.ellipse(hover.x, hover.y, GAL_R * 1.2, GAL_R * (hover.flat + 0.2), hover.tilt, 0, 6.283); ctx.stroke();
   }
-  if (ULOOK.on) uniBloomFlush(ctx);
+  if (ULOOK.on) glowFlush(ctx);
   drawUniLabels(L, hover);
 }

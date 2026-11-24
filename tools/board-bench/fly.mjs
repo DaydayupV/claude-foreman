@@ -6,6 +6,10 @@
 // --headed 用有窗口的浏览器（真机 GPU）；--profile 另给出 CPU 剖析里按函数自身耗时排的前 15 名；
 // --check 时任何一次飞入或落地后有超过 50 ms 的帧就以退出码 1 结束。
 // --url：量一个已经在跑的看板（不起服务，不用 <root>），比如 board 子命令给的直播看板；--session 写对话 id
+// 平时的开销（--steady <秒> 那一段）：画布每秒画了几次、页面主线程忙了多少、各进程的 CPU；--gpu-util 另记 GPU 进程的 3D 引擎占用（只支持 Windows）；
+//   --cost-only 时这一段不记帧间隔（记帧本身会让浏览器每个刷新周期都出一帧，看板空闲时省下的开销就量不出来）。
+//   --dpr <倍数> 模拟高分屏（Retina 写 2）；--throttle <倍数> 给页面的 CPU 降速（不带 --gpu 是软件绘制，两样一起模拟低配机器）；
+//   --reduced-motion 打开"减少动态效果"；--stay 不飞进对话，量宇宙层
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -17,7 +21,7 @@ const opt = (name, fallback) => { const i = args.indexOf(`--${name}`); return i 
 const has = (name) => args.includes(`--${name}`);
 const inside = root && path.relative(os.tmpdir(), path.resolve(root));
 if (!live && (!inside || inside.startsWith('..') || path.isAbsolute(inside))) { console.error(`root must be a folder inside ${os.tmpdir()}`); process.exit(2); }
-const session = opt('session', 'long'), times = Number(opt('runs', 3));
+const session = opt('session', 'long'), times = Number(opt('runs', 3)), stay = has('stay');
 const SERVER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../foreman/skills/dispatch/scripts/board/server.mjs');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -52,7 +56,10 @@ async function once() {
   const dir = has('keep-profile') ? (once.dir ??= fs.mkdtempSync(path.join(os.tmpdir(), 'foreman-fly-'))) : fs.mkdtempSync(path.join(os.tmpdir(), 'foreman-fly-'));
   fs.rmSync(path.join(dir, 'DevToolsActivePort'), { force: true }); // 共用目录时上一次留下的端口文件
   // 无头默认是软件 GL（SwiftShader），绘制和合成会被放大很多；--gpu 让无头也用显卡
-  const browser = spawn(findBrowser(), [...(has('headed') ? [] : ['--headless=new']), ...(has('gpu') ? ['--enable-gpu', '--use-angle=default', '--ignore-gpu-blocklist'] : []), '--remote-debugging-port=0', `--user-data-dir=${dir}`,
+  // 新版无头 Chrome 不带 --gpu 也可能用显卡（看输出里的 renderer）；--software 关掉显卡，和设置里关掉"使用图形加速"一样，全部用 CPU 画
+  const browser = spawn(findBrowser(), [...(has('headed') ? [] : ['--headless=new']), ...(has('gpu') ? ['--enable-gpu', '--use-angle=default', '--ignore-gpu-blocklist'] : []),
+    ...(has('software') ? ['--disable-gpu'] : []),
+    ...(opt('dpr') ? [`--force-device-scale-factor=${opt('dpr')}`] : []), '--remote-debugging-port=0', `--user-data-dir=${dir}`,
     '--no-first-run', '--no-default-browser-check', `--window-size=${opt('size', '1440,900')}`, 'about:blank'], { stdio: 'ignore' });
   try {
     let port;
@@ -60,12 +67,13 @@ async function once() {
     const version = await fetch(`http://127.0.0.1:${port}/json/version`).then((r) => r.json());
     const ws = new WebSocket(version.webSocketDebuggerUrl);
     await new Promise((r) => { ws.onopen = r; });
-    let seq = 0, traceDone = null; const pending = new Map(), trace = [];
+    let seq = 0, traceDone = null, onMark = null; const pending = new Map(), trace = [];
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data);
       if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); }
       else if (m.method === 'Tracing.dataCollected') trace.push(...m.params.value);
       else if (m.method === 'Tracing.tracingComplete') traceDone?.();
+      else if (m.method === 'Runtime.consoleAPICalled' && String(m.params.args?.[0]?.value).startsWith('__bench ')) onMark?.(m.params.args[0].value.slice(8));
     };
     const send = (method, params = {}, sid) => new Promise((r) => { const id = ++seq; pending.set(id, r); ws.send(JSON.stringify({ id, method, params, sessionId: sid })); });
     const evaluate = async (sid, expression) => (await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, sid)).result?.result?.value;
@@ -73,11 +81,26 @@ async function once() {
     const { result: { sessionId: sid } } = await send('Target.attachToTarget', { targetId, flatten: true });
     await send('Target.activateTarget', { targetId });
     if (has('no-shared')) await send('Page.addScriptToEvaluateOnNewDocument', { source: 'delete window.SharedWorker;' }, sid);
+    if (has('reduced-motion')) await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] }, sid);
+    // 平时那一段的起止由页面打到控制台的记号告诉这边：两头各记一次各进程的 CPU 时间和页面主线程的忙碌时间
+    const marks = {}, steadyS = Number(opt('steady', 0));
+    let gpuUtil = null;
+    if (steadyS) {
+      await send('Runtime.enable', {}, sid); await send('Performance.enable', {}, sid);
+      onMark = (name) => {
+        marks[name] = Promise.all([send('SystemInfo.getProcessInfo'), send('Performance.getMetrics', {}, sid)]).then(([p, m]) => ({ at: performance.now(),
+          procs: p.result?.processInfo || [], task: m.result?.metrics?.find((x) => x.name === 'TaskDuration')?.value ?? 0 }));
+        if (name === 'steady-start' && has('gpu-util')) gpuUtil = marks[name].then((s) => sampleGpu(s.procs, steadyS));
+      };
+    }
     await send('Page.enable', {}, sid);
     await send('Page.navigate', { url }, sid);
     let ready = false;
-    for (let i = 0; i < 120 && !ready; i++) { await sleep(250); ready = await evaluate(sid, `typeof U !== 'undefined' && U.sessions.has(${JSON.stringify(session)}) && FLY.mode === 'universe'`); }
-    if (!ready) throw new Error(`conversation ${session} did not show up in the universe`);
+    for (let i = 0; i < 120 && !ready; i++) { await sleep(250); ready = await evaluate(sid, `typeof U !== 'undefined' && (${stay} ? U.sessions.size > 0 : U.sessions.has(${JSON.stringify(session)})) && FLY.mode === 'universe'`); }
+    // --stay：地址里带 s= 时页面会自己飞进去，量之前取消
+    if (stay) await evaluate(sid, 'FLY.pending = null');
+    if (!ready) throw new Error(stay ? 'the universe did not load' : `conversation ${session} did not show up in the universe`);
+    if (opt('throttle')) await send('Emulation.setCPUThrottlingRate', { rate: Number(opt('throttle')) }, sid);
     // --css：临时加一段样式（排查哪一块绘制贵时用，比如关掉某个滤镜）
     if (opt('css')) await evaluate(sid, `document.head.append(Object.assign(document.createElement('style'), { textContent: ${JSON.stringify(opt('css'))} }))`);
     await sleep(2500);
@@ -90,7 +113,10 @@ async function once() {
         for (const e of list.getEntries()) loaf.push({ at: e.startTime, d: e.duration, scripts: e.scripts.map((s) => ({ name: s.invoker + ' ' + (s.sourceFunctionName || ''), d: s.duration })) });
       }) : null;
       obs?.observe({ type: 'long-animation-frame' });
-      const draw = drawFx; drawFx = (...a) => { if (landed == null) draws++; return draw(...a); };
+      // 画布画了几次：飞入过程中看板画布画的（draws）；平时那一段按两边的画布各数一遍
+      let fxCalls = 0, uniCalls = 0;
+      const draw = drawFx; drawFx = (...a) => { fxCalls++; if (landed == null) draws++; return draw(...a); };
+      const drawU = drawUniverse; drawUniverse = (...a) => { uniCalls++; return drawU(...a); };
       // --breakdown：每帧里主要几步各花了多少（包一层计时），超过 50 ms 的帧记下来；--wrap a,b,c 换成只包这几个函数；--slow <毫秒> 改慢帧的门槛（默认 50）
       const parts = ${JSON.stringify(opt('wrap', '').split(',').filter(Boolean))}.length ? ${JSON.stringify(opt('wrap', '').split(',').filter(Boolean))} : ${has('breakdown')} ? ['stepFly', 'uniFrame', 'applyShare', 'smoothFrame', 'computeLayout', 'stepView', 'loadFinals', 'renderTop', 'renderWorld',
         'renderTable', 'renderTerms', 'placeWorld', 'drawFx', 'onRun', 'onEvents', 'onBacklog', 'replaceRateHistory',
@@ -101,21 +127,31 @@ async function once() {
         keep[name] = fn;
         globalThis[name] = function (...a) { const s = performance.now(); try { return fn.apply(this, a); } finally { spent[name] = (spent[name] || 0) + performance.now() - s; } };
       }
+      let paused = false;
       const tick = (ts) => {
         frames.push([ts, ts - last]);
         if (ts - last > ${Number(opt('slow', 50))}) slow.push({ at: Math.round(ts - t0), gap: Math.round(ts - last), parts: Object.entries(spent).filter(([, ms]) => ms >= 2).sort((a, b) => b[1] - a[1]).map(([k, ms]) => k + ' ' + Math.round(ms)).join(', ') });
         for (const k in spent) delete spent[k];
-        last = ts; if (landed == null && FLY.mode === 'board') landed = ts; if (on) requestAnimationFrame(tick);
+        last = ts; if (landed == null && FLY.mode === 'board') landed = ts; if (on && !paused) requestAnimationFrame(tick);
       };
       requestAnimationFrame(tick);
       const t0 = performance.now();
       performance.mark('fly-start');
-      flyIn(${JSON.stringify(session)});
+      // --stay：不飞进去，后面几段量的是宇宙层
+      if (${stay}) landed = t0; else flyIn(${JSON.stringify(session)});
       while (landed == null && performance.now() - t0 < 5000) await new Promise((r) => setTimeout(r, 50));
       await new Promise((r) => setTimeout(r, 2000));
-      // --steady <秒>：落地以后接着记这么多秒的平时帧（对话正在干活、事件不断到达时看有没有周期性的卡顿）
-      const st0 = performance.now(), steadyMs = ${Number(opt('steady', 0)) * 1000};
+      // --steady <秒>：落地以后接着记这么多秒的平时帧（对话正在干活、事件不断到达时看有没有周期性的卡顿），以及这一段的开销
+      const steadyMs = ${Number(opt('steady', 0)) * 1000}, calls0 = [fxCalls, uniCalls];
+      if (steadyMs) console.debug('__bench steady-start');
+      const st0 = performance.now();
+      // --cost-only：这一段不记帧。记帧要每个刷新周期都请求一帧，浏览器就一直在出帧，看板自己限帧、睡着省下的开销就量不出来
+      if (steadyMs && ${has('cost-only')}) paused = true;
       if (steadyMs) await new Promise((r) => setTimeout(r, steadyMs));
+      if (paused) { paused = false; last = performance.now(); requestAnimationFrame(tick); }
+      const stMs = performance.now() - st0;
+      if (steadyMs) console.debug('__bench steady-end');
+      const canvas = steadyMs ? { fx: (fxCalls - calls0[0]) / stMs * 1000, uni: (uniCalls - calls0[1]) / stMs * 1000 } : null;
       // --out：再飞回宇宙，记飞出过程和回到宇宙以后 1 秒
       let out0 = null, back = null;
       if (${has('out')}) {
@@ -123,14 +159,21 @@ async function once() {
         while (FLY.mode !== 'universe' && performance.now() - out0 < 5000) await new Promise((r) => setTimeout(r, 50));
         back = performance.now(); await new Promise((r) => setTimeout(r, 1000));
       }
-      on = false; obs?.disconnect(); drawFx = draw;
+      on = false; obs?.disconnect(); drawFx = draw; drawUniverse = drawU;
       for (const [name, fn] of Object.entries(keep)) globalThis[name] = fn;
       const end = landed ?? Infinity, cut = (a, b) => frames.filter(([ts]) => ts > a && ts <= b).map(([, d]) => d);
       const outFrames = out0 == null ? null : { fly: cut(out0, back), after: cut(back, back + 1000), ms: Math.round(back - out0) };
       const gl = document.createElement('canvas').getContext('webgl'), info = gl?.getExtension('WEBGL_debug_renderer_info');
-      return { fly: cut(t0, end), after: cut(end, end + 2000), steady: steadyMs ? cut(st0, st0 + steadyMs) : null, out: outFrames, flyMs: Math.round(end - t0), draws, slow, renderer: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : '?',
-        flyLoaf: loaf.filter((l) => l.at < end), afterLoaf: loaf.filter((l) => l.at >= end), lanes: B.lanes.length, runs: B.runs.size, mode: FLY.mode };
+      return { fly: cut(t0, end), after: cut(end, end + 2000), steady: steadyMs && !${has('cost-only')} ? cut(st0, st0 + steadyMs) : null, out: outFrames, flyMs: Math.round(end - t0), draws, slow, renderer: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : '?',
+        flyLoaf: loaf.filter((l) => l.at < end), afterLoaf: loaf.filter((l) => l.at >= end), lanes: B.lanes.length, runs: B.runs.size, mode: FLY.mode,
+        canvas, dpr: devicePixelRatio, reduced: matchMedia('(prefers-reduced-motion: reduce)').matches, active: B.lanes.filter((l) => laneActive(l, now())).length,
+        size: FLY.mode === 'universe' ? [UFX.cv.width, UFX.cv.height] : [FX.cv.width, FX.cv.height] };
     })()`);
+    if (marks['steady-start'] && marks['steady-end']) {
+      const [a, b] = await Promise.all([marks['steady-start'], marks['steady-end']]), sec = (b.at - a.at) / 1000, cpu = {};
+      for (const p of b.procs) { const before = a.procs.find((x) => x.id === p.id)?.cpuTime ?? 0; cpu[p.type] = (cpu[p.type] || 0) + (p.cpuTime - before) / sec * 100; }
+      result.cost = { main: (b.task - a.task) / sec * 100, cpu, gpu3d: gpuUtil ? await gpuUtil : null };
+    }
     if (has('profile')) {
       const { result: { profile } } = await send('Profiler.stop', {}, sid);
       const self = new Map(), byId = new Map(profile.nodes.map((n) => [n.id, n]));
@@ -151,6 +194,24 @@ async function once() {
     await sleep(500);
     if (!has('keep-profile')) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
   }
+}
+
+// --gpu-util：GPU 进程 3D 引擎的平均占用（Windows 性能计数器，typeperf 每秒一个样本）。typeperf 起来要一两秒，样本数取秒数减二，大致落在这一段里
+function sampleGpu(procs, seconds) {
+  const pid = procs.find((p) => p.type === 'GPU')?.id;
+  if (process.platform !== 'win32' || !pid) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const p = spawn('typeperf', ['\\GPU Engine(*)\\Utilization Percentage', '-si', '1', '-sc', String(Math.max(1, Math.round(seconds) - 2))], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+    let out = '';
+    p.stdout.on('data', (s) => { out += s; });
+    p.on('error', () => resolve(null));
+    p.on('close', () => {
+      const rows = out.split(/\r?\n/).filter((l) => l.startsWith('"')).map((l) => l.slice(1, -1).split('","'));
+      const cols = (rows[0] || []).flatMap((h, i) => (h.includes(`(pid_${pid}_`) && h.includes('engtype_3D') ? [i] : []));
+      const samples = rows.slice(1).map((r) => cols.reduce((n, i) => n + (Number(r[i]) || 0), 0));
+      resolve(cols.length && samples.length ? samples.reduce((x, y) => x + y, 0) / samples.length : null);
+    });
+  });
 }
 
 const STEADY_US = Number(opt('steady', 0)) * 1e6;
@@ -197,14 +258,20 @@ const stats = (g) => { const s = [...g].sort((a, b) => a - b); return { frames: 
 const scripts = (loaf) => { const m = new Map(); for (const l of loaf) for (const s of l.scripts) m.set(s.name, (m.get(s.name) || 0) + s.d); return [...m].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, d]) => `${k.trim()} ${Math.round(d)} ms`); };
 let failed = false;
 try {
-  console.log(`${url}  session ${session}  ${has('no-shared') ? 'direct stream' : 'shared stream'}  ${has('headed') ? 'headed' : 'headless'}`);
+  const sim = [opt('dpr') && `dpr ${opt('dpr')}`, opt('throttle') && `CPU ${opt('throttle')}x slower`, has('reduced-motion') && 'reduced motion', stay && 'universe only'].filter(Boolean);
+  console.log(`${url}  session ${session}  ${has('no-shared') ? 'direct stream' : 'shared stream'}  ${has('headed') ? 'headed' : 'headless'}  ${has('gpu') ? 'GPU' : has('software') ? 'GPU disabled' : 'default GPU setting'}${sim.length ? '  ' + sim.join(', ') : ''}`);
   for (let i = 1; i <= times; i++) {
     const r = await once(), fly = stats(r.fly), after = stats(r.after);
     if (fly.over50 || after.over50) failed = true;
-    console.log(`#${i} ${r.lanes} lanes ${r.runs} runs → ${r.mode} after ${r.flyMs} ms; board canvas drawn ${r.draws} times during the fly; ${r.renderer}`);
+    console.log(`#${i} ${r.lanes} lanes (${r.active} active) ${r.runs} runs → ${r.mode} after ${r.flyMs} ms; board canvas drawn ${r.draws} times during the fly; canvas ${r.size.join('×')} at dpr ${r.dpr}${r.reduced ? ', reduced motion' : ''}; ${r.renderer}`);
     console.log(`   fly-in  ${JSON.stringify(fly)}  long frames ${r.flyLoaf.length}: ${scripts(r.flyLoaf).join(', ') || '—'}`);
     console.log(`   landed  ${JSON.stringify(after)}  long frames ${r.afterLoaf.length}: ${scripts(r.afterLoaf).join(', ') || '—'}`);
     if (r.steady) { const g = r.steady; console.log(`   steady  ${JSON.stringify(stats(g))} over33 ${g.filter((x) => x > 33).length}`); }
+    if (r.cost) {
+      const pct = (v) => `${Math.round(v)}%`, c = r.cost;
+      console.log(`   cost    canvas drawn ${r.canvas.fx.toFixed(1)}/s (board) ${r.canvas.uni.toFixed(1)}/s (universe) · page main thread ${pct(c.main)}`
+        + ` · CPU ${Object.entries(c.cpu).filter(([, v]) => v >= 0.5).map(([k, v]) => `${k} ${pct(v)}`).join(', ')}${has('gpu-util') ? ` · GPU 3D ${c.gpu3d != null ? pct(c.gpu3d) : 'n/a'}` : ''}`);
+    }
     if (r.out) { console.log(`   fly-out ${JSON.stringify(stats(r.out.fly))} in ${r.out.ms} ms`); console.log(`   back    ${JSON.stringify(stats(r.out.after))}`); }
     if (r.top) console.log(r.top.map(([k, ms]) => `   ${ms.toFixed(1).padStart(7)} ms  ${k}`).join('\n'));
     for (const s of r.slow) console.log(`   slow frame at +${s.at} ms (${s.gap} ms): ${s.parts || 'no wrapped step over 2 ms'}`);

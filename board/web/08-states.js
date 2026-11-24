@@ -39,7 +39,7 @@ function drawGapLaunch(L, lane, r, row, t) {
 }
 
 function drawStates(L, t) {
-  const sec = performance.now() / 1000;
+  const sec = animMs() / 1000;
   for (const g of L.groups) for (const lane of g.lanes) {
     if (lane.ghost) continue;
     const row = L.rows.get(lane.id);

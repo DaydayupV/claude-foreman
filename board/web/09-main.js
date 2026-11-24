@@ -1,11 +1,35 @@
 'use strict';
 // 入口：每帧算版面、推进视图变换；数据变了（或每半秒）刷新卡片和用量表。
-// 限帧：画面里的动作都很慢，静止时约 30 帧；拖动、缩放、镜头在走、飞入飞出时约 60 帧。
+// 限帧：拖动、缩放、镜头在走、飞入飞出时约 60 帧；有任务在跑时约 30 帧；都没有时约 10 帧，两帧之间用定时器睡着，不跟着显示器刷新率空转。
+// 减少动态效果时镜头不动就只在内容变了以后画，最多隔 1 秒画一次（按时间变化的状态也要画上去）。
 // 不限的话会跟着显示器刷新率跑（144Hz 屏一秒重画 144 次），整页都卡。
 
 let raf = 0, lastFx = 0, started = false, lastFrame = 0, busyUntil = 0;
-const FRAME_IDLE = 33, FRAME_BUSY = 16;
-function wake() { if (!raf) raf = requestAnimationFrame(frame); }
+const FRAME_BUSY = 16, FRAME_LIVE = 33, FRAME_IDLE = 100;
+const QUIET_SETTLE_MS = 1000, QUIET_BEAT_MS = 1000;
+
+// 返回还要等几毫秒（0 就画）。nowMs 当前时刻，lastFrame 上次画的时刻，moving 正在操作或移动镜头，live 有任务在跑，quiet 减少动态效果，changedAt 上次看到内容变动，pending 有活没做完。
+function paceWait({ nowMs, lastFrame, moving, live, quiet, changedAt, pending }) {
+  const elapsed = nowMs - lastFrame;
+  if (quiet && !moving && !pending && nowMs - changedAt >= QUIET_SETTLE_MS) return Math.max(0, QUIET_BEAT_MS - elapsed);
+  const interval = moving ? FRAME_BUSY : live && !quiet ? FRAME_LIVE : FRAME_IDLE;
+  // 留 3 毫秒余量，免得刷新间隔抖一下就要多等一帧
+  return Math.max(0, interval - 3 - elapsed);
+}
+
+const PACE = { live: false, seen: '', changedAt: 0, timer: null };
+function wake() {
+  if (PACE.timer != null) { clearTimeout(PACE.timer); PACE.timer = null; }
+  if (!raf) raf = requestAnimationFrame(frame);
+}
+function wakeIn(ms) {
+  if (raf) return;
+  // 最多隔 100 毫秒查一次变化，提前约一个显示帧醒来交给 rAF 对齐
+  const delay = Math.min(ms, FRAME_IDLE) - FRAME_BUSY;
+  if (delay <= 0) { wake(); return; }
+  clearTimeout(PACE.timer);
+  PACE.timer = setTimeout(() => { PACE.timer = null; wake(); }, delay);
+}
 
 // 这一帧要不要刷新卡片和面板，以及用量表、终端区画哪几块（返回 null 是这一帧不刷新）。
 // 数据一直在来的对话（正在干活的那个）事件很密：数据变了最快每 250 毫秒刷新一次；界面操作（UI.ver）马上刷新；没变也每半秒刷新一次。
@@ -31,8 +55,8 @@ function domDrawn(dom, table, terms) {
   if (dom.table && !table || dom.terms && !terms) DOM.again = true;
 }
 // 用户在操作：接下来一小段时间按忙时的帧率画
-function busy(ms = 400) { busyUntil = Math.max(busyUntil, performance.now() + ms); }
-for (const type of ['wheel', 'pointermove', 'pointerdown', 'keydown']) addEventListener(type, () => busy(), { passive: true, capture: true });
+function busy(ms = 400) { busyUntil = Math.max(busyUntil, performance.now() + ms); wake(); }
+for (const type of ['wheel', 'pointermove', 'pointerdown', 'keydown', 'resize']) addEventListener(type, () => busy(), { passive: true, capture: true });
 
 // 一帧里出了错不能拖垮整个页面：记一次日志，下一帧照常画（不然 requestAnimationFrame 链断掉，页面就停住了）
 let frameError = null;
@@ -45,11 +69,25 @@ function frame() {
 }
 
 function step() {
-  const nowMs = performance.now();
-  const moving = nowMs < busyUntil || FLY.mode === 'in' || FLY.mode === 'out' || drag.on || udrag.on
-    || (U.on && FLY.mode === 'universe' ? UV.moving : VIEW.goal);   // 只看正在画的那一边的镜头
-  // 留 3 毫秒余量：刷新间隔有抖动，卡着整数比较会隔一帧才画
-  if (nowMs - lastFrame < (moving ? FRAME_BUSY : FRAME_IDLE) - 3) { wake(); return; }
+  const nowMs = performance.now(), quiet = reduceMotion.matches;
+  const seen = `${B.version}|${U.version}|${UI.ver}`;
+  if (seen !== PACE.seen) { PACE.seen = seen; PACE.changedAt = nowMs; }
+
+  function paceFrame(drawn = false) {
+    const ms = drawn ? performance.now() : nowMs;
+    const moving = ms < busyUntil || FLY.mode === 'in' || FLY.mode === 'out' || drag.on || udrag.on
+      || (U.on && FLY.mode === 'universe' ? UV.moving : VIEW.goal);   // 只看正在画的那一边的镜头
+    // 看板分帧建卡片、用量表、终端区的活只在看板那边算：飞回宇宙时没建完，留下的标记不能让宇宙层一直按 10 帧画
+    const wait = paceWait({ nowMs: ms, lastFrame, moving, live: PACE.live, quiet, changedAt: PACE.changedAt,
+      pending: FLY.mode !== 'universe' && (DOM.again || DOM.world || DOM.deferred) || FLY.pending });
+    if (drawn || wait > 0) {
+      if (moving || !quiet && PACE.live) wake();
+      else wakeIn(wait);
+    }
+    return wait;
+  }
+  if (paceFrame() > 0) return;
+  // 过了限帧就记下这一步的时刻：这一步中途出错时，重试也按原来的间隔，不会每个刷新周期都重跑一遍出错的步骤
   lastFrame = nowMs;
   UV.fitCache = null; UV.frame++;
   viewBox(); // 先量视图，这一帧后面写 DOM 以后不再量（05-world.js）
@@ -65,7 +103,7 @@ function step() {
     if (share.uni > 0) uniFrame(share.fx <= 0);
     applyShare(share);
     renderCrumb();
-    if (share.fx <= 0) { if (FLY.mode === 'in') warmBoard(); wake(); return; }
+    if (share.fx <= 0) { if (FLY.mode === 'in') warmBoard(); paceFrame(true); return; }
   }
   stepReel(nowMs);
   const t = now();
@@ -90,7 +128,8 @@ function step() {
   // 不然它只有宇宙层一半的帧数，看起来一顿一顿的
   const flying = FLY.mode === 'in' || FLY.mode === 'out';
   if ((viewMoving || flying || nowMs - lastFx >= 30) && viewBox().bottom > 0) { lastFx = nowMs; drawFx(t, L); }
-  wake();
+  PACE.live = B.lanes.some((l) => laneActive(l, t)); // 给下一步选间隔用
+  paceFrame(true);
 }
 
 // 提前算好 Claude Code 车道的统计（长对话有两万条统计事件，每来一批新事件整段重算要十几毫秒，之后有缓存）：
@@ -134,6 +173,7 @@ function uniFrame(alone = true) {
   // 往下滚到终端、星图整个移出屏幕时不画
   if (viewBox().bottom > 0) drawUniverse(L);
   setText($("zoom-val"), `${Math.round((UV.k / uniFitGoal().k) * 100)}%`);
+  if (alone) PACE.live = L.galaxies.some((g) => g.s.state !== 'idle'); // 给下一步选间隔用
 }
 
 // 图片的原生拖动一律不要（CSS 管不到的浏览器靠这里）

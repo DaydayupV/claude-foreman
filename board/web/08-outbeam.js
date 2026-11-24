@@ -23,8 +23,8 @@ function fiber(E0, E1, f, sec) {
 // 各条线的出发时刻、光束长短和亮度都略有不同（按车道定，每次一样），不是齐刷刷的一排
 const STREAK = { dur: 0.85, len: 0.2, n: 10 };
 function drawStreaks(E0, E1, color, age, sec, seed) {
-  const g = glowCtx(), soft = g !== ctx, rand = rng(seed + 17);
-  g.save(); ctx.save();
+  const rand = rng(seed + 17);
+  ctx.save();
   for (let f = 0; f < FIBERS; f++) {
     const q = fiber(E0, E1, f, sec), lag = 0.08 * rand(), len = STREAK.len * (0.55 + 0.9 * rand()), lit = 0.6 + 0.4 * rand();
     const head = ease(clamp01((age / STREAK.dur - lag) / (1 - 0.08))) * (1 + len), tail = head - len;
@@ -32,15 +32,16 @@ function drawStreaks(E0, E1, color, age, sec, seed) {
     const u0 = Math.max(0, tail), u1 = Math.min(1, head), fade = lit * (1 - clamp01((tail - 0.75) / 0.25));
     const pts = [];
     for (let i = 0; i <= STREAK.n; i++) pts.push(cubicAt(q, u0 + (u1 - u0) * i / STREAK.n));
-    const trace = (c) => { c.beginPath(); pts.forEach(([x, y], i) => (i ? c.lineTo(x, y) : c.moveTo(x, y))); };
-    // 外圈：车道颜色的柔光（有辉光层时画进辉光层）
-    trace(g); g.strokeStyle = color((soft ? 0.2 : 0.1) * fade); g.lineWidth = (soft ? 4 : 2.8) * FX.lw; g.lineCap = 'round'; g.stroke();
+    const trace = () => { ctx.beginPath(); pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); };
+    // 外圈：车道颜色的柔光（有辉光时记进辉光，见 08-fx.js 的 glowLine）
+    if (GLOW.on) glowLine(pts, 4 * FX.lw, color, 0.2 * fade);
+    else { trace(); ctx.strokeStyle = color(0.1 * fade); ctx.lineWidth = 2.8 * FX.lw; ctx.lineCap = 'round'; ctx.stroke(); }
     // 芯：从尾巴的透明经淡淡的车道颜色到头上的白
     const [hx, hy] = pts[pts.length - 1], [tx, ty] = pts[0], grad = ctx.createLinearGradient(tx, ty, hx, hy);
     grad.addColorStop(0, HI(0)); grad.addColorStop(0.6, color(0.35 * fade)); grad.addColorStop(0.92, HI(0.8 * fade)); grad.addColorStop(1, HI(fade));
-    trace(ctx); ctx.strokeStyle = grad; ctx.lineWidth = 1.5 * FX.lw; ctx.lineCap = 'round'; ctx.stroke();
+    trace(); ctx.strokeStyle = grad; ctx.lineWidth = 1.5 * FX.lw; ctx.lineCap = 'round'; ctx.stroke();
   }
-  ctx.restore(); g.restore();
+  ctx.restore();
 }
 
 function tracePath(E0, E1, n = 28) {
@@ -51,7 +52,7 @@ function tracePath(E0, E1, n = 28) {
 }
 
 function drawOutBeam(E0, E1, color, I, live, seed, ages) {
-  const style = OUT.style, act = 0.2 + (0.3 + 0.5 * I) * live, sec = performance.now() / 1000, flow = flowPhase(`out|${seed}`, 0.18 + 0.5 * I);
+  const style = OUT.style, act = 0.2 + (0.3 + 0.5 * I) * live, sec = animMs() / 1000, flow = flowPhase(`out|${seed}`, 0.18 + 0.5 * I);
   const a0 = E0[0], a1 = E0[3];
   ctx.save();
   if (style === 'rays') {
@@ -93,7 +94,10 @@ function drawOutBeam(E0, E1, color, I, live, seed, ages) {
       const r = (1.3 + rand() * 1.3) * FX.lw;
       ctx.beginPath(); ctx.arc(x, y, r, 0, 6.283); ctx.fill();
       // 每三颗里有一颗带一圈淡淡的柔光，远看也看得出在流动；不要太亮，几条光路叠在一起会糊成一片
-      if (i % 3 === 0) { const g = glowCtx(), soft = g !== ctx; g.fillStyle = color((soft ? 0.16 : 0.08) * a); g.beginPath(); g.arc(x, y, r * (soft ? 2.8 : 2.4), 0, 6.283); g.fill(); }
+      if (i % 3 === 0) {
+        if (GLOW.on) glowAt(x, y, r * 2.8, color, 0.16 * a);
+        else { ctx.fillStyle = color(0.08 * a); ctx.beginPath(); ctx.arc(x, y, r * 2.4, 0, 6.283); ctx.fill(); }
+      }
     }
     ctx.globalAlpha = ga;
   } else if (style === 'tube') {
