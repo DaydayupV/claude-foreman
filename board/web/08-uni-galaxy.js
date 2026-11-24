@@ -92,7 +92,7 @@ function starsOf(g) {
 }
 
 function drawGalaxyOf(g, alpha, hover) {
-  const s = g.s, M = morphOf(g.seed), sec = performance.now() / 1000;
+  const s = g.s, M = morphOf(g.seed), sec = animMs() / 1000;
   // 整个盘面一起转（各点角速度相同），形状不会越转越卷
   const spin = flowPhase(`uspin|${s.id}`, smooth(`uspin|${s.id}`, GAL_SPIN[s.state], GAL_SPIN[s.state])) * M.speed * M.dir;
   const pal = [(a) => rgba('claude', a), ...s.runs.filter((r) => r.status === 'running').map((r) => (a) => rgba(runKey(r), a))];
@@ -129,7 +129,7 @@ function drawGalaxyOf(g, alpha, hover) {
   // 光效：一个星系的光有总量，同时跑的模型越多，每颗星的光斑、柔光和送往核里的光点越淡越小（总量上限），叠加时不会烧成一团白。
   // 每颗按星数的 -0.6 次方，两颗以上再乘 2/3（4 颗时各约 0.29），从一颗变成两颗时总亮度基本不变；只有一颗时也压到 0.55，白色的星（Codex）不会亮成一团白斑
   const damp = ULOOK.on ? Math.min(0.55, Math.pow(Math.max(1, stars.length), -0.6) * (stars.length > 1 ? 2 / 3 : 1)) : 1;
-  // 光效下星和往核里送的光点另有星芒，它们的柔光再进辉光层逐级扩散，按原来的亮度画会在星和核之间糊成一团白
+  // 光效下星和往核里送的光点另有星芒，它们的柔光再进辉光逐级扩散，按原来的亮度画会在星和核之间糊成一团白
   const dotK = ULOOK.on ? 0.6 : 1;
   // 一个星系只拖一道横向长光：派发中亮核自己已经拖了一道（08-uni-glow.js 的 coreFlare），星就不再拖
   let streaked = s.state === 'dispatching';
@@ -196,7 +196,7 @@ function constellation(pts, a) {
 
 // 等你确认：一圈琥珀色的呼吸光环；出错：红色闪一下，之后在右上角留一个红点
 function drawSignals(g) {
-  const s = g.s, m = U.marks.get(s.id), sec = performance.now() / 1000;
+  const s = g.s, m = U.marks.get(s.id), sec = animMs() / 1000;
   const wait = smooth(`uwait|${s.id}`, s.state === 'waiting' ? 1 : 0);
   if (wait > 0.01) {
     const br = 0.5 + 0.5 * Math.sin(sec * 2.2), R = GAL_R * (1.08 + 0.05 * br);

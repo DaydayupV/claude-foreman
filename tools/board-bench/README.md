@@ -98,13 +98,21 @@ node tools/board-bench/long.mjs "$env:TEMP/foreman-fly-long"
 node tools/board-bench/fly.mjs "$env:TEMP/foreman-fly-long" --runs 8 --gpu --keep-profile
 ```
 
-- `long.mjs <root> [hours=10] [groups=35] [seats=3]`：一个 10 小时的长对话（Claude Code 对话记录每 2 秒一条），几十组任务交错开始、互相重叠，另有 3 个短对话。内容用固定种子生成。
+- `long.mjs <root> [hours=10] [groups=35] [seats=3] [running=1]`：一个 10 小时的长对话（Claude Code 对话记录每 2 秒一条），几十组任务交错开始、互相重叠，最后一组还在跑（`running` 写 0 时也已结束），另有 3 个短对话。内容用固定种子生成。
 - `fly.mjs` 每次输出：
   - 飞入多久落地、过渡期间看板画布画了几次；
   - 飞入和落地后 2 秒的帧（`frames` 帧数、`max` 最长、`p95`、超过 50/100 ms 的帧数）；
-  - 长动画帧里排前面的脚本。
+  - 长动画帧里排前面的脚本；
+  - 带 `--steady` 时还有这一段的开销（`cost` 一行）：两边的画布每秒画了几次、页面主线程忙了多少、各进程的 CPU（100% 是占满一个核）。
 - `fly.mjs` 的选项：
-  - `--gpu`：无头也用显卡（默认是软件 GL，绘制和合成会被放大很多）；
+  - `--gpu`：无头也用显卡（看输出里的 renderer：新版 Chrome 的无头模式不加这个也可能用显卡，只是没开全）；
+  - `--software`：关掉显卡（和设置里关掉"使用图形加速"一样，renderer 是 Microsoft Basic Render Driver 或 SwiftShader），全部用 CPU 画；
+  - `--dpr <倍数>`：按这个像素比画，`2` 模拟 Retina 屏；
+  - `--throttle <倍数>`：页面 CPU 降速（和开发者工具性能面板里的 CPU 降速一样）；和 `--software` 一起模拟低配机器；
+  - `--reduced-motion`：打开"减少动态效果"；
+  - `--stay`：不飞进对话，后面几段量宇宙层；
+  - `--cost-only`：`--steady` 那一段不记帧间隔，只量开销（记帧要每个刷新周期都请求一帧，浏览器就一直在出帧，看板空闲时省下的开销量不出来）；
+  - `--gpu-util`：`--steady` 那一段另记 GPU 进程 3D 引擎的平均占用（Windows 性能计数器，用 typeperf 取样；其他系统不支持）；
   - `--keep-profile`：几次运行共用一个浏览器目录，页面照样冷启动，但着色器等缓存是热的，和平时用的浏览器一样；
   - `--no-shared`：去掉 SharedWorker，走页面直连流（Claude 桌面版内置浏览器就是这样）；
   - `--headed`：有窗口；
@@ -133,3 +141,29 @@ node tools/board-bench/fly.mjs "$env:TEMP/foreman-fly-long" --runs 8 --gpu --kee
 - 落地时读尺寸逼浏览器重排；
 - 看板第一帧一次建上百张卡片、现算 Claude Code 车道两万条统计；
 - 过渡期看板画布只按 30 帧画。
+
+## 2026-11-24 平时开销前后（issue #3：Retina 屏和低配机器上掉帧）
+
+13 车道的对话（`long.mjs <root> 2 4 3 0` 全部结束，`… 2 4 3 1` 最后一组 3 席还在跑），RTX 2060，无头 Chrome。改前改后同一条件交替跑，各 6 次，取热缓存的第 5、6 次；`--steady 8 --cost-only`，CPU 的 100% 是占满一个核。
+
+```powershell
+node tools/board-bench/fly.mjs "$env:TEMP/foreman-perf/idle" --session long --runs 6 --keep-profile --steady 8 --cost-only --gpu --dpr 2 --size 1512,900 --gpu-util
+node tools/board-bench/fly.mjs "$env:TEMP/foreman-perf/idle" --session long --runs 6 --keep-profile --steady 8 --cost-only --software --size 1920,1080 --throttle 4
+```
+
+| 场景 | 条件 | 每秒重画 | 页面主线程 | 渲染进程 CPU | GPU 进程 3D 引擎 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 空闲看板 | 显卡，像素比 2 | 28.8 → 10.2 | 8% → 4% | 14% → 6% | 30% → 12% |
+| 有任务在跑 | 显卡，像素比 2 | 28.8 → 28.8 | 16% → 14% | 23% → 19% | 28% → 25% |
+| 宇宙层（空闲） | 显卡，像素比 2 | 28.7 → 10.1 | 11% → 4% | 17% → 5% | 22% → 11% |
+| 空闲看板，减少动态效果 | 显卡，像素比 2 | 28.8 → 1.0 | 9% → 1% | 14% → 2% | 27% → 2% |
+| 空闲看板 | 关掉显卡 | 6.1 → 10.0 | 100% → 19% | 101% → 22% | — |
+| 有任务在跑 | 关掉显卡 | 7.0 → 26.6 | 100% → 86% | 102% → 90% | — |
+| 空闲看板 | 关掉显卡，CPU 降速 4 倍 | 1.4 → 8.1 | 100% → 78% | 110% → 100% | — |
+| 有任务在跑 | 关掉显卡，CPU 降速 4 倍 | 1.2 → 3.6 | 100% → 100% | 126% → 124% | — |
+
+- 改前的画法在关掉显卡时主线程一直占满，帧数到不了限帧的 30 帧。"有任务在跑、CPU 降速 4 倍"这一格改前的页面忙得连宇宙层都要等很久才载入，量这一格时把等宇宙层的上限临时放宽到 120 秒。
+- GPU 3D 引擎的占用来自 Windows 性能计数器，显卡在低负载时降频，百分比和工作量不成正比，只适合同一台机器前后对比。
+- 关掉显卡时剩下的时间几乎都在浏览器自己的光栅化和合成上（CPU 剖析里 JS 函数只占几十毫秒），再要快只能少画（降帧、降分辨率），这是 issue 里第 5 条自适应档位要做的事。
+
+改法：辉光不再每帧整张缩放合成，改成按颜色和大小缓存的贴图；看板画布像素比最高 1.5；没有任务在跑、没有操作、镜头不动时约 10 帧，两帧之间用定时器睡着；减少动态效果时只在内容变了以后画。

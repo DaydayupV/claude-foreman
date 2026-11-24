@@ -21,48 +21,127 @@ const cubicAt = (c, u) => { const v = 1 - u; return [0, 1].map((i) => v * v * v 
 function strokeCubic(c) { ctx.beginPath(); ctx.moveTo(...c[0]); ctx.bezierCurveTo(...c[1], ...c[2], ...c[3]); }
 function glowDot(x, y, r, color, a = 1) {
   r *= FX.lw;
-  // 柔光进了辉光层（1/3 分辨率）会被摊薄，画得大一些、亮一些，放大合上去以后和原来的光晕差不多显眼
-  const g = glowCtx(), soft = g !== ctx;
-  g.fillStyle = color((soft ? 0.42 : 0.2) * a); g.beginPath(); g.arc(x, y, r * (soft ? 3.6 : 2.8), 0, 6.283); g.fill();
+  // 有辉光时外面那圈柔光记进这一层的辉光（见下面），没有时（?glow=0、画在 glowBegin 和 glowFlush 之外）直接画一圈淡的
+  if (GLOW.on) glowAt(x, y, r * 3.6, color, 0.42 * a);
+  else { ctx.fillStyle = color(0.2 * a); ctx.beginPath(); ctx.arc(x, y, r * 2.8, 0, 6.283); ctx.fill(); }
   ctx.fillStyle = HI(0.9 * a); ctx.beginPath(); ctx.arc(x, y, r, 0, 6.283); ctx.fill();
 }
 
-// ---- 辉光层 ----
-// 看板的两层画布（弧线区、上面那层）画的时候，光点外面那圈柔光不直接画上去，先画进一张 1/3 分辨率的离屏画布；
-// 整层画完后放大、用叠加（lighter）合上去：低分辨率放大自带柔边，再从它缩出一张 1/6 的叠一次，外面多一圈淡淡的光晕。
-// 不用 ctx.filter 做模糊：冷着色器缓存时滤镜很慢（落地那一帧的已知问题就是速度曲线的阴影滤镜）。
-// 宇宙层不经过这里，照旧直接画。?glow=0 关掉，用来对比和量帧
-const GLOW = { off: Q.get('glow') === '0', on: false, a: { cv: document.createElement('canvas') }, b: { cv: document.createElement('canvas') } };
-GLOW.a.ctx = GLOW.a.cv.getContext('2d'); GLOW.b.ctx = GLOW.b.cv.getContext('2d');
-function glowBegin(target) {
+// ---- 辉光 ----
+// 看板的两层画布和宇宙层画的时候，光点外面那圈柔光不直接画，先记下来，整层画完后一起用叠加（lighter）贴上去，盖在这一层所有东西的上面。
+// 柔光是预先画好的贴图，每种颜色、每档大小只画一次，画法照搬以前的辉光层：形状按 1/3 分辨率画、放大 3 倍叠上，
+// 再缩一半、放大 6 倍按 0.7 叠一次（宇宙层再往下缩两级，外面多一大圈溢出的光），所以看着和以前一样。
+// 以前是每帧把柔光画进 1/3 分辨率的离屏画布、再整张放大合成上去，一帧要四到八次整张画布的缩放合成，
+// 高分屏上一个空闲的看板就占了大半个 GPU（issue #3）；现在每帧只按位置和亮度贴小图。
+// 不用 ctx.filter 做模糊：冷着色器缓存时滤镜很慢。?glow=0 关掉，用来对比和量帧
+const GLOW = { off: Q.get('glow') === '0', on: false, kind: 'fx', q: [], lines: [] };
+function glowBegin(kind = 'fx') {
   if (GLOW.off) return;
-  const W = Math.ceil(target.canvas.width / 3), H = Math.ceil(target.canvas.height / 3);
-  for (const [buf, w, h] of [[GLOW.a, W, H], [GLOW.b, Math.ceil(W / 2), Math.ceil(H / 2)]]) {
-    if (buf.cv.width !== w || buf.cv.height !== h) { buf.cv.width = w; buf.cv.height = h; }
-  }
-  GLOW.a.ctx.setTransform(1, 0, 0, 1, 0, 0); GLOW.a.ctx.clearRect(0, 0, W, H);
-  GLOW.on = true;
+  GLOW.on = true; GLOW.kind = kind; GLOW.q.length = 0; GLOW.lines.length = 0;
 }
-// 柔光画在哪：辉光层开着时是离屏画布（变换和透明度跟着当前画布走，缩成 1/3），否则就是当前画布
-function glowCtx() {
-  if (!GLOW.on) return ctx;
-  const m = ctx.getTransform(), g = GLOW.a.ctx;
-  g.setTransform(m.a / 3, m.b / 3, m.c / 3, m.d / 3, m.e / 3, m.f / 3);
-  g.globalAlpha = ctx.globalAlpha;
-  return g;
+// 一团柔光记进这一层的辉光：x、y、r（圆盘半径）按当前画布的坐标，a 是这团光本身的不透明度（再乘当前的 globalAlpha）
+function glowAt(x, y, r, color, a, shape = 'disc') {
+  const m = ctx.getTransform(), rd = r * Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)), A = a * ctx.globalAlpha;
+  if (A < 0.003 || !(rd > 0.3)) return;
+  const s = haloOf(shape, baseOf(color), rd);
+  if (s) GLOW.q.push(s, m.a * x + m.c * y + m.e, m.b * x + m.d * y + m.f, rd / s.R, A * s.gain);
 }
 function glowFlush(target) {
   if (!GLOW.on) return;
   GLOW.on = false;
-  const a = GLOW.a.cv, b = GLOW.b.cv;
-  GLOW.b.ctx.setTransform(1, 0, 0, 1, 0, 0); GLOW.b.ctx.clearRect(0, 0, b.width, b.height);
-  GLOW.b.ctx.drawImage(a, 0, 0, b.width, b.height);
+  const q = GLOW.q;
   target.save();
-  target.setTransform(1, 0, 0, 1, 0, 0); target.globalAlpha = 1; target.globalCompositeOperation = 'lighter';
-  target.imageSmoothingEnabled = true; target.imageSmoothingQuality = 'high';
-  target.drawImage(a, 0, 0, a.width * 3, a.height * 3);
-  target.globalAlpha = 0.7; target.drawImage(b, 0, 0, b.width * 6, b.height * 6);
+  target.setTransform(1, 0, 0, 1, 0, 0); target.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < q.length; i += 5) {
+    const s = q[i], h = s.half * q[i + 3];
+    target.globalAlpha = Math.min(1, q[i + 4]);
+    target.drawImage(s.cv, q[i + 1] - h, q[i + 2] - h, 2 * h, 2 * h);
+  }
+  for (const line of GLOW.lines) glowLineDraw(target, line);
   target.restore();
+  q.length = 0; GLOW.lines.length = 0;
+}
+// 一道柔光线（08-outbeam.js 的光束外圈）记进这一层的辉光：pts 是当前画布坐标的折线，w 是线宽
+function glowLine(pts, w, color, a) {
+  const m = ctx.getTransform(), A = a * ctx.globalAlpha;
+  if (A < 0.003) return;
+  GLOW.lines.push({ pts: pts.map(([x, y]) => [m.a * x + m.c * y + m.e, m.b * x + m.d * y + m.f]), w: w * Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)), base: baseOf(color), a: A });
+}
+// 以前这道线在辉光层里糊开，横截面差不多是"线宽那么宽的一条"分别按约 2 和 4.5 个画布像素糊开、按 1 和 0.7 相加；
+// 这里叠三道一道比一道宽的圆头线拼出同样的横截面，每道的亮度取那条曲线在对应位置的高度
+const LINE_BLUR = [[2, 1], [4.5, 0.7]];
+function glowLineDraw(g, { pts, w, base, a }) {
+  const f = (x) => LINE_BLUR.reduce((n, [s, k]) => n + k * (erf((x + w / 2) / (s * Math.SQRT2)) - erf((x - w / 2) / (s * Math.SQRT2))) / 2, 0);
+  const half = [w / 2 + 1, w / 2 + 3.5, w / 2 + 8], v = [f(0), f((half[0] + half[1]) / 2), f((half[1] + half[2]) / 2), 0];
+  g.beginPath(); pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
+  g.lineCap = g.lineJoin = 'round'; g.strokeStyle = `rgb(${base})`;
+  for (let i = 2; i >= 0; i--) { g.globalAlpha = Math.max(0, Math.min(1, a * (v[i] - v[i + 1]))); g.lineWidth = 2 * half[i]; g.stroke(); }
+}
+// 误差函数（Abramowitz–Stegun 7.1.26，误差 1.5e-7）
+function erf(x) {
+  const t = 1 / (1 + 0.3275911 * Math.abs(x)), y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+  return x < 0 ? -y : y;
+}
+
+// 光晕贴图：shape 是 disc（圆盘）、blob（中间亮、往外渐暗的一团）或 star（十字星芒，08-uni-glow.js 的 flareOf），R 是半径（画布像素）。
+// 大小按 1.5 倍分档，贴的时候在档内缩放；模糊的宽度按画布像素算（和以前一样），所以小光点糊成一团、放大以后边缘清楚。
+// 每帧新画的贴图限时 3 毫秒，第一次飞进来时不会一下画几十张卡住那一帧，没画上的那团光下一帧再补
+const HALO = { map: new Map(), K: Math.log(1.5), frame: -1, spent: 0, tmp: [0, 1, 2, 3].map(() => document.createElement('canvas')) };
+const haloLevels = (kind) => (kind === 'uni' ? [[1, 1], [2, 0.7], [4, 0.3 * ULOOK.gain], [8, 0.4 * ULOOK.gain]] : [[1, 1], [2, 0.7]]);
+function haloOf(shape, base, rd) {
+  const b = Math.round(Math.log(rd) / HALO.K), key = `${GLOW.kind}|${shape}|${base}|${b}`;
+  let s = HALO.map.get(key);
+  if (s) { s.used = UV.frame; return s; }
+  if (HALO.frame !== UV.frame) { HALO.frame = UV.frame; HALO.spent = 0; }
+  if (HALO.spent > 3) return null;
+  const t0 = performance.now();
+  // 缩放来缩放去攒下太多档时，扔掉这两帧没用到的，正在用的留着（整个清空的话画面上的光晕要好几帧才补得回来）
+  if (HALO.map.size >= 400) for (const [k, v] of HALO.map) if (v.used < UV.frame - 1) HALO.map.delete(k);
+  HALO.map.set(key, s = haloSprite(shape, base, Math.exp(b * HALO.K), haloLevels(GLOW.kind)));
+  s.used = UV.frame;
+  HALO.spent += performance.now() - t0;
+  return s;
+}
+// 照以前辉光层的做法画一张：形状按 1/3 分辨率画进 A（亮度取各级权重之和的倒数，叠起来最亮也不超过 1），
+// 各级是 A 缩小 1、2、4、8 倍（2 倍那一级和以前一样是普通质量的缩小，宇宙层那两级是高质量），再按权重放大叠到一起；贴的时候亮度乘回去（gain）。
+// 很大的一团（宇宙层放大、飞入蓄能时）A 最多 160 像素见方，按更低的分辨率画：几个像素的模糊比起这么大的光团本来就看不出来
+function haloSprite(shape, base, R, levels) {
+  const sum = levels.reduce((n, [, w]) => n + w, 0), L = levels.at(-1)[0], k = Math.min(1 / 3, (160 - 5 * L) / (2 * R)), [A, B, C, D] = HALO.tmp;
+  const n = Math.ceil(2 * R * k + 5 * L);
+  A.width = A.height = n;
+  const a = A.getContext('2d');
+  a.setTransform(k, 0, 0, k, n / 2, n / 2);
+  haloShape(a, shape, base, R, 1 / sum);
+  const down = (dst, src, f, quality) => {
+    dst.width = dst.height = Math.max(1, Math.ceil(src.width / f));
+    const g = dst.getContext('2d'); g.imageSmoothingQuality = quality; g.drawImage(src, 0, 0, dst.width, dst.height);
+    return dst;
+  };
+  const lv = [A, levels.length > 1 && down(B, A, 2, 'low'), levels.length > 2 && down(C, A, 4, 'high'), levels.length > 3 && down(D, C, 2, 'high')];
+  // 贴图本身最多 96 像素见方：柔光很平滑，大一些的贴的时候放大也看不出来
+  const ext = n / k, res = Math.min(1, 96 / ext), cv = document.createElement('canvas'), g = cv.getContext('2d');
+  cv.width = cv.height = Math.ceil(ext * res);
+  g.globalCompositeOperation = 'lighter'; g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+  levels.forEach(([, w], i) => { g.globalAlpha = w; g.drawImage(lv[i], 0, 0, cv.width, cv.height); });
+  return { cv, R, half: ext / 2, gain: sum };
+}
+function haloShape(g, shape, base, R, a) {
+  const col = (k) => `rgba(${base},${k})`;
+  if (shape === 'star') { g.globalCompositeOperation = 'lighter'; g.globalAlpha = a; g.drawImage(flareOf(base).star, -R, -R, 2 * R, 2 * R); return; }
+  if (shape === 'blob') {
+    const gr = g.createRadialGradient(0, 0, 0, 0, 0, R);
+    gr.addColorStop(0, col(a)); gr.addColorStop(0.4, col(a * 0.35)); gr.addColorStop(1, col(0));
+    g.fillStyle = gr;
+  } else g.fillStyle = col(a);
+  g.beginPath(); g.arc(0, 0, R, 0, 6.283); g.fill();
+}
+// 颜色函数（(a) => 'rgba(r,g,b,a)'）→ 'r,g,b'；同一个颜色只解析一次
+const BASES = new Map();
+function baseOf(color) {
+  const s = color(1);
+  let b = BASES.get(s);
+  if (b == null) BASES.set(s, b = /rgba?\(([^,]+,[^,]+,[^,]+)/.exec(s)[1].replace(/\s/g, ''));
+  return b;
 }
 
 // 核心网：三层长弧线和散点，建一次 Path2D，每帧旋转。每层的弧线分进六个桶：一半留白，另一半按当前各模型的颜色上色，像一团星云
@@ -100,7 +179,7 @@ function starPalette(t, lanes, live) {
 
 function drawCore(c, intensity, pal) {
   if (!FX.web || FX.webR !== c.R) buildWeb(c.R);
-  const sec = performance.now() / 1000;
+  const sec = animMs() / 1000;
   ctx.save();
   ctx.beginPath(); ctx.rect(c.cx - c.R * 2, c.cy - c.R * 1.5, c.clipX - (c.cx - c.R * 2), c.R * 3); ctx.clip();
   for (const [i, [{ paths, dots }, alpha, width, speed]] of FX.web.entries()) {
@@ -136,7 +215,7 @@ function drawCore(c, intensity, pal) {
 const FAR = { cv: document.createElement('canvas'), key: '', half: 0, dim: 0.85 };
 FAR.ctx = FAR.cv.getContext('2d');
 function farLayer(R, [{ paths, dots }, alpha, width], pal) {
-  const dpr = devicePixelRatio || 1, s = Math.min(1.2, Math.max(0.15, 0.5 * VIEW.k * dpr));
+  const dpr = boardDpr(), s = Math.min(1.2, Math.max(0.15, 0.5 * VIEW.k * dpr));
   const key = `${R}|${pal.key}|${Math.round(Math.log(s) / Math.log(1.5))}|${Math.round(Math.log(FX.lw) / Math.log(1.3))}`;
   if (FAR.key === key) return true;
   const size = Math.ceil(2 * R * 1.05 * s), g = FAR.ctx;
@@ -185,7 +264,7 @@ function drawBand(b, t, a = 1) {
   }
   ctx.strokeStyle = vfade(b, '225,225,235', 0.1); ctx.lineWidth = 2.4 * FX.lw; ctx.stroke();
   ctx.strokeStyle = vfade(b, '215,215,225', 0.45); ctx.lineWidth = 0.6 * FX.lw; ctx.stroke();
-  const p = 0.2 + 0.6 * (Math.sin(performance.now() / 2600) + 1) / 2, sy = b.y + p * b.h;
+  const p = 0.2 + 0.6 * (Math.sin(animMs() / 2600) + 1) / 2, sy = b.y + p * b.h;
   const grad = ctx.createLinearGradient(0, sy - 30, 0, sy + 30);
   grad.addColorStop(0, HI(0)); grad.addColorStop(0.5, HI(0.05)); grad.addColorStop(1, HI(0));
   ctx.fillStyle = grad; ctx.fillRect(b.x, sy - 30, b.w, 60);
@@ -225,6 +304,8 @@ function drawFlash(b, R) {
   glow(0.7 * on * Math.exp(-b.p * 2.4), R * 0.32 * (0.45 + 0.55 * b.s), (a) => rgba('claude', a));
   glow(0.9 * on * Math.exp(-b.p * 6), R * (0.1 + 0.5 * b.s), HI);
 }
+// 看板画布的像素比最高 1.5：Retina 屏（2 倍）上要画的像素少了四成多，细线和光点看不出差别（宇宙层的画布本来就只按 1 倍画）
+const boardDpr = () => Math.min(devicePixelRatio || 1, 1.5);
 function sizeCanvas(cv, w, h, dpr) {
   if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
     cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
@@ -233,7 +314,7 @@ function sizeCanvas(cv, w, h, dpr) {
 }
 
 function drawFx(t, L) {
-  const dpr = devicePixelRatio || 1, { cw: w, ch: h } = viewBox(), T = FLYFX;
+  const dpr = boardDpr(), { cw: w, ch: h } = viewBox(), T = FLYFX;
   sizeCanvas(FX.cv, w, h, dpr); sizeCanvas(FX.ov.cv, w, h, dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
@@ -264,7 +345,7 @@ function drawFx(t, L) {
   // 弧线区：切换中以星系亮核为中心按炸开的进度缩放；线宽和散点不跟着缩到看不见，小的时候是一团细亮的丝
   const burst = T ? burstOf(T) : null, lw = FX.lw;
   if (!burst || burst.s > 0.002) {
-    glowBegin(ctx);
+    glowBegin();
     ctx.save();
     if (burst) {
       ctx.translate(burst.wx, burst.wy); ctx.scale(burst.s, burst.s); ctx.translate(-L.core.cx, -L.core.cy);
@@ -287,7 +368,7 @@ function drawFx(t, L) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     ctx.setTransform(dpr * VIEW.k, 0, 0, dpr * VIEW.k, dpr * VIEW.tx, dpr * VIEW.ty);
-    glowBegin(ctx);
+    glowBegin();
     drawOverlay(t, L, P, lanes, rates, live, bandA, burst);
   } finally { glowFlush(ctx); ctx = base; }
 }

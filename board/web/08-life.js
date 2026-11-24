@@ -147,7 +147,7 @@ function drawGate(p, L, t) {
   const rows = p.seats.map((s) => rowOf(L, p.id, s.seat)).filter(Boolean);
   if (!rows.length) return;
   const last = rows[rows.length - 1].card, y0 = rows[0].card.y - 4, y1 = last.y + last.h + 4, x = L.band.x - 58, mid = (y0 + y1) / 2; // 刻度数字左边
-  const fall = clamp01(secSince(p.ev.ts, t) / 0.6), u = open < 0 ? 0 : ease(clamp01(open / 1.2)), a = (open < 0 ? 0.55 + 0.2 * Math.sin(performance.now() / 300) : 1 - u) * fall;
+  const fall = clamp01(secSince(p.ev.ts, t) / 0.6), u = open < 0 ? 0 : ease(clamp01(open / 1.2)), a = (open < 0 ? 0.55 + 0.2 * Math.sin(animMs() / 300) : 1 - u) * fall;
   const half = (mid - y0) * fall, shift = u * (mid - y0);
   ctx.save();
   for (const [from, dir] of [[mid, -1], [mid, 1]]) {

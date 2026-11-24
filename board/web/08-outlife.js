@@ -10,7 +10,7 @@ const clusterR = (grow) => 3 + 10 * grow;
 
 // 一团正在汇聚的光：柔光、亮核、绕圈的小光点
 function drawCluster(x, y, grow, color, seed) {
-  const r = clusterR(grow) * FX.lw, sec = performance.now() / 1000, rand = rng(seed);
+  const r = clusterR(grow) * FX.lw, sec = animMs() / 1000, rand = rng(seed);
   const g = ctx.createRadialGradient(x, y, 0, x, y, r * 2.8);
   g.addColorStop(0, color(0.3 + 0.2 * grow)); g.addColorStop(0.3, color(0.1 + 0.08 * grow)); g.addColorStop(1, color(0));
   ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r * 2.8, 0, 6.283); ctx.fill();

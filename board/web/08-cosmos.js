@@ -21,7 +21,7 @@ const STARS = (() => {
 
 function drawStars(w, h, fit) {
   if (!LOOK.stars) return;
-  const sec = performance.now() / 1000, kz = fit.k * Math.pow(VIEW.k / fit.k, 0.3);
+  const sec = animMs() / 1000, kz = fit.k * Math.pow(VIEW.k / fit.k, 0.3);
   const px = (VIEW.tx - fit.tx) * 0.25, py = (VIEW.ty - fit.ty) * 0.25;
   const cx = w / 2 + px, cy = h / 2 + py, wx = WL.W / 2, wy = VIEW.H / 2;
   for (const s of STARS) {
@@ -88,7 +88,7 @@ const PALE = new Set(['chatgpt', 'unknown']);
 const lobesOf = (m) => 1 + Math.round(2 * Math.sqrt(m.w));
 const lobeAlpha = (m) => (0.08 + 0.12 * Math.sqrt(m.w)) * (m.running ? 1.3 : 1) * (PALE.has(m.key) ? 0.5 : 1);
 function drawMixNebula(x, y, R, flat, mix, fade, seed = 0, { spread = 1, size = 1, cap = Infinity } = {}) {
-  const sec = performance.now() / 1000, prev = ctx.globalCompositeOperation;
+  const sec = animMs() / 1000, prev = ctx.globalCompositeOperation;
   const total = mix.reduce((sum, m) => sum + lobesOf(m) * lobeAlpha(m), 0), scale = total > cap ? cap / total : 1;
   ctx.globalCompositeOperation = 'lighter';
   mix.forEach((m, i) => {
@@ -135,7 +135,7 @@ const DUST = (() => {
 
 function drawDust(L) {
   if (!LOOK.dust) return;
-  const sec = performance.now() / 1000;
+  const sec = animMs() / 1000;
   for (const d of DUST) {
     const span = d.gap ? WL.outX - WL.bandX - WL.bandW : WL.W, left = d.gap ? WL.bandX + WL.bandW : 0;
     const x = left + ((((d.x0 - left + d.vx * sec) % span) + span) % span), y = ((((d.y0 * L.H + d.vy * sec) % L.H) + L.H) % L.H);
@@ -157,7 +157,7 @@ const starColor = (tint, pal) => (tint < 0.6 || !pal.length ? starWhite : pal[Ma
 
 function drawGalaxy(c, intensity, pal = []) {
   if (!LOOK.galaxy) return;
-  const sec = performance.now() / 1000;
+  const sec = animMs() / 1000;
   ctx.save();
   ctx.beginPath(); ctx.rect(c.cx - c.R * 2, c.cy - c.R * 1.5, c.clipX - (c.cx - c.R * 2), c.R * 3); ctx.clip();
   // 轨道环

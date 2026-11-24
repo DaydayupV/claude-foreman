@@ -10,9 +10,19 @@ const FLOW = new Map();
 function flowPhase(key, speed) {
   const ms = performance.now(), f = FLOW.get(key);
   if (!f) { FLOW.set(key, { ms, p: 0 }); return 0; }
-  f.p += speed * Math.min(0.1, (ms - f.ms) / 1000); // 画布停画了一阵再回来时不跳
+  // 画布停画了一阵再回来时不跳；减少动态效果时不流动（和 animMs 一样）
+  if (!reduceMotion.matches) f.p += speed * Math.min(0.1, (ms - f.ms) / 1000);
   f.ms = ms;
   return f.p;
+}
+// 装饰动画（转动、闪烁、呼吸、扫光、虚线流动）的时钟（毫秒）。减少动态效果时停在那一刻，画面只随内容变化，
+// 主循环这时也只在内容变了以后才画（09-main.js）；关掉以后从停下的地方接着走，不跳
+const ANIM = { off: 0, at: null };
+function animMs() {
+  const ms = performance.now();
+  if (reduceMotion.matches) return (ANIM.at ??= ms) - ANIM.off;
+  if (ANIM.at != null) { ANIM.off += ms - ANIM.at; ANIM.at = null; }
+  return ms - ANIM.off;
 }
 const SMOOTH_TAU = 0.35; // 秒：时间常数，越大过渡越慢
 
