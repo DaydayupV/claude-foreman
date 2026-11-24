@@ -11,6 +11,11 @@ import { AGY_EFFORTS, splitAgyModel, agyFamilies, agyModelId } from '../foreman/
 const SCRIPTS = path.join(ROOT, 'foreman/skills/dispatch/scripts'), GUARD = path.join(SCRIPTS, 'adapters/agy-guard.mjs'), M = MESSAGES.zh;
 const agent = () => ({ type: 'agy cli', model: 'gemini-3.8-flash', bin: AGY });
 const permissionsOutput = (permissions) => JSON.stringify({ command: { name: 'permissions', data: { permissions } } });
+const sandboxWithProbe = (t) => {
+  const h = sandbox(t);
+  if (process.platform === 'win32') h.env.FOREMAN_TEST_AGY_WINDOWS_SANDBOX = '1';
+  return h;
+};
 const configure = (h, change = () => {}) => {
   const tmp = path.join(h.home, 'tmp'); fs.mkdirSync(tmp, { recursive: true });
   Object.assign(h.env, { TMP: tmp, TEMP: tmp, TMPDIR: tmp });
@@ -482,7 +487,7 @@ test('agy /hooks 只核对 command.data 的来源和唯一动作，response 不�
 });
 
 test('agy 原文形状的嵌套事件归一后保留时间线、步骤用量和最终回复', async (t) => {
-  const h = sandbox(t); configure(h); await install(h); h.write('r.txt', 'hello\n');
+  const h = sandboxWithProbe(t); configure(h); await install(h); h.write('r.txt', 'hello\n');
   const sid = 'synthetic-real-shape', file = path.join(h.cwd, 'r.txt').replaceAll('\\', '/'), text = JSON.stringify(discussion);
   const events = [
     { event: 'init', conversation_id: sid, init: { model: agent().model, cwd: h.cwd, tools: ['read_file', 'run_command'], permission_mode: 'always-proceed' } },
@@ -522,7 +527,7 @@ test('agy 原文形状的嵌套事件归一后保留时间线、步骤用量和�
 });
 
 test('agy 工具错误对象和字符串识别守卫拒绝，命令输出解析退出码', async (t) => {
-  const h = sandbox(t); configure(h); await install(h);
+  const h = sandboxWithProbe(t); configure(h); await install(h);
   const error = 'tool call denied by pre-tool hook: foreman guard: read_file is not allowed in this run';
   h.scenario({ steps: [
     { tool: { name: 'run_command', args: { CommandLine: 'synthetic failure' } }, output: 'failed', exit_code: 7 },
@@ -562,7 +567,7 @@ test('agy 守卫放行 ByteOffset；只读工具因不认识的参数被拦时�
 });
 
 test('agy 真启动器拒绝写工具，工具事件、权限问题、进度、用量与价格进入公共结果', async (t) => {
-  const h = sandbox(t); configure(h); await install(h); h.write('source.txt', 'original');
+  const h = sandboxWithProbe(t); configure(h); await install(h); h.write('source.txt', 'original');
   h.scenario({ steps: [
     { event: { event: 'step_update', step_update: { step_index: 100, step_type: 'agent_response', state: 'ACTIVE', text_delta: 'working' } } },
     { tool: { name: 'read_file', args: { Path: path.join(h.cwd, 'source.txt') } } },
@@ -586,7 +591,7 @@ test('agy 真启动器拒绝写工具，工具事件、权限问题、进度、�
 });
 
 test('agy 下一轮、回答和报告修复续接同一会话，修复用 none，用量只算本轮各步', async (t) => {
-  const h = sandbox(t); configure(h, (c) => { c.dispatch.discuss_max_rounds = 3; }); await install(h);
+  const h = sandboxWithProbe(t); configure(h, (c) => { c.dispatch.discuss_max_rounds = 3; }); await install(h);
   const captured = path.join(h.home, 'policies.jsonl');
   h.scenario({ guard_file: captured, calls: [{ last_message: 'invalid JSON' }, { last_message: discussion }] });
   const first = output(await run(h)), requests = h.calls().filter((c) => c.operation === 'run');
@@ -606,7 +611,7 @@ test('agy 下一轮、回答和报告修复续接同一会话，修复用 none�
 });
 
 test('agy 沙箱探针失败不给 shell、附文件清单，缓存按版本失效且 canary 清理', async (t) => {
-  const h = sandbox(t); configure(h); await install(h); h.initGit();
+  const h = sandboxWithProbe(t); configure(h); await install(h); h.initGit();
   h.scenario({ sandbox: false, global_deny: ['read_file(private)', 'read_url(*)'] }); const first = output(await run(h));
   if (process.platform === 'win32') {
     const { args } = modelCalls(h).find((c) => c.operation === 'probe');
@@ -651,9 +656,39 @@ test('agy 沙箱探针失败不给 shell、附文件清单，缓存按版本失�
   assert.equal(unavailable.error, M.agyQuotaInvalid); assert.equal(unavailable.fix, M.fixAgySandboxLeaky('agy', items));
 });
 
+test('agy Windows 默认不探测沙箱，check 给出原因且讨论席只读文件', { skip: process.platform !== 'win32' }, async (t) => {
+  const h = sandbox(t); configure(h); await install(h); h.initGit();
+  const cache = path.join(stateDir(h), 'agy-sandbox.json'), capture = path.join(h.home, 'windows-network.jsonl');
+  h.scenario({ network_capture: capture });
+  const check = async (...args) => {
+    const checked = output(await h.bridge(['check', '--agent', 'agy', ...args])).agents.agy;
+    const { key, at } = checked.sandbox;
+    assert.ok(key);
+    assert.equal(new Date(at).toISOString(), at);
+    assert.deepEqual(checked.sandbox, { key, available: false, results: { platform: 'windows' }, at });
+    assert.equal(checked.fix, M.fixAgySandboxWindows);
+    assert.ok(checked.notes.includes(M.agyNoShellCheck(M.agySandboxWindowsReason)));
+    return { key, at };
+  };
+  const { key, at } = await check();
+  assert.equal(fs.existsSync(cache), false);
+  const before = JSON.stringify({ entries: { [key]: { key, available: true, results: { network_control: {} }, at } } });
+  write(cache, before);
+  assert.equal((await check('--reprobe')).key, key);
+  const seat = output(await run(h));
+  assert.equal(seat.status, 'done'); assert.equal(seat.sandbox, 'files-only');
+  assert.equal(JSON.parse(read(path.join(seat.run_dir, 'meta.json'))).sandbox, 'files-only');
+  assert.ok(seat.notes.includes(M.agyNoSandbox(M.agySandboxWindowsReason)));
+  const calls = h.calls(), request = calls.filter((c) => c.operation === 'run').at(-1);
+  assert.ok(JSON.parse(request.stdin).message.content.includes(M.agyFileList(h.git(['ls-files']))));
+  assert.equal(calls.some((c) => ['probe', 'permissions'].includes(c.operation) || c.args.includes('--sandbox')), false);
+  assert.deepEqual(lines(capture), []);
+  assert.equal(read(cache), before);
+});
+
 test('agy Windows 主目录外读取探针决定 shell 权限、清理 canary 并使旧缓存失效', async (t) => {
   if (process.platform === 'win32') {
-    const h = sandbox(t); configure(h); await install(h);
+    const h = sandboxWithProbe(t); configure(h); await install(h);
     const args = ['check', '--agent', 'agy'], cache = path.join(stateDir(h), 'agy-sandbox.json');
     const isolated = output(await h.bridge(args)).agents.agy.sandbox;
     assert.equal(isolated.available, true);
@@ -687,8 +722,9 @@ test('agy Windows 主目录外读取探针决定 shell 权限、清理 canary �
   } else t.skip('仅 Windows 探测主目录外读取');
 });
 
-test('agy 沙箱的原因和修法共用 results 分类，中英覆盖布局、启动、权限设置、离线、不隔离和未完成', (t) => {
-  const h = sandbox(t), results = [{ layout: 'unavailable' }, { start_error: 'synthetic-start', settings_error: 'synthetic-settings' },
+test('agy 沙箱的原因和修法共用 results 分类，中英覆盖 Windows、布局、启动、权限设置、离线、不隔离和未完成', (t) => {
+  const h = sandbox(t), results = [{ platform: 'windows', layout: 'unavailable' },
+    { layout: 'unavailable' }, { start_error: 'synthetic-start', settings_error: 'synthetic-settings' },
     { settings_error: 'synthetic-settings' }, { network: 'host_offline', read_home: 'allowed' },
     { write_project: 'allowed', write_outside: 'allowed', read_home: 'allowed', read_outside: 'allowed', network: 'allowed' }, { network: 'unconfirmed' }];
   for (const lang of ['zh', 'en']) {
@@ -696,6 +732,7 @@ test('agy 沙箱的原因和修法共用 results 分类，中英覆盖布局、�
     const out = moduleCall({ ...h, env: { ...h.env, FOREMAN_LANG: lang } }, 'adapters/agy-setup.mjs',
       `console.log(JSON.stringify(${JSON.stringify(results)}.map(results=>x.agySandboxInfo('chosen', {available:false,results}))));`);
     assert.deepEqual(out, [
+      { fix: m.fixAgySandboxWindows, reason: m.agySandboxWindowsReason },
       { fix: m.fixAgySandboxLayout, reason: m.agySandboxUnconfirmedReason }, { fix: m.fixAgySandboxStart('synthetic-start'), reason: m.agySandboxStartReason },
       { fix: m.fixAgySandboxSettings('chosen', 'synthetic-settings'), reason: m.agySandboxSettingsReason },
       { fix: m.fixAgySandboxOffline('chosen'), reason: m.agySandboxOfflineReason },
@@ -706,7 +743,7 @@ test('agy 沙箱的原因和修法共用 results 分类，中英覆盖布局、�
 });
 
 test('agy /permissions 异常时探针缓存不可用并给出修法', { skip: process.platform !== 'win32' }, async (t) => {
-  const h = sandbox(t); configure(h); await install(h);
+  const h = sandboxWithProbe(t); configure(h); await install(h);
   const cache = path.join(stateDir(h), 'agy-sandbox.json');
   const cases = [
     ['非零退出', { permissions_exit: 7 }, 'exit 7'],
@@ -730,7 +767,7 @@ test('agy /permissions 异常时探针缓存不可用并给出修法', { skip: p
 });
 
 test('agy 命中可用缓存后权限查询失败时派席改用只读文件，check 报不可用', { skip: process.platform !== 'win32' }, async (t) => {
-  const h = sandbox(t); configure(h); await install(h); h.initGit();
+  const h = sandboxWithProbe(t); configure(h); await install(h); h.initGit();
   assert.equal(output(await run(h)).sandbox, 'agy-sandbox');
   const cache = path.join(stateDir(h), 'agy-sandbox.json'), before = read(cache), callsBefore = h.calls().length;
   h.scenario({ permissions_exit: 7 });
@@ -753,7 +790,7 @@ test('agy 命中可用缓存后权限查询失败时派席改用只读文件，c
 });
 
 test('agy 沙箱启动失败缓存原文且再次派出不重测，DONE 命令退出码为 1，中英 check 显示故障', async (t) => {
-  const h = sandbox(t); configure(h); await install(h);
+  const h = sandboxWithProbe(t); configure(h); await install(h);
   const error = 'exebox: creating sandbox: CreateProcessSecurityEnvironment: The system cannot find the path specified..';
   h.scenario({ version: '1.4.10', run_start_error: error, steps: [
     { tool: { name: 'run_command', args: { CommandLine: 'synthetic start failure' } }, files: { 'not-started.txt': 'changed' } },
@@ -781,7 +818,7 @@ test('agy 沙箱启动失败缓存原文且再次派出不重测，DONE 命令�
 });
 
 test('agy 探针首条启动失败即结束，短时限内缓存结论且不发后续命令', async (t) => {
-  const h = sandbox(t); configure(h); await install(h);
+  const h = sandboxWithProbe(t); configure(h); await install(h);
   const error = 'exebox: creating sandbox: synthetic start failure';
   h.scenario({ run_start_error: error, run_start_error_delay_ms: 60000 });
   const result = output(await run(h, ['--timeout', '0.5'], { timeout: 60000 }));
@@ -795,7 +832,7 @@ test('agy 探针首条启动失败即结束，短时限内缓存结论且不发�
 });
 
 test('agy 部分探针有结果不记 start_error，全部启动失败只记首条并截到 300 字符', (t) => {
-  const h = sandbox(t); configure(h); fs.mkdirSync(stateDir(h), { recursive: true });
+  const h = sandboxWithProbe(t); configure(h); fs.mkdirSync(stateDir(h), { recursive: true });
   const error = `  exebox: ${'x'.repeat(320)}  `, names = ['write_project', 'write_outside', 'read_home', 'network', 'environment'];
   if (process.platform === 'win32') names.push('read_outside');
   const results = moduleCall(h, 'adapters/agy-setup.mjs', `const results=[];
@@ -815,33 +852,50 @@ console.log(JSON.stringify(results));`);
   assert.deepEqual(Object.keys(entries), [results[0].key]);
 });
 
-test('agy 网络探针对照区分权限拒绝、普通断网和超时，未确认不写缓存', (t) => {
-  const h = sandbox(t); configure(h); fs.mkdirSync(stateDir(h), { recursive: true });
+test('agy 网络探针对照区分权限拒绝、普通断网和超时，失败不重试且放行结果能缓存', (t) => {
+  const h = sandboxWithProbe(t); configure(h); fs.mkdirSync(stateDir(h), { recursive: true });
   const capture = path.join(h.home, 'network-controls.jsonl');
+  const postFailure = [{}, { https_error: 'ETIMEDOUT' }];
   const cases = [
-    ['error:EPERM', [{}, { https_error: 'ECONNREFUSED' }, { https_error: 'ECONNREFUSED' }], 'sandbox_denied', true],
+    ['error:EPERM', [{}, { https_error: 'ECONNREFUSED' }], 'sandbox_denied', true],
     ['error:EACCES', [{}, { response_error: true }], 'sandbox_denied', true],
     ...['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ENETUNREACH', 'EHOSTUNREACH'].map((code) => [`error:${code}`, [{}, {}], 'sandbox_denied', true]),
-    ['error:ENOTFOUND', [{}, { dns_error: 'ENOTFOUND' }, { dns_error: 'ENOTFOUND' }], 'unconfirmed', false],
-    ['error:ECONNREFUSED', [{}, { https_error: 'ECONNREFUSED' }, { https_error: 'ECONNREFUSED' }], 'unconfirmed', false],
-    ['error:ECONNREFUSED', [{}, { https_error: 'ETIMEDOUT' }, {}], 'sandbox_denied', true],
-    // 超时这类说不清原因的错误按 unconfirmed：不给 shell，也不写缓存。
+    ['error:ENOTFOUND', [{}, { dns_error: 'ENOTFOUND' }], 'unconfirmed', false],
+    ['error:ECONNREFUSED', [{}, { https_error: 'ECONNREFUSED' }], 'unconfirmed', false],
+    ['error:ECONNREFUSED', postFailure, 'unconfirmed', false],
+    ['error:ECONNREFUSED', postFailure, 'unconfirmed', false, { readHome: 'allowed' }],
+    ['error:EPERM', [{}, {}], 'sandbox_denied', false, { readHome: 'allowed', partial: true }],
     ['error:ETIMEDOUT', [{}, {}], 'unconfirmed', false], ['error:ECONNRESET', [{}, {}], 'unconfirmed', false], ['allowed', [{}, {}], 'allowed', false],
   ];
-  const probe = (network, version) => moduleCall(h, 'adapters/agy-setup.mjs', `console.log(JSON.stringify(await x.probeSandbox({cwd:${JSON.stringify(h.cwd)},version:${JSON.stringify(version)},run:async(options)=>({status:'done',tools:options.probeCommands.map(command=>{const code=Buffer.from(/Buffer\\.from\\('([^']+)'/.exec(command)[1],'base64').toString();const prefix=/FOREMAN_AGY_PROBE:[^"']+:/.exec(code)[0];const name=/name:["']([^"']+)["']/.exec(code)[1];return {tool:'run_command',output:prefix+JSON.stringify({name,value:name==='network'?${JSON.stringify(network)}:name==='environment'?true:'sandbox_denied'})};})})})));`);
-  for (const [i, [network, controls, expected, available]] of cases.entries()) {
+  const probe = (version, values, partial) => moduleCall(h, 'adapters/agy-setup.mjs', `const values=${JSON.stringify(values)};
+console.log(JSON.stringify(await x.probeSandbox({cwd:${JSON.stringify(h.cwd)},version:${JSON.stringify(version)},
+  run: async ({probeCommands}) => ({
+    status: ${partial ? "'failed'" : "'done'"},
+    tools: probeCommands.flatMap((command) => {
+      const code = Buffer.from(/Buffer\\.from\\('([^']+)'/.exec(command)[1], 'base64').toString();
+      const prefix = /FOREMAN_AGY_PROBE:[^"']+:/.exec(code)[0], name = /name:["']([^"']+)["']/.exec(code)[1];
+      if (${partial} && name === 'environment') return [];
+      return [{ tool: 'run_command', output: prefix + JSON.stringify({ name, value: values[name] ?? 'sandbox_denied' }) }];
+    }),
+  }),
+})));`);
+  for (const [i, [network, controls, expected, available, { readHome = 'sandbox_denied', partial = false } = {}]] of cases.entries()) {
     h.scenario({ network_controls: controls, network_capture: capture });
-    const capturedBefore = lines(capture).length, after = controls.at(-1);
-    const result = probe(network, `network-${i}`);
+    const capturedBefore = lines(capture).length, after = controls[1], version = `network-${i}`;
+    const values = { network, read_home: readHome, environment: true };
+    const result = probe(version, values, partial);
     assert.equal(result.results.network, expected); assert.equal(result.available, available); assert.equal(result.results.network_error, network);
+    assert.equal(result.results.read_home, readHome); assert.equal(result.results.environment, partial ? undefined : true);
     assert.equal(result.tested, true); assert.equal(result.results.network_control.before.dns, !controls[0].dns_error);
     assert.equal(result.results.network_control.after.dns, !after.dns_error);
     assert.equal(result.results.network_control.after.https, !after.dns_error && !after.https_error);
     assert.deepEqual(lines(capture).slice(capturedBefore).filter((c) => c.stage === 'dns').map((c) => c.index), controls.map((_, j) => j + 1));
     const store = fs.existsSync(path.join(stateDir(h), 'agy-sandbox.json')) ? JSON.parse(read(path.join(stateDir(h), 'agy-sandbox.json'))) : { entries: {} };
-    assert.equal(!!store.entries[result.key], expected !== 'unconfirmed');
-    if (expected !== 'unconfirmed') {
-      const before = lines(capture).length, warm = probe(network, `network-${i}`);
+    const cached = readHome === 'allowed' || expected !== 'unconfirmed' && !partial;
+    assert.equal(!!store.entries[result.key], cached);
+    if (cached) {
+      assert.equal(store.entries[result.key].available, available);
+      const before = lines(capture).length, warm = probe(version, values, partial);
       assert.equal(warm.tested, undefined); assert.equal(lines(capture).length, before);
     }
   }
@@ -849,7 +903,7 @@ test('agy 网络探针对照区分权限拒绝、普通断网和超时，未确�
 });
 
 test('agy 跨盘即使有可用缓存也不读写缓存、不跑探针，根和设备任一不同都拒绝 shell', async (t) => {
-  const h = sandbox(t); configure(h); await install(h); output(await run(h));
+  const h = sandboxWithProbe(t); configure(h); await install(h); output(await run(h));
   const extra = path.join(h.home, 'extra'); fs.mkdirSync(extra);
   const cache = path.join(stateDir(h), 'agy-sandbox.json'), before = read(cache), probes = modelCalls(h).length;
   for (const kind of ['root', 'dev']) {
@@ -872,7 +926,7 @@ ${kind === 'dev' ? "fs.statSync=(file,...args)=>{const s=stat(file,...args);if(f
 });
 
 test('agy 同目录的大小写盘符不算跨盘，项目和附加目录命中同一个缓存键', { skip: process.platform !== 'win32' }, (t) => {
-  const h = sandbox(t); configure(h); fs.mkdirSync(stateDir(h), { recursive: true });
+  const h = sandboxWithProbe(t); configure(h); fs.mkdirSync(stateDir(h), { recursive: true });
   const upper = h.cwd[0].toUpperCase() + h.cwd.slice(1), lower = h.cwd[0].toLowerCase() + h.cwd.slice(1);
   const { first, warm } = moduleCall(h, 'adapters/agy-setup.mjs', `import fs from 'node:fs';const real=fs.realpathSync;
 const [upper,lower]=${JSON.stringify([upper, lower])};
@@ -888,7 +942,7 @@ console.log(JSON.stringify({first,warm}));`);
 });
 
 test('agy 宿主 DNS 或 HTTPS 断网时不放 canary、不启动探针、不写缓存，联网后重测', async (t) => {
-  const h = sandbox(t); configure(h); await install(h);
+  const h = sandboxWithProbe(t); configure(h); await install(h);
   const capture = path.join(h.home, 'offline-network.jsonl'), cache = path.join(stateDir(h), 'agy-sandbox.json');
   for (const control of [{ dns_error: 'ENOTFOUND' }, { https_error: 'ECONNREFUSED' }]) {
     h.scenario({ network_controls: [control], network_capture: capture });
@@ -908,7 +962,7 @@ console.log(JSON.stringify(await x.probeSandbox({cwd:${JSON.stringify(h.cwd)},ve
 });
 
 test('agy 不可用缓存 24 小时后重测，可用缓存不过期，check --reprobe 按平台清理缓存', async (t) => {
-  const h = sandbox(t); configure(h); await install(h); h.scenario({ sandbox: false });
+  const h = sandboxWithProbe(t); configure(h); await install(h); h.scenario({ sandbox: false });
   const check = async (args = []) => output(await h.bridge(['check', '--agent', 'agy', ...args])).agents.agy.sandbox;
   const first = await check(), cache = path.join(stateDir(h), 'agy-sandbox.json'), store = JSON.parse(read(cache));
   h.scenario({}); assert.equal((await check()).tested, undefined);
@@ -941,7 +995,7 @@ test('agy 不可用缓存 24 小时后重测，可用缓存不过期，check --r
 });
 
 test('agy 缓存锁忙仍返回探针结论，force 删除失败仍重测，总时限不能吞掉', (t) => {
-  const h = sandbox(t); configure(h); fs.mkdirSync(stateDir(h), { recursive: true });
+  const h = sandboxWithProbe(t); configure(h); fs.mkdirSync(stateDir(h), { recursive: true });
   const result = moduleCall(h, 'adapters/agy-setup.mjs', `import fs from 'node:fs';import {acquireLock} from ${JSON.stringify(pathToFileURL(path.join(SCRIPTS, 'locks.mjs')).href)};
 let runs=0,probeTime;const options={cwd:${JSON.stringify(h.cwd)},version:'locked',deadline:Infinity,run:async({probeCommands,deadline,timeoutMs})=>{
 if(runs++===0)probeTime={remaining:deadline-Date.now(),timeoutMs};return {status:'done',tools:probeCommands.map(command=>{
@@ -966,7 +1020,7 @@ console.log(JSON.stringify({fresh:fresh.available,forced:forced.error,runs:compl
 });
 
 test('agy 两个并发探针写缓存时锁内重读，保留两个版本的键且探针本身不占锁', async (t) => {
-  const h = sandbox(t); configure(h); fs.mkdirSync(stateDir(h), { recursive: true });
+  const h = sandboxWithProbe(t); configure(h); fs.mkdirSync(stateDir(h), { recursive: true });
   const cache = path.join(stateDir(h), 'agy-sandbox.json'), ready = [1, 2].map((i) => path.join(h.home, `probe-${i}`));
   const script = h.write('cache-race.mjs', `import fs from 'node:fs';import {probeSandbox} from ${JSON.stringify(pathToFileURL(path.join(SCRIPTS, 'adapters/agy-setup.mjs')).href)};
 const i=Number(process.argv[2]),ready=${JSON.stringify(ready)},cache=${JSON.stringify(cache)},read=fs.readFileSync;let reads=0;
@@ -996,7 +1050,7 @@ for(const p of prepared)p.cleanup();console.log(JSON.stringify({queries,times}))
 });
 
 test('agy 总时限覆盖版本查询、hooks、探针和宿主网络对照，到期不再派模型', async (t) => {
-  const h = sandbox(t); configure(h); await install(h);
+  const h = sandboxWithProbe(t); configure(h); await install(h);
   for (const phase of ['version', 'hooks', 'probe', 'network']) {
     const scenario = h.scenario(phase === 'network' ? { network_controls: [{ dns_hang: true }] } : { [`${phase}_delay_ms`]: 5000 }, `deadline-${phase}`);
     const started = Date.now(), result = output(await run(h, ['--timeout', '0.02'], { env: scenario.env } ), 1);
@@ -1012,7 +1066,7 @@ test('agy 总时限覆盖版本查询、hooks、探针和宿主网络对照，�
 });
 
 test('agy check 按 --cwd 扫描和探针，令牌读取仍在 agy-work', async (t) => {
-  const h = sandbox(t); configure(h); await install(h);
+  const h = sandboxWithProbe(t); configure(h); await install(h);
   const target = path.join(h.home, 'target'), bad = path.join(target, '.agents/hooks.json'); write(bad, {});
   const rejected = output(await h.bridge(['check', '--agent', 'agy', '--cwd', target]), 1).agents.agy;
   assert.ok(rejected.error.includes(bad)); assert.equal(h.calls().filter((c) => c.tool === 'agy').length, 0);
@@ -1025,7 +1079,7 @@ test('agy check 按 --cwd 扫描和探针，令牌读取仍在 agy-work', async 
 });
 
 test('agy 提示词在探针后选择读命令权限，讨论和审查无 shell 都附清单', async (t) => {
-  const h = sandbox(t); configure(h); await install(h); h.initGit(); h.write('source.txt', 'review this change\n');
+  const h = sandboxWithProbe(t); configure(h); await install(h); h.initGit(); h.write('source.txt', 'review this change\n');
   const permissions_output = permissionsOutput([{ scope: 'global', allow: ['read_file(extra)', 'read_url(example.invalid)'],
     deny: ['read_file(private)', 'read_url(*)', 'read_file(private)'], ask: ['command(synthetic)'] }]);
   for (const shell of [true, false]) {
@@ -1065,7 +1119,7 @@ test('agy 提示词在探针后选择读命令权限，讨论和审查无 shell 
 });
 
 test('agy 两席同时启动时 hooks 查询不占锁且每次请求只查一次', async (t) => {
-  const h = sandbox(t); configure(h); await install(h);
+  const h = sandboxWithProbe(t); configure(h); await install(h);
   const warm = output(await run(h)); assert.ok(warm.notes.some((n) => n.startsWith(M.agySandboxResult({}).split('{')[0])));
   const probes = h.calls().filter((c) => c.operation === 'probe').length, hooks = h.calls().filter((c) => c.operation === 'hooks').length;
   h.scenario({ hooks_delay_ms: 11000 });
@@ -1114,7 +1168,7 @@ test('agy 每轮必须有决定记录，丢失环境变量被启动标记拦下�
 });
 
 test('agy check 六步、models 两列、清理密钥环境以及模型身份和价格', async (t) => {
-  const h = sandbox(t); configure(h); await install(h);
+  const h = sandboxWithProbe(t); configure(h); await install(h);
   const groups = [{ name: 'Gemini', buckets: [
     { name: 'Gemini weekly', window: 'weekly', remaining_fraction: 0.1, reset_time: '2026-11-02T00:00:00Z' },
     { name: 'Gemini 5h', window: '5h', remaining_fraction: 0.09, reset_time: '2026-10-28T10:00:00Z' } ] },
@@ -1245,7 +1299,7 @@ test('agy 运行时 install/uninstall/刷新拒绝；取消、超时和异常退
 });
 
 test('agy 工具运行时不判卡死，空转会卡死，进程信号后清理标记', async (t) => {
-  const h = sandbox(t); configure(h); await install(h);
+  const h = sandboxWithProbe(t); configure(h); await install(h);
   h.scenario({ steps: [{ tool: { name: 'run_command', args: { CommandLine: 'synthetic long command' } }, before: [{ delay_ms: 1500 }] }] });
   assert.equal(output(await run(h, ['--stall', '0.001'])).status, 'done');
   h.scenario({ steps: [{ delay_ms: 1500 }] }); assert.equal(output(await run(h, ['--stall', '0.001']), 1).status, 'stalled');
