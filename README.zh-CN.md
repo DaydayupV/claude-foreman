@@ -516,7 +516,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 <!-- foreman:scenes -->
 ## 场景路由
 - **code**：评判或决定代码、接口、配置、脚本、测试的改动；`--target diff` 的审查一律算 code。
-- **research**：研究结论和证据、研究方案、卡片、说明文档、研究方向构思；`--target claims` 的审查一律算 research。
+- **research**：研究结论和证据、研究方案、研究报告、研究方向构思；`--target claims` 的审查一律算 research。
 - 两类都有的拆成两个计划；没写到的情况用 default。
 <!-- /foreman:scenes -->
 ```

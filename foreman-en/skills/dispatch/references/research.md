@@ -1,13 +1,13 @@
 # Research and analysis tasks
 
-Read this before writing the brief for a research task; the evidence review before research conclusions are recorded is here too. Research tasks are work whose conclusions rest on experiments and data, such as strategy and factor research, data analysis, comparison experiments and performance investigations. The risk here isn't buggy code; it's conclusions that go beyond the evidence.
+Read this before writing the brief for a research task; the evidence review before research conclusions are recorded is here too. Research tasks are work whose conclusions rest on experiments and data, such as data analysis, comparison experiments, model evaluation and performance investigations. The risk here isn't buggy code; it's conclusions that go beyond the evidence.
 
 ## What the brief adds
 When handing research off, the brief must cover the items below on top of the general structure in `references/run.md`. If an item doesn't apply, say so and why instead of leaving it out. Questions and hypotheses already settled in a discussion go straight in; don't discuss them again.
 - **Questions and hypotheses**: the questions to answer, and each hypothesis with the criteria for judging it. Fix the criteria in advance; don't change them after seeing results.
 - **Controls**: which controls and baselines are needed, and what each one answers.
-- **Robustness**: how to check that a result isn't a fluke of one parameter point or one period, for example parameter neighborhoods, splitting time periods, different starting points.
-- **Confounders**: list what could distort the conclusions, and require each to be ruled out or explained as not applicable. Common ones: capital or size path (changing capital, round-lot limits), sample exposure (choosing after seeing results), multiple testing, survivorship bias, changes in how data is defined.
+- **Robustness**: how to check that a result isn't a fluke of one parameter point, one batch of data or one period, for example parameter neighborhoods, another batch of data or time period, different random seeds or starting points.
+- **Confounders**: list what could distort the conclusions, and require each to be ruled out or explained as not applicable. Common ones: scale and path dependence (results that shift with scale, the starting point or the order of steps), sample exposure (choosing after seeing results), multiple testing, survivorship bias, changes in how data is defined.
 - **Statistics**: how to judge whether a difference is significant, and how to correct for comparing many groups.
 - **Deliverables**: the evidence behind each conclusion (files, numbers, a way to recompute it), and anything that couldn't be verified.
 

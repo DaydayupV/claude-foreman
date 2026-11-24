@@ -121,11 +121,11 @@ First list the full assignment in the message: seat number, model (tier), role, 
 Write them in the preference files (`~/.claude/foreman/preferences.md` or `<project>/.claude/foreman.md`), one section per role, with the same fields as the preset table:
 
 ```markdown
-### Trading risk officer
-- Checks: position limits, drawdown control, assumptions about fees and slippage
+### Privacy reviewer
+- Checks: whether collecting, storing and sending out personal data is necessary, and whether logs and error messages leak sensitive fields
 - Suggested tier: strong
-- Strengths to look for: data analysis, reasoning
-- Tool needs: reads data files
+- Strengths to look for: reasoning, coding
+- Tool needs: reads code
 ```
 
 The preference files can also say which kinds of topics use role mode by default, give a different view of a model's tier, or set a usual assignment.

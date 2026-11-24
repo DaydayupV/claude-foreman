@@ -266,7 +266,7 @@ The same kind of task often serves different occasions: a review of research evi
 <!-- foreman:scenes -->
 ## Scene routing
 - **code**: judging or deciding changes to code, interfaces, configs, scripts and tests; reviews with `--target diff` always count as code.
-- **research**: research conclusions and evidence, research plans, cards, docs, research-direction ideas; reviews with `--target claims` always count as research.
+- **research**: research conclusions and evidence, research plans, research reports, research-direction ideas; reviews with `--target claims` always count as research.
 - Split work that has both into two plans; use default where nothing here applies.
 <!-- /foreman:scenes -->
 ```
