@@ -1,7 +1,7 @@
 // 派发计划固定席位和审查材料，真正启动时再检查当前配置并登记任务。
 import fs from 'node:fs';
 import path from 'node:path';
-import { ENTRY, USER_CONFIG, MODULE_CELLS, resolveAgentAlias, resolveProfile, resolveCell, validatePlan, selectScene, isScened, fromProjectConfig } from './config.mjs';
+import { ENTRY, USER_CONFIG, MODULE_CELLS, isHostAgent, resolveAgentAlias, resolveProfile, resolveCell, validatePlan, selectScene, isScened, fromProjectConfig } from './config.mjs';
 import { RUNS_ROOT, CLAUDE_SESSION, listRuns, readMeta, checkRunners, runOutcome } from './records.mjs';
 import { validateReviewMaterial, reviewPatchText, MAX_REVIEW_CHARS } from './review-scope.mjs';
 import { M, die, need, notice, resolveDir, readAttachments, filesOutside, MAX_MATERIAL_CHARS } from './util.mjs';
@@ -62,6 +62,7 @@ function routeConfirmation(sessionId, route, hint = '') {
 }
 
 function cmdPlan(o, load, adapters) {
+  if (o.seat.some((value) => isHostAgent(value.split('=', 1)[0]))) die(M.hostNotDispatchable);
   if (o['host-role'] != null && !['discuss', 'review'].includes(o.module)) die(M.hostRoleOnly);
   if (o['count-why'] != null && !['discuss', 'review'].includes(o.module)) die(M.countWhyOnly);
   if (o.module !== 'review' && (o.target != null || o.file.length || o.uncommitted || o.base != null || o.commit != null)) die(M.planReviewOnly);

@@ -178,7 +178,9 @@ test('config 输出总表：按等级、按协作方，以及没用到的协作�
   assert.deepEqual(summary.agents.oc, { type: 'opencode cli', model: 'fake/model', used_at: ['modules.default.run.normal[0]'], run_access: 'shell', ok: null });
   assert.deepEqual(summary.agents.api.used_at, []);
   // 测试用的假模型不在价格表和档位表里，这两条告警由 tiers.test.mjs 单独检查
+  const file = path.join(path.dirname(h.userConfig), 'models.md');
   assert.deepEqual(summary.warnings.filter(({ kind }) => !['unpriced_models', 'unrated_models'].includes(kind)), [
+    { kind: 'models_doc_missing', file, message: M.modelsDocMissing(file) },
     { kind: 'readonly_audited', agent: 'codex', modes: ['review', 'discuss'], message: M.warnReadonlyAudited('codex', M.list([M.modeNames.review, M.modeNames.discuss])) },
     { kind: 'unused_agent', agent: 'api', message: M.warnUnusedAgent('api') },
     { kind: 'plaintext_key', agent: 'api', message: M.warnPlaintextKey('api') },

@@ -55,6 +55,31 @@ test('英文偏好说明项目优先、场景块替换和硬规则，plans 不�
   assert.ok(!context.includes('20000101-plan'));
 });
 
+for (const lang of ['zh', 'en']) test(`会话在两份偏好之后注入并截断用户模型特长文档 (${lang})`, async (t) => {
+  const h = sandbox(t);
+  const custom = write(path.join(h.home, 'custom', 'config.json'), h.config());
+  h.env.FOREMAN_CONFIG = custom;
+  const file = path.join(path.dirname(custom), 'models.md');
+  write(path.join(path.dirname(custom), 'preferences.md'), 'user preferences marker');
+  h.write('.claude/foreman.md', 'project preferences marker');
+  const context = async () => output(await reminder(h, lang)).hookSpecificOutput.additionalContext;
+  const title = lang === 'zh'
+    ? `模型特长文档 ${file}（各模型的擅长和短处；挑人、写任务说明、验收、权衡审查和讨论意见时参考，问题成不成立仍以核实为准）：`
+    : `Model notes ${file} (each model's strengths and weaknesses; consult them when picking agents, writing briefs, accepting work and weighing review and discussion points; whether a finding holds still rests on verification):`;
+  const baseline = await context();
+  write(file, ' \n');
+  assert.equal(await context(), baseline);
+  const notes = '合成模型笔记';
+  write(file, notes);
+  assert.equal(await context(), `${baseline}\n\n${title}\n${notes}`);
+  assert.ok(baseline.endsWith('project preferences marker'));
+  const long = '长'.repeat(4000);
+  write(file, long + 'should be truncated');
+  const truncated = lang === 'zh' ? '（内容过长，后面已截断，完整内容请读原文件）'
+    : '(Truncated because it is long; read the file for the rest)';
+  assert.equal(await context(), `${baseline}\n\n${title}\n${long}\n${truncated}`);
+});
+
 for (const lang of ['zh', 'en']) test(`图像会话提醒只认用户的 auto，项目配置和偏好不能开启 (${lang})`, async (t) => {
   const h = sandbox(t), context = async () => output(await reminder(h, lang)).hookSpecificOutput.additionalContext;
   const ask = lang === 'zh'

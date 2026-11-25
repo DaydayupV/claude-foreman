@@ -81,7 +81,7 @@ test('config/check md 固定四张格子表、六种派法、权限和合并提�
   assert.equal(check.includes('- ❌ d：'), false); assert.equal(check.includes('synthetic-test-key'), false);
   for (const cmd of ['config', 'models']) assert.equal((await h.bridge([cmd])).stdout, (await h.bridge([cmd, '--format', 'json'])).stdout);
   const cfg = output(await h.bridge(['config']));
-  assert.deepEqual(Object.keys(cfg), ['user_config', 'loaded_from', 'project_config', 'scenes', 'effective', 'agents_status', 'resolved_modules', 'resolved_scenes', 'image_configured', 'runs_dir', 'watch_launcher', 'watch_launcher_ascii', 'preferences', 'environment', 'summary']);
+  assert.deepEqual(Object.keys(cfg), ['user_config', 'loaded_from', 'project_config', 'scenes', 'effective', 'agents_status', 'resolved_modules', 'resolved_scenes', 'image_configured', 'runs_dir', 'watch_launcher', 'watch_launcher_ascii', 'preferences', 'model_notes', 'environment', 'summary']);
   const before = output(await h.bridge(['check']), 1), after = output(await h.bridge(['check', '--format', 'json']), 1);
   for (const r of [before, after]) for (const agent of Object.values(r.agents)) delete agent.seconds;
   assert.deepEqual(before, after);

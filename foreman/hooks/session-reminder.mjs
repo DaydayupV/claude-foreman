@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // SessionStart 钩子：会话开始（包括恢复和上下文压缩之后）时提醒 Claude 何时加载 dispatch skill，
-// 并附上用户的偏好文件。skill 是否加载全靠 Claude 自己判断，项目里有更贴合的领域 skill 时容易漏掉；
+// 并附上偏好文件和模型特长文档。skill 是否加载全靠 Claude 自己判断，项目里有更贴合的领域 skill 时容易漏掉；
 // 偏好文件又只在 skill 加载后才会被读到，所以直接在会话开始时带上。
 // 只读文件，不 import 主脚本，避免触发它首次运行时生成配置文件。
 
@@ -16,9 +16,12 @@ const HOME_DIR = path.join(os.homedir(), '.claude', 'foreman');
 const LEGACY_CONFIG = process.env.CODEX_BRIDGE_CONFIG || path.join(os.homedir(), '.claude', 'codex-bridge.json');
 // 装好 foreman 后脚本还没运行过时，新位置还是空的，先读改名前（codex-bridge）的文件；脚本第一次运行时会把它们搬过来。
 const pick = (file, legacy) => (fs.existsSync(file) || !fs.existsSync(legacy) ? file : legacy);
-const USER_CONFIG = process.env.FOREMAN_CONFIG || process.env.CODEX_BRIDGE_CONFIG || pick(path.join(HOME_DIR, 'config.json'), LEGACY_CONFIG);
-const USER_PREFS = pick(path.join(path.dirname(USER_CONFIG), 'preferences.md'), path.join(path.dirname(LEGACY_CONFIG), 'codex-bridge.md'));
-const MAX_PREFS_CHARS = 4000; // 每个偏好文件最多带这么多字，防止文件太长挤占上下文
+const CUSTOM_CONFIG = process.env.FOREMAN_CONFIG || process.env.CODEX_BRIDGE_CONFIG;
+const USER_CONFIG = CUSTOM_CONFIG || path.join(HOME_DIR, 'config.json');
+const READ_CONFIG = CUSTOM_CONFIG || pick(USER_CONFIG, LEGACY_CONFIG);
+const USER_PREFS = pick(path.join(path.dirname(READ_CONFIG), 'preferences.md'), path.join(path.dirname(LEGACY_CONFIG), 'codex-bridge.md'));
+const MODEL_NOTES = path.join(path.dirname(USER_CONFIG), 'models.md');
+const MAX_PREFS_CHARS = 4000; // 每份文件最多带这么多字，防止文件太长挤占上下文
 
 const readText = (file) => { try { return fs.readFileSync(file, 'utf8').replace(/^﻿/, '').trim(); } catch { return ''; } };
 const readJson = (file) => { try { return JSON.parse(readText(file)); } catch { return null; } };
@@ -35,6 +38,7 @@ ${auto ? '主动发起的派活、讨论和审查直接做（用户已开启 dis
 项目自带的领域 skill 照常使用：领域 skill 管怎么做，dispatch skill 管由谁来做、要不要先讨论、做完怎么验收和审查。调用协作方（Codex、opencode、pi、agy、CodeBuddy、API 模型）只能通过该 skill 的脚本。`,
     prefsUser: (file, text) => `用户偏好文件 ${file}（在插件的硬规则以内调整做法，和 skill 冲突时以它为准；必选、材料外发、只读、要不要弹窗确认（只看用户配置）和席位上限不受偏好文件影响）：\n${text}`,
     prefsProject: (file, text) => `项目偏好文件 ${file}（和用户偏好冲突时以它为准，场景块有就只用它的；同样只在插件的硬规则以内调整做法，必选、材料外发、只读、要不要弹窗确认（只看用户配置）和席位上限不受偏好文件影响）：\n${text}`,
+    modelNotes: (file, text) => `模型特长文档 ${file}（各模型的擅长和短处；挑人、写任务说明、验收、权衡审查和讨论意见时参考，问题成不成立仍以核实为准）：\n${text}`,
     truncated: '（内容过长，后面已截断，完整内容请读原文件）',
     unfinishedHeading: '当前项目里有执行没有正常结束的协作方任务，可能需要处理：',
     unfinishedRun: (m, status) => `- ${m.id}｜${m.mode}｜${m.title || '-'}｜${status}`,
@@ -53,6 +57,7 @@ ${auto ? 'Start handoffs, discussions and reviews on your own directly (the user
 Keep using the project's own domain skills as usual: domain skills say how to do the work, the dispatch skill decides who does it, whether to discuss first, and how it gets checked and reviewed. Agents (Codex, opencode, pi, agy, CodeBuddy, API models) may only be called through that skill's script.`,
     prefsUser: (file, text) => `User preference file ${file} (adjusts how things are done within the plugin's hard rules and wins over the skill where they conflict; required seats, sending material out, read-only, whether to confirm in a pop-up (set only in the user config) and the seat limit can't be changed by preference files):\n${text}`,
     prefsProject: (file, text) => `Project preference file ${file} (wins over the user preferences where they conflict, and its scene block, if any, replaces the user's; it too only adjusts things within the plugin's hard rules: required seats, sending material out, read-only, whether to confirm in a pop-up (set only in the user config) and the seat limit can't be changed by preference files):\n${text}`,
+    modelNotes: (file, text) => `Model notes ${file} (each model's strengths and weaknesses; consult them when picking agents, writing briefs, accepting work and weighing review and discussion points; whether a finding holds still rests on verification):\n${text}`,
     truncated: '(Truncated because it is long; read the file for the rest)',
     unfinishedHeading: 'Some agent runs in this project did not finish normally and may need attention:',
     unfinishedRun: (m, status) => `- ${m.id} | ${m.mode} | ${m.title || '-'} | ${status}`,
@@ -108,7 +113,7 @@ process.stdin.on('end', () => {
 
   const language = readJson(path.join(SCRIPTS, 'language.json'))?.language || 'zh';
   const t = REMINDERS[language] || REMINDERS.zh;
-  const config = readJson(USER_CONFIG);
+  const config = readJson(READ_CONFIG);
   // 只认用户配置：项目配置里的 dispatch.confirm 会被忽略，这里也不读；写法不合法时按默认的 ask（脚本会报错）
   const confirm = config?.dispatch?.confirm;
   const imageAuto = confirm !== null && typeof confirm === 'object' && !Array.isArray(confirm)
@@ -118,14 +123,17 @@ process.stdin.on('end', () => {
 
   const legacyAgent = config && ['auto_dispatch', 'codex_bin', 'model', 'max_parallel', 'sandbox', 'approval'].some((key) => Object.hasOwn(config, key));
   const noAgents = config && !Object.keys(config.agents || {}).length && !legacyAgent;
-  const parts = [noAgents ? t.noAgentsReminder(USER_CONFIG) : t.intro(autoDispatch, imageAuto)];
+  const parts = [noAgents ? t.noAgentsReminder(READ_CONFIG) : t.intro(autoDispatch, imageAuto)];
   // 配置文件在脚本第一次运行时生成，没有它说明用户还没真正用过插件。
-  if (!fs.existsSync(USER_CONFIG)) parts.push(t.firstUse(USER_CONFIG));
-  for (const file of [USER_PREFS, ...(cwd ? [pick(path.join(cwd, '.claude', 'foreman.md'), path.join(cwd, '.claude', 'codex-bridge.md'))] : [])]) {
+  if (!fs.existsSync(READ_CONFIG)) parts.push(t.firstUse(READ_CONFIG));
+  const files = [[USER_PREFS, t.prefsUser]];
+  if (cwd) files.push([pick(path.join(cwd, '.claude', 'foreman.md'), path.join(cwd, '.claude', 'codex-bridge.md')), t.prefsProject]);
+  files.push([MODEL_NOTES, t.modelNotes]);
+  for (const [file, render] of files) {
     let text = readText(file);
     if (!text) continue;
     if (text.length > MAX_PREFS_CHARS) text = `${text.slice(0, MAX_PREFS_CHARS)}\n${t.truncated}`;
-    parts.push((file === USER_PREFS ? t.prefsUser : t.prefsProject)(file, text));
+    parts.push(render(file, text));
   }
 
   // 新键存在就以它为准（写成 null 表示用默认目录），没有新键才看迁移前的旧键。
