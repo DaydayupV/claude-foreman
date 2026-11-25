@@ -6,10 +6,11 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA } from '../config.mjs';
 import { MAX_REVIEW_CHARS, reviewPatchText } from '../review-scope.mjs';
-import { newRunDir, isCancelled, cancelSource, announceBoard } from '../records.mjs';
+import { RUNS_ROOT, newRunDir, isCancelled, cancelSource, announceBoard } from '../records.mjs';
 import { startRun, finishDiscussion, execute, eventWriter, runLimits, reportWithRepair, spawnCli, validateSchema } from '../runner.mjs';
 import { M, die, isObject, binCommand, pathCommand, npmEntry, killTree, readAttachments, filesOutside, focusFiles, relativePath, closestMatches } from '../util.mjs';
 import { D, modelLabel, toolLabel } from '../format.mjs';
+import { codebuddyConfigDir } from './codebuddy-guard.mjs';
 
 // The npm package entry has no extension but is JavaScript; custom extensionless bins may be native executables.
 function codebuddyCommand(agent = {}) {
@@ -36,58 +37,159 @@ function nodeEntry(file) {
 
 // An empty --setting-sources falls back to all scopes in 2.180.0. Keep user sign-in/settings,
 // but refuse rules or hooks that could widen the project boundary before starting the CLI.
-function unsafeUserSettings(edit = false) {
-  const file = path.resolve(process.env.CODEBUDDY_CONFIG_DIR || path.join(os.homedir(), '.codebuddy'), 'settings.json');
+function unsafeUserSettings(configDir, access) {
+  const file = path.join(configDir, 'settings.json');
   let settings;
   try { settings = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
   catch (error) { return error.code === 'ENOENT' ? null : M.codebuddyUnsafeSettings(file, 'unreadable settings'); }
   const present = (value) => value != null && (Array.isArray(value) ? value.length > 0 : isObject(value) ? Object.keys(value).length > 0 : !!value);
   const rules = ['allow', 'additionalDirectories'].filter(key => present(settings?.permissions?.[key])).map(key => `permissions.${key}`);
-  // Hook approvals precede the CLI's deny/ask rules. Refuse these on edit calls
-  // rather than silently overriding a user's more restrictive file policy.
-  if (edit) for (const key of ['deny', 'ask']) if (present(settings?.permissions?.[key])) rules.push(`permissions.${key}`);
+  // Only edit emits allow, which would override the CLI's user deny/ask rules.
+  if (access === 'edit') for (const key of ['deny', 'ask']) if (present(settings?.permissions?.[key])) rules.push(`permissions.${key}`);
   if (present(settings?.hooks)) rules.push('hooks');
+  if (Object.values(settings?.enabledPlugins ?? {}).some(value => value === true || value?.enabled === true)) rules.push('enabledPlugins');
   return rules.length ? M.codebuddyUnsafeSettings(file, rules.join(', ')) : null;
+}
+
+function readUserSettings(configDir) {
+  try { return JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8').replace(/^﻿/, '')); }
+  catch { return null; }
+}
+
+// On Windows CodeBuddy runs hooks with Git Bash when it finds one and falls back to PowerShell otherwise,
+// where the guard command (POSIX quoting) wouldn't start and the guard would silently not apply.
+// Pin a bash.exe that exists; CodeBuddy exits instead of falling back when this variable points nowhere.
+export function gitBashPath(env = process.env) {
+  for (const value of [env.CODEBUDDY_CODE_GIT_BASH_PATH, env.CLAUDE_CODE_GIT_BASH_PATH]) {
+    if (value && fs.statSync(value, { throwIfNoEntry: false })?.isFile()) return path.resolve(value);
+  }
+  const git = spawnSync('git', ['--exec-path'], { env, encoding: 'utf8', windowsHide: true, timeout: 10000 });
+  // git --exec-path is <Git>/mingw64/libexec/git-core.
+  const roots = git.status === 0 && git.stdout.trim() ? [path.resolve(git.stdout.trim(), '..', '..', '..')] : [];
+  for (const key of ['ProgramW6432', 'ProgramFiles', 'ProgramFiles(x86)']) if (env[key]) roots.push(path.join(env[key], 'Git'));
+  for (const root of roots) {
+    const bash = path.join(root, 'bin', 'bash.exe');
+    if (fs.statSync(bash, { throwIfNoEntry: false })?.isFile()) return bash;
+  }
+  return null;
 }
 
 const LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 const RUN_ACCESS = ['edit', 'shell'];
-// 和 opencode、pi 一样只靠工具白名单隔离：给不了的工具模型就用不了。none 只出现在修报告格式时。
+const SEARCH_SCAN_LIMIT = 100000;
+// 工具白名单限定能调用哪些工具，PreToolUse 守卫检查读写路径。none 只出现在修报告格式时。
 const TOOLS = { none: [], read: ['Read', 'Glob', 'Grep'] };
 TOOLS.edit = [...TOOLS.read, 'Write', 'Edit'];
 TOOLS.shell = [...TOOLS.edit, 'Bash', 'PowerShell'];
+const WEB_TOOLS = ['WebFetch', 'WebSearch'];
 const capabilities = { modes: ['run', 'review', 'discuss'], isolation: 'tools', reads_code: true, reads_images: false, native_schema: true,
   native_review: false, images: false, resume: true, command_start_events: false };
 
+const FILE_LIST_BUDGET = 60000;
+const DENIAL = /^(?:Error:\s*)?(?:PreToolUse:\S+ hook blocked this tool call|Permission to use \S+ has been denied)/;
+
+// CodeBuddy 在 Windows 上搜索时会跟随链接，工具钩子只能检查搜索起点。
+// skip 是要跳过的目录（绝对路径）：CodeBuddy 的 ripgrep 默认遵守 .gitignore，被忽略的目录它不会搜。
+export function outsideLinks(root, limit = SEARCH_SCAN_LIMIT, skip = []) {
+  const realRoot = fs.realpathSync.native(root);
+  const key = (dir) => { const rel = path.relative(path.resolve(root), dir); return process.platform === 'win32' ? rel.toLowerCase() : rel; };
+  const skipped = new Set(skip.map(key));
+  const dirs = [realRoot], links = [];
+  let visited = 0;
+  while (dirs.length) {
+    const dir = dirs.pop();
+    let entries;
+    // A folder foreman can't list can't be searched by CodeBuddy either (same account), so skip it.
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      if (entry.name.toLowerCase() === '.git') continue;
+      const file = path.join(dir, entry.name);
+      if (skipped.has(key(path.join(path.resolve(root), path.relative(realRoot, file))))) continue;
+      if (++visited > limit) return { links, capped: true };
+      if (entry.isSymbolicLink()) {
+        let target;
+        try { target = fs.realpathSync.native(file); } catch { continue; }
+        const rel = path.relative(realRoot, target);
+        if (rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) links.push(relativePath(realRoot, file));
+      } else if (entry.isDirectory()) dirs.push(file);
+    }
+  }
+  return { links, capped: false };
+}
+
+// git 忽略的目录（--directory 把整个被忽略的目录合成一项，以 / 结尾）。不是 git 仓库时返回空，也就是全都扫描。
+function ignoredDirs(cwd) {
+  const r = spawnSync('git', ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'],
+    { cwd, encoding: 'utf8', windowsHide: true, timeout: 60000, maxBuffer: 64 * 1024 * 1024 });
+  if (r.status !== 0) return [];
+  return r.stdout.split('\0').filter((entry) => entry.endsWith('/')).map((entry) => path.resolve(cwd, entry));
+}
+
+// 清单按字符预算截断，超出的部分写明总数。
+export function boundedList(files, budget = FILE_LIST_BUDGET) {
+  const shown = [];
+  let size = 0;
+  for (const file of files) {
+    if (size + file.length + 1 > budget) break;
+    shown.push(file);
+    size += file.length + 1;
+  }
+  return shown.length === files.length ? M.codebuddyFileList(shown.join('\n'))
+    : `${M.codebuddyFileList(shown.join('\n'))}\n${M.codebuddyFileListTruncated(shown.length, files.length)}`;
+}
+
+function fileList(cwd) {
+  const r = spawnSync('git', ['ls-files'], { cwd, encoding: 'utf8', windowsHide: true, timeout: 60000, maxBuffer: 64 * 1024 * 1024 });
+  const files = r.status === 0 ? r.stdout.split('\n').map((line) => line.trim()).filter(Boolean) : [];
+  return files.length ? boundedList(files) : M.codebuddyFileList('');
+}
+
 // --json-schema 只在结构化输出工具可用时才生效：不把它放进白名单，模型拿不到这个工具，只会把 JSON 写在正文里。
-function codebuddyArgs({ model, effort, access, session, schema, ephemeral = false, cwd }) {
+// web：讨论和执行能上网（WebFetch、WebSearch），审查和修报告格式不能。dontAsk 下这两个工具要预先放行，否则会被拒。
+function codebuddyArgs({ model, effort, access, session, schema, ephemeral = false, cwd, search = true, web = false }) {
   const args = ['-p', '--output-format', 'stream-json', '--strict-mcp-config', '--setting-sources', 'user'];
   if (model) args.push('--model', model);
   if (effort != null && effort !== 'default') args.push('--effort', effort);
   if (schema) args.push('--json-schema', typeof schema === 'string' ? schema : JSON.stringify(schema));
-  args.push('--tools', [...new Set([...(TOOLS[access] ?? TOOLS.read), ...(schema ? ['StructuredOutput'] : [])])].join(','));
+  const online = web && access !== 'none';
+  const tools = (TOOLS[access] ?? TOOLS.read).filter(tool => search || (tool !== 'Grep' && tool !== 'Glob'));
+  args.push('--tools', [...new Set([...tools, ...(online ? WEB_TOOLS : []), ...(schema ? ['StructuredOutput'] : [])])].join(','));
   if (access === 'shell') args.push('-y');
-  else if (access === 'edit') {
-    args.push('--permission-mode', 'dontAsk', '--allowedTools', 'Write(./**),Edit(./**)');
+  else args.push('--permission-mode', 'dontAsk');
+  const allowed = [...(access === 'edit' ? ['Write(./**)', 'Edit(./**)'] : []), ...(online && access !== 'shell' ? WEB_TOOLS : [])];
+  if (allowed.length) args.push('--allowedTools', allowed.join(','));
+  if (access !== 'none') {
     const quote = value => "'" + value.replaceAll('\\', '/').replaceAll("'", "'\\''") + "'";
     const guard = fileURLToPath(new URL('./codebuddy-guard.mjs', import.meta.url));
-    const command = [process.execPath, guard, cwd].map(quote).join(' ');
-    args.push('--settings', JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Write|Edit', hooks: [{ type: 'command', command }] }] } }));
+    const command = [process.execPath, guard, access, cwd, path.resolve(RUNS_ROOT)].map(quote).join(' ');
+    args.push('--settings', JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Read|Glob|Grep|Write|Edit|WebFetch', hooks: [{ type: 'command', command }] }] } }));
   }
-  else args.push('--permission-mode', 'dontAsk');
   if (session) args.push('--resume', session);
   if (ephemeral) args.push('--no-session-persistence');
   return args;
 }
 
-function runCodebuddy({ agent, args, cwd, prompt = '', timeoutMs = 120000, stallMin = 0, runDir, onEvent }) {
+function runCodebuddy({ agent, args, access, cwd, prompt = '', timeoutMs = 120000, stallMin = 0, runDir, onEvent }) {
   return new Promise((resolve) => {
     const { file, pre } = codebuddyCommand(agent);
     const out = { code: null, status: null, stdout: '', stderrTail: '', text: '', errors: [], events: 0, messages: [], questions: [],
       usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 }, cost: 0,
       structured: null, sessionId: null, isError: false };
-    const settingsError = args.includes('-p') ? unsafeUserSettings(args.includes('--settings')) : null;
+    const configDir = codebuddyConfigDir();
+    const settingsError = access == null ? null : unsafeUserSettings(configDir, access);
     if (settingsError) { out.status = 'failed'; out.errors.push(settingsError); resolve(out); return; }
+    // foreman's tool list, permission flags and hook are meant to be the whole policy. Plugins listed in
+    // CODEBUDDY_PLUGIN_DIRS are enabled by default and bring their own hooks; a standing "main agent"
+    // (settings mainAgent, or CODEBUDDY_MAIN_AGENT_*) would swap in another agent; the MCP and project
+    // config variables point CodeBuddy at other configuration. The environment wins over settings for the
+    // main agent, so turning it off here also covers a mainAgent block in the user's settings.
+    const env = { ...process.env, CODEBUDDY_CONFIG_DIR: configDir, CODEBUDDY_MAIN_AGENT_ENABLED: '0' };
+    for (const key of ['CODEBUDDY_PLUGIN_DIRS', 'CODEBUDDY_MAIN_AGENT_ALLOW_UNOPTED', 'CODEBUDDY_MCP_CONFIG', 'CODEBUDDY_PROJECT_CONFIG_DIR']) delete env[key];
+    if (process.platform === 'win32' && access != null) {
+      const bash = gitBashPath();
+      if (!bash) { out.status = 'failed'; out.errors.push(M.codebuddyNeedsGitBash); resolve(out); return; }
+      env.CODEBUDDY_CODE_GIT_BASH_PATH = bash;
+    }
     const assistantUsage = new Map(), usageStages = new Map();
     let usageSnapshot = null, anonymousUsageId = 0, stopped = false, child;
     const deadline = Date.now() + Math.max(1, timeoutMs);
@@ -103,7 +205,7 @@ function runCodebuddy({ agent, args, cwd, prompt = '', timeoutMs = 120000, stall
       if (child?.pid) killTree(child.pid);
     };
     const onSignal = () => stop('cancelled');
-    child = spawnCli(file, [...pre, ...args], { cwd, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' }, {
+    child = spawnCli(file, [...pre, ...args], { cwd, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' }, {
       onInput: (line, min) => {
         out.questions.push({ source: 'input_prompt', question: line });
         out.errors.push(M.inputWaitDetected(min, line));
@@ -133,8 +235,6 @@ function runCodebuddy({ agent, args, cwd, prompt = '', timeoutMs = 120000, stall
           assistantUsage.set(ev.message?.id || 'anonymous-' + (++anonymousUsageId), u);
           refreshUsage();
         }
-      } else if (ev.type === 'user') {
-        for (const block of ev.message?.content || []) if (block.type === 'tool_result' && block.is_error) out.errors.push(String(block.content ?? '').slice(0, 500));
       } else if (ev.type === 'result') {
         out.isError = ev.is_error === true || (ev.subtype != null && ev.subtype !== 'success');
         if (isObject(ev.structured_output)) out.structured = ev.structured_output;
@@ -144,9 +244,8 @@ function runCodebuddy({ agent, args, cwd, prompt = '', timeoutMs = 120000, stall
           usageSnapshot = ev.usage;
           refreshUsage();
         }
-        for (const message of ev.errors || []) out.errors.push(String(message));
-        for (const denial of ev.permission_denials || []) out.questions.push({ source: 'permission_denied', question: denial.tool_name || denial.tool || 'denied',
-          detail: JSON.stringify(denial) });
+        const errors = Array.isArray(ev.errors) ? ev.errors : ev.errors == null ? [] : [ev.errors];
+        for (const message of errors) out.errors.push(typeof message === 'string' ? message : JSON.stringify(message));
       }
       const turnUsage = usageFromEvent(ev);
       if (turnUsage?.kind === 'stage') usageStages.set(turnUsage.id, turnUsage.usage);
@@ -223,14 +322,16 @@ const readonlyLevel = () => 'tools';
 
 async function executeCodebuddy(ctx) {
   const { model, agent, level, cwd, brief, mode, opts } = ctx;
+  if (opts['add-dir']?.length || ctx.addDirs?.length) die(M.codebuddyNoAddDir(ctx.agentName));
   if (ctx.parent && !ctx.sessionId) die(M.noSession(ctx.parent));
   const review = ctx.kind === 'review', exec = ctx.kind === 'exec';
   const schemaText = fs.readFileSync(review ? REVIEW_SCHEMA : exec ? SCHEMA : DISCUSS_SCHEMA, 'utf8');
   const schema = JSON.parse(schemaText);
   const files = readAttachments(opts.file, cwd, false), outside = filesOutside(files, [cwd]);
   if (outside.length) die(M.filesOutsideCwd(ctx.agentName, M.list(outside), false));
-  // 讨论和审查只读，和执行一样用工具白名单把写入和命令挡在外面。
-  const access = exec ? agent.run_access || 'shell' : 'read';
+  const access = exec ? agent.run_access : 'read';
+  // 讨论和执行能上网，审查不能（用户 2026-11-25 的决定，和其他协作方一致）。
+  const web = !review;
   let prompt;
   if (review) {
     const scope = ctx.reviewScope;
@@ -246,31 +347,41 @@ async function executeCodebuddy(ctx) {
     prompt = [...parts, M.reviewFooter(ctx.reviewTarget), M.reviewSchemaFooter(schemaText)].join('\n\n') + '\n';
   } else if (exec) prompt = ctx.parent
     ? `${brief}${focusFiles(files)}\n\n${M.resumeFooter}\n\n${M.opencodeRunResumeFooter}\n`
-    : `${brief}\n\n${M.footer(cwd, ctx.addDirs || [])}\n\n${M.opencodeRunFooter(schemaText, access)}\n`;
-  else prompt = `${brief}${focusFiles(files)}\n\n${ctx.parent ? M.opencodeResumeFooter : M.opencodeDiscussFooter(cwd, schemaText)}\n`;
+    : `${brief}\n\n${M.footer(cwd, [], web)}\n\n${M.opencodeRunFooter(schemaText, access, web)}\n`;
+  else prompt = `${brief}${focusFiles(files)}\n\n${ctx.parent ? M.opencodeResumeFooter : M.opencodeDiscussFooter(cwd, schemaText, web)}\n`;
+
+  let searchNote;
+  if (process.platform === 'win32' && (access === 'read' || access === 'edit')) {
+    // ignoreGitIgnore 为 true 时 CodeBuddy 也搜被 git 忽略的文件，这时一个目录也不跳过。
+    const skip = readUserSettings(codebuddyConfigDir())?.ignoreGitIgnore === true ? [] : ignoredDirs(cwd);
+    const { links, capped } = outsideLinks(cwd, SEARCH_SCAN_LIMIT, skip);
+    if (capped) searchNote = M.codebuddySearchScanCapped(SEARCH_SCAN_LIMIT);
+    else if (links.length) searchNote = M.codebuddyLinksNoSearch(M.list(links.slice(0, 3)));
+    if (searchNote) prompt += '\n\n' + fileList(cwd);
+  }
 
   const { id, dir, release } = await newRunDir(ctx);
-  const context = { ...ctx, ...(exec ? {} : { readonly: readonlyLevel(agent, ctx.kind) }), id, dir, release, prompt };
+  const context = { ...ctx, ...(exec ? {} : { readonly: readonlyLevel(agent, ctx.kind) }), id, dir, release, prompt, searchNote };
   if (exec) return execute(context, {
     capabilities,
     describe: () => ({ sandbox: null, modelShown: model, modelName: model }),
-    run: ({ run }) => codebuddySession(run, schema, access),
+    run: ({ run }) => codebuddySession(run, schema, access, web),
   });
   const run = startRun(context);
   fs.writeFileSync(path.join(dir, 'brief.md'), prompt);
   process.stderr.write(`foreman: ${D.started(mode, modelLabel(run.meta), level, dir)}\n`);
   announceBoard(ctx.cfg, mode, modelLabel(run.meta), level);
-  return finishDiscussion(run, { ...await codebuddySession(run, schema, access), files, changesNote: M.codebuddyNoChanges });
+  return finishDiscussion(run, { ...await codebuddySession(run, schema, access, web), files, changesNote: M.codebuddyNoChanges });
 }
 
-async function codebuddySession(run, schema, access) {
+async function codebuddySession(run, schema, access, web = false) {
   const { ctx, started, meta, writeMeta } = run;
-  const { dir, agentName, agent, model, effort, cwd, prompt } = ctx;
+  const { dir, agentName, agent, model, effort, cwd, prompt, searchNote } = ctx;
   const { deadline, stallMin } = runLimits(ctx, started);
   const event = eventWriter(dir);
   fs.appendFileSync(path.join(dir, 'events.jsonl'), '');
   for (const file of ['codebuddy.jsonl', 'stderr.log']) fs.writeFileSync(path.join(dir, file), '');
-  const errors = [], warnings = [], notes = [];
+  const errors = [], warnings = [], notes = searchNote ? [searchNote] : [];
   const observed = { messages: [], questions: [] };
   const usage = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 };
   const fileChanges = new Set();
@@ -279,12 +390,36 @@ async function codebuddySession(run, schema, access) {
   let anonymousToolId = 0, anonymousStepId = 0;
   let cost = 0, commands = 0, repairing = false, last = '';
 
-  const completeTool = (id, call, result, denied = false) => {
+  const addDenial = (id, tool, input, detail) => {
+    if (id && deniedTools.has(id)) return;
+    if (id) deniedTools.add(id);
+    const value = input?.file_path || input?.path || input?.notebook_path;
+    const parts = [];
+    if (typeof value === 'string' && value) {
+      const fromHome = value === '~' || /^~[\\/]/.test(value);
+      const absolute = fromHome ? path.resolve(os.homedir(), value.slice(2)) : path.resolve(cwd, value);
+      const relative = relativePath(cwd, absolute);
+      parts.push(relative === '..' || relative.startsWith('../') || path.isAbsolute(relative) ? absolute : relative);
+    }
+    // Glob and Grep: keep the pattern and glob filter so two different searches stay two questions.
+    if (tool === 'Glob' || tool === 'Grep') for (const name of ['pattern', 'glob']) if (typeof input?.[name] === 'string' && input[name]) parts.push(`${name} ${input[name]}`);
+    const question = parts.length ? `${tool} (${parts.join(', ')})` : tool;
+    // The runner merges permission questions by detail, so keep the tool and path in it:
+    // the same guard reason for two different files stays two questions.
+    observed.questions.push({ source: 'permission_denied', question, detail: `${question}: ${detail}` });
+  };
+
+  const completeTool = (id, call, result, detail = null) => {
     const input = call.input || {};
     const resultText = Array.isArray(result?.content)
-      ? result.content.map((block) => block.text || '').join('\n')
+      ? result.content.flatMap(block => typeof block?.text === 'string' ? [block.text] : []).join('\n')
       : String(result?.content ?? '');
-    const exitCode = Number.isInteger(result?.exit_code) ? result.exit_code : !result || result.is_error || denied ? 1 : 0;
+    // Only failed results count, and only when they start with CodeBuddy's own denial wording:
+    // a successful Read of a file that quotes these phrases is not a denial.
+    if (detail === null && result?.is_error === true && DENIAL.test(resultText.trimStart())) detail = resultText.slice(0, 500);
+    const denied = detail !== null;
+    if (denied) addDenial(id, call.name, input, detail);
+    const exitCode = denied ? 1 : Number.isInteger(result?.exit_code) ? result.exit_code : !result || result.is_error ? 1 : 0;
     const succeeded = !denied && result != null && result.is_error !== true && exitCode === 0;
     const target = input.file_path || input.path || input.notebook_path;
     if (call.name === 'Write' || call.name === 'Edit' || call.name === 'NotebookEdit') {
@@ -303,6 +438,11 @@ async function codebuddySession(run, schema, access) {
         exit_code: exitCode, aggregated_output: resultText.slice(0, 2000) } });
       return;
     }
+    // 网页搜索和读网页按 opencode 的写法记成 web_search，看板和实时查看照常显示。
+    if (WEB_TOOLS.includes(call.name) && succeeded) {
+      event({ type: 'item.completed', item: { id, type: 'web_search', query: String(input.query ?? input.url ?? '') } });
+      return;
+    }
     const args = ['pattern', 'path', 'glob'].filter((key) => input[key] != null)
       .map((key) => (key === 'path' ? shown(input[key]) : String(input[key])));
     const category = call.name === 'Grep' || call.name === 'Glob' ? 'search' : 'read';
@@ -313,10 +453,7 @@ async function codebuddySession(run, schema, access) {
   };
 
   const finishPendingTools = () => {
-    for (const [id, call] of pendingTools) {
-      const denied = deniedTools.has(id);
-      completeTool(id, call, null, denied);
-    }
+    for (const [id, call] of pendingTools) completeTool(id, call, null);
     pendingTools.clear();
   };
 
@@ -366,12 +503,12 @@ async function codebuddySession(run, schema, access) {
       flushUsage();
       for (const denial of ev.permission_denials || []) {
         const id = String(denial.tool_use_id || '');
-        deniedTools.add(id);
         const call = pendingTools.get(id);
+        const detail = denial.reason ?? JSON.stringify(denial);
         if (call) {
           pendingTools.delete(id);
-          completeTool(id, call, null, true);
-        }
+          completeTool(id, call, null, detail);
+        } else addDenial(id, denial.tool_name || denial.tool || 'denied', denial.tool_input, detail);
       }
     }
   };
@@ -384,8 +521,8 @@ async function codebuddySession(run, schema, access) {
     const current = repairing ? 'none' : access;
     emittedUsage.clear();
     pendingUsage.clear();
-    const out = await runCodebuddy({ agent, args: codebuddyArgs({ model, effort, access: current, session: meta.session_id, schema, cwd }),
-      cwd, prompt: nextPrompt, runDir: dir, onEvent: translate, timeoutMs: deadline - Date.now(), stallMin });
+    const out = await runCodebuddy({ agent, args: codebuddyArgs({ model, effort, access: current, session: meta.session_id, schema, cwd, search: !searchNote, web }),
+      access: current, cwd, prompt: nextPrompt, runDir: dir, onEvent: translate, timeoutMs: deadline - Date.now(), stallMin });
     flushUsage();
     finishPendingTools();
     errors.push(...out.errors);
@@ -416,7 +553,8 @@ async function codebuddySession(run, schema, access) {
 function codebuddyCatalog(agent = {}) {
   const { file, pre } = codebuddyCommand(agent);
   const source = 'codebuddy --help';
-  const r = spawnSync(file, [...pre, '--help'], { encoding: 'utf8', windowsHide: true, timeout: 60000, maxBuffer: 16 * 1024 * 1024 });
+  const env = { ...process.env, CODEBUDDY_CONFIG_DIR: codebuddyConfigDir() };
+  const r = spawnSync(file, [...pre, '--help'], { env, encoding: 'utf8', windowsHide: true, timeout: 60000, maxBuffer: 16 * 1024 * 1024 });
   try {
     if (r.error) throw r.error;
     const match = /Currently supported:\s*\(([^)]+)\)/i.exec(r.stdout || '');
@@ -426,10 +564,10 @@ function codebuddyCatalog(agent = {}) {
   } catch (e) { return { ok: false, source, models: [], error: e.message }; }
 }
 
-async function checkCodebuddyAgent(name, agent, efforts = [], catalog = () => codebuddyCatalog(agent)) {
+async function checkCodebuddyAgent(name, agent, efforts = [], catalog = () => codebuddyCatalog(agent), _modes, cwd = process.cwd()) {
   const started = Date.now();
   const out = { ok: false, type: 'codebuddy cli', model: agent.model, version: null, model_listed: false, seconds: null, reply: null, error: null, fix: null, efforts: [] };
-  const call = (args, timeoutMs = 120000, prompt = '') => runCodebuddy({ agent, args, cwd: process.cwd(), timeoutMs, prompt });
+  const call = (args, access, prompt) => runCodebuddy({ agent, args, access, cwd, prompt });
   const failed = (result) => result.errors.join('; ') || result.stderrTail.trim() || result.status;
   const finish = () => ({ ...out, seconds: Number(((Date.now() - started) / 1000).toFixed(1)) });
   const version = await call(['--version']);
@@ -443,7 +581,8 @@ async function checkCodebuddyAgent(name, agent, efforts = [], catalog = () => co
     out.fix = M.fixCodebuddyModel(name, agent.model) + (near.length ? M.closestHint(M.list(near)) : '');
     return finish();
   }
-  const reply = await call(codebuddyArgs({ model: agent.model, effort: null, access: 'read', ephemeral: true }), 120000, 'Reply with the single word OK.');
+  // The probe needs no tools; with none, there is nothing for it to read or search.
+  const reply = await call(codebuddyArgs({ model: agent.model, effort: null, access: 'none', ephemeral: true, cwd }), 'none', 'Reply with the single word OK.');
   out.ok = reply.status === 'done';
   out.reply = reply.text.trim().slice(0, 40);
   if (!out.ok) { out.error = failed(reply); out.fix = M.fixCodebuddyRun(name, out.error); return finish(); }

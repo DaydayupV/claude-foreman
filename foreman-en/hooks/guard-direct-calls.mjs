@@ -41,20 +41,41 @@ const CB_VALUE_OPTIONS = new Set(['--output-format', '--input-format', '--json-s
   '--permission-mode-before-plan', '--subagent-permission-mode', '--tools', '--allowedTools', '--disallowedTools',
   '--channels', '--dangerously-load-development-channels', '--text-to-image-model', '--image-to-image-model',
   '--sandbox-id', '--teleport', '--name', '--exec', '--port', '--host', '--base-path', '--auth', '--header',
-  '--acp-transport', '--max-budget-usd', '--autocompact', '--resume', '--worktree', '-H', '-w', '-r']);
+  '--acp-transport', '--max-budget-usd', '--autocompact', '-H']);
+const CB_OPTIONAL_VALUES = new Set(['--resume', '--worktree', '-r', '-w']);
+const CB_SHORT_OPTIONS = new Set(['-p', '-c', '-y', '-r', '-w', '-H']);
+
+// CodeBuddy's npm package installs a `cbc` command too. When the `cbc` the shell would run is that
+// launcher (a small text file that names codebuddy), it is CodeBuddy and gets no solver exemption;
+// a COIN-OR CBC binary, or no cbc at all, keeps the exemption.
+function cbcIsCodebuddy() {
+  const exts = process.platform === 'win32' ? ['', '.cmd', '.ps1', '.bat', '.exe'] : [''];
+  for (const dir of (process.env.PATH || '').split(path.delimiter).filter(Boolean)) {
+    for (const ext of exts) {
+      const file = path.join(dir, `cbc${ext}`);
+      const stat = fs.statSync(file, { throwIfNoEntry: false });
+      if (!stat?.isFile()) continue;
+      if (stat.size > 65536) return false;
+      try { return /codebuddy/i.test(fs.readFileSync(file, 'latin1')); } catch { return false; }
+    }
+  }
+  return false;
+}
 
 function codebuddyRunsModel(words, bareCbc = false) {
   if (CB_ADMIN.has(words[0])) return false;
-  let codebuddyOption = false;
+  let codebuddyOption = false, solverInput = false;
   for (let n = 0; n < words.length; n++) {
-    const w = words[n];
+    const w = words[n], next = words[n + 1];
     if (w === '--') return true; // 后面都是提示词，不当选项解析
-    // COIN-OR CBC uses single-dash keywords; only its bare executable gets this exemption.
-    if (w.startsWith('--') || /^-[pcyrwH]/.test(w)) codebuddyOption = true;
-    if (CB_VALUE_OPTIONS.has(w)) { n++; continue; }
+    // CodeBuddy 的短选项可以连写（-py）；CBC 的关键字（-presolve、-priority 等）含其他字母，不算。
+    if (w.startsWith('--') || CB_SHORT_OPTIONS.has(w) || /^-[pcyrwH]{2,}$/.test(w)) codebuddyOption = true;
+    if (CB_VALUE_OPTIONS.has(w) || (CB_OPTIONAL_VALUES.has(w) && next != null && !next.startsWith('-'))) { n++; continue; }
     if (CB_QUERY_FLAGS.has(w)) return false;
+    if (w.toLowerCase() === '-import' && next && !next.startsWith('-')
+      || !w.startsWith('-') && /\.(mps|lp)(\.(gz|bz2))?$/i.test(w)) solverInput = true;
   }
-  return !bareCbc || codebuddyOption;
+  return !bareCbc || !solverInput || codebuddyOption;
 }
 
 function piRunsModel(words) {
@@ -138,7 +159,7 @@ function callsAgentDirectly(command) {
     else continue;
     const words = dropRedirects(rest).map((t) => t.replace(/^["']|["']$/g, ''));
     if (agy) { if (agyRunsModel(words)) return true; continue; }
-    if (codebuddy) { if (codebuddyRunsModel(words, /^cbc(?:\.exe|\.cmd|\.ps1)?$/.test(first))) return true; continue; }
+    if (codebuddy) { if (codebuddyRunsModel(words, /^cbc(?:\.exe|\.cmd|\.ps1)?$/.test(first) && !cbcIsCodebuddy())) return true; continue; }
     if (pi) {
       if (piRunsModel(words)) return true;
       continue;
