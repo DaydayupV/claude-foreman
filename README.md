@@ -9,66 +9,37 @@
 
 ![Claude Code × all models: Claude Code commands GPT, Claude, DeepSeek, Gemini and more](docs/images/banner.en.png)
 
-A Claude Code plugin that makes Claude Code the foreman: it plans, decides and checks the results, and hands off hands-on coding work to CLI agents such as Codex, opencode, pi and CodeBuddy according to your config. It can also ask them for independent code reviews, or gather several models to weigh in on a complex design before Claude Code decides.
+foreman is a Claude Code plugin that makes Claude Code the foreman of your other AI coding tools. Claude Code still plans the work, makes the decisions and checks every result, while the hands-on coding, second opinions and code reviews go to Codex, opencode, pi, agy, CodeBuddy or any model with an OpenAI-compatible API, as your config says.
 
-- **Claude Code checks the work**: Claude Code reviews every diff an agent hands back, runs it to verify, and sends it back for rework if needed. In discussions, the other models' views are input only; Claude Code accepts or rejects each point on its merits.
-- **Your own quota**: agents run on your Codex plan, opencode subscription or API credit, not on your Claude Code quota.
-- **Visible all the way**: every handoff says who got it, with which model and reasoning effort, and a terminal view shows each model's progress live.
+- **Claude Code checks the work**: it reads every diff an agent hands back, runs it, and sends it back if it isn't right. In discussions, the other models' views are input; Claude Code weighs each point on its merits.
+- **Many models in one conversation**: models from different providers can discuss a design or review a change together, each from its own angle.
+- **Your own quota**: agents run on your Codex plan, opencode subscription or API credit, not on your Claude Code allowance.
+- **Visible all the way**: every handoff says who got it, with which model and reasoning effort, and you can watch each model work, live.
 
 **Intro video**: [watch on Bilibili](https://www.bilibili.com/video/BV13sxL6aE4Z/)
 
-**In action**: the web board's star map, where each recent conversation on this computer is a galaxy and the ones handing off work light up:
+The web board's star map: each recent conversation on this computer is a galaxy, and the ones handing off work light up.
 
 ![The web board's star map: one galaxy per conversation, with the conversation list and usage below](docs/images/board-universe.webp)
 
-Flying into one conversation: four models discussing at once, with each seat's progress, live speed, output and cost:
+Inside one conversation: four models discussing at once, with each seat's progress, live speed, output and cost.
 
 ![One conversation on the web board: four models discussing at once, with each seat's usage below](docs/images/board-conversation.webp)
 
-## Install and setup
+## What it's like to use
 
-### Recommended: the Claude desktop app, with the release package
+Once it's installed, you talk to Claude Code the way you always do. There are no commands to learn. For example:
 
-The plugin is mainly developed and tested in the Code tab of the Claude desktop app: after each handoff the live view opens in the terminal panel and comes to the front by itself (while the web board is off), and the intro is tuned for the desktop app's terminal.
+> Add a date filter to the order export, and cover it with tests.
 
-1. Download the package from the [latest release](https://github.com/DaydayupV/claude-foreman/releases/latest): `foreman-en.plugin` for English, or `foreman.plugin` for Chinese. The two differ only in language, so install just one (see [English and Chinese versions](#english-and-chinese-versions)). The `.zip` and `.plugin` files of the same plugin are identical; either one works.
-2. Upload the file as a plugin in the Claude desktop app. It's listed under "My Uploads".
-3. Open the Code tab and run `/foreman-en:setup` (`/foreman:setup` for the Chinese plugin); see [Running setup](#running-setup) below.
+Claude Code breaks the request into steps and, at each one, decides whether another model is worth bringing in:
 
-To upgrade, download the new release and upload it the same way, then delete the old version from "My Uploads": a new upload can sit next to the old one instead of replacing it.
+1. **Settle the approach.** If the way forward is clear, it just starts. If there are real options to weigh and a wrong choice would be costly, it asks a few models for independent proposals, has them critique each other, then decides and tells you which points it took and which it didn't.
+2. **Do the work.** It makes small changes itself and hands larger pieces of coding to Codex, opencode, pi, agy or CodeBuddy, as your config says. Every handoff names the model and the reasoning effort, and you can watch the work live in the terminal or on the web board.
+3. **Check the result.** It reads every diff that comes back, runs the tests, and sends the work back if it isn't right.
+4. **Review before delivery.** When a change carries risk, another model reviews it in a fresh session. Claude Code checks each finding against the code and drops the false positives.
 
-### Or: install from the marketplace
-
-In the CLI, or in the desktop app if you'd rather not upload a file, run this in Claude Code:
-
-```
-/plugin marketplace add DaydayupV/claude-foreman
-/plugin install foreman-en@claude-foreman
-```
-
-For the Chinese plugin, install `foreman@claude-foreman` instead. To upgrade, run `/plugin marketplace update claude-foreman`. The CLI does the same handoffs, reviews and discussions; the only difference is that you run the live-view command Claude Code gives you in another terminal yourself.
-
-Upgrading from codex-bridge? See [below](#upgrading-from-codex-bridge).
-
-### Requirements
-
-- [Claude Code](https://claude.com/claude-code)
-- Node.js 18 or later. If you run Claude Code inside WSL, Node.js must be installed inside WSL too, or the plugin's hooks will error before every command
-- Git 2.25 or later, used to track which files the agents changed
-- Agents, as many as you like (with none, the plugin still installs and Claude Code does all the work itself):
-  - The [Codex CLI](https://github.com/openai/codex), installed and signed in. Recommended; image generation can only go to Codex
-  - [opencode](https://opencode.ai) 2.x or [pi](https://github.com/earendil-works/pi), to reach models from many providers
-  - Agy CLI (Google Antigravity CLI), installed and signed in, for discussions, reviews and hands-on work (only Windows 11 verified so far)
-  - CodeBuddy CLI (Tencent Cloud's coding assistant), installed and signed in, for discussions, reviews and hands-on work (only Windows 11 verified so far, with Git for Windows)
-  - API keys for models with an OpenAI-compatible API (such as DeepSeek, Kimi or MiMo); these can join discussions and reviews (text only, no screenshots)
-
-### Running setup
-
-After installing, run `/foreman-en:setup`. Its output always has the same structure: which tools this machine has, every model available and the efforts each supports, then the current config (who gets each level of each task type, how many outside models each level uses, who is required, which agents aren't used, and anything to watch out for), then suggested changes (including leftovers from older versions that can be removed). On a first setup or right after an update, the suggestions start with what's new in this version and whether any of it needs you; after them, a sentence or two explains each kind of option in the tables. After reading it all you confirm or adjust the suggestions in a pop-up: each question makes sense on its own, each option says what choosing it does, the recommended one comes first, and related consents (such as installing the agy guard) are asked in the same pop-up. It changes the config, reports what changed, and creates or fills out the [model notes](#model-notes), asking you to write in each model's strengths and weaknesses from your own experience. Last, it lists the five files you can edit yourself (user config, project config, user preferences, project preferences, model notes) with their full paths on your computer, what each controls and when a change takes effect. Run it again after installing a new tool or to change models.
-
-## How it works
-
-The plugin has three modules: **discuss**, **run** and **review**. They have no fixed order: after each step Claude Code decides what comes next and goes into whichever module it needs, so one request can use them in any order and more than once. For example "discuss the approach → run → discuss the result → rework → review", or "run → review → discuss a design problem the review raised → run again".
+At the end it tells you who did each step, how many tokens they used, and roughly what that would cost at official API prices.
 
 ```mermaid
 flowchart LR
@@ -87,9 +58,97 @@ flowchart LR
     class discuss,run,review module
 ```
 
-Each time it enters a module, Claude Code levels that step by the module's own criteria. Small things not worth an outside model are level 0, which Claude Code does itself; the rest are simple, normal or complex (`simple` / `normal` / `complex`). Which candidate models levels 1–3 have, who is required, and with what effort is up to you in the config, and Claude Code picks from the candidates each time, consulting the [model notes](#model-notes) you write; a level set to `"claude code"` is done by Claude Code itself too. Hands-on candidates can also include Claude Code, alongside outside models. Once something is handed off, a live view in the terminal shows each step the model takes, and at the end Claude Code reports which model did the work and how many tokens it used.
+**You stay in control**
 
-Inside each module (purple steps are done by Claude Code; green ones involve an agent):
+- Who takes each level of work, how many models join in and who must take part all live in your config, and `/foreman-en:setup` walks you through it.
+- Pause points decide when Claude Code stops to check with you. By default it only asks before acting on the results of a level 3 discussion, or of a review at level 2 or above.
+- What you've learned about each model (what it's good at, where it tends to slip) goes in the [model notes](#model-notes), and Claude Code draws on them when it picks an agent, writes the brief and checks the work.
+
+## Install and setup
+
+### In the Claude desktop app (recommended)
+
+foreman is developed and tested mainly in the Code tab of the Claude desktop app, where the live view opens in the terminal panel by itself after each handoff.
+
+1. Download the package from the [latest release](https://github.com/DaydayupV/claude-foreman/releases/latest): `foreman-en.plugin` for English, or `foreman.plugin` for Chinese. Install just one (see [English and Chinese versions](#english-and-chinese-versions)). The `.zip` and `.plugin` files of the same plugin are identical.
+2. Upload the file as a plugin in the Claude desktop app. It's listed under "My Uploads".
+3. Open the Code tab and run `/foreman-en:setup` (see [Running setup](#running-setup)).
+
+### From the marketplace
+
+In the Claude Code CLI, or in the desktop app if you'd rather not upload a file:
+
+```
+/plugin marketplace add DaydayupV/claude-foreman
+/plugin install foreman-en@claude-foreman
+```
+
+For the Chinese plugin, install `foreman@claude-foreman`. The CLI does the same handoffs, reviews and discussions; the only difference is that you open the live view yourself, in another terminal, with the command Claude Code gives you.
+
+To upgrade later, see [Upgrading](#upgrading).
+
+### Requirements
+
+- [Claude Code](https://claude.com/claude-code)
+- Node.js 18 or later. If you run Claude Code inside WSL, install Node.js inside WSL too, or the plugin's hooks will fail before every command.
+- Git 2.25 or later, used to track which files an agent changed.
+- As many agents as you like. With none, the plugin still works, and Claude Code does everything itself.
+  - The [Codex CLI](https://github.com/openai/codex), installed and signed in. Recommended; image generation can only go to Codex.
+  - [opencode](https://opencode.ai) 2.x or [pi](https://github.com/earendil-works/pi), to reach models from many providers.
+  - Agy CLI (Google Antigravity CLI), installed and signed in. Verified on Windows 11 so far.
+  - CodeBuddy CLI (Tencent Cloud's coding assistant), installed and signed in. Verified on Windows 11 with Git for Windows so far.
+  - API keys for models with an OpenAI-compatible API, such as DeepSeek, Kimi or MiMo. These join discussions and reviews.
+
+### Running setup
+
+Run `/foreman-en:setup` after installing. It checks this machine and walks you through the config:
+
+- **What it found**: the tools you have, every model they can reach, and the reasoning efforts each model supports.
+- **Your current setup**: who takes each level of each kind of work, how many models join, who's required, and anything to watch out for.
+- **Suggested changes**, each explained in a sentence or two. On a first run or right after an update, it starts with what's new and whether any of it needs you. You accept the suggestions or adjust them one by one in a pop-up.
+
+It then writes the config, creates or fills in your [model notes](#model-notes), and lists the five files you can edit yourself, with their full paths on your computer (see [Configuration](#configuration)). Run it again whenever you install a new tool or want to change models.
+
+### English and Chinese versions
+
+There are two plugins that differ only in language:
+
+- `foreman-en`: English, with commands like `/foreman-en:setup`
+- `foreman`: Chinese, with commands like `/foreman:setup`
+
+Install just one. Both read the same config, preference files, model notes and run records, so you can switch without setting anything up again.
+
+## How it works
+
+### Three modules
+
+foreman works in three modules: **discuss**, **run** (hands-on work) and **review**. They have no fixed order. After each step Claude Code decides what comes next, so one request can go "discuss the approach → run → review", or "run → review → discuss a design problem the review raised → run again".
+
+### Levels
+
+Each time Claude Code enters a module, it gives that step a level by the module's own criteria. Level 0 is small enough that Claude Code handles it itself. Levels 1–3 (`simple`, `normal`, `complex`) go to the candidates you set for that level in the config.
+
+| Level | Discussion: how uncertain, how costly a wrong choice | Hands-on work: how much judgement, how costly a mistake | Review: how risky the change |
+|---|---|---|---|
+| 0 | The approach is clear, or you've already decided | A small change in one place, quicker to make than to brief | Small changes, docs, styling, config, or low-risk changes covered by tests |
+| 1 `simple` | A one-off question that needs a second opinion | The method is settled and needs little judgement | Large but mechanical changes |
+| 2 `normal` | A few options to compare, with limited impact | There's a spec, but the details need designing | Larger ordinary features and fixes |
+| 3 `complex` | Complex, uncertain and costly to get wrong | Unknown cause, costly mistakes, or changes across modules | Code that touches money, data, concurrency or access control |
+
+Levels go by judgement and risk, not by how much changes: renaming across 20 files from a list is simple, while changing an interface between modules is complex. A review is levelled by what the changed code could affect, and only hand-written code counts toward its size, not docs or generated files.
+
+### Who does what
+
+- **Claude Code always keeps the decisions and the checks**: planning, levelling each step, picking agents, writing briefs, checking results, ruling on discussion and review points, and reporting to you.
+- **Hands-on work** at levels 1–3 goes to that level's candidates. A level set to `"claude code"` is done by Claude Code itself, and a candidate list can also include Claude Code alongside outside agents: it then does the work itself only when the [model notes](#model-notes) say its model is better at this kind of work.
+- **Discussions and reviews** always include Claude Code's own seat, plus as many outside models as the level asks for.
+- **Images** go through a separate image module, where you choose the route before work starts (see [Images](#images)).
+- If a required model fails or runs out of quota, the step counts as unfinished. Another model doesn't quietly stand in for it.
+
+<details>
+<summary>What happens inside each module</summary>
+
+Purple steps are done by Claude Code; green ones involve an agent.
 
 **Discuss**
 
@@ -150,30 +209,40 @@ flowchart TD
     class vnew agent
 ```
 
-## What it does
+</details>
+
+## Everyday use
+
+### Commands
+
+You never have to use these, but they're there when you want to ask for something by name:
 
 | Command | What it does |
 |---|---|
-| `/foreman-en:run <task>` | Hands a task to the configured agent. When it finishes, Claude Code reviews the diff, runs it to verify, and sends it back for rework if needed |
-| `/foreman-en:review` | Has an agent review uncommitted changes, a branch or a commit, or existing files, research conclusions with their evidence, and screenshots or playback files. The agent returns a structured list of issues; Claude Code checks each finding and filters out false positives |
-| `/foreman-en:discuss <topic>` | Several models each propose an approach to a complex design and critique each other's; Claude Code rules on each point and writes up a decision record; topics with competing goals can use role mode, see below |
-| `/foreman-en:watch` | Shows what each model is doing, live, in a terminal, plus a link to the web board when it is on; see below |
-| `/foreman-en:status` | Lists recent runs, or shows the details of one, including token use and Codex quota |
-| `/foreman-en:setup` | Setup guide: detects this machine's tools, lists the models available, shows the current config and suggested changes, and changes the config the way you choose |
+| `/foreman-en:run <task>` | Hands a task to the configured agent, then Claude Code checks the diff, runs it and sends it back for rework if needed |
+| `/foreman-en:review` | Has an agent review uncommitted changes, a branch or a commit, existing files, research conclusions with their evidence, or screenshots and playback files. Claude Code checks each finding and drops false positives |
+| `/foreman-en:discuss <topic>` | Several models each propose an approach and critique each other's; Claude Code rules on each point and writes a decision record |
+| `/foreman-en:watch` | Opens the live view, plus the web board link when the board is on |
+| `/foreman-en:status` | Lists recent runs, or shows one in detail, with token use and Codex quota |
+| `/foreman-en:setup` | Checks this machine and walks you through the config |
 | `/foreman-en:config` | Shows or changes the config |
 
-You can also just ask Claude Code to "check the environment" (`check`: whether each agent works, whether its model supports the configured efforts, and whether Codex's sandbox can start), to "list the available models" (`models`), or to "show the model tiers" (`tiers`: each model in use with its tier, overall score, strengths and weaknesses, from the third-party LiveBench leaderboard).
+You can also just ask Claude Code to "check the environment" (whether each agent works and supports the configured efforts, and whether Codex's sandbox starts), to "list the available models", or to "show the model tiers" (each model's tier, overall score, strengths and weaknesses on the LiveBench leaderboard).
 
-### Without commands
+### When Claude Code starts things on its own
 
-The bundled skill has Claude Code level each discussion, piece of hands-on work and review as it comes up, and start what crosses the threshold on its own:
+Without any command, Claude Code levels each step as it comes up and starts what crosses the threshold:
 
-- Before giving an approach, and when judging the result of work already done to decide what to adjust, talk complex, uncertain questions through with other models first; Claude Code rules on the conclusion.
-- Before starting work, hand off hands-on work (UI and text included) as the levels and config say; decisions and checks (planning, levelling, picking agents, writing briefs, checking results, ruling) and level 0 small things stay with Claude Code.
-- Before delivering, decide by the risk of the change whether another model should review it.
-- When a big task splits into parts that don't touch each other, hand them to several sessions at once to cut the wait (each agent's limit is `max_parallel`).
+- Before proposing an approach, or when judging a result to decide what to adjust, it talks complex, uncertain questions through with other models first.
+- Before doing hands-on work, it hands it off as the level and config say.
+- Before delivering changes, it decides by their risk whether another model should review them.
+- When a large task splits into parts that don't touch each other, it hands them to several sessions at once (each agent's limit is `max_parallel`).
 
-Where Claude Code stops to ask you first is set by `dispatch.confirm` in the user config. The default is:
+Every time it does, it tells you in a sentence who it handed the work to and why.
+
+### Pause points
+
+`dispatch.confirm` in your user config decides where Claude Code stops to check with you. The default:
 
 ```json
 "confirm": {
@@ -185,130 +254,178 @@ Where Claude Code stops to ask you first is set by `dispatch.confirm` in the use
 }
 ```
 
-- `start` covers whether it asks before a discussion, a handoff or a review starts; `adopt` covers whether it asks after a discussion or review, before it acts on the results. Each takes `"auto"` (don't ask), `"ask"` (always ask) or a level, `"simple"`, `"normal"` or `"complex"` (ask at that level and above). By default it only asks before acting on the results of a level 3 discussion or a review at level 2 or above.
-- `roles` (the role assignment of a role-mode discussion) and `image` (the image route and final image) are described below and take only `"ask"` or `"auto"`.
-- `"confirm": "ask"` asks at every step and `"confirm": "auto"` is fully automatic; `/foreman-en:setup` offers these three sets directly.
-- With the older switch `dispatch.auto` set to `false`, it asks before each start that isn't set on its own.
-- What you ask for by name doesn't get asked again before it starts, and level 0 small things are never asked about. When nobody can answer (an unattended automated run, for example), the five points before starting and before acting on results go ahead as if set to "don't ask", and the report says so; `roles` and `image` follow the rules below.
-- Only the user config counts; in a project config the setting has no effect, so a cloned repository can't use it to skip confirmations. Version 1.2.x can't read the new form, so if an older version is still installed on the same computer, upgrade both first.
-
-Only you type the commands in the table above; Claude Code doesn't call them itself. They mean "you asked for this by name" and skip the level 0 check. When Claude Code starts something on its own, it goes through the plugin's skill, which still levels the step and follows `dispatch.confirm`.
+- `start` is the point before a discussion, a handoff or a review begins; `adopt` is the point after a discussion or review, before Claude Code acts on the results. Each takes `"auto"` (don't ask), `"ask"` (always ask), or a level (`"simple"`, `"normal"` or `"complex"`: ask at that level and above).
+- `roles` is the role assignment of a role-mode discussion, and `image` is the image route and final image. Each takes `"ask"` or `"auto"`.
+- `"confirm": "ask"` asks at every step, and `"confirm": "auto"` never stops; `/foreman-en:setup` offers these as presets.
+- Things you ask for by name aren't asked about again before they start, and level 0 work never is.
+- When nobody can answer (in an unattended run, for example), the start and adopt points go ahead without asking, and the report says so.
+- Only the user config counts here, so a repository you clone can't use its project config to skip your confirmations.
 
 ### Role-mode discussions
 
-When a topic has several goals pulling against each other (such as security and convenience, implementation cost and user experience, compatibility and a rewrite), a level 2 or 3 discussion can use role mode: each model gets a role card and checks the same topic from one angle, such as architect, math / correctness, fact checker, maintenance and compatibility, user experience or edge-case lister, plus an overall reviewer with no role.
+When a topic has goals pulling against each other (security and convenience, cost and user experience, compatibility and a rewrite), a level 2 or 3 discussion can use role mode. Each model gets a role card and examines the same topic from one angle, such as architect, correctness, fact checker, security, maintenance and compatibility, user experience or edge cases, often alongside an overall reviewer with no role.
 
-- **Assigned by ability**: first whether the tools can do it (the fact checker has to run commands, so only Codex can take it), then strengths and the model tier: roles that need hard thinking go to strong models first, but the tier is only a guide, not a condition for taking part. Models are sorted into strong, mid and weak tiers from a third-party leaderboard; see [references/model-tiers.md](foreman-en/skills/dispatch/references/model-tiers.md).
-- **One model per role first**: when there aren't enough qualifying models, a strong model opens another session for another role; each extra session takes a parallel slot, and its agreeing conclusions still count as one piece of evidence. Mid and weak models can take "breadth seats" that join round 1 only by default (one can be resumed when a key point it raised is still open), with Claude checking each of their points.
-- **Core roles are never merged**: the angles a topic needs most get a seat each, and at level 3 one core role can be played by two different models. The number of seats follows the level's `seats`, and required models always get one.
-- **The assignment table**: by default (`dispatch.confirm.roles` set to `"auto"`) Claude Code writes the "model → role" assignment in its reply and starts, and you can ask for changes at any time; set to `"ask"`, a pop-up comes first, and you can start as suggested, adjust it, or use a normal discussion instead.
-- A role only sets what each model checks most closely, not its conclusion; decisions still go by evidence, and several roles agreeing doesn't count as more evidence.
-- Custom roles and using role mode by default for some kinds of topics can go in the preference files; views on a model (its tier, strengths and weaknesses) go in the [model notes](#model-notes). The role table and assignment rules are in [references/roles.md](foreman-en/skills/dispatch/references/roles.md).
+- Roles are assigned by ability: first whether the model's tools can do the job (only Codex can run commands, so only Codex can be the fact checker), then its strengths and tier. Hard roles go to strong models first, and weaker ones can join as breadth seats.
+- The angles a topic needs most each get their own seat.
+- By default Claude Code shows the "model → role" assignment in its reply and starts; set `dispatch.confirm.roles` to `"ask"` to approve it in a pop-up first.
+- A role only shapes what a model looks at most closely. Conclusions still go by evidence, and several roles agreeing doesn't count as extra evidence.
 
-So that Claude Code doesn't forget (easy when a project has its own skills), the plugin reminds it once at the start of every session and includes your preference files and the model notes.
+Custom roles go in your [preference files](#preference-files); the full role table is in [references/roles.md](foreman-en/skills/dispatch/references/roles.md).
 
-### Image assets
+### Images
 
-Bitmaps are drawn by Codex's built-in image tool, then Claude Code turns them into assets ready for downstream use with the `assets` subcommand on your machine: transparent PNG parts, a manifest listing them by name, a contact sheet, and SVG for flat assets with few colors (one layer per part, which opens in Figma or Illustrator).
+Codex draws the images, and Claude Code turns them into assets you can use straight away: transparent PNG parts, a manifest listing them by name, a contact sheet, and SVG for flat graphics with few colours.
 
-- **You choose the route before work starts**: before each new graphic deliverable, Claude Code asks you in a pop-up: ① bitmap, ② bitmap + vector mix (a final image plus hand-drawn pieces that bend), ③ pure vector (a reference image first to set the style), or ④ pure vector / code (no image generation). The pop-up says which model generates and which hand-draws, whether reference images get uploaded, and the rework rule. It asks even with `dispatch.auto` on; rework and partial regeneration of the same deliverable don't ask again, while switching routes, adding a deliverable, widening the scope or changing the model vendor does. With `dispatch.confirm.image` set to `"auto"` there is no pop-up: Claude Code takes the route from your words, or the recommended one if you didn't say, puts what the pop-up would have said in its reply and starts, and doesn't wait for your approval of the final image either; it still asks first before uploading your images as references, generating several candidates or widening the scope. The plugin's hook records the route you chose, and the script checks it before an image task goes out: if you cancelled, didn't choose, or chose something else, nothing goes out. This was tested in the desktop app; the CLI hasn't been tested yet.
-- **Generating and drawing are the two cells of the image module**: `generate` makes the final image, background plates, local variants and standalone assets; `draw` hand-draws the pieces that bend from the final image, or draws the whole thing on the pure vector routes. There are no levels; a plan made with `plan --module image` goes out with the `image` command. If images get generated outside the image module by a plain hands-on task, the result points it out, and so does an SVG on a pure vector route that embeds a bitmap.
-- **In SVG, HTML and animations, every piece comes from one image**: Codex draws only the whole final image (by default nothing goes further until you've seen and approved it), then edits it into a background plate with the subject removed; every piece of the work comes from that final image. Pieces that move as a whole (a head, a torso, props, a counter) are cut out where they are by Claude Code with `assets layers`; pieces that bend themselves or must touch things drawn in code exactly (bending limbs, tails) go to Codex, which hand-draws them as SVG traced from the final image and writes their deformation, while Claude Code writes the brief and checks the result with its own screenshots (in a comparison the two tied on the metrics, and in a blind review Codex's version looked more natural); shapes simulated by physics every frame, things tied to mechanics, text and UI controls are drawn in code. In testing, the image model couldn't place joint pivots and contact points accurately, and pieces it took out on their own came back enlarged (up to twice the size) with redrawn proportions; pieces cut from the same image meet exactly, with the same line weight. Claude Code tells you before starting which pieces move as a whole and which go to Codex to be traced and bent.
-- **Expressions are only patches**: a blink or an open mouth is a local edit of the final image, and only the changed region is laid over, instead of swapping the whole image, which would flicker.
-- **Detailed images such as characters aren't turned into SVG by default**: they come out large and banded, so they stay PNG, embedded in the page.
-- **Several parts are named by slot**: Codex gets a numbered slot template and draws part N in slot N, and the cut names parts by slot, so a model reshuffling the layout can't mislabel them.
-- **Edits and images from a reference**: the brief says to pass the reference through `referenced_image_paths`; if it wasn't passed, `image_calls` in the result shows it and a warning points it out. A partial change replaces only the part that changed.
-- **Measured thresholds for regenerating**: when the background plate or an expression edit measures more than 3 pixels off or more than 1% scaled against the final image, when the plate still shows traces of the subject, or when a moving piece in the final image is covered by another, the image is regenerated with a different approach, not patched up later or worked around with a custom registration script. There's no fixed number of generations; it stops to ask you only when three tries in a row don't improve the same problem.
-- **Patches, tracing, screenshots and playback checks also run locally**: `assets patch` takes only the changed region of an edited image (a blink, an open mouth), `assets trace` traces a piece that bends from the final image (curved outlines with an even line weight; Codex starts from it when hand-drawing), `assets capture` takes screenshots at given moments with your local Chrome or Edge, and `assets playback` captures one loop of the animation, checks flicker and the loop seam, and makes an APNG you can play.
-- **Backgrounds**: transparent by default, with the script cleaning the faint halo at the edges; a flat magenta background when the subject is white or pale.
-- **Turning flat assets into SVG needs nothing extra**: the plugin's own tracer draws straight edges as lines and curves as Bézier curves, and the contact sheet shows the SVG rendered back.
-- Not supported: pixel art, exact pixel sizes, high-resolution images above about 1.57 megapixels, having the model draw separate jointed parts, and big turns or changes of viewpoint that need a side the final image doesn't show.
+- **You choose the route first.** Before each new graphic, a pop-up asks how to make it: ① bitmap, ② bitmap plus hand-drawn vector pieces that bend, ③ pure vector from a reference image, or ④ pure vector or code, with no image generation. It also says which model generates, which hand-draws, and whether your reference images get uploaded.
+- **One final image, approved by you.** For animations and SVG, Codex draws a single final image, and nothing goes further until you've approved it. Every piece is then cut or traced from that image, so the parts line up exactly.
+- **Checked before delivery.** Claude Code looks at the contact sheet, takes screenshots, and plays animations through once to check for flicker.
+- **Not supported**: pixel art, exact pixel sizes, images above about 1.57 megapixels, and big turns or changes of viewpoint.
 
-The image module's workflow is in [references/image.md](foreman-en/skills/dispatch/references/image.md), the prompt templates in [references/image-assets.md](foreman-en/skills/dispatch/references/image-assets.md), and the `assets` command options and checks in [references/assets-cli.md](foreman-en/skills/dispatch/references/assets-cli.md).
+With `dispatch.confirm.image` set to `"auto"`, Claude Code picks the route from your request (or the recommended one), explains it in its reply and starts. The workflow is in [references/image.md](foreman-en/skills/dispatch/references/image.md), and the `assets` commands in [references/assets-cli.md](foreman-en/skills/dispatch/references/assets-cli.md).
+
+## Watching the work
 
 ### The live view
 
-- Every run keeps two lines at the top: the model, written like "gpt-6.1-sol max · Codex CLI" (model and effort · how it's reached), colored by status, with the status and elapsed time on the right, such as "running 37:51"; and the task, written like "run · title · complex", starting with the module (run, discuss, review, image), with the round for a resume, and the cell and route instead of the level for image tasks.
-- Below that is a timeline: times down the left, with what the model says, commands, file reads and searches, file changes and images generated or opened in order. Only the first few actions between two messages are shown and the rest fold into one line such as "… +9 commands"; files changed one after another share one line; a failed command is marked "✗ exit 1" at the end of its line, and a search that found nothing says "no match". The bottom line shows the latest thinking summary and the keys.
-- The view re-flows when the window is resized. Scroll back with ↑↓, PgUp/PgDn or the mouse wheel and press End to jump to the latest; while the run is going, q stops watching and the run keeps going. When the run ends the view stays on screen and can still be scrolled, with the status, duration, changes, token use, cost (at official API prices) and conclusion at the end; after q the full record stays in the terminal. Once the run is resumed (a rework, a discussion's next round), a line above the bottom one names the new run, and n switches to it.
-- Discussions, reviews and split hands-on work are shown in one window, one block per seat. The heading reads "discuss · panel · title · normal": the module, the mode (panel for several plain seats, roles for role mode, split for parallel parts), the title, the level and the round, with the count of each status on the right, such as "●2 ✔1". Each block starts with the seat number and a line with the model and its status; role mode puts the role on the next line, and split work puts that part's title and level there. While a seat is working its body shows what it last said, its thinking summary and its latest actions; once it's done, its conclusion. The Claude Code seat comes first (seat 0) and shows its report's conclusion like any other seat.
-- Blocks get more lines when the window has room, and you scroll with the mouse wheel when they don't fit. Press a seat's number to open its full timeline and Esc to go back. When an API model is queued because its service is busy, press x to stop it. When the plan is missing a required seat, the gap seat hasn't finished, or the material under review changed during the review, one extra line under the heading says so. When everything has finished the view stays on screen; after q a summary is left behind, with each seat's conclusion, token use and run_id, and one last line with the command to replay a seat.
-- The fields the plugin writes itself in the live view, `status` and the start line (status words, durations, model labels, token use, labels and hints) are in English in both plugins, so they look the same; what the models and Claude Code write, task titles included, is shown as written.
-- Color only means status: cyan for running, green for done, yellow for questions returned, waiting for an answer or queued, red for anything else that didn't finish. Task lines and model lines are bold, and the model line takes the status color; roles and the titles of split parts are bold; paths, token use, hints and times are dim.
-- Add `--verbose` for every detail: the raw reasoning, each command and its output, token use.
-- The first time it opens for a newly dispatched conversation, a few seconds of intro play first: the model's pixel avatar, "Starting …" and a few jokes (5 seconds for one model, 10 for a discussion). Any key skips it, and setting `dispatch.intro` to `false` turns it off. The avatar is picked by the model name, with a ??? avatar for anything it doesn't recognize.
-- In the Claude desktop app, the live view opens in the terminal panel by itself after each handoff (not while the web board is on: then you get the board link instead); in the CLI, Claude Code sends you the command to run in another terminal.
+In the Claude desktop app, the live view opens in the terminal panel by itself after each handoff (unless the web board is on). In the CLI, Claude Code gives you the command to run in another terminal, and `/foreman-en:watch` opens it any time.
+
+- **Each run** starts with two lines: the model, its effort and how it's reached (such as "gpt-6.1-sol max · Codex CLI") with the status and elapsed time, then the task (module, title, level). Below them is a timeline of what the model says, the commands it runs, the files it reads and changes, and the images it makes. A failed command is marked at the end of its line.
+- **Discussions, reviews and split work** share one window, one block per seat, with Claude Code's own seat first. Press a seat's number to open its full timeline, and Esc to go back.
+- **Keys**: ↑↓, PgUp/PgDn or the mouse wheel to scroll, End to jump to the latest, q to stop watching (the run keeps going), n to follow a run that was resumed, and x to stop an API seat that's queued because its service is busy.
+- **Colour means status**: cyan running, green done, yellow waiting or queued, red anything that didn't finish.
+- When a run ends, the view stays on screen with the duration, changes, token use and cost. Add `--verbose` for every detail, including raw reasoning and command output.
+- The first time it opens for a new conversation, a few seconds of intro play (the model's pixel avatar and a joke or two). Any key skips it, and `dispatch.intro: false` turns it off.
+
+The full layout is described in [references/watch.md](foreman-en/skills/dispatch/references/watch.md).
 
 ### The web board
 
-Another way to watch besides the terminal live view, off by default: set `dispatch.watch.web` to `true` in the config, or run `/foreman-en:setup` (it decides from this computer's memory). While it's on, handoffs give the board link and no longer open the terminal live view by themselves; use `/foreman-en:watch` when you want the terminal view. After handing work off, Claude Code adds the board link to the sentence that tells you so (on every handoff, once for several runs handed off together); while runs are still going, the last line of each of its replies is the board link, and the final report has it too. A plugin hook also shows the link right before the handoff command runs; the desktop app folds it into the tool calls. When the conversation started a run during a turn (a handoff command leaves a mark for the conversation as soon as it runs, however it was written) but Claude Code's reply text has no board link, the hook stops the turn from ending once, so Claude Code adds that sentence. To have the board come up by itself, set `dispatch.watch.web_open` to `true`: the first handoff of each conversation opens it once in your default browser.
+The web board is a second way to watch, in your browser. It's off by default: turn it on with `dispatch.watch.web: true`, or let `/foreman-en:setup` decide from this computer's memory. While it's on, every handoff gives you a board link instead of opening the terminal view; set `dispatch.watch.web_open: true` to have it open in your default browser on a conversation's first handoff.
 
-- **Opening it**: when it's on, every handoff first gives a link in the conversation, then starts the work; `/foreman-en:watch` gives one too. It opens in your default browser: you see the star map first, then fly into that conversation's board on your own (a reload goes straight back to the board); it never opens inside the Claude app.
-- **The star map**:
-  - Every Claude Code conversation on this computer from the last 24 hours is a galaxy, and conversations of the same project gather into a nebula. The list matches the Claude desktop app's sidebar: conversations archived or deleted there, and sessions the app doesn't list (one-off `claude -p` calls from a terminal, for example), are left out, except a terminal conversation that has handed off work; a conversation started from another one belongs to its parent's project and is listed indented under it. With only the command line and no desktop app, every conversation is listed.
-  - Agents at work are stars circling their galaxy; a conversation waiting for you has an amber ring; one with a failure keeps a red dot.
-  - The nebulas take their colours from the models used: each project's nebula and each galaxy's disc are coloured by the models its conversations used (Claude Code orange, Qwen purple, DeepSeek blue, ...), a model that did more taking more of it, and the ones running now brighter, without several running models adding up to a glare; the nebula in a single conversation's arc area works the same way.
-  - The table below has one row per conversation: hover a row to highlight its galaxy, click it to fly into that conversation. A row's runs, tokens and cost cover the whole conversation from its start (including transcripts from before a desktop restart), the same as its board; the last 24 hours only decide which conversations are listed. In the status column, each seat with a problem (timed out, failed, stopped, no valid result) in a group that is still going gets a red dot, which goes away once the group has ended.
-  - The "Running now" panel at the top left lists the agents used in the four modules; each cell is one run the agent can have going at once, lit in the color of the conversation using it. Agents outside the modules only show up while they have a run going.
-- **One conversation's board**: click a galaxy or a row in the table, or keep scrolling in on a galaxy, to fly into that conversation's board; Esc, clicking FOREMAN at the top left or zooming all the way out takes you back to the star map. The board covers the conversation's whole history (including transcripts from before a desktop restart, whether or not it dispatched anything) and shows:
-  - cards for Claude Code and each seat, with light paths between the models;
-  - animations for the dispatch plan, the cross-check and the verdict;
-  - the usage table below (scroll on it when there are many rows), ordered like the terminal section: running groups first, each group under a line with its title and status counts; hovering a row brings that seat forward on the board and dims the rest;
-  - each seat's terminal (keep scrolling past the end of the usage table): running groups in the top row; a minute after a group ends it moves to the "finished" part below: groups that ended after your latest message stay open and look the same, groups from earlier rounds fold into one line (title, counts, end time, the cost of all its rounds) that opens on click; click a column head to fold it again.
-  - Status colors follow the same split as the terminal live view: running; done; partly done and questions returned; failed and timed out; resumed — one color each.
-- **Cost**: the usage table always prices each model at its official API price (hover over it to see this), to compare what the models cost; it may differ from what you're actually charged: Codex and Claude Code on a subscription aren't charged per token, and opencode and pi bill through their own accounts. Claude Code's reports in the conversation and `stats` use the same price table (the plugin's `prices.json`); models missing from it and runs with no recorded usage aren't counted: that row shows `?` and the total gets a `+`.
-- **The board server**:
-  - One local process shared by every conversation on this computer, reachable only on 127.0.0.1 with a random token in the address.
-  - It only reads your conversation records and run records, plus a few fields of each conversation in the Claude desktop app's list (its session ids, archived flag, which conversation started it, and its start folder).
-  - It exits after 30 minutes with nobody looking and nothing running (a board tab left in the background for over 30 minutes doesn't count as looking), and when the plugin is removed or updated.
-  - When it starts again (with the next handoff, or `/foreman-en:watch`), it keeps the same port and token: links given earlier in a conversation still open, and a board tab left open reconnects by itself (and reloads if the plugin was updated in between). Only when the old port has been taken by another program or reserved by the system does it move to a new port with a new token.
-  - To shut it down now, run `node <the plugin's scripts folder>/cli.mjs board --stop` in a terminal.
-  - Since the token stays the same, treat board links like a password: anyone on this computer who has one can open the board while it runs. To get a new address, shut it down as above and delete `board.address.json` in the runs folder (`~/.claude/foreman/runs` unless `dispatch.runs_dir` says otherwise); the next start picks a new port and token.
-- **Replay (for debugging)**: every link the plugin gives is live. To play a finished conversation back in time to look into a problem, run `node <the plugin's scripts folder>/cli.mjs board --replay <conversation id, run id, group or all>` in a terminal. Add `--speed <N>` to speed it up and `--maxgap <sec>` to shorten idle gaps.
-  - It starts a separate, temporary replay server and prints a link. The server exits after ten minutes with no one watching, and leaves the live page alone.
-  - Records over 256 MB in total are refused, with the size given.
-  - Opening an old-style replay link on the live page shows live data, with a line at the top saying how to replay.
-- **Resources**: the server takes about 100–130 MB of memory, and the browser tab about 60–90 MB. On a computer low on memory (under 8 GB in total or under 2 GB available), `/foreman-en:setup` suggests keeping it off.
-- **Browser**: it needs a recent browser: Chrome or Edge 111, Firefox 113, Safari 16.2 or later.
+- **The star map**: every Claude Code conversation on this computer from the last 24 hours is a galaxy, and conversations from the same project gather into a nebula, coloured by the models they used. Agents at work circle their galaxy; a conversation waiting for you gets an amber ring, and one with a failure a red dot. The table below lists each conversation with its runs, tokens and cost; click a row or a galaxy to fly in.
+- **One conversation's board**: cards for Claude Code and each seat, with animations for the plan, the cross-check and the verdict, a usage table, and each seat's terminal. It covers the conversation's whole history. Esc takes you back to the star map.
+- **Cost** is always priced at each model's official API price, so you can compare models. It can differ from what you're actually charged: Codex and Claude Code subscriptions aren't billed per token, and opencode and pi bill through their own accounts. A model with no known price shows `?`.
+- **The board server** is one local process shared by every conversation, reachable only on 127.0.0.1 with a random token in the address. It only reads your conversation and run records, and stops after 30 minutes with nobody watching and nothing running. When it starts again it keeps the same address, so earlier links still work.
+- **Treat board links like a password**: anyone on this computer with a link can open the board while it runs. To get a new address, stop the server with `node <the plugin's scripts folder>/cli.mjs board --stop` and delete `board.address.json` in the runs folder.
+- It needs a recent browser (Chrome or Edge 111, Firefox 113, Safari 16.2 or later) and about 200 MB of memory between the server and the tab; on a computer low on memory, `/foreman-en:setup` suggests keeping it off.
+
+Replaying a finished conversation for debugging is described under `board` in [references/cli.md](foreman-en/skills/dispatch/references/cli.md).
+
+## Agents
+
+| `type` | What it is | What it can do | Reads your code itself | How it's kept in bounds | Whose quota |
+|---|---|---|---|---|---|
+| `codex cli` | The Codex CLI | Hands-on work, discussions, reviews, images | Yes | Codex's own sandbox | Your Codex plan or OpenAI API |
+| `opencode cli` | opencode, with any model it can reach | Discussions and reviews; hands-on work once you allow it | Yes | Only the tools the task needs, plus write rules; no OS sandbox | Providers you've signed in to in opencode, or an OpenCode Go subscription |
+| `pi cli` | pi, with any model it can reach | Same as opencode | Yes | Only the tools the task needs, plus a guard that keeps file access in the project; no OS sandbox | Providers you've signed in to in pi |
+| `agy cli` | Agy CLI (Google Antigravity CLI) | Discussions and reviews; hands-on work once you allow it | Yes | A guard in agy's global hooks checks every tool call | The Google account you signed in to in agy |
+| `codebuddy cli` | CodeBuddy CLI (Tencent Cloud) | Discussions and reviews; hands-on work once you allow it | Yes | A guard hook keeps reads and writes in the project | The Tencent Cloud account you signed in to in CodeBuddy |
+| `api` | Any model with an OpenAI-compatible API | Discussions and reviews | No; Claude Code attaches the relevant files | Not applicable | The provider's API balance |
+
+You can have several agents of one type, each with a different model, and Codex isn't required. Codex, opencode, agy and CodeBuddy can look things up on the web in discussions and hands-on work (never in reviews); pi and API models can't.
+
+### Codex
+
+Install the [Codex CLI](https://github.com/openai/codex) and sign in. It's the recommended agent: it can do every kind of task, and it's the only one that generates images.
+
+- Codex works inside its own sandbox, set per task type with `sandbox` (`read-only`, `workspace-write` or `danger-full-access`); left out, your Codex config applies. `read-only` is recommended for discussions and reviews.
+- On Windows, Codex's default sandbox needs a one-time setup with administrator rights, and if that setup is broken every command fails. Ask Claude Code to "check the environment": it tests the sandbox without calling a model and suggests the fix, usually `[windows] sandbox = "unelevated"` in your Codex config.
+- For web search, Codex follows your `~/.codex/config.toml`. If it doesn't set `web_search`, the plugin turns on live search for discussions and hands-on work.
+- Leave `approval` at the default `never`: nobody can approve a prompt inside a handed-off task.
+
+### API models
+
+Any model with an OpenAI-compatible API (DeepSeek, Kimi, MiMo, GLM, Qwen, OpenRouter and so on) can join discussions and reviews.
+
+1. **Add the agent**: `{ "type": "api", "base_url": "...", "model": "..." }`. Provider-specific parameters go in `extra_body`.
+2. **Add the key**, one of two ways:
+   - an environment variable, with `"api_key_env": "DEEPSEEK_API_KEY"` (restart Claude Code after setting it), or
+   - the config itself, with `"api_key": "sk-..."`. It's stored in plain text, so don't commit or share the file.
+3. **Add it to the cells** you want under `modules`.
+
+Or just ask: `/foreman-en:setup add DeepSeek`. You type the key in yourself; there's no need to paste it into the chat. API models can't browse your code, so Claude Code sends the relevant files with the brief (the patch, for a review) and checks what they say against the source.
+
+### opencode
+
+With opencode 2.x, any model it can use can take part, such as GLM, Kimi, Qwen, MiniMax or DeepSeek through an [OpenCode Go](https://opencode.ai/docs/go/) subscription. These models read your project themselves, and every file they read is another request against your quota.
+
+1. **Sign in**: run `opencode`, sign in with `/connect`, then run `opencode models` to see what you can use. Skip the free models (names ending in `-free`): opencode only allows them inside its own app.
+2. **Add them**: one entry per model, such as `{ "type": "opencode cli", "model": "opencode-go/glm-5.3" }`, then list it in the cells you want.
+
+In discussions and reviews, opencode gets a read-only agent with tools to read, search and list files. In discussions and hands-on work it can also read web pages, and search the web once you've set up a search provider in opencode (`"websearch": {"provider": "random"}`, or a provider you name). Your keys and sign-in stay in opencode. OpenCode Go's limits are per model, and premium models have small ones, so keep those for complex discussions.
+
+### pi
+
+Install pi with `npm install -g @earendil-works/pi-coding-agent`. It works like opencode.
+
+1. **Sign in**: run `pi`, sign in to the providers you want with `/login` (or set their API key environment variables), then run `pi --list-models`.
+2. **Add them**: one entry per model, such as `{ "type": "pi cli", "model": "deepseek/deepseek-flash" }`.
+
+- The effort is pi's thinking level (`off` to `max`). If a model doesn't support the level you set, pi quietly uses the nearest one instead of reporting an error, so ask Claude Code to check the environment after a change: it tells you which level would really be used.
+- Each call enables only the tools the task needs, and a guard extension keeps file access inside the project. Your own extensions, skills and MCP servers aren't loaded.
+
+### CodeBuddy
+
+Install the CodeBuddy CLI with `npm install -g @tencent-ai/codebuddy-code` (the command is `codebuddy` or `cbc`) and sign in. Verified on Windows 11 so far, where Git for Windows is required.
+
+1. **Sign in**: run `codebuddy`, sign in with `/login`, then run `codebuddy --help` and look at the models under "Currently supported".
+2. **Add them**: one entry per model, such as `{ "type": "codebuddy cli", "model": "deepseek-v4.1-flash" }`. Add `"run_access"` if you want it to do hands-on work (see [Letting agents change files](#letting-agents-change-files)).
+
+- Every call goes through a guard hook the plugin injects: reads and writes stay inside the project, and `.git`, `.codebuddy` and `.claude` can't be changed. In discussions and hands-on work it can also search the web and read web pages.
+- To keep those limits from being loosened, a call is refused when your CodeBuddy user settings contain `permissions.allow`, `additionalDirectories`, `hooks` or enabled plugins, and the message names the settings file. Project settings and MCP servers aren't loaded.
+- The effort ranges from `minimal` to `max`.
+
+### agy
+
+Agy CLI (Google Antigravity CLI, command `agy`) can join discussions and reviews, and do hands-on work once you allow it. Verified on Windows 11 so far.
+
+1. **Install the guard.** agy can't load a plugin per call, so foreman controls its tools through a guard in agy's global hooks. When `/foreman-en:setup` adds agy, it asks for your consent first, then installs the guard under `~/.gemini/config/` (backing up your existing `hooks.json`). After a plugin update, the guard updates itself the next time agy is used; there's nothing to reinstall.
+2. **Add the models.** Run `agy models` to see what you can use. agy puts the effort at the end of the model ID (`gemini-3.8-flash-high`); in foreman you write the model and the effort separately, `{ "type": "agy cli", "model": "gemini-3.8-flash" }` with `"effort": "high"` in the cell.
+
+- **Your own agy use**: when foreman isn't running agy, the guard lets agy behave exactly as before (it adds about 0.1 s per tool call). While foreman runs agy in a folder, your own agy in that same folder has its tool calls paused, with a message saying why and until when.
+- **Discussions and reviews** can only read files, inside the project and folders you add with `--add-dir`. Where agy's sandbox passes the plugin's test, agy also gets a shell for read-only commands; on Windows it doesn't for now, because agy's sandbox there can read folders outside your user folder.
+- **Web and browser**: in discussions and hands-on work, agy can search the web. Its browser subagent is allowed too: it drives your own Chrome through Chrome's remote debugging, so it acts with your sign-ins, and it only connects once you turn on remote debugging at `chrome://inspect/#remote-debugging`. It can read your open tabs and act on websites, local services and intranet systems as you. None of this is allowed in reviews.
+- **When agy isn't used**: if the project has its own agy hooks, MCP or plugin config, or your global `hooks.json` has other hooks, foreman can't vouch for them, so it doesn't use agy that time and names the file that stopped it.
+- **Uninstalling the guard**: ask Claude Code to run `agy-guard uninstall`. If the plugin is already gone, delete the `foreman-guard` entry from `~/.gemini/config/hooks.json`, then delete `foreman-agy-guard.mjs`, `foreman-agy-guard.cmd` and `foreman-agy-guard.sh` in the same folder. Deleting the files but not the entry blocks every agy tool call.
+
+### Letting agents change files
+
+Codex does hands-on work out of the box. opencode, pi, agy and CodeBuddy only do it once you give them `run_access` in your user config and list them in a `run` cell (or the image `draw` cell); a project config can't turn this on.
+
+- `"edit"`: reads and writes files in the project, with no commands. Claude Code runs the tests afterwards.
+- `"shell"`: can also run commands, such as tests. There's no OS sandbox, so its commands run with your account's permissions and can reach the whole machine. Use it only for projects and models you trust.
+
+Either way, foreman takes a snapshot first, and Claude Code reviews the diff file by file afterwards. Writes are held to the project in every case:
+
+- **None of them** can write outside the project.
+- **opencode, agy and CodeBuddy** also keep out of the folders that hold git's, Claude Code's and the agents' own config and hooks (`.git`, `.claude`, `.opencode`, `.codebuddy`, `.gemini`, `.agents` and the like), since a file written there could run commands later.
+- **opencode** also can't write through links in the project (to change the file a link points to, it uses the real path), or into the folders git actually uses and worktrees registered in the project. At `edit` it doesn't run the project's formatter commands either. These rules haven't been tested on macOS or Linux yet.
+- **agy** treats folders added with `--add-dir` as read-only, and won't take hands-on work when the project contains, or sits inside, the `.gemini` or `.claude` folder in your home folder, foreman's state folder or the run records.
+- **CodeBuddy** won't take `edit` work while your CodeBuddy user settings have `permissions.deny` or `permissions.ask` rules.
+
+The complete rules for each agent are in [references/config.md](foreman-en/skills/dispatch/references/config.md).
 
 ## Configuration
 
-There are five files you can edit yourself (`/foreman-en:setup` ends by listing their full paths on your computer):
+There are five files you can edit yourself. `/foreman-en:setup` ends by listing their full paths on your computer.
 
 | File | Where | What it controls | When a change takes effect |
 |---|---|---|---|
-| User config | `~/.claude/foreman/config.json` | Agents, who takes each level of each task type, how many agents each level sends, who's required, and switches such as pause points and the web board | From the next handoff or command |
-| Project config | `<project dir>/.claude/foreman.json` | This project only: overrides cells and time limits of the same name, see [Project config](#project-config) | Same as above |
-| User preferences | `~/.claude/foreman/preferences.md` | How you'd like things done, in your own words, and scene routing, see [Preference files](#preference-files) | When a new session starts; after editing mid-session, ask Claude Code to read it again |
-| Project preferences | `<project dir>/.claude/foreman.md` | This project only; wins over the user preferences where they conflict | Same as above |
+| User config | `~/.claude/foreman/config.json` | Your agents; who takes each level of each kind of work, how many models join and who's required; switches such as pause points and the web board | From the next handoff or command |
+| Project config | `<project>/.claude/foreman.json` | This project only: overrides cells and time limits, see [Project config](#project-config) | Same as above |
+| User preferences | `~/.claude/foreman/preferences.md` | How you'd like things done, in your own words, plus scene routing, see [Preference files](#preference-files) | When a new session starts, or after you ask Claude Code to read it again |
+| Project preferences | `<project>/.claude/foreman.md` | This project only; wins over the user preferences where they conflict | Same as above |
 | Model notes | `~/.claude/foreman/models.md` | What each model is good and bad at, see [Model notes](#model-notes) | Same as above |
 
-When the `FOREMAN_CONFIG` environment variable points to another user config, the user preferences and the model notes live in that file's folder.
-
-The user config is `~/.claude/foreman/config.json`, and a project config is `<project dir>/.claude/foreman.json`. Edit the file directly, or tell Claude Code something like "use `/foreman-en:config` to switch complex tasks to ultra". Every setting is described in [references/config.md](foreman-en/skills/dispatch/references/config.md). `modules` reads best one entry per line: each candidate on one line, `seats` and `gap` on one line each; `/foreman-en:setup` can rewrite an existing config this way without changing the content.
-
-### First run
-
-On first run, the plugin checks what this machine has, then generates a config:
-
-| Found | Resulting setup |
-|---|---|
-| A usable Codex (installed and signed in) | Claude Code does simple and normal hands-on tasks itself, and complex ones go to Codex's `gpt-6.1-sol`. Reviews and discussions go to Codex, with `gpt-6-astra` for complex ones. Images are generated by `gpt-6.1-sol`, and pieces that bend are hand-drawn by `gpt-6-astra` |
-| No Codex | Claude Code does every task itself for now, and both image cells are off |
-| API key environment variables (DeepSeek, Kimi, MiMo) | Added to the config, but not to any discussion yet |
-| opencode, pi, agy, CodeBuddy | Not added automatically; you pick the models |
-
-Choices that cost money or affect safety are never made automatically; `/foreman-en:setup` goes through them with you.
+If the `FOREMAN_CONFIG` environment variable points to another user config, the user preferences and model notes live next to that file. You can edit any of them directly, or tell Claude Code something like "use `/foreman-en:config` to switch complex tasks to ultra". Every setting is documented in [references/config.md](foreman-en/skills/dispatch/references/config.md).
 
 ### How the config is laid out
 
-It has three parts:
-
 | Part | What it covers |
 |---|---|
-| `dispatch` | How the plugin hands off work: where it stops to ask you first, the live view, the intro, discussion rounds, time limits, the run directory |
-| `agents` | Which agents there are and how to reach them |
-| `modules` | Which candidates each cell of each task type has, who is required, and with what effort; how many seats each discussion and review level uses, and whether a review adds a gap seat |
+| `dispatch` | How foreman hands work off: pause points, the live view and web board, discussion rounds, time limits, where run records go |
+| `agents` | Which agents you have and how to reach them |
+| `modules` | For each kind of work and each level: the candidates, who's required, which effort, and for discussions and reviews how many seats |
 
 A minimal example: Codex does complex hands-on work and every review, complex discussions add one model from opencode, and Codex also generates images and hand-draws pieces. Anything left out uses its default.
 
@@ -330,128 +447,18 @@ A minimal example: Codex does complex hands-on work and every review, complex di
 }
 ```
 
-- Each key under `agents` is the agent's **ID**, which `modules` and `--agent` refer to. Naming it after its model works best; IDs may use letters, digits, `.`, `-` and `_`.
-- Each of the three task types (`discuss`, `run` for hands-on work, `review`) has three levels, plus a level 0 that isn't in the config (see "Task levels" below); images (`image`) have no levels, just two cells: `generate` for image generation and `draw` for hand-drawing.
-- Each cell lists candidates. When a cell has several, Claude Code picks by its rules each time: for discussions and reviews, `seats` sets how many per level (defaults in ["Candidates and required agents" in `config.md`](foreman-en/skills/dispatch/references/config.md), not counting Claude Code itself), using different models where possible and all of them when there are fewer candidates; whether a review level adds a gap seat is set by `gap`, off by default; for hands-on work, one agent per piece of work. An entry marked `"required": true` is required and always takes part when the cell is used.
-- `"claude code"` means Claude Code does it itself; for reviews and discussions, that cell uses no outside model. `null` turns an image cell off.
-- In hands-on cells, a candidate list can also include Claude Code: `"normal": [{ "agent": "claude code" }, { "agent": "gpt-6.1-sol", "effort": "high" }]` (`"claude code"` can also be written `"self"`). Claude Code picks by the [model notes](#model-notes): when they say its model is better at this kind of work (UI design or text people read, say), it does the work itself, and the rest goes to the outside candidates. The entry takes only `agent`. In discussions and reviews Claude Code always has a seat of its own, so their lists can't include it. This format is new, and older versions of the plugin fail on it: if both the Chinese and English packages are installed, upgrade both.
-- `effort` is the reasoning effort; leave it out for the default. For Codex it's `low` to `ultra`; for opencode, the model's variant; for pi, its thinking level; for agy, a level such as `low` / `medium` / `high` (agy puts it in the model ID suffix, and the plugin adds it back when dispatching); for API models it's sent as `reasoning_effort` as is.
-- Image tasks start by settling the route (by default you choose it in a pop-up), and the route decides which cells are used: a pure vector route that only draws never touches the generate cell, so that cell's required agents don't take part.
-
-A flat `modules` from before (with `discuss`, `run` and so on directly under it) still works: the first time the plugin reads it, it moves it unchanged into `modules.default`, backing up the original first. The old `levels` form still works too: the first time the plugin reads it, it rewrites it as `modules`, keeping every cell's agents, efforts and order, and backs up the original as `config.json.bak`. One thing changes: the models at a discussion level used to all take part, and after the rewrite they're candidates Claude Code picks from. To keep everyone taking part, mark them all `"required": true`; `/foreman-en:setup` can mark them, and it adds the two image cells too.
-
-### The six kinds of agents
-
-| `type` | What it is | Tasks it can do | Reads code itself | Isolation | Whose quota |
-|---|---|---|---|---|---|
-| `codex cli` | The Codex CLI on this machine | Hands-on work, reviews, discussions, images | Yes | Codex's own sandbox | Your Codex plan or OpenAI API |
-| `opencode cli` | opencode on this machine, with the models it can reach | Reviews and discussions; hands-on work once `run_access` is set | Yes | Limited tools only, no OS sandbox | Providers you signed in to in opencode, or an OpenCode Go subscription |
-| `pi cli` | pi on this machine, with the models it can reach | Same as opencode | Yes | Same as opencode, with file paths checked by a guard the plugin injects | Providers you signed in to in pi |
-| `agy cli` | Agy CLI (Google Antigravity CLI) on this machine | Reviews and discussions; hands-on work once `run_access` is set | Yes | A guard the plugin installs in agy's global hooks checks every tool call; read-only commands in discussions and reviews run in agy's sandbox when it passes the plugin's test (not on Windows for now); hands-on work has no OS sandbox, like opencode | The Google account you signed in to in agy |
-| `codebuddy cli` | CodeBuddy CLI (Tencent Cloud's coding assistant) on this machine, with the models it can reach | Reviews and discussions; hands-on work once `run_access` is set | Yes | A guard hook the plugin injects keeps reads and writes inside the project; `shell` commands have no OS sandbox | The Tencent Cloud account you signed in to in codebuddy |
-| `api` | A model with an OpenAI-compatible API | Discussions, reviews (text only) | No; Claude Code attaches the relevant files | Not applicable | The provider's API balance |
-
-You can have several agents of one type, each with a different model. Codex isn't required.
-
-### Task levels
-
-Each time Claude Code enters a discussion, hands-on work or a review, it levels that step by the kind's own criteria; when the same kind comes up again in one request, it's levelled again. The criteria differ by kind:
-
-| Level | Discussion (how uncertain, how costly a wrong choice) | Hands-on work (how much judgement, how costly a mistake) | Review (risk of the change) |
-|---|---|---|---|
-| 0 | The approach is clear or you've decided: no outside model | A small change done in one place, quicker to make than to brief | Small changes, docs, styling, config, or low-risk changes with tests: Claude Code's check is enough |
-| 1 `simple` | A one-off question that needs a second opinion | The method is settled, little judgement needed | Large but mechanical changes |
-| 2 `normal` | A few options to compare, limited impact | There's a spec, details need designing | Larger ordinary features and fixes |
-| 3 `complex` | Complex, uncertain and costly to get wrong | Unknown cause, costly mistakes, cross-module | High-risk code: money, data, concurrency, auth |
-
-Level 0 is always done by Claude Code and isn't in the config; which candidates levels 1–3 have, who is required and with what effort is up to you in `modules`, and Claude Code only picks from the cell's candidates, consulting the model notes. Levels go by judgement and risk, not by how much changes: renaming across 20 files from a list is simple, while changing an interface between modules is complex. A review goes only by the change under review: level 3 hands-on work or a cause that was hard to find doesn't make the review level 3 by itself; only changes that alter high-risk behaviour, or whose effect on it can't be ruled out, do. After fixes, there's a second review only when the fix itself touches high-risk behaviour, and it covers just the fix. Every call that goes out must carry a level; if it's missing, the script errors out rather than quietly picking one.
-
-- To choose on the spot, tell Claude Code "run it with ultra" or "use such-and-such model"; Claude Code adds `--effort` (it only changes the effort) or `--model` (only another model from the same provider).
-- When a level is `"claude code"`, you can still explicitly ask for a task to be handed off, and Claude Code names an agent with `--agent`.
-- To hand one task to several seats (say, several models discussing one topic), Claude Code first creates a dispatch plan; the script checks that every required agent is in it and that a discussion or review has as many external seats as `seats` says, then each seat is started. If a required model fails or runs out of quota, the task counts as unfinished; another model doesn't stand in for it.
-- Level 0 is only for small changes done in one place. By default Claude Code also does `simple` itself; give `simple` to an agent and everything except level 0 changes gets handed off.
-
-### Adding API models
-
-1. **Add the agent**: `{ "type": "api", "base_url": "...", "model": "..." }`. Any OpenAI-compatible API works, such as DeepSeek, Kimi, MiMo, GLM, Qwen or OpenRouter; provider-specific parameters go in `extra_body` and are merged into the request as is.
-2. **Fill in the key**, either way:
-   - Environment variable: write `"api_key_env": "DEEPSEEK_API_KEY"`, then set that variable. On Windows, add a user variable under "System Properties → Environment Variables"; on macOS and Linux, put it in your shell's startup file. Restart Claude Code so it can see it.
-   - Config file: write `"api_key": "sk-..."`. It takes effect immediately but is stored in plain text, so don't commit or share the file. If both are set, the one in the config file wins.
-3. **Add it to discussions or reviews**: list it in the cells you want under `modules.default.discuss` or `modules.default.review` (or in a scene block).
-
-You can also leave this to `/foreman-en:setup`, for example `/foreman-en:setup add DeepSeek`; you fill in the key yourself, with no need to paste it into the chat. API models can't look through your code themselves, so Claude Code sends the relevant files along with the topic or review brief (the patch, when reviewing changes; up to about 300,000 characters each time) and checks what they say about the code against the source.
-
-### Adding opencode
-
-With opencode 2.x installed, any model it can use can join discussions and do reviews, for example GLM, Kimi, Qwen, MiniMax or DeepSeek from an [OpenCode Go](https://opencode.ai/docs/go/) subscription. They read your project's code themselves; the trade-off is that every file they read is another request, which uses more quota.
-
-1. **Sign in**: run `opencode` in a terminal and sign in with `/connect` (choose OpenCode Go for a Go subscription), then run `opencode models` to see which models you can use. Don't configure the free models (names ending in `-free`): OpenCode now only allows them inside its own app, and calls from the command line are refused with "OpenCode's free tier can only be used from within OpenCode".
-2. **Add them to the config**: one entry per model, `{ "type": "opencode cli", "model": "opencode-go/glm-5.3" }`, then add it to the cells you want. `/foreman-en:setup` can do this for you.
-
-For discussions and reviews, the plugin gives opencode a read-only agent with the read, search and list tools, plus reading web pages in discussions, and searching the web when you've set up a web search provider in opencode (`"websearch": {"provider": "random"}`, or a provider you name); for a review, the plugin works out the changes with git and attaches them. The injected agents get a random name suffix on every run, so same-named agents written ahead of time in your own or the project's opencode config can't override their permissions. Keys and sign-in stay in opencode. The result's cost (`cost_usd`) is priced at the model's official API price like every other agent's; the cost opencode reports itself (what OpenCode Go quota is charged by) is kept in `reported_cost_usd`. Go's limits are per model, and premium models have small limits, so keep them for complex discussions.
-
-### Adding pi
-
-With pi installed (`npm install -g @earendil-works/pi-coding-agent`), it works like opencode.
-
-1. **Sign in**: run `pi` in a terminal and sign in to the providers you want with `/login` (or set the provider's API key environment variable), then run `pi --list-models` to see which models you can use.
-2. **Add them to the config**: one entry per model, `{ "type": "pi cli", "model": "deepseek/deepseek-flash" }`, then add it to the cells you want.
-
-- The effort is pi's thinking level (`off` to `max`), and each model supports its own set. **If you set a level the model doesn't support, pi doesn't report an error; it quietly switches to the nearest one**, so run `check` after a change: it says which level would be used instead.
-- pi has no permission system of its own. Every call from the plugin enables only the tools the task needs and injects a guard extension that keeps file reads and writes inside the project directory; your own extensions, skills and MCP servers aren't loaded. The project's AGENTS.md / CLAUDE.md are read as usual, and sessions stay in pi's default location.
-
-### Adding CodeBuddy
-
-With the CodeBuddy CLI installed (`npm install -g @tencent-ai/codebuddy-code`, command `codebuddy` or `cbc`) and signed in, any model it lists can join discussions and reviews, and do hands-on work once you give it `run_access` (see [Letting opencode, pi, agy or CodeBuddy do hands-on work](#letting-opencode-pi-agy-or-codebuddy-do-hands-on-work)). Only Windows 11 has been verified so far, with Git for Windows installed.
-
-1. **Sign in**: run `codebuddy` in a terminal and sign in with `/login`, then run `codebuddy --help` and look at the models under "Currently supported".
-2. **Add them to the config**: one entry per model, `{ "type": "codebuddy cli", "model": "deepseek-v4.1-flash" }`. Add `"run_access": "edit"` (or `"shell"`) if you also want hands-on work, then list it in the cells you want.
-
-- The plugin injects a guard hook into every call, and file reads, searches, file writes and page fetches all go through it: reads and writes stay inside the project, `.git`, `.codebuddy` and `.claude` can't be changed, and `WebFetch` can only fetch http and https pages. Discussions and hands-on work can search the web and read pages; reviews can't. `--add-dir` isn't supported.
-- Calls refuse CodeBuddy user settings with `permissions.allow`, `additionalDirectories`, `hooks` or enabled plugins, and name the settings file; `edit` also refuses `deny` and `ask` rules, so the guard's approvals can't override them. Project and local settings aren't loaded, and `--strict-mcp-config` keeps MCP servers out.
-- On Windows, Git Bash is required: the plugin runs the guard hook with it and refuses to start without it. CodeBuddy's search follows links on Windows, so when the project has links pointing outside it, that run gets no Grep or Glob and a file list instead.
-- `shell` also runs commands and has no OS sandbox.
-- Reports go through codebuddy's native `--json-schema` structured output; if the service still returns an invalid report, the script makes one repair round in the same session.
-- `effort` is `minimal` to `max`, passed as `--effort`. `codebuddy --help` lists models but not levels, so `check` can only confirm the level is one of the six; a level a model doesn't really support may be mapped to the nearest one.
-
-### Adding agy
-
-If Agy CLI (Google Antigravity CLI, command `agy`) is installed and signed in, it can take part in discussions and reviews, and do hands-on work once you give it `run_access` (see [Letting opencode, pi, agy or CodeBuddy do hands-on work](#letting-opencode-pi-agy-or-codebuddy-do-hands-on-work)). Only Windows 11 has been verified so far.
-
-1. **Install the guard**: agy can't load an extension per call, so the plugin can only control its tools through agy's global hooks. When `/foreman-en:setup` adds agy, it asks for your consent first; if you agree, it writes a hook entry named `foreman-guard`, a launcher and the guard script under `~/.gemini/config/`, after backing up the existing `hooks.json`. You can also ask Claude Code to run `agy-guard install`. After a plugin update, the guard files are replaced with the new version the next time agy is dispatched or checked (`hooks.json` is left alone), so you don't need to install it again.
-2. **Add them to the config**: run `agy models` to see the models you can use. agy puts the effort in the model ID suffix (for example `gemini-3.8-flash-high`); the plugin splits it off, so you write it like any other agent: the agent is `{ "type": "agy cli", "model": "gemini-3.8-flash" }`, the cell says `"effort": "high"`, and the plugin builds the ID agy expects when dispatching. Models with one level or none (such as `claude-sonnet-4-6`) need no `effort`. The old form (a full ID in `model`, no `effort`) still works.
-
-- **How the guard affects your own agy use**: when no foreman run is active, the guard answers every tool call with "use agy's own setting", so agy works as before, with about 0.1 s added per tool call. While foreman runs agy in a folder, your own agy in that same folder has its tool calls blocked; the reason says why and when it ends.
-- **When agy isn't used**: if the project (including folders like `.agents/`) has agy hooks, MCP or plugin config, or the global `hooks.json` has hooks besides foreman's, the plugin can't control them, so agy isn't dispatched that time and the result names the file that blocked it.
-- **What it can read and run**: in discussions and reviews only file reads are allowed, limited to the project directory and folders given with `--add-dir`. agy also gets a shell for read-only commands when its sandbox passes the plugin's test on this machine: commands in the sandbox must not be able to write inside or outside the project, read your home folder or reach the network. The system temp folder stays writable, so what it guarantees is unchanged project files and no network, not a read-only machine. On Windows, agy's sandbox currently lets commands read folders outside your user folder, so the plugin doesn't test it there and agy gets no shell; this will change once agy fixes it. Without a shell, the plugin attaches the project's file list instead. Before starting agy, the plugin removes environment variables such as API keys (`GEMINI_API_KEY`, which agy may use to sign in, is kept, and commands in the sandbox can see it).
-- **Web and browser**: in discussions and hands-on work, the guard allows agy's web search, `search_web` (it runs on agy's servers, and the sources it gives are Google redirect links). `read_url_content` and `open_browser_url` are allowed too, but the agy 1.5.16 command line doesn't enable them. The browser subagent is allowed as well: it drives your own Chrome, the one you're using, through Chrome's remote debugging, so it acts with your sign-ins, and it only connects once you turn on remote debugging at `chrome://inspect/#remote-debugging`. Calls with an argument whose name contains path or file (saving a screenshot, uploading a file), or whose name contains url or uri without an http or https URL, are refused, and so are tools whose names may come from an MCP server you configured. So project files stay read-only and hands-on work keeps its write limits. The guard can't hold back the browser itself, though: files it downloads go to Chrome's download folder, it can read tabs you already have open (local files included), and it can act on websites, local services and intranet systems with your sign-ins. None of this is allowed in reviews.
-- Your own GEMINI.md and skills load as usual and your global MCP servers start, but the guard blocks their tools. agy's sessions show up in its history.
-- **Uninstalling**: ask Claude Code to run `agy-guard uninstall`, which removes the hook entry and the guard files. If the plugin is already gone and you can't run it, open `~/.gemini/config/hooks.json`, delete the entry named `foreman-guard` (or the whole file if it's the only one), then delete `foreman-agy-guard.mjs`, `foreman-agy-guard.cmd` and `foreman-agy-guard.sh` in the same folder. Deleting the files but not the entry blocks every agy tool call.
-
-### Letting opencode, pi, agy or CodeBuddy do hands-on work
-
-Give the agent `run_access` in the user config, then put it in a `modules.default.run` cell (or the image `draw` cell); a project config can't turn this on:
-
-- `"edit"`: reads and writes files in the project directory only, with no commands. Claude Code runs the tests afterwards.
-- `"shell"`: can also run commands, such as tests. There's no OS sandbox: its commands run with your account's permissions and can reach the whole machine, so use this only for projects and models you trust.
-
-Both take a change snapshot first, and Claude Code reviews the diff file by file afterwards.
-
-For opencode, both levels rely on permission rules the plugin injects. opencode decides where a write goes from the path as written, so the plugin's write rules allow everything first and then forbid: every symbolic link and junction in the project, wherever it points (to change the files it points to, the agent has to use their real paths; the plugin scans the project before handing off the work, blocks folders it can't list or didn't finish scanning, merges too many links into blocking their parent folders, and the result says so); the `.git`, `.claude`, `.opencode`, `.codebuddy`, `.gemini`, `.agents`, `.agent`, `_agents`, `_agent`, `.pnpm` and `.pnpm-store` folders and `opencode.json` and `opencode.jsonc`, plus the git metadata and hooks folders git actually uses and git worktrees registered inside the project, at any depth; absolute paths and paths starting with `..`; and on Windows, paths containing `~` or `:`, so 8.3 short names and NTFS stream names can't get around it. opencode's worktree tools are turned off too. `edit` also turns off opencode's formatters, including ones set in the project's `opencode.json`, because they run commands after each write; `shell` keeps them. Other hard links and links created while the work runs aren't covered, and macOS and Linux haven't been checked on a real machine yet.
-
-For agy, the guard applies these levels to every tool call, on every system including Windows: file writes must be inside the project directory (folders given with `--add-dir` are read-only, even inside the project), and never into `.git`, `.claude`, `.gemini`, `.agents`, `.agent`, `_agents` or `_agent` folders in the project, since writing there would change git's, Claude Code's or agy's config and hooks; agy's settings, foreman's state folder and the run records can't be written either. Write paths with a `.` or `..` segment, or on Windows a name ending in a dot or space, are refused, and so are paths to a network share outside the project. agy's web and browser tools are allowed as in discussions (see "Web and browser" above). At `shell`, its commands aren't limited by any of this. agy isn't given hands-on work when the project directory contains the `.gemini` or `.claude` folder in your home folder, or is itself inside agy's settings, foreman's state folder or the run records.
-
-For CodeBuddy, the guard hook the plugin injects checks every read and write at both levels: file writes must be inside the project directory, and never into the project's `.git`, `.codebuddy` or `.claude` folders or the git directory a `.git` file points to; CodeBuddy's settings, foreman's state folder and the run records can't be written either, and neither can a file with other hard links. Write paths with a `.` or `..` segment, on Windows a name ending in a dot or space, and paths starting with `@` or `file:` or written `/c/`-style are refused. The web tools work as in discussions. At `shell`, the guard still blocks these writes, but commands aren't limited. CodeBuddy isn't given `edit` work while its user settings have `permissions.deny` or `permissions.ask` rules, since the guard's approvals would override them.
-
-### A complete example
+- **Agent IDs**: each key under `agents` is an ID that `modules` refers to. Naming it after its model reads best.
+- **Cells**: `discuss`, `run` and `review` each have three levels; `image` has two cells instead, `generate` and `draw`. A cell lists candidates. An entry with `"required": true` always takes part when the cell is used.
+- **Seats**: for discussions and reviews, `seats` sets how many outside models each level uses (Claude Code's own seat isn't counted), and `gap` adds one more reviewer at the end that only looks for what the others missed. Hands-on work goes to one agent per piece of work.
+- **Claude Code itself**: `"claude code"` as a cell means Claude Code does that level itself, with no outside model. In a `run` cell you can also list it as one candidate among others, `[{ "agent": "claude code" }, { "agent": "gpt-6.1-sol", "effort": "high" }]`, and Claude Code then takes the work only when the [model notes](#model-notes) say its model is better at that kind of work. `null` turns an image cell off.
+- **Effort**: `effort` is the reasoning effort, left out for the default. For Codex it's `low` to `ultra`; for opencode, the model's variant; for pi, its thinking level; for agy and CodeBuddy, a level such as `high`; for API models it's sent as `reasoning_effort`.
 
 <details>
-<summary>Expand: a complete config using several kinds of agents</summary>
+<summary>A complete example using several kinds of agents</summary>
 
 ```json
 {
   "dispatch": {
-    "auto": true,
     "confirm": {
       "discuss": { "start": "auto", "adopt": "complex" },
       "run": { "start": "auto" },
@@ -516,36 +523,27 @@ For CodeBuddy, the guard hook the plugin injects checks every read and write at 
 }
 ```
 
-| ID | Reached through | Used for |
-|---|---|---|
-| `gpt-6.1-sol` | Codex CLI | Complex hands-on work, image generation |
-| `gpt-6-astra` | Codex CLI | A candidate for every review and discussion, required for complex ones; hand-drawing pieces that bend |
-| `glm-5.3` | opencode (OpenCode Go subscription) | A candidate for discussions at all three levels and for complex reviews |
-| `deepseek-flash` | opencode | A candidate for normal and complex discussions and reviews |
-| `mimo-v2.6-pro` | pi | A candidate for complex discussions |
-| `kimi-k2.6` | API, with the key in the `KIMI_API_KEY` environment variable | A candidate for complex discussions |
+Claude Code does simple and normal hands-on work itself. Complex hands-on work goes either to Claude Code or to `gpt-6.1-sol`, depending on what the model notes say each is better at. Discussions and reviews get more candidates as the level rises; `gpt-6-astra` is required at the complex level, and complex reviews add a gap seat.
 
-Claude Code does simple and normal hands-on work itself; complex hands-on work is picked between Claude Code and `gpt-6.1-sol`: what the model notes say Claude is better at (UI design or text people read, say) Claude Code does itself, and the rest goes to `gpt-6.1-sol`. Discussions and reviews get more candidates as the level rises: each time Claude Code picks a few seats from them (as many as `seats` says, with all three levels written in the config), and `gpt-6-astra` is required for complex discussions and reviews, so it always takes part. Complex reviews also add a gap seat (`gap`): after the seats finish, one more model that hasn't taken part looks only for "what the list still misses".
-
-Fields this config doesn't use but that are often adjusted:
+Other agent settings you may want:
 
 ```json
-"gpt-6.1-sol":        { "type": "codex cli", "model": "gpt-6.1-sol", "sandbox": { "run": "workspace-write" }, "max_parallel": 2 },
-"glm-5.3":            { "type": "opencode cli", "model": "opencode-go/glm-5.3", "run_access": "edit" },
-"deepseek-v4-pro":    { "type": "api", "base_url": "https://api.deepseek.com", "api_key_env": "DEEPSEEK_API_KEY", "model": "deepseek-v4-pro", "extra_body": { "temperature": 0.3 } }
+"gpt-6.1-sol":     { "type": "codex cli", "model": "gpt-6.1-sol", "sandbox": { "discuss": "read-only", "review": "read-only" }, "max_parallel": 2 },
+"glm-5.3":         { "type": "opencode cli", "model": "opencode-go/glm-5.3", "run_access": "edit" },
+"deepseek-v4-pro": { "type": "api", "base_url": "https://api.deepseek.com", "api_key_env": "DEEPSEEK_API_KEY", "model": "deepseek-v4-pro", "extra_body": { "temperature": 0.3 } }
 ```
 
-- `sandbox`: the sandbox Codex uses for each task type (`run`, `review`, `discuss`): `read-only`, `workspace-write` or `danger-full-access`. Left out, Codex's own config applies. `read-only` is recommended for discussions and reviews; if the read-only sandbox won't start on Windows, switch to unelevated as described under "Safety notes" below.
-- `max_parallel`: how many runs this agent may have at once; 4 by default (2 for agy). When it's full, new dispatches queue for a slot in arrival order (for up to 60 minutes by default; `--queue-timeout` changes that, and 0 refuses right away instead of queueing), across all conversations.
-- `run_access`: lets opencode, pi, agy or CodeBuddy do hands-on work; see above.
-- `extra_body`: extra parameters to send with API requests.
-- `bin`: the full path to the executable, if the command can't be found.
+- `sandbox`: Codex's sandbox per task type (`run`, `review`, `discuss`).
+- `max_parallel`: how many runs this agent may have going at once (4 by default, 2 for agy). Extra handoffs queue for a free slot.
+- `run_access`: lets opencode, pi, agy or CodeBuddy change files, see [Letting agents change files](#letting-agents-change-files).
+- `extra_body`: extra parameters for API requests.
+- `bin`: the full path to the program, if foreman can't find it.
 
 </details>
 
 ### Project config
 
-When one project should use a different set of candidates, more or fewer models, or other time limits, write `<project>/.claude/foreman.json` in the project; it overrides your user config:
+When one project needs different candidates, more or fewer models, or longer time limits, put a `.claude/foreman.json` in it:
 
 ```json
 {
@@ -561,15 +559,14 @@ When one project should use a different set of candidates, more or fewer models,
 }
 ```
 
-- It can only set `modules` (including scene blocks, `seats` and `gap`) and `discuss_max_rounds`, `timeout_min`, `stall_min`, `busy_ask_min` under `dispatch`; agents must be defined in the user config's `agents`, and a project can't add new ones.
-- A cell it writes is replaced as a whole, and cells it doesn't write keep the user config's value; `seats` and `gap` override per level. It can add candidates, change who is required, raise seat counts and lengthen time limits.
-- The per-project overrides that used to go under `projects` in the user config are no longer used; `/foreman-en:setup` can move them to each project's `.claude/foreman.json`.
+- It can only set `modules` and four settings under `dispatch` (`discuss_max_rounds`, `timeout_min`, `stall_min`, `busy_ask_min`). Agents, pause points and the web board belong to the user config, and a project can't add agents of its own.
+- A cell it sets replaces the user config's cell as a whole; cells it doesn't set keep your values.
 
 ### Configuring by scene
 
-The same kind of task sometimes serves different occasions: a review of research evidence should be broad, with more providers and a gap seat; a review of high-risk code should be precise, using only the two strongest at full effort. In that case you can write a whole setup per scene under `modules`: `default` is the default setup, and other scenes list only what they change. If you don't need this, skip it; the config then has only `modules.default`.
+The same kind of task sometimes needs a different setup. A review of research evidence should be broad, with more providers and a gap seat; a review of high-risk code should be precise, with only the two strongest models at full effort. For that, `modules` can hold a setup per scene: `default`, plus scenes that list only what they change. If you don't need this, keep just `modules.default`.
 
-First define the scenes and how to choose between them in a preference file (`/foreman-en:setup` can write it for you):
+First describe the scenes in a preference file (`/foreman-en:setup` can write this for you):
 
 ```markdown
 <!-- foreman:scenes -->
@@ -580,7 +577,7 @@ First define the scenes and how to choose between them in a preference file (`/f
 <!-- /foreman:scenes -->
 ```
 
-Then add scene blocks under `modules`:
+Then add the scene blocks under `modules`:
 
 ```json
 "modules": {
@@ -592,23 +589,19 @@ Then add scene blocks under `modules`:
   "research": {
     "review": { "normal": [{ "agent": "gpt-6.1-sol", "effort": "high", "required": true }, { "agent": "gpt-6-astra", "effort": "high" },
                            { "agent": "deepseek-flash" }, { "agent": "glm-5.3" }],
-                "complex": [{ "agent": "gpt-6-astra", "effort": "max", "required": true }, { "agent": "gpt-6.1-sol", "effort": "high" },
-                            { "agent": "deepseek-flash" }, { "agent": "glm-5.3" }],
-                "seats": { "normal": 3, "complex": 4 }, "gap": { "normal": true, "complex": true } }
+                "seats": { "normal": 3 }, "gap": { "normal": true } }
   }
 }
 ```
 
-In the example above, code reviews (complex) use two seats, sol and astra, with no gap seat; research reviews ask more models at both normal and complex and keep a gap seat, with astra as the required agent at complex (an ordinary evidence review is level 2, so normal needs it too). Cells not written follow `default`. All four modules can be configured by scene. Claude Code picks the scene by the routing in the preferences when it hands out work and creates plans, and says which line it followed. When `modules` has a scene the preferences don't define, handing out work and creating plans are both refused, and `config` names the file; the other way round, a scene defined in the preferences but not in `modules` only gets a notice and works like `default`. When the project preferences have a scene block, that project uses only the scenes it defines (an empty block means no scenes). Details are under ["Scenes" in `config.md`](foreman-en/skills/dispatch/references/config.md).
+Claude Code picks the scene from your routing each time it hands out work, and says which line it followed. Cells a scene doesn't set follow `default`. Details are under "Scenes" in [references/config.md](foreman-en/skills/dispatch/references/config.md).
 
 ### Preference files
 
-Some habits don't fit in JSON, such as which code in your project counts as high-risk, or what you never want handed off. Write those in plain text in a preference file. Claude Code reads it the first time it uses the plugin in a session:
+Some habits don't fit in JSON: which code in your project counts as high-risk, or what you never want handed off. Write them in plain words:
 
-- User level: `~/.claude/foreman/preferences.md`
-- Project level: `<project>/.claude/foreman.md`
-
-Preference files only adjust how things are done within the plugin's hard rules: the config files themselves, required agents, whether material may go to a given provider, read-only discussions and reviews, the things that need a confirmation pop-up, and each level's seat count can't be changed by preference files. Within that, they win over the plugin's built-in rules. Both files are read, and where they conflict the project level wins. For example:
+- for all projects: `~/.claude/foreman/preferences.md`
+- for one project: `<project>/.claude/foreman.md` (wins where the two conflict)
 
 ```markdown
 # foreman preferences
@@ -619,11 +612,11 @@ Preference files only adjust how things are done within the plugin's hard rules:
 - Use role mode for discussions where performance and maintainability pull against each other.
 ```
 
-Custom roles for role-mode discussions go here too; the format is under "Custom roles" in [references/roles.md](foreman-en/skills/dispatch/references/roles.md). Views on a model go in the model notes below.
+Preferences can change how things are done, but not the plugin's hard rules: required agents, which providers may receive your code, read-only discussions and reviews, the confirmations that need a pop-up, and each level's seat count stay as configured. Custom roles for role-mode discussions also go here (see "Custom roles" in [references/roles.md](foreman-en/skills/dispatch/references/roles.md)).
 
 ### Model notes
 
-Write what each model is good and bad at, from your own experience, in `~/.claude/foreman/models.md` (next to the user config). `/foreman-en:setup` creates a default version: a section for each model in use, with a LiveBench line giving its tier, strengths and weaknesses, and "Strengths" and "Weaknesses" lines left for you to fill in. Claude's section starts out saying it's good at UI and visual design sign-off and text people read: that used to be a fixed rule of the plugin, and now it lives here, where you can change it. Later setup runs only add a section for models no heading fits yet and never change what you wrote.
+`~/.claude/foreman/models.md` is where you write what you've learned about each model. `/foreman-en:setup` creates it with a section for each model you use: a line with its LiveBench tier, strengths and weaknesses, and "Strengths" and "Weaknesses" lines for you to fill in. Claude's section starts out saying it's good at UI and visual design sign-off and at text people read; change that if your experience differs. Later setup runs only add sections for new models; they never change what you wrote.
 
 ```markdown
 ## gpt-6-astra
@@ -636,99 +629,80 @@ Write what each model is good and bad at, from your own experience, in `~/.claud
 
 ## kimi-k2.6
 - Strengths: treat it as a strong model
-
-## deepseek-flash
-- Strengths: local results from stats show it finding many issues no one else does in reviews; treat it as strong for reviews
 ```
 
-Headings are model names, without the access route: a model has one section whichever CLI or API it runs through. A heading can be part of a name: it fits a model when each of its parts appears in the model name in the same order, so versions can be left out. `claude-opus` fits Opus 5.5 and 4.8, and `deepseek-flash` fits deepseek-v4.1-flash. You can also list several models separated by commas. When several sections fit one model, all of them are read; where they disagree, the more specific one wins, and an exact model name is the most specific. The full rule is under ["The model notes" in `config.md`](foreman-en/skills/dispatch/references/config.md).
+- **Headings are model names**, without how the model is reached, so one section covers a model whichever tool runs it. A heading can be part of a name and leave the version out: `claude-opus` fits Opus 5.5 and 4.8, and `deepseek-flash` fits deepseek-v4.1-flash. Several models can share a section, separated by commas. When several sections fit one model, all are read, and the more specific one wins where they disagree.
+- **How Claude Code uses them**: when a cell has several candidates, it picks by strengths and weaknesses; it turns the chosen model's weaknesses into concrete reminders in the brief (such as "add fallbacks only where the brief asks" for a model that codes defensively); it looks hardest at those weak spots when checking the result; and it weighs review and discussion points with each model's habits in mind.
+- **They're input, not verdicts**: whether a point holds is still checked against the code and the evidence. Where your notes and the LiveBench tiers disagree, your notes win. When Claude Code sees a model make the same kind of mistake again and again, it suggests adding a line.
 
-Claude Code reads it at the start of every session and uses it in these places:
-- **Picking agents**: when a cell has several candidates, it picks by strengths and weaknesses. When hands-on candidates include Claude Code, it does the work itself only when the notes say its model is better at this kind of work.
-- **Writing briefs**: it turns the executor's weaknesses into concrete reminders, such as "add fallbacks and validation only where the brief asks for them" for a model that codes defensively.
-- **Checking results**: it looks hardest at the executor's weaknesses.
-- **Weighing review and discussion points**: a hardening suggestion from a model that codes defensively, for example, is weighed by the actual risk and cost.
+The matching rules are under "The model notes" in [references/config.md](foreman-en/skills/dispatch/references/config.md).
 
-The notes are only input: whether a point holds, Claude Code still checks against the code and the evidence. Where they disagree with the LiveBench tiers, the notes win. Write them however you like; only the `## ` headings are matched to models. There's only this one user-level file. When Claude Code sees a model making the same kind of mistake again and again, it will suggest adding it.
+## Safety and privacy
 
-## Safety notes
+- **Your code goes to the providers behind your agents.** Codex sends it to OpenAI; opencode, pi and API models to the providers you use through them; agy to Google; CodeBuddy to Tencent Cloud. API models also receive the files Claude Code attaches. For a sensitive project, remove those candidates in its project config, or set its discussions and reviews to `"claude code"`.
+- **Discussions and reviews are read-only.** They can read your project but not change it: Codex through its read-only sandbox when you set one, the others through the tools they're given. If a discussion or review run writes to the project anyway, the run is marked failed.
+- **Hands-on work has limits you choose.** Codex works inside its sandbox. With `danger-full-access` it can reach any folder on your machine; the brief says what to touch and Claude Code reviews the diff, but that isn't isolation, so use `workspace-write` if you want it held to the project. opencode, pi, agy and CodeBuddy have no OS sandbox: at `edit` they can't write outside the project or run commands, while at `shell` their commands can reach the whole machine. Only you can allow them, in the user config.
+- **Agents can go online in discussions and hands-on work**, never in reviews. agy's browser subagent drives your own Chrome with your sign-ins once you turn on remote debugging.
+- **Claude Code only calls agents through foreman.** A hook stops Claude Code from running `codex exec`, `codex review`, `opencode run`, pi tasks or agy model runs directly, so every call is recorded, has its changes tracked, and uses an explicit model and effort. Running these tools yourself in a terminal isn't affected.
+- **Check unfamiliar repositories.** A project's `.claude/foreman.json` can add candidates (only agents you've defined), raise seat counts and lengthen time limits, and its `.claude/foreman.md` can change scene routing. It can't let an agent change files, skip your pause points or carry API keys. Look at both files in a repository you didn't write; Claude Code can show you what they override.
+- **API keys** can live in environment variables or in the user config. In the config they're plain text, so don't commit or share `~/.claude/foreman/config.json`. foreman never shows keys and never writes them into run records.
+- **Pay-as-you-go costs real money.** Codex on API-key billing, API models and pay-as-you-go providers through opencode or pi are billed for every handoff, discussion and review. Set the `start` pause points to `"ask"` to approve each one first.
+- **Agents never sit waiting for an answer.** Whatever they need to know comes back in their result. Claude Code answers within the authority you've already given and resumes the work; it only asks you about business trade-offs, a wider scope, extra cost or steps that can't be undone.
 
-- **Claude Code can only call agents through the plugin.** The plugin includes a hook that blocks Claude Code's commands that run `codex exec`, `codex review`, `opencode run`, a pi task or an agy model run directly, so every call is recorded, has its changes tracked, and uses an explicit model and effort. Running them yourself in a terminal isn't affected.
-- **Codex is isolated by its own sandbox.**
-  - The sandbox is whatever Codex is configured with. With `danger-full-access`, Codex can read and write any directory on your machine; the task brief limits what it should touch and Claude Code reviews the diff afterwards, but that is not isolation. For isolation, set `agents.<ID>.sandbox` to `workspace-write` or `read-only`. `read-only` is recommended for discussions and reviews: the OS blocks writes (the result's `readonly` is `sandbox`); without it, only the rules and a snapshot comparison afterwards hold it back (`audited`), and any write marks the run failed. On Windows the read-only sandbox may fail to start even file-reading commands; then follow `check` and switch to `[windows] sandbox = "unelevated"`.
-  - Codex's default elevated sandbox on Windows needs a one-time setup with administrator rights, and if that setup is broken, every command fails (with `windows sandbox failed`). After changing the sandbox, have Claude Code run `check`: it tests the sandbox without calling a model and lists fixes if it's broken, such as switching to `[windows] sandbox = "unelevated"`.
-  - Leave `approval` at the default `never`: nobody can approve in a handed-off task, and a broken sandbox needs fixing at the sandbox.
-- **Agents can go online in discussions and hands-on work.** Codex, opencode, agy and CodeBuddy can look things up on the web in discussions and hands-on work, not in reviews; pi and API models can't. Codex follows your `~/.codex/config.toml`: if it doesn't set `web_search`, the plugin turns on live search, and if it does, your setting stands. agy's browser subagent drives your own Chrome (once you turn on remote debugging), with your sign-ins.
-- **opencode, pi, agy and CodeBuddy have no OS sandbox when doing hands-on work.** At `edit` they can't write outside the project or run commands; at `shell` their commands can reach the whole machine. It's off by default; only you can turn it on, in the user config, and a project config can't.
-- **Your code goes to the providers behind your agents.** Work handed to Codex goes to OpenAI; opencode, pi and API models send it to their providers, agy to Google, CodeBuddy to Tencent Cloud, and API models also receive the files Claude Code attaches. Check that this is acceptable for sensitive projects; if needed, drop the API candidates in the project config, or set discussions and reviews to `"claude code"` as a whole.
-- **The project config and project preferences can override your settings.** A project's `.claude/foreman.json` can add candidates (only agents you defined in the user config), raise seat counts and lengthen time limits, and `.claude/foreman.md` can change the scene routing; that includes repositories cloned from someone else. Look at both files when you open an unfamiliar repository; `project_config` in the `config --cwd` output lists what it overrides.
-- **API keys can go in the user config or in environment variables.** In the config they're plain text, so don't commit or share `~/.claude/foreman/config.json`; keys in a project config are ignored. The `config` command never shows keys, and the script never writes them into run records. Config backups (`.bak`) and the new file a migration writes take the permissions of their folder: to keep them readable only by you, restrict the whole folder (the default `~/.claude/foreman` already is), not just the config file.
-- **Pay-as-you-go means real costs.** Codex with API-key billing, API models, and pay-as-you-go providers reached through opencode or pi all cost money for each handoff or discussion. Set the three starts in `dispatch.confirm` to `"ask"` if you don't want Claude Code starting handoffs, discussions and reviews on its own; it asks you first instead. If you haven't set those three yourself, `dispatch.auto` set to `false` does the same.
-- **Agents don't get stuck waiting for an answer.** Codex needs no approvals by default, opencode gets no way to ask questions or request confirmable permissions, pi has no question tool, and the guard blocks agy's question tool. Anything they need answered is collected in the result, and Claude Code decides: within the authority you've already given, it decides and resumes; it only asks you about business trade-offs, wider scope, extra cost and irreversible steps.
+## Run records and stats
 
-## Run records
+Every handoff is recorded in `~/.claude/foreman/runs/<run_id>/`: the brief, the event stream, the changes and the final report. `/foreman-en:status` reads them.
 
-Each call is recorded in `~/.claude/foreman/runs/<run_id>/`: the brief, the event stream, the diff and the final report. Runs by API models have no diff, but add the conversation history `messages.json`, which a resume continues from. `/foreman-en:status` reads them.
-
-- Change tracking uses a separate git repository inside the record folder and never touches your project's `.git`. It compares the whole working directory at the start and end of a run, so files that you, Claude Code or another session change at the same time are seen too: files with evidence that the agent changed them are marked separately from files of unknown origin, and Claude Code won't simply revert changes of unknown origin.
-- Paths ignored by `.gitignore` aren't tracked unless you pass them with `--track` when handing off.
-- When the Codex quota runs out or an API balance is too low, the run is marked `quota_exhausted` and isn't retried automatically; for Codex it includes the expected reset time.
-- Runs whose dispatcher exited unexpectedly, got stuck or timed out are flagged to Claude Code the next time you start a session in that project.
-- After a review or discussion ends and Claude Code has checked it, it records what happened to each point in that run's `verdict.json`. `cli.mjs stats` sums these records up by model and module: seats, points confirmed and false positives, points only that model found, rework rate, time (median and P90), usage and cost, with missing usage shown as missing rather than 0. Add `--by effort,cell,scene` (any of them) to split the figures by reasoning effort, level and scene as well; the output also gives, per kind and level, how long plans took from creation to the last seat's end. To compare before and after an effort change (say reviews from xhigh to high), use `--since` to look at the runs since the change. You can point to these figures in the preference files to adjust model tiers; the plugin never ranks models itself.
+- **Change tracking** uses a separate git repository inside the record folder, never your project's `.git`. It compares the whole working directory before and after a run, so it also notices files that you or another session changed meanwhile; those are marked as being of unknown origin, and Claude Code won't simply revert them. Paths ignored by `.gitignore` aren't tracked unless you ask for them with `--track`.
+- **Quota**: when Codex's quota runs out or an API balance is too low, the run is marked `quota_exhausted` and isn't retried; for Codex it includes the expected reset time.
+- **Interrupted runs** (the dispatcher exited, got stuck or timed out) are pointed out to Claude Code the next time you open a session in that project.
+- **Stats**: ask Claude Code for the stats (`cli.mjs stats`) to see, per model and module, how many points were confirmed or turned out to be false positives, which points only that model found, the rework rate, time, token use and cost. Split them by effort, level or scene, or look only at recent runs. These figures are a good basis for your [model notes](#model-notes).
 
 ## Platforms
 
-Mainly developed and tested in the Claude desktop app on Windows (including the Microsoft Store version); the CLI has been tested too, and loads the plugin, commands and hooks the same way. The macOS and Linux code paths are written but not yet tested in practice; issue reports are welcome.
+foreman is developed and tested mainly in the Claude desktop app on Windows (including the Microsoft Store version), and also tested in the CLI. The macOS and Linux code paths are written but not yet tested in practice; issue reports are welcome.
 
-- **The live view in the desktop app** opens in the terminal panel, which only accepts ASCII commands. If the run directory (`~/.claude/foreman/runs` by default) has non-English characters in its path (for example a Windows user name in Chinese), `/foreman-en:setup` will point it out; set `dispatch.runs_dir` in the config to a plain-English path. The CLI isn't affected.
-- **Programs started from a graphical app** (such as the macOS desktop app) may have a PATH without Homebrew, nvm and similar directories. If the script can't find a command, it also looks in the directory node runs from, `/opt/homebrew/bin`, `/usr/local/bin` and other common places; if it's still not found, set `bin` on that agent to the executable's full path. The plugin's hooks run `node`, so it also needs to be on the PATH.
-- **The live view** redraws the whole screen. Windows Terminal, macOS Terminal and iTerm2, the VS Code terminal and common Linux terminals all support this; simple terminals such as `TERM=dumb` get line-by-line output instead. The intro uses 24-bit color and switches to 256 colors in macOS's built-in Terminal; it has mainly been seen in the Claude desktop app's terminal, so if it looks wrong elsewhere, turn it off with `dispatch.intro: false`.
+- **The desktop app's terminal panel** only accepts ASCII commands. If your run records folder has non-English characters in its path (a Chinese Windows user name, for example), `/foreman-en:setup` points it out; set `dispatch.runs_dir` to a plain-English path. The CLI isn't affected.
+- **Apps started from a desktop** (such as the macOS desktop app) may have a PATH without Homebrew, nvm and similar folders. foreman also looks in common places such as `/opt/homebrew/bin` and `/usr/local/bin`; if a command still can't be found, set `bin` on that agent. The hooks run `node`, so it must be on the PATH too.
+- **The live view** redraws the whole screen, which Windows Terminal, macOS Terminal, iTerm2, the VS Code terminal and common Linux terminals all support; very simple terminals (`TERM=dumb`) get line-by-line output instead. If the intro looks wrong in your terminal, turn it off with `dispatch.intro: false`.
 
-## Upgrading from codex-bridge
+## Upgrading
 
-This plugin used to be called codex-bridge. Claude Code doesn't upgrade a plugin to a new name on its own, so switch over once by hand:
+- **Desktop app**: download the new release and upload it the same way, then delete the old version under "My Uploads". A new upload can sit next to the old one instead of replacing it.
+- **Marketplace**: run `/plugin marketplace update claude-foreman`.
+- **If you have both the English and Chinese plugins**, upgrade both: an older version can't read config written by a newer one, such as Claude Code listed among `run` candidates or the newer pause points.
+- **Older configs keep working.** foreman rewrites older config layouts into the current one the first time it reads them, keeping every agent, effort and order, and backs up the original as `config.json.bak`. `/foreman-en:setup` also offers to tidy up what's left over, such as moving per-project settings into each project's own file.
+- **The agy guard** updates itself after an upgrade; there's nothing to reinstall.
+
+### Upgrading from codex-bridge
+
+This plugin used to be called codex-bridge. Claude Code doesn't move a plugin to a new name on its own, so switch over once by hand:
 
 1. Uninstall the old plugin: `/plugin uninstall codex-bridge-en@claude-codex-bridge`. With both installed, their hooks block and remind twice.
-2. Install `foreman-en` as in [Install and setup](#install-and-setup), from the release package or the new marketplace.
+2. Install `foreman-en` as described in [Install and setup](#install-and-setup).
 3. If you installed the old plugin through "My Uploads" in the desktop app, delete it there.
 
-Your settings move over automatically the first time the new plugin runs:
+Your settings move over by themselves the first time the new plugin runs:
 
 | Before | Now |
 |---|---|
 | Plugins `codex-bridge` / `codex-bridge-en`, marketplace `claude-codex-bridge` | `foreman` / `foreman-en`, marketplace `claude-foreman` |
 | `/codex-bridge-en:rescue` | `/foreman-en:run`; other commands only change their prefix |
-| Config `~/.claude/codex-bridge.json` | `~/.claude/foreman/config.json` (copied automatically) |
-| Preferences `~/.claude/codex-bridge.md` | `~/.claude/foreman/preferences.md` (copied automatically) |
-| Run records `~/.claude/codex-runs` | `~/.claude/foreman/runs` (moved as a whole; if runs are still in progress there, it moves on a later run) |
-| A project's `.claude/codex-bridge.json` and `.claude/codex-bridge.md` | `.claude/foreman.json` and `.claude/foreman.md` (the old names are still read, with a suggestion to rename) |
+| Config `~/.claude/codex-bridge.json` | `~/.claude/foreman/config.json` (copied) |
+| Preferences `~/.claude/codex-bridge.md` | `~/.claude/foreman/preferences.md` (copied) |
+| Run records `~/.claude/codex-runs` | `~/.claude/foreman/runs` (moved once no runs are in progress there) |
+| A project's `.claude/codex-bridge.json` and `.claude/codex-bridge.md` | `.claude/foreman.json` and `.claude/foreman.md` (the old names are still read) |
 | Environment variables `CODEX_BRIDGE_CONFIG`, `CODEX_RUNS_DIR`, `CODEX_BRIDGE_LANG` | `FOREMAN_CONFIG`, `FOREMAN_RUNS_DIR`, `FOREMAN_LANG` (the old names still work for now) |
 
-The config is also rewritten in the new format: `type` becomes `codex cli` / `opencode cli` / `api`, `"claude"` becomes `"claude code"`, agent IDs are renamed after their models (for example `codex` becomes `gpt-6-astra`), and `levels` is rewritten as `modules` (see "How the config is laid out" above). The model and effort each cell actually uses stay the same, and the original is backed up as `config.json.bak`. The old config and preferences files are kept; delete them yourself once everything works.
-
-## English and Chinese versions
-
-The marketplace has two plugins that differ only in the language of their rules and output:
-
-- `foreman-en`: English, commands are `/foreman-en:…`
-- `foreman`: Chinese, commands are `/foreman:…`
-
-Install just one. Both share the same config file, preference files, model notes and run records, so switching doesn't mean setting things up again. If you have both, upgrade them together: an older version fails on config formats a newer one added.
+The old config and preferences files are kept; delete them yourself once everything works.
 
 ## Development
 
-Both plugins use the same scripts: everything under `skills/dispatch/scripts/` except `language.json` (the entry point is `cli.mjs`), plus the hook scripts under `hooks/`. Only edit the copy in `foreman/`, then run the sync tool to copy it into the English plugin:
-
-```bash
-node tools/sync-shared.mjs
-```
-
-- Before committing, `node tools/sync-shared.mjs --check` checks that both copies of the scripts, the structure of both sets of schemas and both plugin versions match.
-- Tests: `npm test` (Node built-ins only, nothing to install); see [tests/README.md](tests/README.md).
-- Terminal messages, the rules and prompts sent to agents and other text live in `messages.mjs`, with a Chinese and an English set; each plugin has its own skill `SKILL.md` files (slash commands are skills too, in `skills/<command>/SKILL.md`), `references/` and schemas.
-- The model tier data is in `scripts/model-tiers.json`, from LiveBench, which changes within months: before each release, copy the latest leaderboard and import it with `tools/import-livebench.mjs` (see "Upkeep" in `references/model-tiers.md`). Model identities and aliases are in `scripts/models.json` and prices in `scripts/prices.json`; edit only the Chinese plugin's copies, then sync with `tools/sync-shared.mjs`.
-- The intro's avatar data is generated by `node tools/make-avatars.mjs` from `tools/avatars/source.webp`.
-- The web board's server is in `skills/dispatch/scripts/board/`, shared by both plugins; the page's source is in `board/` at the repo root. After changing it, run `node board/build.mjs` to generate `index.html` (one file for both languages, shown in the plugin's language), then the sync tool. The protocol and design notes are in `docs/board/`.
+- Both plugins share the same scripts: everything under `skills/dispatch/scripts/` except `language.json`, plus the hooks under `hooks/`. Edit only the copy in `foreman/`, then run `node tools/sync-shared.mjs` to copy it into `foreman-en/`; `node tools/sync-shared.mjs --check` verifies the two match.
+- Tests: `npm test`, with nothing to install; see [tests/README.md](tests/README.md).
+- Text shown to users and sent to agents lives in `messages.mjs`, in a Chinese and an English set. Each plugin has its own skills, `references/` and schemas.
+- Model data: tiers in `scripts/model-tiers.json` (imported from LiveBench with `tools/import-livebench.mjs` before each release), identities and aliases in `scripts/models.json`, prices in `scripts/prices.json`.
+- The web board's page is built from `board/` with `node board/build.mjs`; its design notes are in `docs/board/`.
 
 ## License
 
