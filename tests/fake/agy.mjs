@@ -2,8 +2,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { setup, replay, finish } from './common.mjs';
-import { discussion, review } from '../fixtures/reports.mjs';
+import { discussion, report, review } from '../fixtures/reports.mjs';
 
 const args = process.argv.slice(2), value = (key) => args[args.indexOf(key) + 1];
 let policy;
@@ -96,12 +97,13 @@ async function toolCall(name, toolArgs = {}, options = {}) {
   else if (decision.decision === 'deny') error = `tool call denied by pre-tool hook: ${decision.reason}`;
   else {
     try {
+      const target = /^file:\/\//i.test(toolArgs.Path) ? fileURLToPath(toolArgs.Path) : toolArgs.Path;
       if (name === 'read_file' || name === 'view_file') {
-        contents = fs.readFileSync(/^file:\/\//.test(toolArgs.Path) ? new URL(toolArgs.Path) : toolArgs.Path, 'utf8');
+        contents = fs.readFileSync(target, 'utf8');
         output = `${contents.split('\n').length - Number(contents.endsWith('\n'))} lines, ${Buffer.byteLength(contents)} bytes`;
       }
-      if (name === 'write_file') { fs.mkdirSync(path.dirname(toolArgs.Path), { recursive: true }); fs.writeFileSync(toolArgs.Path, toolArgs.Content); }
-      if (name === 'edit_file') fs.writeFileSync(toolArgs.Path, fs.readFileSync(toolArgs.Path, 'utf8').replaceAll(toolArgs.Target, toolArgs.Replacement));
+      if (name === 'write_file') { fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, toolArgs.Content); }
+      if (name === 'edit_file') fs.writeFileSync(target, fs.readFileSync(target, 'utf8').replaceAll(toolArgs.Target, toolArgs.Replacement));
       if (operation === 'probe' && name === 'run_command') output = probeOutput(toolArgs.CommandLine);
       for (const [file, content] of Object.entries(options.files || {})) fs.writeFileSync(path.resolve(file), content);
     } catch (e) { error = e.message; }
@@ -183,9 +185,9 @@ else {
       }
     }
     if ((operation === 'probe' || !s.hold) && (operation === 'probe' || !s.no_reply)) {
-      const report = s.last_message ?? checkReply ?? (operation === 'probe' ? 'OK'
-        : prompt.includes('"verdict"') ? review : discussion);
-      const text = typeof report === 'string' ? report : JSON.stringify(report);
+      const reply = s.last_message ?? checkReply ?? (operation === 'probe' ? 'OK'
+        : ['edit', 'shell'].includes(policy?.access) ? report : prompt.includes('"verdict"') ? review : discussion);
+      const text = typeof reply === 'string' ? reply : JSON.stringify(reply);
       const idx = ++step;
       emit('step_update', { conversation_id: sid, step_index: idx, step_type: 'agent_response', state: 'ACTIVE', text_delta: text });
       if (!s.no_completed) emit('step_update', { conversation_id: sid, step_index: idx, step_type: 'agent_response', state: 'DONE', text_delta: '\n',

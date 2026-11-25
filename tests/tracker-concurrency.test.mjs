@@ -189,6 +189,34 @@ test('快照存原始字节：项目改了 .gitattributes 的换行设置，没�
   assert.equal(r.stored, r.raw);
 });
 
+test('生成补丁时不调用 .gitattributes 选中的外部 diff 驱动和 textconv', async (t) => {
+  const h = sandbox(t), marker = path.join(h.home, 'driver-ran.txt');
+  const node = process.execPath.replace(/\\/g, '/'), driver = write(path.join(h.home, 'driver.mjs'),
+    `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(marker)}, process.argv[2] + '\\n'); process.stdout.write('converted\\n');`).replace(/\\/g, '/');
+  // 用户 git 配置里定义了驱动，项目的 .gitattributes 给文件选中它：普通的 git diff 会调用这个外部程序。
+  write(path.join(h.home, '.gitconfig'), `[diff "custom"]\n\tcommand = \\"${node}\\" \\"${driver}\\" ext-diff\n\ttextconv = \\"${node}\\" \\"${driver}\\" textconv\n`);
+  h.write('.gitattributes', '* diff=custom\n');
+  h.write('notes.txt', 'before\n');
+  const r = output(await h.start('-e', [snapshotScript(h, String.raw`
+    const ran = () => fs.existsSync(${JSON.stringify(marker)}) ? fs.readFileSync(${JSON.stringify(marker)}, 'utf8').trim().split(/\r?\n/) : [];
+    const before = tracker.snap('before');
+    fs.writeFileSync('notes.txt', 'after\n');
+    const after = tracker.snap('after');
+    const diff = tracker.diff(before, after, ${JSON.stringify(path.join(h.home, 'driver.patch'))});
+    const byTracker = ran();
+    // 对照：不加开关的 git diff 确实会调用驱动和 textconv，说明上面的“没调用”不是因为配置没生效。
+    const plain = (...extra) => spawn('git', ['--git-dir', gitDir, '--work-tree', process.cwd(), 'diff', ...extra, before.tree, after.tree], { encoding: 'utf8', windowsHide: true });
+    plain(); const afterPlain = ran();
+    plain('--no-ext-diff'); const afterTextconv = ran();
+    console.log(JSON.stringify({ files: diff.files, byTracker, afterPlain, afterTextconv }));
+  `)]).done);
+  assert.deepEqual(r.files, [{ status: 'M', path: 'notes.txt' }]);
+  assert.match(read(path.join(h.home, 'driver.patch')), /-before\n\+after/);
+  assert.deepEqual(r.byTracker, []);
+  assert.ok(r.afterPlain.includes('ext-diff'), JSON.stringify(r));
+  assert.ok(r.afterTextconv.includes('textconv'), JSON.stringify(r));
+});
+
 test('中文路径及 5 MB 前后阈值保留原有大小文件语义', async (t) => {
   const h = sandbox(t), size = 5 * 1024 * 1024;
   h.write('中文/阈下.bin', Buffer.alloc(size - 1));

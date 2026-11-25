@@ -54,7 +54,9 @@ export function guardEnvironment(policy) {
 const gitConfigFor = (policy) => path.join(os.tmpdir(), `foreman-agy-${policy.nonce}.gitconfig`);
 export function policyFor({ cwd, addDirs = [], access = 'none', runDir, sandbox = false, probeCommands }) {
   return { root: cwd, add_dirs: addDirs, access, run_dir: runDir, log_file: path.join(runDir, 'agy.log'), nonce: randomUUID(),
-    sandbox, sandbox_available: sandbox && access === 'read', ...(probeCommands ? { probe_commands: probeCommands } : {}) };
+    sandbox, sandbox_available: sandbox && access === 'read', ...(probeCommands ? { probe_commands: probeCommands } : {}),
+    // 运行记录可以放在项目里（dispatch.runs_dir），守卫按它拒绝写入，免得改到决定记录和改动快照。
+    ...(RUNS_ROOT ? { runs_root: path.resolve(RUNS_ROOT) } : {}) };
 }
 
 function atomic(file, text, mode = 0o600) {
@@ -165,6 +167,16 @@ function validEntry(entry) {
   if (!object(entry) || entry.enabled === false) return false;
   const { enabled, ...events } = entry;
   return (enabled === undefined || enabled === true) && isDeepStrictEqual(events, guardEntry());
+}
+
+export function unsafeWriteRoot(cwd) {
+  const root = fs.realpathSync.native(cwd), home = fs.realpathSync.native(os.homedir());
+  const forms = (folder) => fs.existsSync(folder) ? [folder, fs.realpathSync.native(folder)] : [folder];
+  // 和守卫一样按真实路径逐字比较：Windows 上同一个父目录里可以有只差大小写的两个目录。
+  const contains = (outer, inner) => inner === outer || inner.startsWith(outer.endsWith(path.sep) ? outer : outer + path.sep);
+  // 项目根把主目录下的 .gemini、.claude 包在里面，或者项目根就在 agy 的设置、foreman 的状态目录或运行记录里面：写入范围都会碰到守卫、配置或记录。
+  return ['.gemini', '.claude'].some((name) => forms(path.join(home, name)).some((target) => contains(root, target)))
+    || [path.join(home, '.gemini'), foremanStateDir(), ...(RUNS_ROOT ? [path.resolve(RUNS_ROOT)] : [])].some((dir) => forms(dir).some((target) => contains(target, root)));
 }
 
 // 第 3.4 节：静态检查必须先于任何会加载项目配置的 agy 进程。

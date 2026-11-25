@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { plannedSandbox as sandbox, baseConfig, taskArgs, output, failed, read, lines, write, poll, ROOT, AGY, MESSAGES, seedRun } from './helpers.mjs';
-import { discussion } from './fixtures/reports.mjs';
+import { discussion, report } from './fixtures/reports.mjs';
 import { AGY_EFFORTS, splitAgyModel, agyFamilies, agyModelId } from '../foreman/skills/dispatch/scripts/adapters/agy-models.mjs';
 
 const SCRIPTS = path.join(ROOT, 'foreman/skills/dispatch/scripts'), GUARD = path.join(SCRIPTS, 'adapters/agy-guard.mjs'), M = MESSAGES.zh;
@@ -217,15 +218,18 @@ test('agy 同族不同档位在 stats 合并，不能再充当不同基础模型
     '--seat', 'agy', '--seat', 'other=gap', '--target', 'files', '--file', 'source.txt']), M.gapSeatSameModel(2, 'gemini-3.8-flash'));
 });
 
-test('agy 守卫逐档逐工具拒绝写入、未知工具和未知参数', (t) => {
+test('agy 守卫逐档逐工具校验放行范围，拒绝未知工具和未知参数', (t) => {
   const h = sandbox(t); h.write('source.txt', 'readable');
   const inputs = { read_file: { Path: path.join(h.cwd, 'source.txt') }, view_file: { Path: path.join(h.cwd, 'source.txt') },
     run_command: { CommandLine: 'git --version' }, edit_file: { Path: path.join(h.cwd, 'source.txt'), Target: 'readable', Replacement: 'bad' },
     write_file: { Path: path.join(h.cwd, 'other.txt'), Content: 'bad', Overwrite: true }, manage_task: {}, ask_question: {},
-    invoke_subagent: {}, define_subagent: {}, manage_subagents: {}, send_message: {}, schedule: {}, search_web: {}, browser_open: {}, call_mcp_tool: {}, generate_image: {}, notebook_edit: {}, unknown: {} };
-  for (const access of ['none', 'read', 'edit', 'shell']) for (const [tool, args] of Object.entries(inputs)) {
+    invoke_subagent: {}, define_subagent: {}, manage_subagents: {}, send_message: {}, schedule: {}, search_web: {}, read_url: {}, browser_open: {},
+    list_dir: {}, grep_search: {}, call_mcp_tool: {}, generate_image: {}, notebook_edit: {}, unknown: {} };
+  const readTools = ['manage_task', 'read_file', 'view_file'], editTools = [...readTools, 'write_file', 'edit_file'];
+  const allowedTools = { none: ['manage_task'], read: readTools, edit: editTools, shell: [...editTools, 'run_command'] };
+  for (const [access, tools] of Object.entries(allowedTools)) for (const [tool, args] of Object.entries(inputs)) {
     const result = guard(h, policy(h, { access }), tool, args);
-    const allowed = access === 'read' && ['read_file', 'view_file'].includes(tool) || ['none', 'read'].includes(access) && tool === 'manage_task';
+    const allowed = tools.includes(tool);
     assert.equal(result.decision, allowed ? 'allow' : 'deny', `${access}/${tool}`);
     if (!allowed) assert.match(result.reason, /^foreman guard: /);
   }
@@ -233,9 +237,175 @@ test('agy 守卫逐档逐工具拒绝写入、未知工具和未知参数', (t) 
     const r = guard(h, policy(h), tool, { ...inputs[tool], Cwd: h.cwd });
     assert.equal(r.decision, 'deny'); assert.match(r.reason, /Cwd/);
   }
-  for (const bad of ['{', {}, { access: 'read' }, { ...policy(h), root: 'relative' }, { ...policy(h), add_dirs: ['relative'] }, { ...policy(h), root: path.join(h.cwd, 'missing') }])
+  for (const bad of ['{', {}, { access: 'read' }, policy(h, { access: 'all' }), policy(h, { root: 'relative' }),
+    policy(h, { add_dirs: ['relative'] }), policy(h, { root: path.join(h.cwd, 'missing') })])
     assert.equal(guard(h, bad).decision, 'deny');
   assert.equal(read(path.join(h.cwd, 'source.txt')), 'readable');
+});
+
+test('agy 守卫执行两档只写项目，附加目录只读并按真实路径拦截受保护位置', (t) => {
+  const h = sandbox(t);
+  const addedFile = write(path.join(h.home, 'added', 'file.txt'), 'added');
+  const nestedAddedFile = h.write('read-only/file.txt', 'nested');
+  const outsideFile = write(path.join(h.home, 'outside.txt'), 'outside');
+  const denied = [
+    [outsideFile, 'is outside the project directory'],
+    ...[addedFile, nestedAddedFile].map((file) => [file, 'is in a folder added for reading only']),
+  ];
+  const protectedReason = (name) => `is in a protected folder (${name}) that agy tasks may not change`;
+  for (const name of ['.git', '.CLAUDE', '.gemini', '.agents', '.agent', '_agents', '_agent']) {
+    denied.push([path.join(h.cwd, 'nested', name, 'new', 'file.txt'), protectedReason(name)]);
+  }
+  const protectedFolder = path.join(h.cwd, 'nested', '.CLAUDE'), alias = path.join(h.cwd, 'alias');
+  const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+  fs.mkdirSync(protectedFolder, { recursive: true });
+  fs.symlinkSync(protectedFolder, alias, linkType);
+  denied.push([pathToFileURL(path.join(alias, 'missing.txt')).href, protectedReason('.CLAUDE')]);
+  const dangling = path.join(h.cwd, 'dangling');
+  fs.symlinkSync(path.join(protectedFolder, 'missing'), dangling, linkType);
+  denied.push([path.join(dangling, 'file.txt'), protectedReason('.CLAUDE')]);
+  for (const access of ['edit', 'shell']) {
+    const p = policy(h, { access, add_dirs: [path.dirname(addedFile), path.dirname(nestedAddedFile)] });
+    for (const tool of ['write_file', 'edit_file']) for (const [Path, reason] of denied) {
+      assert.deepEqual(guard(h, p, tool, { Path }), { decision: 'deny', reason: `foreman guard: ${Path} ${reason}` }, `${access}/${tool}`);
+    }
+    for (const [tool, Path] of [['read_file', addedFile], ['view_file', nestedAddedFile]]) assert.equal(guard(h, p, tool, { Path }).decision, 'allow');
+  }
+});
+
+test('agy 写入保护只比较项目根以内的路径段', (t) => {
+  const h = sandbox(t), root = path.join(h.home, '.claude', 'worktrees', 'synthetic');
+  fs.mkdirSync(root, { recursive: true });
+  const allowed = path.join(root, 'source.txt'), blocked = path.join(root, '.git', 'config');
+  for (const access of ['edit', 'shell']) {
+    const p = policy(h, { root, access });
+    assert.deepEqual(guard(h, p, 'write_file', { Path: allowed }), { decision: 'allow' });
+    assert.deepEqual(guard(h, p, 'edit_file', { Path: blocked }), {
+      decision: 'deny', reason: `foreman guard: ${blocked} is in a protected folder (.git) that agy tasks may not change`,
+    });
+  }
+});
+
+const ambiguousReason = (target) => `foreman guard: ${target} has a . or .. segment or a name ending in a dot or space; write to a plain absolute path`;
+
+test('agy Windows 写入路径有段名以点或空格结尾时一律拒绝', { skip: process.platform !== 'win32' }, (t) => {
+  const h = sandbox(t), p = policy(h, { access: 'edit' });
+  for (const [folder, file] of [['.git.', 'config'], ['.claude ', 'x.txt'], ['.GIT.', 'x'], ['ordinary', 'name.'], ['ordinary ', 'x.txt']]) {
+    const target = path.join(h.cwd, folder, file);
+    assert.deepEqual(guard(h, p, 'write_file', { Path: target }), { decision: 'deny', reason: ambiguousReason(target) });
+  }
+});
+
+test('agy 写入路径带 . 或 .. 段时一律拒绝，包括 file URL 里编码过的', (t) => {
+  const h = sandbox(t), inner = path.join(h.cwd, 'inner'), deep = path.join(h.cwd, 'a', 'b');
+  fs.mkdirSync(deep, { recursive: true });
+  fs.symlinkSync(deep, inner, process.platform === 'win32' ? 'junction' : 'dir');
+  const url = `${pathToFileURL(path.join(h.cwd, 'a')).href}/%2e%2e/x.txt`;
+  // 查询参数和片段转成路径时会被丢掉，写入一律拒绝。
+  const withQuery = `${pathToFileURL(path.join(h.cwd, 'x.txt')).href}?v=1`, withFragment = `${pathToFileURL(path.join(h.cwd, 'x.txt')).href}#..`;
+  const targets = [[inner, '..', '..', 'x.txt'].join(path.sep), [h.cwd, 'a', '..', 'x.txt'].join(path.sep), [h.cwd, '.', 'x.txt'].join(path.sep), url, withQuery, withFragment];
+  for (const access of ['edit', 'shell']) for (const target of targets) {
+    assert.deepEqual(guard(h, policy(h, { access }), 'write_file', { Path: target }), { decision: 'deny', reason: ambiguousReason(target) }, `${access} ${target}`);
+  }
+  assert.equal(guard(h, policy(h, { access: 'edit' }), 'read_file', { Path: [h.cwd, 'a', '..', 'source.txt'].join(path.sep) }).decision, 'allow');
+});
+
+test('agy Windows 项目外的网络共享路径不碰文件系统就拒绝', { skip: process.platform !== 'win32' }, (t) => {
+  const h = sandbox(t), target = '\\\\foreman-test.invalid\\share\\x.txt';
+  for (const access of ['read', 'edit', 'shell']) for (const tool of access === 'read' ? ['read_file'] : ['read_file', 'write_file']) {
+    assert.deepEqual(guard(h, policy(h, { access }), tool, { Path: target }), { decision: 'deny', reason: `foreman guard: ${target} is outside the project directory` });
+  }
+});
+
+test('agy 项目根上受保护目录的链接目标和 gitdir 指向的目录照样不能写', (t) => {
+  const h = sandbox(t), linkType = process.platform === 'win32' ? 'junction' : 'dir';
+  const linked = path.join(h.home, 'linked-git'), plain = path.join(linked, 'plain');
+  fs.mkdirSync(plain, { recursive: true });
+  fs.symlinkSync(plain, path.join(linked, '.git'), linkType);
+  const separate = path.join(h.home, 'separate-git');
+  fs.mkdirSync(path.join(separate, 'meta'), { recursive: true });
+  write(path.join(separate, '.git'), 'gitdir: meta\n');
+  const reason = (target) => `foreman guard: ${target} is in a protected folder (.git) that agy tasks may not change`;
+  for (const access of ['edit', 'shell']) {
+    for (const target of [path.join(plain, 'config'), path.join(linked, '.git', 'hooks', 'pre-commit')]) {
+      assert.deepEqual(guard(h, policy(h, { root: linked, access }), 'write_file', { Path: target }), { decision: 'deny', reason: reason(target) });
+    }
+    const target = path.join(separate, 'meta', 'config');
+    assert.deepEqual(guard(h, policy(h, { root: separate, access }), 'write_file', { Path: target }), { decision: 'deny', reason: reason(target) });
+    assert.equal(guard(h, policy(h, { root: separate, access }), 'write_file', { Path: path.join(separate, 'source.txt') }).decision, 'allow');
+  }
+});
+
+test('agy gitdir 照 git 的规则读，经项目外别名绕回项目的受保护目录也拦', (t) => {
+  const h = sandbox(t), linkType = process.platform === 'win32' ? 'junction' : 'dir';
+  const reason = (target) => `foreman guard: ${target} is in a protected folder (.git) that agy tasks may not change`;
+  // git 只去掉 "gitdir: " 这个前缀和末尾的换行：目录名开头的空格属于目录名。
+  const spaced = path.join(h.home, 'spaced-gitdir');
+  fs.mkdirSync(path.join(spaced, ' meta'), { recursive: true }); fs.mkdirSync(path.join(spaced, 'meta'));
+  write(path.join(spaced, '.git'), 'gitdir:  meta\r\n');
+  // .git 指向项目外的一个别名，别名又指回项目里的普通目录。
+  const looped = path.join(h.home, 'looped'), alias = path.join(h.home, 'looped-alias');
+  fs.mkdirSync(path.join(looped, 'plain'), { recursive: true });
+  fs.symlinkSync(looped, alias, linkType); fs.symlinkSync(path.join(alias, 'plain'), path.join(looped, '.git'), linkType);
+  for (const access of ['edit', 'shell']) {
+    const inSpaced = path.join(spaced, ' meta', 'config'), inLooped = path.join(looped, 'plain', 'config');
+    assert.deepEqual(guard(h, policy(h, { root: spaced, access }), 'write_file', { Path: inSpaced }), { decision: 'deny', reason: reason(inSpaced) });
+    assert.equal(guard(h, policy(h, { root: spaced, access }), 'write_file', { Path: path.join(spaced, 'meta', 'config') }).decision, 'allow');
+    assert.deepEqual(guard(h, policy(h, { root: looped, access }), 'write_file', { Path: inLooped }), { decision: 'deny', reason: reason(inLooped) });
+  }
+});
+
+test('agy 用别名作项目根时，按真实根写的路径照样查受保护段名', (t) => {
+  const h = sandbox(t), linkType = process.platform === 'win32' ? 'junction' : 'dir';
+  const real = path.join(h.home, 'real-project'), alias = path.join(h.home, 'project-link');
+  fs.mkdirSync(path.join(real, 'sub', 'plain'), { recursive: true });
+  fs.symlinkSync(real, alias, linkType); fs.symlinkSync(path.join(real, 'sub', 'plain'), path.join(real, 'sub', '.git'), linkType);
+  const target = path.join(real, 'sub', '.git', 'config');
+  for (const access of ['edit', 'shell']) assert.deepEqual(guard(h, policy(h, { root: alias, access }), 'write_file', { Path: target }), {
+    decision: 'deny', reason: `foreman guard: ${target} is in a protected folder (.git) that agy tasks may not change`,
+  });
+});
+
+test('agy 的设置、foreman 的状态目录和运行记录在项目里也不能写', (t) => {
+  const h = sandbox(t), reason = (target) => `foreman guard: ${target} is in agy's or foreman's own settings or run records, which agy tasks may not change`;
+  const inState = path.join(h.home, '.claude', 'foreman', 'project'), inGemini = path.join(h.home, '.gemini', 'config');
+  for (const dir of [inState, inGemini]) fs.mkdirSync(dir, { recursive: true });
+  for (const access of ['edit', 'shell']) {
+    for (const root of [inState, inGemini]) {
+      const target = path.join(root, 'file.txt');
+      assert.deepEqual(guard(h, policy(h, { root, access }), 'write_file', { Path: target }), { decision: 'deny', reason: reason(target) });
+    }
+    const runs = path.join(h.cwd, 'runs'), record = path.join(runs, 'run-1', 'agy-guard.jsonl');
+    assert.deepEqual(guard(h, policy(h, { access, runs_root: runs }), 'write_file', { Path: record }), { decision: 'deny', reason: reason(record) });
+    assert.equal(guard(h, policy(h, { access, runs_root: runs }), 'write_file', { Path: path.join(h.cwd, 'source.txt') }).decision, 'allow');
+  }
+});
+
+test('agy 任务清单 update_steps 各档都放行，命令的决定记录写下完整命令行', (t) => {
+  const h = sandbox(t);
+  for (const access of ['read', 'edit', 'shell']) {
+    assert.deepEqual(guard(h, policy(h, { access }), 'update_steps', { steps: [{ status: 'done', title: '合成步骤' }] }), { decision: 'allow' });
+  }
+  const command = `node -e "${'x'.repeat(600)}"`;
+  assert.equal(guard(h, policy(h, { access: 'shell' }), 'run_command', { CommandLine: command }).decision, 'allow');
+  const recorded = lines(path.join(h.cwd, 'agy-guard.jsonl')).at(-1);
+  assert.equal(recorded.tool, 'run_command'); assert.equal(recorded.command, command);
+});
+
+test('agy shell 不核对沙箱，命令延长同步等待并在 Windows 设置 UTF-8', (t) => {
+  const h = sandbox(t), args = { CommandLine: 'git --version', WaitMsBeforeAsync: 1 };
+  const p = policy(h, { access: 'shell', sandbox: false, sandbox_available: false });
+  assert.equal(fs.existsSync(p.log_file), false);
+  assert.deepEqual(guard(h, p, 'run_command', args), { decision: 'allow', overwrite: {
+    WaitMsBeforeAsync: 1800000,
+    ...(process.platform === 'win32' ? { CommandLine: `[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; ${args.CommandLine}` } : {}),
+  } });
+});
+
+test('agy 守卫第一行保留 1.2.0 标签并记录正文的 SHA-256', () => {
+  const source = fs.readFileSync(GUARD), newline = source.indexOf(0x0a);
+  const hash = createHash('sha256').update(source.subarray(newline + 1)).digest('hex');
+  assert.equal(source.subarray(0, newline).toString('utf8'), `// foreman 1.2.0 的 agy 守卫；正文 sha256: ${hash}`);
 });
 
 test('agy 路径只认盘符、UNC 和解码 file URL，真实路径不能逃逸', (t) => {
@@ -608,6 +778,119 @@ test('agy 下一轮、回答和报告修复续接同一会话，修复用 none�
   assert.ok(policies.some((c) => c.operation === 'probe' && c.policy.access === 'probe'));
   assert.ok(policies.some((c) => c.operation === 'run' && c.policy.access === 'none'));
   assert.ok(policies.some((c) => c.operation === 'run' && c.policy.access === 'read'));
+});
+
+for (const access of ['edit', 'shell']) test(`agy 执行 ${access} 使用执行报告和快照，只有成功的文件工具计为 agent`, async (t) => {
+  const h = sandboxWithProbe(t);
+  configure(h, (c) => { c.agents.agy.run_access = access; c.modules.default.run.complex = [{ agent: 'agy', effort: 'high' }]; });
+  await install(h); h.initGit();
+  const addDir = path.join(h.home, 'extra'); fs.mkdirSync(addDir);
+  const capture = path.join(h.home, 'policies.jsonl'), networkCapture = path.join(h.home, 'network.jsonl');
+  const brief = '合成执行任务', tracked = h.git(['ls-files']), created = path.join(h.cwd, 'new file.txt');
+  const s = h.scenario({ guard_file: capture, network_capture: networkCapture, steps: [
+    { tool: { name: 'write_file', args: { Path: pathToFileURL(created).href, Content: 'created\n' } } },
+    { tool: { name: 'edit_file', args: { Path: path.join(h.cwd, 'source.txt'), Target: 'before', Replacement: 'after' } } },
+    { tool: { name: 'edit_file', args: { Path: path.join(h.cwd, 'command.txt'), Target: 'missing', Replacement: 'failed' } } },
+    { tool: { name: 'run_command', args: { CommandLine: 'synthetic file creation' } }, files: { 'command.txt': 'shell\n' } },
+  ] });
+  const r = output(await h.bridge(taskArgs(h, 'run', ['--add-dir', addDir]), { input: brief, env: s.env }));
+  const shell = access === 'shell', calls = s.calls();
+  assert.equal(r.status, 'done'); assert.deepEqual(r.report, report);
+  assert.equal(r.run_access, access); assert.equal(r.isolation, 'tools'); assert.equal(r.sandbox, null);
+  // edit 档的命令被守卫拦下，没有运行，不计数。
+  assert.equal(r.commands_executed, access === 'shell' ? 1 : 0);
+  assert.equal(read(created), 'created\n'); assert.equal(read(path.join(h.cwd, 'source.txt')), 'after\n');
+  const expectedChanges = [['new file.txt', 'agent'], ['source.txt', 'agent']];
+  if (shell) {
+    expectedChanges.unshift(['command.txt', 'unknown']);
+    assert.equal(read(path.join(h.cwd, 'command.txt')), 'shell\n');
+  } else assert.equal(fs.existsSync(path.join(h.cwd, 'command.txt')), false);
+  assert.equal(r.changes.available, true);
+  assert.deepEqual(r.changes.files.map(({ path: file, by }) => [file, by]).sort(), expectedChanges);
+  const changes = h.events(r.run_id).filter((e) => e.item?.type === 'file_change').map((e) => e.item.changes);
+  assert.deepEqual(changes, [[{ path: fs.realpathSync.native(created), kind: 'add' }], [{ path: fs.realpathSync.native(path.join(h.cwd, 'source.txt')), kind: 'update' }], []]);
+  assert.deepEqual(lines(path.join(r.run_dir, 'agy-guard.jsonl')).map(({ tool, decision }) => [tool, decision]), [
+    ['write_file', 'allow'], ['edit_file', 'allow'], ['edit_file', 'allow'], ['run_command', shell ? 'allow' : 'deny'],
+  ]);
+  assert.deepEqual(calls.map((c) => c.operation), ['version', 'catalog', 'hooks', 'run']);
+  const request = calls.at(-1);
+  assert.ok(request.args.includes('--dangerously-skip-permissions'));
+  assert.equal(request.args.includes('--sandbox') || request.args.includes('--settings'), false);
+  assert.equal(fs.existsSync(networkCapture), false);
+  assert.deepEqual(lines(capture).filter((c) => c.operation === 'run').map(({ policy: p, sandbox }) => [p.access, p.sandbox, sandbox]), [[access, false, false]]);
+  const schema = read(path.join(SCRIPTS, '../schemas/report.schema.json'));
+  // 附加目录对 agy 的执行只能读，提示里不能写成“另可改动”。
+  const prompt = `${brief}\n\n${M.footer(h.cwd, [])}\n${M.agyReadOnlyDirs(M.list([addDir]))}\n\n${M.opencodeRunFooter(schema, access)}\n`
+    + (shell ? '' : `\n\n${M.agyFileList(tracked)}`);
+  assert.equal(JSON.parse(request.stdin).message.content, prompt);
+  assert.equal(read(path.join(r.run_dir, 'brief.md')), prompt);
+});
+
+test('agy 执行经项目外的链接写进项目时，改动按真实路径归属 agent', async (t) => {
+  const h = sandbox(t);
+  configure(h, (c) => { c.agents.agy.run_access = 'edit'; c.modules.default.run.complex = [{ agent: 'agy', effort: 'high' }]; });
+  await install(h); h.initGit();
+  const alias = path.join(h.home, 'project-alias');
+  fs.symlinkSync(h.cwd, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const s = h.scenario({ steps: [{ tool: { name: 'write_file', args: { Path: path.join(alias, 'linked.txt'), Content: 'linked\n' } } }] });
+  const r = output(await h.bridge(taskArgs(h, 'run'), { input: '合成执行任务', env: s.env }));
+  assert.equal(r.status, 'done'); assert.equal(read(path.join(h.cwd, 'linked.txt')), 'linked\n');
+  assert.deepEqual(r.changes.files.map(({ path: file, by }) => [file, by]), [['linked.txt', 'agent']]);
+  // 用别名作项目根派出、按真实路径写：归属换回项目根原来的写法，仍是项目里的同一个文件。
+  const rootAlias = path.join(h.home, 'root-alias');
+  fs.symlinkSync(h.cwd, rootAlias, process.platform === 'win32' ? 'junction' : 'dir');
+  const again = h.scenario({ steps: [{ tool: { name: 'write_file', args: { Path: path.join(fs.realpathSync.native(h.cwd), 'via-real.txt'), Content: 'real\n' } } }] });
+  const second = output(await h.bridge(taskArgs(h, 'run', ['--cwd', rootAlias]), { input: '合成执行任务', env: again.env }));
+  assert.equal(second.status, 'done');
+  assert.deepEqual(second.changes.files.map(({ path: file, by }) => [file, by]), [['via-real.txt', 'agent']]);
+});
+
+test('agy 执行两档在项目根等于或包含用户设置目录时拒绝派出', async (t) => {
+  const h = sandbox(t);
+  const c = configure(h, (config) => { config.agents.agy.run_access = 'edit'; config.modules.default.run.complex = [{ agent: 'agy', effort: 'high' }]; });
+  await install(h);
+  const claudeDir = path.join(h.home, '.claude'), geminiDir = path.join(h.home, '.gemini'), alias = path.join(h.cwd, 'settings-alias');
+  fs.symlinkSync(geminiDir, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  // 项目根在 agy 的设置或 foreman 的状态目录里面时也拒绝：守卫和配置就在写入范围里。
+  const insideGemini = path.join(geminiDir, 'config'), insideState = path.join(claudeDir, 'foreman', 'project');
+  for (const dir of [insideGemini, insideState]) fs.mkdirSync(dir, { recursive: true });
+  for (const access of ['edit', 'shell']) {
+    c.agents.agy.run_access = access; h.config(c);
+    for (const root of [h.home, claudeDir, geminiDir, alias, insideGemini, insideState]) {
+      failed(await h.bridge(taskArgs(h, 'run', ['--cwd', root])), M.agyWriteRootUnsafe(root));
+    }
+  }
+  assert.deepEqual(h.calls(), []);
+  assert.deepEqual(h.records(), []);
+});
+
+test('agy 执行返工沿用会话和档位，报告修复只用 none', async (t) => {
+  const h = sandbox(t);
+  configure(h, (c) => { c.agents.agy.run_access = 'edit'; c.modules.default.run.complex = [{ agent: 'agy', effort: 'high' }]; });
+  await install(h); h.initGit();
+  const capture = path.join(h.home, 'policies.jsonl'), blocked = path.join(h.cwd, 'repair.txt');
+  const s = h.scenario({ guard_file: capture, calls: [
+    { last_message: 'invalid JSON' },
+    { last_message: report, steps: [{ tool: { name: 'write_file', args: { Path: blocked, Content: 'blocked' } } }] },
+  ] });
+  const first = output(await h.bridge(taskArgs(h), { env: s.env }));
+  assert.deepEqual(first.report, report);
+  assert.equal(first.usage.input_tokens, 26);
+  assert.equal(fs.existsSync(blocked), false);
+  assert.deepEqual(lines(path.join(first.run_dir, 'agy-guard.jsonl')).map(({ tool, decision }) => [tool, decision]), [['write_file', 'deny']]);
+  const resumed = output(await h.bridge(['resume', '--run', first.run_id, '--level', 'complex', '--reason', 'rework', '--brief', '-'],
+    { env: s.env, input: '合成返工说明' }));
+  assert.equal(resumed.mode, 'resume'); assert.equal(resumed.parent, first.run_id); assert.equal(resumed.session_id, first.session_id);
+  assert.equal(resumed.run_access, first.run_access); assert.deepEqual(resumed.report, report);
+  assert.equal(resumed.usage.input_tokens, 13); assert.equal(resumed.usage_scope, 'this_run');
+  const requests = s.calls().filter((c) => c.operation === 'run');
+  assert.equal(requests.length, 3);
+  assert.equal(requests[0].args.includes('--conversation'), false);
+  for (const { args } of requests.slice(1)) assert.equal(args[args.indexOf('--conversation') + 1], first.session_id);
+  assert.ok(requests.every(({ args }) => args.includes('--dangerously-skip-permissions') && !args.includes('--sandbox')));
+  assert.deepEqual(lines(capture).filter((c) => c.operation === 'run').map((c) => c.policy.access), ['edit', 'none', 'edit']);
+  const prompt = JSON.parse(requests.at(-1).stdin).message.content;
+  assert.equal(prompt, `合成返工说明\n\n${M.resumeFooter}\n\n${M.opencodeRunResumeFooter}\n\n\n${M.agyFileList(h.git(['ls-files']))}`);
 });
 
 test('agy 沙箱探针失败不给 shell、附文件清单，缓存按版本失效且 canary 清理', async (t) => {
@@ -1253,11 +1536,26 @@ test('agy check 只接受令牌及 read_file allow，额度只读各桶数值', 
   assert.equal(catalog.ok, false); assert.equal(catalog.error, M.agyCatalogInvalid);
 });
 
-test('agy 配置拒绝 run、词表外 effort 和完整 ID 重复指定档位；默认并发共用同一函数', async (t) => {
+test('agy 配置校验执行权限、effort 和完整 ID；默认并发共用同一函数', async (t) => {
   const h = sandbox(t); configure(h);
   const cfg = output(await h.bridge(['config'])); assert.equal(cfg.agents_status.agy.max_parallel, 2); assert.equal(cfg.agents_status.codex.max_parallel, 4);
   assert.deepEqual(cfg.agents_status.agy.capabilities.modes, ['discuss', 'review']);
-  configure(h, (c) => { c.modules.default.run.complex = [{ agent: 'agy' }]; }); failed(await h.bridge(['config']), 'agy');
+  assert.equal(cfg.agents_status.agy.run_access, null);
+  const execution = configure(h, (c) => { c.modules.default.run.complex = [{ agent: 'agy', effort: 'high' }]; });
+  failed(await h.bridge(['config']), M.runAccessRequired('agy', 'agy cli'));
+  for (const access of ['edit', 'shell']) {
+    execution.agents.agy.run_access = access; h.config(execution);
+    const configured = output(await h.bridge(['config'])), status = configured.agents_status.agy;
+    assert.deepEqual(status.capabilities.modes, ['run', 'discuss', 'review']);
+    assert.equal(status.run_access, access); assert.equal(status.capabilities.isolation, 'tools');
+    assert.equal(configured.summary.agents.agy.run_access, access);
+    const warnedAgents = configured.summary.warnings.filter((w) => w.kind === 'shell_access').map((w) => w.agent);
+    assert.deepEqual(warnedAgents, access === 'shell' ? ['agy'] : []);
+  }
+  for (const access of ['read', null]) {
+    execution.agents.agy.run_access = access; h.config(execution);
+    failed(await h.bridge(['config']), M.configInvalid('agents.agy.run_access', M.invalid.runAccess));
+  }
   configure(h, (c) => { c.modules.default.discuss.complex[0].effort = 'off'; }); failed(await h.bridge(['config']), 'default / minimal / low / medium / high / xhigh / max');
   configure(h, (c) => { c.modules.default.discuss.complex[0].model = 'gemini-3.8-flash-high'; });
   failed(await h.bridge(['config']), M.agyEffortFullId('gemini-3.8-flash-high', 'high', 'gemini-3.8-flash'));

@@ -155,7 +155,9 @@ function makeTracker(runDir, cwd, track, { ignored: listIgnored = false } = {}) 
       git(['update-index', '--force-remove', '-z', '--stdin'], { input: excluded.join('\0') + '\0', index });
       return git(['write-tree'], { index }).trim();
     });
-    const tokens = git(['diff', '-z', '--name-status', '--no-renames', ...trees]).split('\0').filter(Boolean);
+    // 项目的 .gitattributes 能给文件选 diff 驱动、textconv：协作方改了它，生成补丁时就会调用用户 git 配置里的外部程序，所以一律关掉。
+    const pure = ['--no-ext-diff', '--no-textconv'];
+    const tokens = git(['diff', ...pure, '-z', '--name-status', '--no-renames', ...trees]).split('\0').filter(Boolean);
     const files = [];
     for (let i = 0; i + 1 < tokens.length; i += 2) files.push({ status: tokens[i], path: tokens[i + 1] });
     const largeChanged = [];
@@ -163,9 +165,9 @@ function makeTracker(runDir, cwd, track, { ignored: listIgnored = false } = {}) 
       if (a.large[f] === b.large[f] || excluded.includes(f)) continue;
       largeChanged.push({ status: !a.large[f] ? 'A' : !b.large[f] ? 'D' : 'M', path: f });
     }
-    const patch = git(['diff', '--no-renames', ...trees]);
+    const patch = git(['diff', ...pure, '--no-renames', ...trees]);
     fs.writeFileSync(patchFile, patch);
-    const stat = files.length ? git(['diff', '--shortstat', ...trees]).trim() : '';
+    const stat = files.length ? git(['diff', ...pure, '--shortstat', ...trees]).trim() : '';
     return { files, large_files_changed: largeChanged, shortstat: stat, patch_bytes: Buffer.byteLength(patch) };
   }
 

@@ -1,4 +1,4 @@
-// foreman 1.2.0 的 agy 守卫；正文 sha256: 5f03fb017cc9c6b998f12cc4d4165a5e565872e2fb8a5d23daba5171ec5f5518
+// foreman 1.2.0 的 agy 守卫；正文 sha256: fd06e38301940e8fa3b8aab7f422a87312df4231e40cfe695e32ed16659ae3b5
 // 只依赖 Node 内置模块，复制到用户目录后仍可独立运行。
 import fs from 'node:fs';
 import os from 'node:os';
@@ -10,17 +10,33 @@ import { spawnSync } from 'node:child_process';
 const READ_KEYS = ['Path', 'StartLine', 'EndLine', 'ByteOffset'];
 const KEYS = { read_file: READ_KEYS, view_file: READ_KEYS, edit_file: ['Path', 'Target', 'Replacement'],
   write_file: ['Path', 'Content', 'Overwrite'], run_command: ['CommandLine', 'WaitMsBeforeAsync', 'toolSummary'] };
+// 写进这些目录等于改 git、Claude Code、agy 的配置或钩子，能绕开“edit 档不跑命令”，被忽略的文件在验收的 diff 里也看不到。
+const PROTECTED_DIRS = new Set(['.git', '.claude', '.gemini', '.agents', '.agent', '_agents', '_agent']);
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const deny = (reason) => ({ decision: 'deny', reason: `foreman guard: ${reason}` });
+// 网络共享的根（\\服务器\共享），用来在碰文件系统之前判断：访问共享会让 Windows 先连上对方、送出登录凭据。
+const share = (p) => process.platform === 'win32' && /^(?:\\\\|\/\/)([^\\/]+)[\\/]+([^\\/]+)/.exec(p)?.slice(1, 3).join('\\').toLowerCase();
 let matchedMarkers = [];
 
 // 和 pi 一样展开符号链接、junction，以及尚不存在的最后几层路径。
-function realPath(p) {
+function realPath(p, writing = false) {
   const rest = [];
-  for (let current = p; ; current = path.dirname(current)) {
-    try { return path.join(fs.realpathSync.native(current), ...rest.reverse()); } catch {
-      if (path.dirname(current) === current) return p;
+  let current = p, links = 0;
+  for (;;) {
+    try { return path.join(fs.realpathSync.native(current), ...rest.reverse()); } catch (err) {
+      if (writing && err.code !== 'ENOENT') throw err;
+      // 写入可能创建悬空链接的目标，沿链接继续查，不能把链接本身当成新文件。
+      if (writing && fs.lstatSync(current, { throwIfNoEntry: false })?.isSymbolicLink()) {
+        if (++links > 40) throw err;
+        const link = fs.readlinkSync(current);
+        if (share(link)) throw new Error('Path links to a network share');
+        current = path.isAbsolute(link) ? link : `${path.dirname(current)}${path.sep}${link}`;
+        continue;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) { if (writing) throw err; return p; }
       rest.push(path.basename(current));
+      current = parent;
     }
   }
 }
@@ -28,6 +44,48 @@ const inside = (root, target) => {
   const rel = path.relative(root, target);
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 };
+// 策略范围按系统给出的真实路径逐字比较：Windows 上同一个父目录里可以有只差大小写的两个目录（目录级区分大小写）。
+const within = (root, target) => target === root || target.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
+// 写入路径里有 . 或 ..，或者 Windows 上有段名以点、空格结尾时，agy 和系统可能按不同的规则解析，拿不准写到哪里，一律拒绝。
+function ambiguousWrite(value) {
+  let raw = value;
+  if (/^file:\/\//i.test(raw)) {
+    // 查询参数和片段在转成路径时会被丢掉，带了就说不清写的是哪个文件。
+    if (/[?#]/.test(raw)) return true;
+    try { raw = decodeURIComponent(raw.slice('file://'.length)); } catch { return true; }
+  }
+  return raw.split(/[\\/]+/).some((part) => part === '.' || part === '..' || process.platform === 'win32' && /[. ]$/.test(part));
+}
+// git 读 .git 文件时只认开头的 "gitdir: "，只去掉末尾的换行，目录名里的其他空白照原样（git 的 read_gitfile）。
+function gitdirOf(file) {
+  const text = fs.readFileSync(file, 'utf8');
+  return text.startsWith('gitdir: ') ? text.slice('gitdir: '.length).replace(/[\r\n]+$/, '') : null;
+}
+// 项目根上的受保护目录如果是链接，或者 .git 是写着 gitdir: 的文件（工作树、--separate-git-dir），真正被 git、Claude Code、agy
+// 读取的目录在别处，按名字查不到，也要拦。只认项目里的目标：项目外的本来就写不进去。
+function protectedTargets(root) {
+  const targets = [];
+  for (const name of PROTECTED_DIRS) {
+    const entry = path.join(root, name), stat = fs.lstatSync(entry, { throwIfNoEntry: false });
+    if (!stat) continue;
+    let target = null, base = root;
+    if (stat.isSymbolicLink()) {
+      target = fs.readlinkSync(entry);
+      if (share(target)) continue;
+      const linked = path.resolve(root, target);
+      // .git 链接到一个写着 gitdir: 的文件时，git 用的是那个文件里写的目录，按那个文件所在的目录解析。
+      if (name === '.git' && fs.statSync(linked, { throwIfNoEntry: false })?.isFile()) { base = path.dirname(linked); target = gitdirOf(linked); }
+    } else if (name === '.git' && stat.isFile()) target = gitdirOf(entry);
+    if (!target || share(target)) continue;
+    // 按真实落点判断在不在项目里：经项目外的别名绕回项目的也算。
+    const dir = realPath(path.resolve(base, target));
+    if (within(root, dir)) targets.push({ name, dir });
+  }
+  return targets;
+}
+// agy 的设置、foreman 的状态目录和运行记录不论在不在项目里都不许写：改了它们等于改守卫、配置或验收要用的改动快照和决定记录。
+const foremanOwned = (policy) => [path.join(os.homedir(), '.gemini'), path.join(os.homedir(), '.claude', 'foreman'),
+  ...(typeof policy.runs_root === 'string' && path.isAbsolute(policy.runs_root) ? [policy.runs_root] : [])].map((dir) => realPath(dir));
 function agyPath(value) {
   if (typeof value !== 'string' || !value) throw new Error('Path must be an absolute path');
   let p = value;
@@ -41,7 +99,7 @@ function agyPath(value) {
   }
   // 第 4 节：设备路径、NT 命名空间和备用数据流不是文件路径白名单的一部分。
   if (p.includes('\0') || process.platform === 'win32' && (/^(?:\\\\|\/\/)[?.][\\/]/.test(p) || p.slice(2).includes(':'))) throw new Error('unsupported Path');
-  return realPath(path.resolve(p));
+  return p;
 }
 function activeMarkers() {
   const dir = path.join(os.homedir(), '.claude', 'foreman', 'agy-markers');
@@ -104,14 +162,13 @@ function decide(input, policy) {
     // 第 3.2 节：丢失环境变量时，跳过权限不能把 ask 变成放行。
     return marker ? deny(`foreman is running agy in this folder (run ${path.basename(marker.run_dir || '') || 'unknown'}), so tool calls here are paused until that run ends (at the latest ${marker.expires_at}); run "agy-guard status" in foreman to see it`) : { decision: 'ask' };
   }
-  // 第 3.2 节：第一期只开放 none、read 和安装器专用的 probe 策略。
-  if (!object(policy) || !['none', 'read', 'probe'].includes(policy.access) || !path.isAbsolute(policy.root || '')
+  if (!object(policy) || !['none', 'read', 'probe', 'edit', 'shell'].includes(policy.access) || !path.isAbsolute(policy.root || '')
     || !fs.statSync(policy.root).isDirectory() || !Array.isArray(policy.add_dirs)
     || !policy.add_dirs.every((p) => typeof p === 'string' && path.isAbsolute(p) && fs.statSync(p).isDirectory())
     || !path.isAbsolute(policy.run_dir || '') || !path.isAbsolute(policy.log_file || '') || !policy.nonce) return deny('invalid policy for this run');
   const tool = input.toolCall?.name, args = input.toolCall?.args;
-  // 第 4 节：任务清单不执行命令，也不读写项目文件。
-  if (tool === 'manage_task') return { decision: 'allow' };
+  // 第 4 节：任务清单（manage_task；agy 1.5 起是 update_steps）不执行命令，也不读写项目文件。
+  if (tool === 'manage_task' || tool === 'update_steps') return { decision: 'allow' };
   if (KEYS[tool]) {
     if (!object(args)) return deny('tool arguments must be an object');
     // 第 4 节：升级后出现新参数时，先拒绝再人工核对。
@@ -120,16 +177,19 @@ function decide(input, policy) {
   }
   // 第 4 节：none 用于报告修复，只保留上面的任务清单例外。
   if (policy.access === 'none') return deny(`${tool} is not allowed in this run`);
-  // 第 4 节：写工具留给第二期；子 agent、MCP、浏览器、联网、提问和未知工具均不放行。
-  if (!['read_file', 'view_file', 'run_command'].includes(tool)) return deny(tool === 'ask_question'
+  // 第 4 节：子 agent、MCP、浏览器、联网、提问和未知工具均不放行。
+  const writing = tool === 'edit_file' || tool === 'write_file';
+  if (!['read_file', 'view_file', 'run_command'].includes(tool) && !(writing && ['edit', 'shell'].includes(policy.access))) return deny(tool === 'ask_question'
     ? 'ask_question is not allowed in this run; put questions in the report' : `${tool} is not allowed in this run`);
   if (tool === 'run_command') {
     if (typeof args.CommandLine !== 'string' || !args.CommandLine.trim()) return deny('CommandLine must be a command string');
+    if (policy.access === 'edit') return deny('run_command is not allowed in this run');
     // agy 在 Windows 上用 PowerShell 跑命令，输出按系统代码页编码；里面有中文路径时 agy 会把非 UTF-8 的字节
     // 原样发给模型接口，整轮报 400。放行时在命令前面把输出编码设成 UTF-8（第 12 节）。
-    const allow = process.platform === 'win32'
-      ? { decision: 'allow', overwrite: { CommandLine: `[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; ${args.CommandLine}` } }
-      : { decision: 'allow' };
+    const overwrite = process.platform === 'win32' ? { CommandLine: `[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; ${args.CommandLine}` } : {};
+    // shell 档没有系统沙箱，和 pi 的 shell 档一样只靠任务说明约束。
+    if (policy.access === 'shell') return { decision: 'allow', overwrite: { ...overwrite, WaitMsBeforeAsync: 1800000 } };
+    const allow = process.platform === 'win32' ? { decision: 'allow', overwrite } : { decision: 'allow' };
     // 第 4 节：probe 仅放行 foreman 创建的精确命令，不能供模型任意执行。
     if (policy.access === 'probe') return policy.probe_commands?.includes(args.CommandLine) && policy.sandbox === true
       ? allow : deny('run_command is not allowed in this probe');
@@ -139,9 +199,31 @@ function decide(input, policy) {
     if (!/enabling terminal sandbox/i.test(log) || /(?:disabl\w*|unavailable|unsupported|fall\w*\s*back|fallback|not enabled|permission prompt).{0,80}sandbox|sandbox.{0,80}(?:disabl\w*|unavailable|unsupported|fall\w*\s*back|fallback|ask|prompt)/i.test(log)) return deny('terminal sandbox is not confirmed for this run');
     return allow;
   }
-  const target = agyPath(args.Path);
+  const p = agyPath(args.Path), normalized = path.resolve(p);
+  if (share(p) && ![policy.root, ...policy.add_dirs].some((dir) => share(dir) === share(p))) return deny(`${args.Path} is outside the project directory`);
+  if (writing && ambiguousWrite(args.Path)) return deny(`${args.Path} has a . or .. segment or a name ending in a dot or space; write to a plain absolute path`);
+  const root = realPath(policy.root), added = policy.add_dirs.map((dir) => realPath(dir));
+  const owned = writing ? foremanOwned(policy) : [], guarded = writing ? protectedTargets(root) : [];
+  // agy 写入时可能先合并 ..，也可能交给文件系统处理，两种写入目标都要检查。
+  const candidates = writing && p !== normalized ? [p, normalized] : [normalized];
   // 第 4 节：真实路径比较堵住符号链接和 junction 越界，add-dir 只扩展读取范围。
-  if (![policy.root, ...policy.add_dirs].some((p) => inside(realPath(p), target))) return deny(`${args.Path} is outside the project directory`);
+  for (const candidate of candidates) {
+    const target = realPath(candidate, writing), inProject = within(root, target);
+    const inAdded = (!inProject || writing) && added.some((dir) => within(dir, target));
+    if (!inProject && !inAdded) return deny(`${args.Path} is outside the project directory`);
+    if (!writing) continue;
+    if (owned.some((dir) => within(dir, target))) return deny(`${args.Path} is in agy's or foreman's own settings or run records, which agy tasks may not change`);
+    if (inProject) {
+      // 段名按写法本身和真实路径各查一遍：经普通名字的链接指进受保护目录，或者经受保护目录名的链接指到别处，都要拦。
+      // 写法本身的段名：工具路径可能按策略里的根来写，也可能按真实的根来写，两种都查。
+      const written = [path.resolve(policy.root), root].flatMap((base) => inside(base, path.resolve(candidate))
+        ? path.relative(base, path.resolve(candidate)).split(path.sep) : []);
+      const names = [...path.relative(root, target).split(path.sep), ...written];
+      const protectedDir = names.find((part) => PROTECTED_DIRS.has(part.toLowerCase())) ?? guarded.find(({ dir }) => within(dir, target))?.name;
+      if (protectedDir) return deny(`${args.Path} is in a protected folder (${protectedDir}) that agy tasks may not change`);
+    }
+    if (inAdded) return deny(`${args.Path} is in a folder added for reading only`);
+  }
   return { decision: 'allow' };
 }
 
@@ -159,8 +241,10 @@ try {
 const recordFile = policy ? 'agy-guard.jsonl' : 'agy-guard-stray.jsonl';
 for (const recordDir of new Set(policy ? [policy.run_dir] : matchedMarkers.map((m) => m.run_dir))) {
   if (!recordDir || !path.isAbsolute(recordDir) || !['allow', 'deny'].includes(result.decision)) continue;
+  // stream-json 会把 CommandLine 截到约 512 个字符，完整的命令记在这里，验收时对照。
+  const command = input.toolCall?.name === 'run_command' && typeof input.toolCall.args?.CommandLine === 'string' ? { command: input.toolCall.args.CommandLine } : {};
   try { fs.appendFileSync(path.join(recordDir, recordFile), JSON.stringify({ t: new Date().toISOString(), tool: input.toolCall?.name ?? null,
-    decision: result.decision, reason: result.reason ?? null }) + '\n'); }
+    decision: result.decision, reason: result.reason ?? null, ...command }) + '\n'); }
   // 第 3.2 节：写不出决定记录时不能执行工具。
   catch { result = deny('cannot record the guard decision'); }
 }
