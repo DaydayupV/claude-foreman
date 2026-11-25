@@ -63,6 +63,42 @@ function projectFile(cwd, current, legacy) {
 }
 
 const LEVELS = ['simple', 'normal', 'complex'];
+export const CONFIRM_POINTS = { discuss: ['start', 'adopt'], run: ['start'], review: ['start', 'adopt'] };
+export const CONFIRM_DEFAULT = {
+  discuss: { start: 'auto', adopt: 'complex' },
+  run: { start: 'auto' },
+  review: { start: 'auto', adopt: 'normal' },
+  roles: 'auto',
+  image: 'ask',
+};
+const CONFIRM_TOGGLES = ['auto', 'ask'];
+const CONFIRM_MODES = [...CONFIRM_TOGGLES, ...LEVELS];
+
+export function isConfirmObject(raw, complete = false) {
+  if (!isObject(raw) || complete && Object.keys(raw).length !== Object.keys(CONFIRM_DEFAULT).length) return false;
+  return Object.entries(raw).every(([key, value]) => {
+    if (key === 'roles' || key === 'image') return CONFIRM_TOGGLES.includes(value);
+    if (!Object.hasOwn(CONFIRM_POINTS, key) || !isObject(value)) return false;
+    const points = CONFIRM_POINTS[key], entries = Object.entries(value);
+    return (!complete || entries.length === points.length)
+      && entries.every(([point, mode]) => points.includes(point) && CONFIRM_MODES.includes(mode));
+  });
+}
+
+export function resolveConfirm(raw, auto) {
+  const preset = CONFIRM_TOGGLES.includes(raw) ? raw : undefined;
+  if (raw !== undefined && preset === undefined && !isConfirmObject(raw)) return raw;
+  const confirm = structuredClone(CONFIRM_DEFAULT);
+  // 简写覆盖全部确认项，dispatch.auto 只决定没写的 start。
+  for (const [module, points] of Object.entries(CONFIRM_POINTS)) {
+    if (auto === false) confirm[module].start = 'ask';
+    for (const point of points) confirm[module][point] = preset ?? raw?.[module]?.[point] ?? confirm[module][point];
+  }
+  confirm.roles = preset ?? raw?.roles ?? confirm.roles;
+  confirm.image = preset ?? raw?.image ?? confirm.image;
+  return confirm;
+}
+
 // 讨论和审查每一级默认的外部席位数（不含 Claude Code 席和补漏席）。默认值只在这里写，文档里只在 references/config.md 写一次。
 const DEFAULT_SEATS = { discuss: { simple: 2, normal: 4, complex: 8 }, review: { simple: 1, normal: 2, complex: 2 } };
 const DEFAULT_GAP = { review: { simple: false, normal: false, complex: false } };
@@ -125,7 +161,7 @@ function normalizeModules(cfg) {
   return { ...cfg, modules };
 }
 const DEFAULT_CONFIG = {
-  dispatch: { auto: true, confirm: { roles: 'ask', image: 'ask' }, watch: { terminal: true, web: false }, intro: true, discuss_max_rounds: 2, timeout_min: 480, stall_min: 40, busy_ask_min: 2, runs_dir: null },
+  dispatch: { auto: true, confirm: structuredClone(CONFIRM_DEFAULT), watch: { terminal: true, web: false }, intro: true, discuss_max_rounds: 2, timeout_min: 480, stall_min: 40, busy_ask_min: 2, runs_dir: null },
   agents: {},
   modules: { ...Object.fromEntries(MODES.map((mode) => [mode, Object.fromEntries(LEVELS.map((lv) => [lv, CLAUDE_CODE]))])), image: { generate: null, draw: null } },
 };
@@ -202,8 +238,9 @@ function mergeConfig(base, extra) {
     if (!extra || !(k in extra)) continue;
     const v = extra[k];
     out[k] = isObject(v) ? { ...base[k], ...v } : v;
-    // dispatch.confirm 只写了一项时，另一项沿用默认的 "ask"
-    if (k === 'dispatch' && isObject(v?.confirm)) out.dispatch.confirm = { ...base.dispatch.confirm, ...v.confirm };
+    if (k === 'dispatch' && isObject(v) && (Object.hasOwn(v, 'confirm') || Object.hasOwn(v, 'auto'))) {
+      out.dispatch.confirm = resolveConfirm(v.confirm, out.dispatch.auto);
+    }
     if (k === 'modules' && isObject(v)) {
       for (const { module, cell, value } of eachCell(base.modules)) {
         if (isObject(out.modules[module]) && !Object.hasOwn(out.modules[module], cell)) out.modules[module] = { ...out.modules[module], [cell]: value };
@@ -365,6 +402,11 @@ function migrateConfig(config, file, base, project) {
   if (old && !project) {
     result = mergeConfig(Object.hasOwn(config, 'modules') ? DEFAULT_CONFIG : LEGACY_DEFAULT_CONFIG, result);
   }
+  // 旧结构改写保留 confirm 原文，补默认值只在加载生效配置时做。
+  if (old && isObject(result.dispatch)) {
+    if (Object.hasOwn(config.dispatch ?? {}, 'confirm')) result.dispatch.confirm = config.dispatch.confirm;
+    else delete result.dispatch.confirm;
+  }
   if (old && isObject(result.modules)) result.modules = mapCells(result.modules, (value) => value === 'claude' ? CLAUDE_CODE : isObject(value) ? [value] : value);
   if (project && (old || hasLevels)) notice(M.projectOldFormat(file));
   const seats = project || result.modules !== undefined && !isObject(result.modules) ? [] : ['discuss', 'review'].filter((module) => {
@@ -499,8 +541,7 @@ function validateConfig(cfg, adapters, fail = die, prefix = 'modules', own = nul
   const text = (v) => typeof v === 'string' && !!v.trim();
   for (const key of ['dispatch', 'agents', 'modules']) check(isObject(cfg[key]), key, why.object);
   check(typeof cfg.dispatch.auto === 'boolean', 'dispatch.auto', why.boolean);
-  if (!isObject(cfg.dispatch.confirm) || Object.keys(cfg.dispatch.confirm).length !== 2
-    || !['roles', 'image'].every((key) => ['ask', 'auto'].includes(cfg.dispatch.confirm[key]))) fail(M.confirmShape);
+  if (!isConfirmObject(cfg.dispatch.confirm, true)) fail(M.confirmShape);
   if (!isObject(cfg.dispatch.watch) || Object.keys(cfg.dispatch.watch).some((key) => !['terminal', 'web', 'web_open'].includes(key))
     || !['terminal', 'web'].every((key) => typeof cfg.dispatch.watch[key] === 'boolean')
     || Object.hasOwn(cfg.dispatch.watch, 'web_open') && typeof cfg.dispatch.watch.web_open !== 'boolean') fail(M.watchShape);
@@ -688,6 +729,8 @@ const API_STARTERS = [
 ];
 function buildStarterConfig(environment) {
   const cfg = structuredClone(DEFAULT_CONFIG);
+  // 不写 confirm：没写的项按内置默认值补，dispatch.auto 照样管没写的 start，同一台电脑上的 1.2.x 也读得懂。
+  delete cfg.dispatch.confirm;
   if (environment.codex.found && environment.codex.logged_in) {
     for (const model of ['gpt-6.1-sol', 'gpt-6-astra']) cfg.agents[model] = { type: 'codex cli', model };
     cfg.modules.run.complex = [{ agent: 'gpt-6.1-sol', effort: 'max' }];
