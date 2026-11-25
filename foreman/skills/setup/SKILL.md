@@ -128,7 +128,7 @@ $ARGUMENTS
 - 配置是从旧的 `levels` 写法改写来的：旧的讨论名单原来是全员参加，现在变成了候选。问用户要保留全员参加（全部标必选），还是让 Claude Code 挑、只给关键的模型标必选；推荐后者。全部标必选时，要把这一级的 `seats` 一起调到不少于必选数，否则配置读不出来。
 - **图像两格**：`generate` 只能放能出图的协作方（目前只有 `codex cli`），推荐 gpt-6.1-sol、`medium`：出图质量主要看图像模型，推理强度调高只是多花额度。`draw` 放能执行的强档模型，推荐 gpt-6-astra、`max`：照定稿图描会弯的部件、写变形要反复推敲。没有 Codex 时两格写 `null`；用户不想出图时 `generate` 写 `null`，不想外派手画时 `draw` 写 `null`（由 Claude Code 自己画）。
 - **agy**（`agy cli`）：能参加讨论和审查，写了 `run_access` 还能执行，目前只验证了 Windows 11。它和 Google 账号的订阅额度挂钩、按 5 小时窗口算，默认并发 2，推荐放进讨论和审查的 normal、complex 当候选，不推荐标必选。配置里已经有 agy 协作方、而 `agy-guard status` 报守卫没装，或者 check 报守卫没装、条目不完整时，放进 ④：推荐安装（同样要经上面的同意弹窗）；只是守卫文件和插件里的不一致时，check 和派出会自动换成新版，不用装。check 报项目或全局有别的 agy 钩子、MCP 或插件配置时，在理由里说明这些情况下不会派 agy，要不要处理由用户决定，插件不替用户改这些文件。
-- **CodeBuddy**（`codebuddy cli`）：可参加讨论、审查和执行。讨论与审查用 `dontAsk` 权限模式和用户级设置，项目配置的 hooks 不会加载；`edit` 用 `acceptEdits` 模式开放项目内 `Write`/`Edit`，`shell` 可运行命令且没有系统沙箱，命令以当前账户权限访问整台机器。不要默认推荐执行；用户明确同意后再写 `run_access`，选择 `shell` 前先明确告知并取得用户对“没有系统沙箱”的同意。
+- **CodeBuddy**（`codebuddy cli`）：能参加讨论和审查，写了 `run_access` 还能执行，目前只在 Windows 11 上验证过（要装 Git for Windows）。读写由插件注入的守卫钩子限定在项目里。CodeBuddy 的用户设置（`~/.codebuddy/settings.json`）里有 `permissions.allow`、`additionalDirectories`、`hooks` 或启用的插件时，插件拒绝派出；check 报这种情况时，在理由里说明，要不要处理由用户决定，插件不替用户改这个文件。
 - **不默认推荐让 opencode、pi、agy 或 CodeBuddy 做执行**。用户想要时讲清两档，用户明确同意并选好一档后才写 `run_access`：
   - `"edit"`：只能改项目里的文件，不能运行命令，测试由 Claude Code 事后跑；
   - `"shell"`：还能运行命令。opencode、pi、agy 和 CodeBuddy 做执行时都没有系统沙箱，命令以用户的账户权限运行、能访问整台机器。选这一档要请用户明确确认接受"没有系统沙箱"。

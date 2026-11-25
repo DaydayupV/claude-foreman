@@ -16,7 +16,7 @@
 
 按 `source` 分别处理：
 - `decision_request`：执行报告里交回的问题。`recommendation` 里写了它已经按哪个做了。Claude 同意就不用改，不同意就在续接说明里写明要怎么改（这时续接要求改交付，写 `--reason rework`）。
-- `permission_denied`：工具想做的操作被权限挡住了，比如 opencode 想读项目目录外的文件，或者 pi、agy 的操作被 foreman 的守卫挡下。权限是有意设的边界，不要为了放行去改配置；它需要的材料由 Claude 读出来，写进续接说明，或者用 `--file` 附上。
+- `permission_denied`：工具想做的操作被权限挡住了，比如 opencode 想读项目目录外的文件，或者 pi、agy、CodeBuddy 的操作被 foreman 的守卫挡下。权限是有意设的边界，不要为了放行去改配置；它需要的材料由 Claude 读出来，写进续接说明，或者用 `--file` 附上。
 - `final_question`：最终回答是一个问题，不是报告。Claude 回答它，用 `resume --reason answer` 续接，并要求按格式交报告。
 - `input_prompt`（状态 `needs_input`）：工具在等终端输入。看提示内容：属于上面 Claude 能决定的，用 `resume --reason answer` 续接，在说明里写明答复；否则交给用户。
 - `asked_mid_run`：运行中提过的问题，没人回答，它已按自己的判断继续了。验收时对照报告看它选的做法，不合适就按返工处理。这类不计入 `needs_decision`。
@@ -42,6 +42,8 @@
 - `check` 报 agy 自己的沙箱起不来（原文类似 `exebox: creating sandbox: …`）：这是 agy 在本机建不起沙箱，不是网络或项目路径的问题，重测也一样。agy 照常参加讨论和审查，只是只读文件、不跑命令；agy 升级后会自动重测，这个结论也会在 24 小时后过期。
 - `check` 在 Windows 上报 agy 的沙箱不拦用户目录以外的读取：这是 agy 的 Windows 沙箱本身的情况，插件在 Windows 上不探测、不给 shell，agy 照常参加讨论和审查，只是只读文件、不跑命令。重测也不会变，不用处理；等 agy 改掉以后，插件会跟着更新。
 - `check` 报 agy 的沙箱"没拦住"某些写入或读取（比如项目外写入、读主目录）：沙箱能起来，但隔离不够，所以按不可用处理，agy 只读文件、不跑命令。这和网络无关，重测结果也一样；要不要深究由用户决定，插件不改 agy 的设置。探针跑完记录目录就删了，要看 agy 当时做了什么，读 `~/.gemini/antigravity-cli/brain/<对话 ID>/.system_generated/logs/transcript_full.jsonl`。
+- CodeBuddy 拒绝启动、报错里写着它的设置文件：CodeBuddy 的用户设置里有放宽权限的规则（`permissions.allow`、`additionalDirectories`，`edit` 档还包括 `deny`、`ask`）、`hooks` 或启用的插件，插件为了守住项目边界拒绝启动。换别的候选，把原因告诉用户；用户想用 CodeBuddy 的话，可以单独准备一份干净的配置目录（用环境变量 `CODEBUDDY_CONFIG_DIR` 指过去，第一次要在里面重新登录）。不要替用户改这个文件。
+- CodeBuddy 在 Windows 上报找不到 Git Bash：守卫钩子要在 Git Bash 里跑，没有它守卫不起作用，所以拒绝启动。请用户安装 Git for Windows，或者把 `CODEBUDDY_CODE_GIT_BASH_PATH` 设成 bash.exe 的完整路径。
 - agy 在模型端断流或被限流时会自己重试几次，只写在它自己的日志里：foreman 读到后在状态、实时查看和看板里显示"连接断开，N 秒后重试"这类提示，结果的 `notes` 写明重试了几次、用时和用量包含那几次。这是在等 agy 自己恢复，不是卡死；`stall_min` 也把重试算作有动静。
 
 ## 遇到沙箱问题时停下来

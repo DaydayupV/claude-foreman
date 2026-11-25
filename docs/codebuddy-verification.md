@@ -102,3 +102,83 @@ A further real discuss/resume probe with the final event translation reported
 Only this model and Windows were exercised against the live service. Native
 extensionless executable selection and Node shebang selection have regression
 coverage; a macOS/Linux live run was not performed.
+
+## Maintainer follow-up after the merge
+
+Re-checked on 2026-11-25 on Windows 11 with Node 24, CodeBuddy CLI 2.185.0,
+`deepseek-v4.1-flash` and effort `low`, through foreman's `cli.mjs` with a
+separate foreman config and a disposable project whose own
+`.codebuddy/settings.json` tried to widen permissions.
+
+The first pass found these gaps in the merged adapter:
+
+- CodeBuddy's user `trustedDirectories` widened reads: with the home folder
+  listed there, `Read` and `Grep` in discussion, review and `edit` runs read a
+  marker file under the home folder.
+- CodeBuddy strips a leading `@` or `file:` (and converts `/c/...` paths on
+  Windows) after the hook has run, so `Write @../x` and `Write file:../x` were
+  approved as project paths and landed outside the project.
+- `.claude` in the project was writable.
+- At `shell`, `-y` left `Write` and `Edit` unguarded, `.git` included.
+- On Windows, `Grep` and `Glob` follow links: in a project with a junction to a
+  sibling folder, `Grep` returned the sibling folder's marker.
+
+The follow-up commits changed the adapter so that:
+
+- one `PreToolUse` hook (`codebuddy-guard.mjs`) checks `Read`, `Glob`, `Grep`,
+  `Write`, `Edit` and `WebFetch` in every mode. Reads and searches stay in the
+  project. `edit` and `shell` writes stay in the project and out of `.git`,
+  `.codebuddy`, `.claude`, linked protected folders, the folder a `.git` file
+  points to, foreman's state and run records, and CodeBuddy's config folder;
+  files with other hard links are refused. `@`, `file:` and `/c/`-style paths,
+  `..` segments, write paths with `.` segments or names ending in a dot or
+  space, and network shares are refused;
+- the settings precheck also refuses enabled plugins; `trustedDirectories` no
+  longer matters because the hook denies reads outside the project;
+- the child process runs with the main-agent switch off and without
+  `CODEBUDDY_PLUGIN_DIRS`, `CODEBUDDY_MAIN_AGENT_ALLOW_UNOPTED`,
+  `CODEBUDDY_MCP_CONFIG` and `CODEBUDDY_PROJECT_CONFIG_DIR`;
+- on Windows, `CODEBUDDY_CODE_GIT_BASH_PATH` is pinned to an existing
+  `bash.exe`, and the call is refused without one: CodeBuddy would otherwise
+  run hooks in PowerShell, where the guard doesn't apply;
+- on Windows, a discussion, review or `edit` run in a project with a link
+  pointing outside it gets no `Grep` or `Glob` and a `git ls-files` list
+  instead, and its notes say so;
+- `--add-dir` is refused;
+- discussions and hands-on runs get `WebSearch` and `WebFetch`, reviews don't.
+  In `-p` runs under `dontAsk`, `--allowedTools` didn't pre-approve `WebFetch`,
+  so the hook approves http and https pages itself unless the user's settings
+  deny or ask for `WebFetch`, and refuses other URLs;
+- `check`'s probe runs with no tools.
+
+Live results with the final adapter:
+
+| Probe | Result |
+|---|---|
+| Discussion: `Read` of a project file | Returned the project marker |
+| Discussion: `Read` of a sibling folder's file, of a file under the home folder, and via `@../` | Denied by the guard |
+| Discussion: `Grep` with a `path` under the home folder | Denied by the guard |
+| Discussion: `Glob` with a `~/...` pattern | `No files found` (the pattern isn't expanded) |
+| Discussion in a project with a junction to a sibling folder | No `Grep` or `Glob`; file list attached; notes name the link; `Read` through the junction denied |
+| `edit`: `Read`, `Edit` and `Write` inside the project | Succeeded |
+| `edit`: `Write` to a sibling folder, under the home folder, into `.git`, `.codebuddy` and `.claude`, via `@../` and `file:../`, through the junction, and to `./name` | Denied by the guard |
+| `edit`: `Read` of a file under the home folder | Denied by the guard |
+| `shell`: `Bash` command | Ran |
+| `shell`: `Write` to a sibling folder and into `.git` | Denied by the guard |
+| Discussion: `WebSearch`, and `WebFetch` of an https page | Returned content; searches recorded as `web_search` events |
+| Discussion: `WebFetch` of a `file:///` URL | Denied by the guard |
+| `review --target diff --uncommitted` | Valid report; a `Read` under the home folder was denied and listed as a `permission_denied` question; asked to call `Bash`, the model said it had only `Read`, `Glob`, `Grep` and `StructuredOutput` |
+
+CodeBuddy's `system/init` event lists every registered tool whatever
+`--tools` says. CodeBuddy applies the `--tools` filter when it enables each
+tool, so that event isn't the set the model can use; the review above had only
+the tools foreman passed.
+
+Still open: links that point to network shares, nested git metadata in unusual
+layouts, Windows folders with case sensitivity turned on, the board's live
+token rate briefly differing from the final total when `turnUsage` and message
+usage disagree, and macOS and Linux, which haven't been run against the live
+service.
+
+Automated checks on the final tree: full `npm test` ran 1,513 tests, 1,512
+passed, 0 failed, 1 skipped; `node tools/sync-shared.mjs --check` passed.

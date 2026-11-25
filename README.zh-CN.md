@@ -59,6 +59,7 @@
   - [Codex CLI](https://github.com/openai/codex)，已安装并登录。推荐，生成图片只能交给它
   - [opencode](https://opencode.ai) 2.x 或 [pi](https://github.com/earendil-works/pi)，用来接入各家模型
   - Agy CLI（Google Antigravity CLI），已安装并登录，能参加讨论、审查和执行（目前只验证了 Windows 11）
+  - CodeBuddy CLI（腾讯云代码助手），已安装并登录，能参加讨论、审查和执行（目前只验证了 Windows 11，要装 Git for Windows）
   - 兼容 OpenAI 接口的模型 API key（比如 DeepSeek、Kimi、MiMo），能参加讨论和审查（只审文本，不看截图）
 
 ### 运行设置
@@ -266,7 +267,7 @@ flowchart TD
 | 能用的 Codex（已安装、已登录） | 简单和常规的执行由 Claude Code 自己做，复杂的执行交给 Codex 的 `gpt-6.1-sol`；审查和讨论交给 Codex，复杂的用 `gpt-6-astra`；出图用 `gpt-6.1-sol`，手画会弯的部件用 `gpt-6-astra` |
 | 没有 Codex | 所有任务暂时由 Claude Code 自己做，图像两格关掉 |
 | API key 环境变量（DeepSeek、Kimi、MiMo） | 写进配置，先不加入讨论 |
-| opencode、pi、agy | 不自动加，用哪个模型由你选 |
+| opencode、pi、agy、CodeBuddy | 不自动加，用哪个模型由你选 |
 
 花钱或有安全影响的选择不会自动做，交给 `/foreman:setup` 和你一起定。
 
@@ -317,7 +318,7 @@ flowchart TD
 | `opencode cli` | 本机的 opencode，接入它支持的各家模型 | 审查、讨论；写了 `run_access` 还能执行 | 能 | 只限定工具，没有系统沙箱 | 在 opencode 里登录的厂商，或 OpenCode Go 订阅 |
 | `pi cli` | 本机的 pi，接入它支持的各家模型 | 同 opencode | 能 | 同 opencode，读写路径由插件注入的守卫检查 | 在 pi 里登录的厂商 |
 | `agy cli` | 本机的 Agy CLI（Google Antigravity CLI） | 审查、讨论；写了 `run_access` 还能执行 | 能 | 插件装在 agy 全局钩子里的守卫逐个检查工具调用；讨论和审查时，沙箱通过插件的检测才让只读命令跑在 agy 的沙箱里（Windows 上暂时不给）；执行没有系统沙箱，同 opencode | 在 agy 里登录的 Google 账号 |
-| `codebuddy cli` | 本机的 CodeBuddy CLI（腾讯云代码助手），接入它支持的各家模型 | 审查、讨论；写了 `run_access` 还能执行 | 能 | 项目内路径由权限规则限制；`shell` 无系统沙箱 | 在 codebuddy 里登录的腾讯云账号 |
+| `codebuddy cli` | 本机的 CodeBuddy CLI（腾讯云代码助手），接入它支持的各家模型 | 审查、讨论；写了 `run_access` 还能执行 | 能 | 插件注入的守卫钩子把读写限在项目里；`shell` 的命令没有系统沙箱 | 在 codebuddy 里登录的腾讯云账号 |
 | `api` | 兼容 OpenAI 接口的模型 | 讨论、审查（只审文本） | 不能，Claude Code 把相关文件附过去 | 不涉及 | 厂商的 API 余额 |
 
 同一种可以配多个，各用不同模型。Codex 不是必需的。
@@ -371,18 +372,21 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 
 ### 接入 CodeBuddy
 
-装了 CodeBuddy CLI（`npm install -g @tencent-ai/codebuddy-code`，命令是 `codebuddy` 或 `cbc`）并登录后，它能用的模型都能参加讨论和审查。
+装了 CodeBuddy CLI（`npm install -g @tencent-ai/codebuddy-code`，命令是 `codebuddy` 或 `cbc`）并登录后，它能用的模型都能参加讨论和审查；给它写了 `run_access` 还能做执行任务（见[让 opencode、pi、agy 或 CodeBuddy 做执行任务](#让-opencodepiagy-或-codebuddy-做执行任务)）。目前只验证了 Windows 11，要装 Git for Windows。
 
 1. **登录**：在终端运行 `codebuddy`，用 `/login` 登录，再运行 `codebuddy --help`，看 "Currently supported" 里有哪些模型。
 2. **加进配置**：一个模型一条，`{ "type": "codebuddy cli", "model": "deepseek-v4.1-flash" }`。想让它也能执行，再加 `"run_access": "edit"`（或 `"shell"`），然后把代号写进要用的格子。
 
-- 讨论、审查和 `edit` 都用 `dontAsk`，不加载项目和本地设置及 hooks。用户设置有权限 allow 规则、额外可信目录或 hooks 时拒绝启动，并写明配置文件路径。只能读项目内文件；`edit` 用项目内 `Write`/`Edit` 规则加路径守卫，展开符号链接后只批准项目内编辑，保护 `.git` 和 `.codebuddy`。`edit` 还会拒绝用户 deny/ask 规则，避免钩子批准覆盖这些限制。`shell` 还能运行命令且没有系统沙箱。`--strict-mcp-config` 不加载 MCP 服务器。
+- 插件给每次调用注入一个守卫钩子，读文件、搜索、写文件和读网页都要经过它：读写都限在项目里，`.git`、`.codebuddy`、`.claude` 不能改，`WebFetch` 只能读 http、https 网页。讨论和执行能搜网页、读网页，审查不能。不支持 `--add-dir`。
+- CodeBuddy 的用户设置里有 `permissions.allow`、`additionalDirectories`、`hooks` 或启用的插件时拒绝启动，并写明配置文件路径；`edit` 档还会拒绝 `deny`、`ask` 规则，免得守卫的批准盖过它们。不加载项目和本地设置，`--strict-mcp-config` 不加载 MCP 服务器。
+- Windows 上要有 Git Bash：插件用它运行守卫钩子，找不到就拒绝启动。CodeBuddy 在 Windows 上搜索时会跟着链接走，所以项目里有指向项目外的链接时，这一轮不给 Grep 和 Glob，改附上文件清单。
+- `shell` 还能运行命令，没有系统沙箱。
 - 报告走 codebuddy 原生的 `--json-schema` 结构化输出；若服务端仍返回无效报告，脚本会在同一会话里按通用流程修复一次。
 - `effort` 是 `minimal` 到 `max`，作为 `--effort` 传进去。`codebuddy --help` 只列模型、不列档位，所以 `check` 只能核对是不是这六档之一；模型实际不支持的档位可能被换成最接近的一档。
 
 ### 接入 agy
 
-装了 Agy CLI（Google Antigravity CLI，命令 `agy`）并登录好账号的话，可以让它参加讨论和审查；给它写了 `run_access` 还能做执行任务（见[让 opencode、pi 或 agy 做执行任务](#让-opencodepi-或-agy-做执行任务)）。目前只验证了 Windows 11。
+装了 Agy CLI（Google Antigravity CLI，命令 `agy`）并登录好账号的话，可以让它参加讨论和审查；给它写了 `run_access` 还能做执行任务（见[让 opencode、pi、agy 或 CodeBuddy 做执行任务](#让-opencodepiagy-或-codebuddy-做执行任务)）。目前只验证了 Windows 11。
 
 1. **装守卫**：agy 不能按次加载扩展，插件只能靠 agy 的全局钩子管住它的工具。`/foreman:setup` 加 agy 时会先问你同不同意，同意后在 `~/.gemini/config/` 下写一个钩子条目 `foreman-guard`、一个启动器和守卫脚本，原来的 `hooks.json` 先备份。也可以让 Claude Code 运行 `agy-guard install`。插件升级后，下一次派 agy 或检查时，守卫文件会自动换成新版（`hooks.json` 不动），不用重装。
 2. **加进配置**：运行 `agy models` 看能用哪些模型。agy 把推理强度写在模型 ID 的后缀里（比如 `gemini-3.8-flash-high`），插件把它拆开，写法和其他协作方一样：协作方写 `{ "type": "agy cli", "model": "gemini-3.8-flash" }`，格子里写 `"effort": "high"`，派出时再拼成 agy 认的 ID。只有一档或者没有档位的模型（比如 `claude-sonnet-4-6`）不用写 `effort`。旧写法（`model` 写完整 ID、不写 `effort`）照常能用。
@@ -394,7 +398,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 - 你自己的 GEMINI.md 和 skill 照常加载，全局配置的 MCP 服务器也会启动，但它们的工具会被守卫拒绝。agy 的会话会出现在它的历史里。
 - **卸载**：让 Claude Code 运行 `agy-guard uninstall`，它删掉钩子条目和守卫文件。插件已经卸掉、没法运行这个命令时，手动打开 `~/.gemini/config/hooks.json` 删掉名为 `foreman-guard` 的条目（只剩它时可以删掉整个文件），再删掉同目录下的 `foreman-agy-guard.mjs`、`foreman-agy-guard.cmd` 和 `foreman-agy-guard.sh`。只删文件不删条目的话，agy 的每次工具调用都会被拦下。
 
-### 让 opencode、pi 或 agy 做执行任务
+### 让 opencode、pi、agy 或 CodeBuddy 做执行任务
 
 在用户配置里给这个协作方写 `run_access`，再放进 `modules.default.run`（或者图像的 `draw`）的格子（项目配置开不了）：
 
@@ -404,6 +408,8 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 两档都会先拍改动快照，Claude Code 事后逐个文件审查 diff。
 
 agy 的两档由守卫逐个工具调用执行，各系统一样，Windows 也支持：写文件只能写在项目目录里（`--add-dir` 给的目录只能读，在项目里面的也一样），而且不能写项目里的 `.git`、`.claude`、`.gemini`、`.agents`、`.agent`、`_agents`、`_agent` 目录，写进去等于改 git、Claude Code 或 agy 的配置和钩子；agy 的设置、foreman 的状态目录和运行记录也不能写。写入路径带 `.` 或 `..` 段、Windows 上有段名以点或空格结尾的，一律拒绝；指向项目外网络共享的路径也拒绝。agy 的上网和浏览器工具和讨论时一样放行（见上面的“上网和浏览器”）。`shell` 档的命令不受这些限制。项目目录包含主目录下的 `.gemini` 或 `.claude`，或者本身就在 agy 的设置、foreman 的状态目录或运行记录里面时，不给 agy 派执行任务。
+
+CodeBuddy 的两档由插件注入的守卫钩子检查每一次读写：写文件只能写在项目目录里，不能写项目里的 `.git`、`.codebuddy`、`.claude` 目录和 `.git` 文件指向的 git 目录；CodeBuddy 的设置、foreman 的状态目录和运行记录也不能写，有其他硬链接的文件也不能写。写入路径带 `.` 或 `..` 段、Windows 上有段名以点或空格结尾的，以及 `@`、`file:` 开头和 `/c/` 这类写法，一律拒绝。上网工具和讨论时一样能用。`shell` 档的守卫照样拦这些写入，但命令本身不受限制。CodeBuddy 的用户设置里有 `permissions.deny` 或 `permissions.ask` 规则时不给它派 `edit`，因为守卫的批准会盖过这些规则。
 
 ### 完整示例
 
@@ -493,7 +499,7 @@ agy 的两档由守卫逐个工具调用执行，各系统一样，Windows 也�
 
 - `sandbox`：Codex 每类任务（`run`、`review`、`discuss`）用的沙箱，`read-only`、`workspace-write` 或 `danger-full-access`；不写就用 Codex 自己的配置。讨论和审查推荐 `read-only`；Windows 上只读沙箱启动不了时，见下面“安全提示”改用 unelevated。
 - `max_parallel`：这个协作方同时最多跑几个任务，默认 4（agy 默认 2）。满了以后，新的派发按先来后到排队等名额（默认最多等 60 分钟，`--queue-timeout` 可以改，写 0 表示不排队、直接拒绝），不同对话派出的任务也一起排。
-- `run_access`：允许 opencode、pi 或 agy 做执行任务，见上文。
+- `run_access`：允许 opencode、pi、agy 或 CodeBuddy 做执行任务，见上文。
 - `extra_body`：API 请求里额外带的参数。
 - `bin`：找不到命令时，写可执行文件的完整路径。
 
@@ -585,9 +591,9 @@ agy 的两档由守卫逐个工具调用执行，各系统一样，Windows 也�
   - 沙箱以 Codex 的配置为准。是 `danger-full-access` 时，Codex 能读写电脑上的任何目录；任务说明会限定改动范围、Claude Code 事后也会审查 diff，但这些都不是技术上的隔离。想要隔离，把 `agents.<代号>.sandbox` 设成 `workspace-write` 或 `read-only`。讨论和审查推荐设 `read-only`：写入被系统拦下（结果的 `readonly` 为 `sandbox`）；没设时只靠规则约束和事后对比快照（`audited`），发现写入就记为失败。Windows 上的只读沙箱可能连读文件的命令都启动不了，这时按 `check` 的提示改用 `[windows] sandbox = "unelevated"`。
   - Windows 上 Codex 默认的 elevated 沙箱要先以管理员身份完成一次设置，设置坏了每条命令都会失败（报 `windows sandbox failed`）。改了沙箱之后让 Claude Code 运行一次 `check`：它不调模型地测一遍沙箱，坏了会列出修法，比如改用 `[windows] sandbox = "unelevated"`。
   - 审批 `approval` 保持默认的 `never` 就好：派出去的任务没人能批准，沙箱坏了要修沙箱。
-- **讨论和执行时协作方能上网。** Codex、opencode 和 agy 讨论和执行时能上网查资料，审查时不能；pi 和 API 模型不能。Codex 按你的 `~/.codex/config.toml`：没写 `web_search` 时插件让它实时搜索，写了就照你的。agy 的浏览器子 agent 操作的是你自己的 Chrome（要你开了远程调试），带着你的登录状态。
-- **opencode、pi 和 agy 做执行时没有系统沙箱。** `edit` 档写不了项目以外的文件、不能运行命令；`shell` 档的命令能访问整台机器。默认不开放，要你自己在用户配置里写，项目配置开不了。
-- **代码会发给协作方背后的厂商。** 派给 Codex 的发给 OpenAI；opencode、pi 和 API 模型发给对应的厂商，agy 发给 Google，API 模型还会收到 Claude Code 附上的文件。涉及敏感代码的项目先确认没问题，必要时在项目配置里去掉 API 候选，或者把讨论、审查整格写成 `"claude code"`。
+- **讨论和执行时协作方能上网。** Codex、opencode、agy 和 CodeBuddy 讨论和执行时能上网查资料，审查时不能；pi 和 API 模型不能。Codex 按你的 `~/.codex/config.toml`：没写 `web_search` 时插件让它实时搜索，写了就照你的。agy 的浏览器子 agent 操作的是你自己的 Chrome（要你开了远程调试），带着你的登录状态。
+- **opencode、pi、agy 和 CodeBuddy 做执行时没有系统沙箱。** `edit` 档写不了项目以外的文件、不能运行命令；`shell` 档的命令能访问整台机器。默认不开放，要你自己在用户配置里写，项目配置开不了。
+- **代码会发给协作方背后的厂商。** 派给 Codex 的发给 OpenAI；opencode、pi 和 API 模型发给对应的厂商，agy 发给 Google，CodeBuddy 发给腾讯云，API 模型还会收到 Claude Code 附上的文件。涉及敏感代码的项目先确认没问题，必要时在项目配置里去掉 API 候选，或者把讨论、审查整格写成 `"claude code"`。
 - **项目配置和项目偏好能覆盖你的设置。** 项目里的 `.claude/foreman.json` 能加候选（只能用你在用户配置里定义的协作方）、调高席位、延长时长，`.claude/foreman.md` 能改场景路由；从别人那里克隆来的仓库也一样。打开陌生仓库时先看看这两个文件，`config --cwd` 的 `project_config` 会列出它覆盖了什么。
 - **API key 可以写在用户配置里，也可以放在环境变量里。** 写在配置里是明文，`~/.claude/foreman/config.json` 不要提交或分享；项目配置里写的 key 不生效。`config` 命令不显示 key，脚本也不会把 key 写进运行记录。配置的备份（`.bak`）和迁移时改写出来的新文件继承所在目录的权限：想只让自己能读，就让整个目录只有自己能读（默认的 `~/.claude/foreman` 就是这样），别只给配置文件单独设权限。
 - **按量计费的都会产生费用。** Codex 用 API key 计费时、API 模型、opencode 和 pi 接入的按量计费厂商，每次派活或讨论都会花钱。不想让 Claude Code 自己发起派活、讨论和审查，就把 `dispatch.auto` 设成 `false`，它会先问你。

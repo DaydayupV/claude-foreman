@@ -48,6 +48,7 @@ Keep a role card under 10 lines, in this format:
 - **Codex**: reads code and runs read-only commands, and can search and read web pages.
 - **opencode agents**: read, search and list files inside the project directory, and can read web pages (and search the web when a web search provider is set up in opencode); can't run commands.
 - **pi agents**: only read, search and list files inside the project directory; can't run commands or go online.
+- **CodeBuddy agents**: read, search and list files inside the project directory, and can search the web (`WebSearch`) and read pages (`WebFetch`); can't run commands. On Windows, when the project has links pointing outside it, they can read files but not search them.
 - **agy agents**: read files inside the project directory and can search the web with `search_web`; when agy's sandbox works on this machine (not on Windows for now) they can also run read-only commands, otherwise they only get a file list (see the result's `notes`).
 - **API agents**: see only the brief and the files attached with `--file`.
 

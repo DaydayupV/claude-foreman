@@ -158,18 +158,27 @@
 | `max_parallel` | 可选，默认 `4` |
 | `run_access` | 可选，和 opencode 一样：`"edit"` 或 `"shell"`，只能写在用户配置里。不写就只能参加讨论和审查，不能放进 `run` 和 `draw` 格子，也不能被点名派执行 |
 
-登录和可用模型由 codebuddy 自己的账号管（在 codebuddy 里 `/login`），插件不碰。讨论、审查和 `edit` 都用 `dontAsk`，不依赖 `acceptEdits`；`shell` 没有系统沙箱。脚本每次调用都：
-- 只开放这次任务需要的工具：讨论和审查只有 `Read`、`Glob`、`Grep`；执行的 `edit` 档再加 `Write`、`Edit`，`shell` 档再加 `Bash`、`PowerShell`；
-- 讨论和审查的 `Read`、`Grep`、`Glob` 只允许当前项目。`edit` 用 `Write(./**)`、`Edit(./**)` 加注入的 `PreToolUse` 路径守卫；只有词法路径和展开符号链接后的真实路径都在项目内才批准，尚未存在的文件按最近的真实父目录检查；不批准 `.git`、`.codebuddy` 的修改；
-- 用 `--strict-mcp-config` 不加载任何 MCP 服务器，所以模型看不到你配的那些工具；
-- 用 `--setting-sources user` 不加载项目和本地 settings，也不加载其中的 hooks；
-- 启动模型前检查 `~/.codebuddy/settings.json`（设置了 `CODEBUDDY_CONFIG_DIR` 时检查其中的 `settings.json`）；有非空 `permissions.allow`、`permissions.additionalDirectories` 或 `hooks`，或文件无法解析时拒绝启动并写明路径。`edit` 的守卫批准先于原生权限规则，因此还会拒绝非空 `permissions.deny`、`permissions.ask`，避免覆盖用户的额外限制。换用干净的独立 CodeBuddy 配置或其他协作方，不要替用户修改这些文件；
+登录和可用模型由 codebuddy 自己的账号管（在 codebuddy 里 `/login`），插件不碰。脚本每次调用都：
+- 只开放这次任务需要的工具：讨论和审查只有 `Read`、`Glob`、`Grep`；执行的 `edit` 档再加 `Write`、`Edit`，`shell` 档再加 `Bash`、`PowerShell`；讨论和执行另加上网的 `WebSearch`、`WebFetch`，审查不加；
+- 注入一个 `PreToolUse` 守卫钩子，检查每一次读文件、搜索、写文件和读网页：
+  - 读和搜索只能在项目里；
+  - `edit`、`shell` 的写入也只能在项目里，不能改 `.git`、`.codebuddy`、`.claude`、foreman 的记录和设置、CodeBuddy 的设置，也不能写有其他硬链接的文件；
+  - `@`、`file:` 开头和 `/c/` 这类写法（CodeBuddy 会在钩子之后改写它们）、带 `..` 的路径、网络共享上的路径一律拒绝；
+  - `WebFetch` 只能读 http、https 网页；
+- 讨论、审查和 `edit` 用 `dontAsk`，`shell` 用 `-y`，守卫照样拦写入；
+- 用 `--strict-mcp-config` 不加载任何 MCP 服务器，用 `--setting-sources user` 不加载项目和本地设置以及其中的 hooks；子进程里关掉"主 agent"切换，去掉 `CODEBUDDY_PLUGIN_DIRS`、`CODEBUDDY_MCP_CONFIG`、`CODEBUDDY_PROJECT_CONFIG_DIR` 这些会换掉配置来源的环境变量；
+- 启动前检查 CodeBuddy 的用户设置（`~/.codebuddy/settings.json`，设置了 `CODEBUDDY_CONFIG_DIR` 时用其中的 `settings.json`）：
+  - 有 `permissions.allow`、`permissions.additionalDirectories`、`hooks` 或启用的插件，或者文件读不出来，就拒绝启动并写明路径；
+  - `edit` 的守卫会批准项目内的写入、盖过用户的规则，所以 `edit` 另外拒绝 `permissions.deny`、`permissions.ask`；
+  - 用户设置里的 `trustedDirectories` 不影响边界；
+  - 遇到这种情况，换一份干净的独立 CodeBuddy 配置或者换别的协作方，不要替用户改这些文件；
+- Windows 上固定用找得到的 Git Bash 执行钩子，找不到就拒绝启动：没有 Git Bash 时 CodeBuddy 会改用 PowerShell，守卫就不起作用；
+- Windows 上 CodeBuddy 的 Grep、Glob 会跟着链接走，所以讨论、审查和 `edit` 开始前先扫一遍项目（跳过 git 忽略的目录）：有指向项目外的链接时，这一轮不给 Grep 和 Glob，改附上 `git ls-files` 清单，`notes` 里写明；
+- 不支持 `--add-dir`，项目外的材料摘进说明；
 - 报告走它原生的 `--json-schema` 结构化输出（`StructuredOutput` 工具只在这一轮要输出报告时放进白名单）；如果服务端仍返回无效报告，脚本会按通用流程在同一会话再修一次；
-- 会话存在 codebuddy 自己的历史里，续接用 `--resume`。
+- 会话存在 codebuddy 自己的历史里，续接用 `--resume`；续接和修复报告时只算本轮的用量，不用累计的 `result.usage`。
 
-CodeBuddy 2.180.0 实测：空 `--setting-sources ""` 会回退到默认作用域，不能用来禁用用户设置；Windows 上仅靠 `Write(./**)`、`Edit(./**)` 会连项目内写入一起拒绝，所以 `edit` 由守卫明确批准合法路径，仍保持 `dontAsk` 和路径规则。守卫失败时没有额外批准，不会放宽规则。续接和修复报告的用量优先按本轮 `turnUsage` 统计；缺少时按去重的 assistant 消息统计，不使用累计的 `result.usage`。
-
-`edit` 和 `shell` 都必须先拍改动快照才开始；`shell` 的命令仍以当前账户权限运行。
+被守卫或 CodeBuddy 拦下的调用记在结果的 `questions` 里（`permission_denied`，写明工具和路径）。`edit` 和 `shell` 都必须先拍改动快照才开始；`shell` 的命令仍以当前账户权限运行，没有系统沙箱。以上在 Windows 11、CodeBuddy 2.185.0 上实测过，macOS 和 Linux 还没有验证。
 
 **`type: "api"`**（兼容 OpenAI 接口的模型）
 
@@ -188,13 +197,13 @@ CodeBuddy 2.180.0 实测：空 `--setting-sources ""` 会回退到默认作用�
 |  | codex cli | opencode cli | pi cli | agy cli | codebuddy cli | api |
 |---|---|---|---|---|---|---|
 | 能做的任务（`modes`） | 执行、审查、讨论 | 执行（要写 `run_access`）、审查、讨论 | 执行（要写 `run_access`）、审查、讨论 | 执行（要写 `run_access`）、审查、讨论 | 执行（要写 `run_access`）、审查、讨论 | 讨论、审查（只审文本材料） |
-| 隔离（`isolation`） | 系统沙箱（`os`），看沙箱配置 | 只有工具权限（`tools`） | 只有工具权限加守卫扩展（`tools`） | 全局钩子里的守卫（`tools`）；讨论和审查的只读命令在 agy 沙箱里，执行不用沙箱 | 只有工具权限（`tools`） | 无（`none`），只收发文字 |
+| 隔离（`isolation`） | 系统沙箱（`os`），看沙箱配置 | 只有工具权限（`tools`） | 只有工具权限加守卫扩展（`tools`） | 全局钩子里的守卫（`tools`）；讨论和审查的只读命令在 agy 沙箱里，执行不用沙箱 | 工具权限加守卫钩子（`tools`） | 无（`none`），只收发文字 |
 | 自己读代码（`reads_code`） | 能 | 能 | 能 | 能 | 能 | 不能，靠附带文件 |
 | 原生格式约束（`native_schema`） | 有 | 没有，靠提示词加一次修复 | 没有，同左 | 没有，同左 | 有（`--json-schema`） | 没有，同左 |
 | 原生审查（`native_review`） | 有 | 没有 | 没有 | 没有 | 没有 | 没有 |
 | 出图（`images`） | 能 | 不能 | 不能 | 不能 | 不能 | 不能 |
 | 看图（`reads_images`），决定能不能做 `visual` 审查 | 能（view_image） | 先记为不能（还没验证） | 先记为不能（还没验证） | 先记为不能（还没验证） | 先记为不能（还没验证） | 不能 |
-| 上网（讨论和执行时；审查都不能；不在 `capabilities` 里） | 能，用 Codex 自己的网页搜索 | 能读网页（`webfetch`）；在 opencode 里配了网页搜索服务才能搜 | 不能 | 能搜网页；浏览器子 agent 要 Chrome 开远程调试 | 不能 | 不能 |
+| 上网（讨论和执行时；审查都不能；不在 `capabilities` 里） | 能，用 Codex 自己的网页搜索 | 能读网页（`webfetch`）；在 opencode 里配了网页搜索服务才能搜 | 不能 | 能搜网页；浏览器子 agent 要 Chrome 开远程调试 | 能，`WebSearch` 搜网页、`WebFetch` 读网页 | 不能 |
 | 讨论和审查的只读保障（结果的 `readonly`） | `sandbox`（配了 `read-only` 沙箱）或 `audited` | `tools` | `tools` | `tools` | `tools` | `tools` |
 
 ## modules
@@ -215,7 +224,7 @@ CodeBuddy 2.180.0 实测：空 `--setting-sources ""` 会回退到默认作用�
 
 `discuss` 和 `review` 另有一项 `seats`，写每一级找几个外部模型；`review` 还有一项 `gap`，写每一级要不要补漏席。三级都写在配置文件里，改直接改它们。新建的配置自带这两项；没写全的用户配置，第一次读的时候由脚本补全写进文件。默认值和规则见下文"候选和必选"，按场景整套配置见"场景"。
 
-能放进哪一格，按能力表校验：discuss 的候选要能讨论，review 的要能审查；run 的要能执行，opencode、pi 和 agy 还要写了 `run_access`；generate 的要能出图（适配器声明了 `images`，并且实现了出图检测：这一轮新出了哪些图、每次调用传了什么参数；目前只有 codex cli）；draw 的要求和 run 相同。
+能放进哪一格，按能力表校验：discuss 的候选要能讨论，review 的要能审查；run 的要能执行，opencode、pi、agy 和 CodeBuddy 还要写了 `run_access`；generate 的要能出图（适配器声明了 `images`，并且实现了出图检测：这一轮新出了哪些图、每次调用传了什么参数；目前只有 codex cli）；draw 的要求和 run 相同。
 
 图像任务的派法：每个新的图形交付物开工前，Claude 先弹窗让用户选路线（`dispatch.confirm.image` 为 `"auto"` 时由 Claude 选、在正文写明；① 位图、② 位图 + 矢量混合、③ 纯矢量先出参考图、④ 纯矢量 / 代码），再用 `plan --module image --cell <generate|draw> --route <路线号>` 建计划、`image --plan … --seat …` 启动；路线决定用到哪几格，只建用到的格子的计划，所以没用到的格子里的必选不会触发（比如选了路线 ④，generate 的必选不用到场）。脚本会核对这个会话里最近一次路线弹窗的回答（自动模式下用 `--route-auto` 记下理由，不核对），见 `references/cli.md` 的"plan、image 和 status --plan"。
 
@@ -268,7 +277,7 @@ CodeBuddy 2.180.0 实测：空 `--setting-sources ""` 会回退到默认作用�
 | 能用的 Codex | 两个 `codex cli` 协作方 `gpt-6.1-sol` 和 `gpt-6-astra`。执行：simple、normal 由 Claude 做，complex 用 gpt-6.1-sol max。审查：gpt-6.1-sol medium / high，complex 用 gpt-6-astra max。讨论：gpt-6.1-sol medium / high，complex 用 gpt-6-astra max。图像：generate 用 gpt-6.1-sol medium，draw 用 gpt-6-astra max |
 | 没有能用的 Codex | discuss、run、review 九格都是 `"claude code"`，image 两格是 `null` |
 | API key | 每家一个 `api` 协作方，`api_key_env` 指向检测到的变量，代号用模型名，**不放进任何格子** |
-| opencode、pi、agy | 不写，要用哪个模型由 `/foreman:setup` 引导用户选 |
+| opencode、pi、agy、CodeBuddy | 不写，要用哪个模型由 `/foreman:setup` 引导用户选 |
 
 花钱或有安全影响的决定（用哪个 opencode 或 pi 模型、让 API 模型参加讨论、谁必选）都不会自动做，统一由 `/foreman:setup` 问用户。以后装了新工具，重跑 setup 就能补进配置。
 

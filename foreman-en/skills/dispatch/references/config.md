@@ -158,18 +158,27 @@ It takes part in discussions and reviews, and does hands-on work once `run_acces
 | `max_parallel` | Optional; `4` by default |
 | `run_access` | Optional, same as opencode: `"edit"` or `"shell"`, only in the user config. Without it the agent can only take part in discussions and reviews and can't go in `run` or `draw` cells or be named for hands-on work |
 
-Signing in and the model list are up to codebuddy's own account (`/login` inside codebuddy); the plugin doesn't touch them. Discussions, reviews and `edit` use `dontAsk`, independently of `acceptEdits`; `shell` has no OS sandbox. Every call the script makes:
-- opens only the tools this task needs: `Read`, `Glob` and `Grep` for discussions and reviews; `Write` and `Edit` added for `edit`, plus `Bash` and `PowerShell` for `shell`;
-- confines discussion and review `Read`, `Grep` and `Glob` to the project. `edit` adds `Write(./**)`, `Edit(./**)` and an injected `PreToolUse` path guard: both the lexical path and resolved real path must stay inside the project; new files are checked through their nearest real parent. Changes to `.git` and `.codebuddy` are not authorized;
-- passes `--strict-mcp-config`, so no MCP servers load and the model can't reach the tools you configured there;
-- passes `--setting-sources user`, so project and local settings and their hooks aren't loaded;
-- checks `~/.codebuddy/settings.json` before calling the model (or `settings.json` under `CODEBUDDY_CONFIG_DIR`). Non-empty `permissions.allow`, `permissions.additionalDirectories`, or `hooks`, and unreadable settings, refuse startup with the file path. Because edit hook approvals precede native permission rules, `edit` also refuses non-empty `permissions.deny` and `permissions.ask` rather than overriding the user's restrictions. Use a clean separate CodeBuddy config or another agent; do not modify these files for the user;
+Signing in and the model list are up to codebuddy's own account (`/login` inside codebuddy); the plugin doesn't touch them. Every call the script makes:
+- opens only the tools this task needs: `Read`, `Glob` and `Grep` for discussions and reviews; `Write` and `Edit` added for `edit`, plus `Bash` and `PowerShell` for `shell`; discussions and hands-on work also get `WebSearch` and `WebFetch` for the web, reviews don't;
+- injects a `PreToolUse` guard hook that checks every file read, search, file write and page fetch:
+  - reads and searches stay inside the project;
+  - `edit` and `shell` writes stay inside the project too, and can't touch `.git`, `.codebuddy`, `.claude`, foreman's records and settings or CodeBuddy's settings, or write a file that has other hard links;
+  - paths starting with `@` or `file:` and `/c/`-style paths (CodeBuddy rewrites them after the hook), paths with `..`, and paths on network shares are refused;
+  - `WebFetch` can only fetch http and https pages;
+- runs discussions, reviews and `edit` with `dontAsk` and `shell` with `-y`; the guard still blocks writes;
+- passes `--strict-mcp-config`, so no MCP servers load, and `--setting-sources user`, so project and local settings and their hooks aren't loaded. The child process also has the "main agent" switch turned off, and drops `CODEBUDDY_PLUGIN_DIRS`, `CODEBUDDY_MCP_CONFIG` and `CODEBUDDY_PROJECT_CONFIG_DIR`, which would point it at other configuration;
+- checks CodeBuddy's user settings before starting (`~/.codebuddy/settings.json`, or `settings.json` under `CODEBUDDY_CONFIG_DIR`):
+  - `permissions.allow`, `permissions.additionalDirectories`, `hooks`, enabled plugins, or an unreadable file refuse the start and name the file;
+  - `edit`'s guard approves project writes, which would override the user's rules, so `edit` also refuses `permissions.deny` and `permissions.ask`;
+  - `trustedDirectories` in the user settings doesn't affect the boundary;
+  - when this happens, use a clean separate CodeBuddy config or another agent; don't change these files for the user;
+- on Windows, pins the Git Bash it finds for running hooks and refuses to start without one: without Git Bash, CodeBuddy runs hooks in PowerShell and the guard doesn't work;
+- on Windows, where CodeBuddy's Grep and Glob follow links, scans the project before a discussion, review or `edit` run (skipping folders git ignores): if a link points outside the project, that run gets no Grep or Glob, a `git ls-files` list is attached instead, and `notes` say so;
+- doesn't support `--add-dir`; put outside material into the brief;
 - gets the report through codebuddy's native `--json-schema` structured output (the `StructuredOutput` tool goes into the allowlist only on a round that has to produce a report); if the service still returns an invalid report, the script uses the common one repair round in the same session;
-- keeps the session in codebuddy's own history; resume uses `--resume`.
+- keeps the session in codebuddy's own history; resume uses `--resume`, and resumed and report-repair calls count only their own tokens, never the cumulative `result.usage`.
 
-Real 2.180.0 probes found that empty `--setting-sources ""` falls back to the default scopes and cannot disable user settings. On Windows the scoped allow rules alone also deny project-local writes, so the guard explicitly approves safe edit paths while retaining `dontAsk` and those rules. A failed guard grants no additional approval. Resumed and report-repair calls use per-turn `turnUsage`, falling back to deduplicated assistant messages, never the cumulative `result.usage`.
-
-Both hands-on levels take a change snapshot before they start; `shell` commands still run with the current account's permissions.
+Calls the guard or CodeBuddy blocked are listed in the result's `questions` (`permission_denied`, with the tool and the path). Both hands-on levels take a change snapshot before they start; `shell` commands still run with the current account's permissions and have no OS sandbox. All of this was checked on Windows 11 with CodeBuddy 2.185.0; macOS and Linux aren't verified yet.
 
 **`type: "api"`** (models with an OpenAI-compatible API)
 
@@ -188,13 +197,13 @@ Both hands-on levels take a change snapshot before they start; `shell` commands 
 |  | codex cli | opencode cli | pi cli | agy cli | codebuddy cli | api |
 |---|---|---|---|---|---|---|
 | Tasks (`modes`) | hands-on work, reviews, discussions | hands-on work (needs `run_access`), reviews, discussions | hands-on work (needs `run_access`), reviews, discussions | hands-on work (needs `run_access`), reviews, discussions | hands-on work (needs `run_access`), reviews, discussions | discussions, reviews (text material only) |
-| Isolation (`isolation`) | OS sandbox (`os`), per the sandbox setting | tool permissions only (`tools`) | tool permissions plus a guard extension (`tools`) | a guard in the global hooks (`tools`); read-only commands in discussions and reviews run in agy's sandbox, hands-on work uses none | tool permissions only (`tools`) | none (`none`); text in and out only |
+| Isolation (`isolation`) | OS sandbox (`os`), per the sandbox setting | tool permissions only (`tools`) | tool permissions plus a guard extension (`tools`) | a guard in the global hooks (`tools`); read-only commands in discussions and reviews run in agy's sandbox, hands-on work uses none | tool permissions plus a guard hook (`tools`) | none (`none`); text in and out only |
 | Reads code itself (`reads_code`) | yes | yes | yes | yes | yes | no; relies on attached files |
 | Native report format (`native_schema`) | yes | no; prompt plus one repair | no; same | no; same | yes (`--json-schema`) | no; same |
 | Native review (`native_review`) | yes | no | no | no | no | no |
 | Images (`images`) | yes | no | no | no | no | no |
 | Reads images (`reads_images`), which decides who can do a `visual` review | yes (view_image) | no for now (not verified yet) | no for now (not verified yet) | no for now (not verified yet) | no for now (not verified yet) | no |
-| Goes online (in discussions and hands-on work; none of them in reviews; not in `capabilities`) | yes, with Codex's own web search | reads web pages (`webfetch`); searches only with a web search provider set up in opencode | no | searches the web; the browser subagent needs remote debugging on in Chrome | no | no |
+| Goes online (in discussions and hands-on work; none of them in reviews; not in `capabilities`) | yes, with Codex's own web search | reads web pages (`webfetch`); searches only with a web search provider set up in opencode | no | searches the web; the browser subagent needs remote debugging on in Chrome | yes: `WebSearch` searches, `WebFetch` reads pages | no |
 | How discussions and reviews stay read-only (the result's `readonly`) | `sandbox` (with a `read-only` sandbox) or `audited` | `tools` | `tools` | `tools` | `tools` | `tools` |
 
 ## modules
@@ -215,7 +224,7 @@ There is also a level 0 (below the threshold, not worth an outside model), which
 
 `discuss` and `review` also take `seats`, how many external models each level uses; `review` also takes `gap`, whether each level adds a gap seat. All three levels are written in the config file; change them right there. New configs come with both; when a user config lacks some of them, the script fills them in and writes them into the file the first time it reads it. The defaults and rules are under "Candidates and required agents" below; a whole setup per scene is under "Scenes".
 
-What can go in a cell is checked against the capability table: discuss candidates must be able to discuss, review candidates to review; run candidates must be able to do hands-on work, and opencode, pi and agy also need `run_access`; generate candidates must be able to generate images (the adapter declares `images` and implements image detection: which images appeared in this round and what each call passed; only codex cli for now); draw takes the same as run.
+What can go in a cell is checked against the capability table: discuss candidates must be able to discuss, review candidates to review; run candidates must be able to do hands-on work, and opencode, pi, agy and CodeBuddy also need `run_access`; generate candidates must be able to generate images (the adapter declares `images` and implements image detection: which images appeared in this round and what each call passed; only codex cli for now); draw takes the same as run.
 
 How image tasks go out: before work starts on each new graphic deliverable, Claude has the user choose the route in a pop-up (with `dispatch.confirm.image` set to `"auto"`, Claude picks it and states it in the reply; ① bitmap, ② bitmap + vector mix, ③ pure vector with a reference image first, ④ pure vector / code), then creates a plan with `plan --module image --cell <generate|draw> --route <route number>` and starts it with `image --plan … --seat …`. The route decides which cells are used, and only those cells get plans, so required agents in an unused cell don't come into play (with route ④, for example, the generate cell's required agent isn't needed). The script checks the answer to the latest route pop-up in this session (in automatic mode `--route-auto` records the reason instead); see "plan, image and status --plan" in `references/cli.md`.
 
@@ -268,7 +277,7 @@ What gets generated, all in `modules.default` (every cell is written as a list o
 | A usable Codex | Two `codex cli` agents, `gpt-6.1-sol` and `gpt-6-astra`. Hands-on work: Claude does simple and normal, complex goes to gpt-6.1-sol at max. Reviews: gpt-6.1-sol medium / high, complex on gpt-6-astra at max. Discussions: gpt-6.1-sol medium / high, complex on gpt-6-astra at max. Images: generate on gpt-6.1-sol at medium, draw on gpt-6-astra at max |
 | No usable Codex | The nine discuss, run and review cells are `"claude code"`, and both image cells are `null` |
 | API keys | One `api` agent per provider, with `api_key_env` pointing at the variable found and the model name as its ID, **not added to any cell** |
-| opencode, pi, agy | Nothing added; `/foreman-en:setup` helps the user pick a model |
+| opencode, pi, agy, CodeBuddy | Nothing added; `/foreman-en:setup` helps the user pick a model |
 
 Choices that cost money or affect safety (which opencode or pi model to use, letting API models join discussions, who is required) are never made automatically; `/foreman-en:setup` asks the user. Running setup again later picks up newly installed tools.
 
