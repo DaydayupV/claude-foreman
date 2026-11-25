@@ -4,9 +4,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
-import { sandbox, baseConfig, opencodeAgent, apiAgent, taskArgs, output, failed, json, read, write, poll, seedRun, ROOT, MESSAGES } from './helpers.mjs';
-import { report } from './fixtures/reports.mjs';
+import { sandbox, plannedSandbox, baseConfig, opencodeAgent, apiAgent, taskArgs, output, failed, json, read, write, poll, seedRun, ROOT, MESSAGES } from './helpers.mjs';
+import { discussion, report, review } from './fixtures/reports.mjs';
 import { normalize } from '../foreman/skills/dispatch/scripts/board/feed.mjs';
+import { outsideLinks, scanLinks, resolveRealPath } from '../foreman/skills/dispatch/scripts/util.mjs';
 const M = MESSAGES.zh;
 const D = { ...MESSAGES.en, ...displayText }; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
 const configure = (h, access = 'edit') => {
@@ -19,8 +20,24 @@ const configure = (h, access = 'edit') => {
 const runs = (s) => s.calls().filter((c) => c.operation === 'run');
 const tool = (name, input, files, status = 'completed') => ({ files,
   event: { type: 'tool_use', part: { tool: name, state: { status, input, output: 'synthetic output' } } } });
-const permissions = (access, websearch = false) => ({ '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow',
-  webfetch: 'allow', ...(websearch ? { websearch: 'allow' } : {}), edit: 'allow', ...(access === 'shell' ? { shell: 'allow' } : {}) });
+const windows = process.platform === 'win32';
+const windowsWriteRules = [['*~*', 'deny'], ['*:*', 'deny']];
+const protectedRules = [
+  ...['.git', '.claude', '.opencode', '.codebuddy', '.gemini', '.agents', '.agent', '_agents', '_agent', '.pnpm', '.pnpm-store'].flatMap((name) => [name, `${name}/*`, `*/${name}`, `*/${name}/*`]),
+  ...['opencode.json', 'opencode.jsonc'].flatMap((name) => [name, `*/${name}`]),
+].map((rule) => [rule, 'deny']);
+const fixedWriteRules = [['/*', 'deny'], ['..', 'deny'], ['../*', 'deny']];
+const denyPaths = (paths) => paths.flatMap((file) => [[file, 'deny'], [`${file}/*`, 'deny']]);
+const editRules = (linkRules = [], gitDirs = [], platform = process.platform) =>
+  [['*', 'allow'], ...protectedRules, ...fixedWriteRules, ...denyPaths(gitDirs), ...linkRules, ...(platform === 'win32' ? windowsWriteRules : [])];
+const permissions = (access, websearch = false, gitDirs = []) => ({ '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow',
+  webfetch: 'allow', ...(websearch ? { websearch: 'allow' } : {}), edit: Object.fromEntries(editRules([], gitDirs)),
+  worktree_remove: 'deny', worktree_create: 'deny', ...(access === 'shell' ? { shell: 'allow' } : {}) });
+const dirLink = (target, link) => fs.symlinkSync(target, link, windows ? 'junction' : 'dir');
+const injectedPermission = (call) => {
+  const agentName = call.args[call.args.indexOf('--agent') + 1];
+  return JSON.parse(call.env.OPENCODE_CONFIG_CONTENT).agent[agentName].permission;
+};
 
 test('opencode step_finish 在运行中写分段用量，缺 tokens 时跳过并保留当前步骤', async (t) => {
   const h = sandbox(t); configure(h); h.initGit();
@@ -86,6 +103,7 @@ test('opencode 原请求和修复请求都缺 step_finish 时保留最早起点�
     const context = vm.createContext({ path, Date: class extends Date { static now() { return clock; } },
       fs: { appendFileSync() {}, writeFileSync() {} }, capabilities: {}, M: { reportRepairPrompt: () => 'repair' },
       isCancelled: () => false, runLimits: () => ({ deadline: 100000, stallMin: 0 }), validateSchema() {},
+      opencodeWriteRules: () => ({ edit: 'allow', links: [], blocked: [] }), opencodeWebsearchReady: () => false,
       eventWriter: () => (ev) => events.push(ev), opencodeArgs: () => ['run'],
       reportWithRepair: async ({ request, repair }) => {
         let result;
@@ -176,7 +194,9 @@ for (const [access, websearch] of [['edit', true], ['shell', false]]) test(`open
   const agentName = call.args[call.args.indexOf('--agent') + 1];
   assert.match(agentName, /^foreman-run-[0-9a-f]{8}$/);
   assert.deepEqual(Object.keys(config.agent), [agentName]);
-  assert.deepEqual(config.agent[agentName].permission, permissions(access, websearch));
+  assert.deepEqual(config.agent[agentName].permission, permissions(access, websearch, ['.git/hooks']));
+  // edit 档不能跑命令，项目配置里的格式化命令也要关掉；shell 档照旧。
+  assert.equal(config.formatter, access === 'edit' ? false : undefined);
   assert.ok(call.args.includes('--standalone'));
   assert.ok(execution.stderr.includes(M.unsandboxedRun(access)));
   assert.ok(call.stdin.includes(M.footer(h.cwd, [], true)));
@@ -203,6 +223,297 @@ for (const [access, websearch] of [['edit', true], ['shell', false]]) test(`open
     assert.ok(!watch.stdout.includes('$ read') && !watch.stdout.includes('$ grep'));
     if (access === 'shell') assert.ok(watch.stdout.includes('node --version'));
   }
+});
+
+test('opencode 外部目录链接在 edit 和 shell 续接中按顺序拒绝写入，报告修复仍无工具', async (t) => {
+  const h = sandbox(t); configure(h); h.initGit();
+  h.write('.gitignore', 'node_modules/\n');
+  const outside = path.join(h.home, 'outside');
+  fs.mkdirSync(outside);
+  // 每层一个链接，扫描的先后次序不依赖同一目录的枚举顺序。
+  const links = ['123', ...Array.from({ length: 10 }, (_, i) => `node_modules/${'sub/'.repeat(i)}outlink`)];
+  for (const link of links) {
+    const file = path.join(h.cwd, link);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    dirLink(outside, file);
+  }
+  const s = h.scenario({ calls: [
+    { last_message: 'not json', expected_agent: 'foreman-run' },
+    { last_message: report, expected_agent: 'foreman-repair' },
+    { last_message: report, expected_agent: 'foreman-run' },
+  ] });
+  const first = output(await h.bridge(taskArgs(h), { env: s.env }));
+  assert.deepEqual(first.notes, [M.opencodeLinksDenied(`${M.list(links.slice(0, 10))} 等 1 个`)]);
+  configure(h, 'shell');
+  const next = output(await h.bridge(['resume', '--run', first.run_id, '--level', 'complex', '--brief', '-', '--reason', 'rework'],
+    { env: { ...s.env, FOREMAN_LANG: 'en' } }));
+  const en = MESSAGES.en;
+  assert.equal(next.session_id, first.session_id);
+  assert.deepEqual(next.notes, [en.runAccessChanged('edit', 'shell'), en.opencodeLinksDenied(`${en.list(links.slice(0, 10))} and 1 more`)]);
+  const calls = runs(s);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(injectedPermission(calls[1]), { '*': 'deny' });
+  // 纯数字的链接名写成 123*：opencode 读配置时会把数字键排到 "*": "allow" 前面（opencode 2.3.2 实测）。
+  const expected = editRules(links.flatMap(link => [[link === '123' ? '123*' : link, 'deny'], [`${link}/*`, 'deny']]), ['.git/hooks']);
+  const editJson = expected.map(([pattern, rule]) => `${JSON.stringify(pattern)}:${JSON.stringify(rule)}`).join(',');
+  for (const [access, call] of [['edit', calls[0]], ['shell', calls[2]]]) {
+    const permission = injectedPermission(call);
+    assert.deepEqual(permission, { ...permissions(access), edit: Object.fromEntries(expected) });
+    assert.ok(call.env.OPENCODE_CONFIG_CONTENT.includes(`"edit":{${editJson}}`));
+  }
+});
+
+test('opencode 拒绝内部链接、套着外链的别名和指向 .git 的别名', async (t) => {
+  const h = sandbox(t); configure(h); h.initGit();
+  const outside = path.join(h.home, 'outside');
+  fs.mkdirSync(outside);
+  fs.mkdirSync(path.join(h.cwd, 'a'));
+  const links = ['inlink', 'x', 'a/innerout', 'gitalias'];
+  for (const [link, target] of [['inlink', path.join(h.cwd, 'a')], ['x', path.join(h.cwd, 'a')],
+    ['a/innerout', outside], ['gitalias', path.join(h.cwd, '.git')]]) {
+    dirLink(target, path.join(h.cwd, link));
+  }
+  const s = h.scenario({ last_message: report });
+  const r = output(await h.bridge(taskArgs(h), { env: s.env }));
+  const edit = injectedPermission(runs(s)[0]).edit;
+  assert.deepEqual(edit, Object.fromEntries(editRules(denyPaths(links), ['.git/hooks'])));
+  const listed = Object.keys(edit).filter((file) => links.includes(file));
+  assert.deepEqual(r.notes, [M.opencodeLinksDenied(M.list(listed))]);
+});
+
+test('opencode 拒绝写目标不存在的链接，outsideLinks 仍只列可解析的外链', async (t) => {
+  const h = sandbox(t); configure(h);
+  // 往目标不存在的链接写文件，会在它指向的地方新建文件。
+  dirLink(path.join(h.home, 'missing'), path.join(h.cwd, 'dangling'));
+  assert.deepEqual(outsideLinks(h.cwd), { links: [], capped: false });
+  const s = h.scenario({ last_message: report });
+  const r = output(await h.bridge(taskArgs(h), { env: s.env }));
+  assert.deepEqual(Object.entries(injectedPermission(runs(s)[0]).edit), editRules([['dangling', 'deny'], ['dangling/*', 'deny']]));
+  assert.deepEqual(r.notes, [M.opencodeLinksDenied('dangling')]);
+});
+
+test('opencode 为外部文件符号链接注入拒绝规则', async (t) => {
+  const h = sandbox(t); configure(h);
+  const outside = write(path.join(h.home, 'outside.txt'), 'synthetic');
+  try { fs.symlinkSync(outside, path.join(h.cwd, 'out.txt'), 'file'); }
+  catch (error) {
+    if (!windows || error.code !== 'EPERM') throw error;
+    return t.skip('Windows 缺少创建文件符号链接的权限（EPERM）');
+  }
+  const s = h.scenario({ last_message: report });
+  const r = output(await h.bridge(taskArgs(h), { env: s.env }));
+  assert.deepEqual(Object.entries(injectedPermission(runs(s)[0]).edit), editRules([['out.txt', 'deny'], ['out.txt/*', 'deny']]));
+  assert.deepEqual(r.notes, [M.opencodeLinksDenied('out.txt')]);
+});
+
+test('opencode 项目有外部链接时讨论和审查仍沿用各自的权限', async (t) => {
+  const h = plannedSandbox(t), config = configure(h);
+  dirLink(h.home, path.join(h.cwd, 'outlink'));
+  for (const [mode, last_message] of [['discuss', discussion], ['review', review]]) {
+    config.modules.default[mode].complex = { agent: 'oc' };
+    h.config(config);
+    const s = h.scenario({ last_message, expected_agent: `foreman-${mode}` }, mode);
+    const r = output(await h.bridge(taskArgs(h, mode, ['--agent', 'oc', '--no-snapshot']), { env: s.env }));
+    assert.deepEqual(injectedPermission(runs(s)[0]), { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow',
+      ...(mode === 'discuss' ? { webfetch: 'allow' } : {}) });
+    assert.deepEqual(r.notes, []);
+  }
+});
+
+test('opencode 拒绝列不出的目录、扫满时正在扫的目录和队列里的目录', async (t) => {
+  const h = sandbox(t), limit = 5;
+  h.write('locked/a.txt', 'synthetic');
+  h.write('outer/queued/a.txt', 'synthetic');
+  h.write('outer/visiting/a.txt', 'synthetic');
+  const outside = path.join(h.home, 'outside');
+  fs.mkdirSync(outside);
+  dirLink(outside, path.join(h.cwd, 'outlink'));
+  const root = fs.realpathSync.native(h.cwd), readdir = fs.readdirSync;
+  t.mock.method(fs, 'readdirSync', (dir, ...args) => {
+    if (dir === path.join(root, 'locked')) throw Object.assign(new Error('synthetic permission error'), { code: 'EACCES' });
+    const entries = readdir(dir, ...args);
+    if (dir === root) return entries.sort((a, b) => b.name.localeCompare(a.name));
+    if (dir === path.join(root, 'outer')) return entries.sort((a, b) => a.name.localeCompare(b.name));
+    return entries;
+  });
+  const source = read(path.join(ROOT, 'foreman/skills/dispatch/scripts/adapters/opencode-cli.mjs'));
+  const constants = source.slice(source.indexOf('const WRITE_RULES_BUDGET'), source.indexOf('const capabilities'));
+  const rules = source.slice(source.indexOf('function writePathPatterns('), source.indexOf('function opencodeEnv('));
+  const session = source.slice(source.indexOf('async function opencodeSession('), source.indexOf('// 本机 opencode'));
+  const blocked = ['locked', 'outer/visiting', 'outer/queued'];
+  for (const platform of ['win32', 'linux']) {
+    const edits = [];
+    let scans = 0;
+    const r = await vm.runInNewContext(`${constants}\n${rules}\n${session}\nopencodeSession(run, {}, 'foreman-run');`, {
+      fs, path, M, Buffer, resolveRealPath, LANGUAGE: 'zh', process: { platform, env: {} }, WRITE_SCAN_LIMIT: limit, capabilities: {},
+      spawnSync: () => ({ status: 128 }), opencodeWebsearchReady: () => false,
+      run: { started: 0, ctx: { cwd: h.cwd, dir: h.home, agent: {}, kind: 'exec', model: 'model' }, meta: {} },
+      scanLinks: (cwd, options) => { scans++; return scanLinks(cwd, options); },
+      isCancelled: () => false, runLimits: () => ({ deadline: Infinity, stallMin: 0 }), validateSchema() {},
+      eventWriter: () => () => {}, opencodeArgs: () => ['run'],
+      reportWithRepair: async ({ request, repair }) => {
+        await request();
+        repair(['invalid']);
+        await request();
+        return report;
+      },
+      runOpencode: async ({ edit }) => {
+        edits.push(edit);
+        return { status: 'done', errors: [], recovered: [], messages: [], questions: [] };
+      },
+    });
+    assert.equal(scans, 1);
+    assert.equal(edits.length, 2);
+    assert.equal(Object.getPrototypeOf(edits[0]), null);
+    assert.deepEqual(Object.entries(edits[0]), editRules(denyPaths(['outlink', ...blocked]), [], platform));
+    assert.equal(edits[1], undefined);
+    assert.deepEqual([...r.notes], [M.opencodeLinksDenied('outlink'), M.opencodeWriteBlocked(M.list(blocked))]);
+  }
+});
+
+function manyLinks(h, target, parent, count) {
+  fs.mkdirSync(path.join(h.cwd, parent), { recursive: true });
+  return Array.from({ length: count }, (_, i) => {
+    const file = path.posix.join(parent, `link-${'x'.repeat(106)}-${i}`);
+    dirLink(target, path.join(h.cwd, file));
+    return file;
+  });
+}
+
+test('opencode 超出规则预算时先合并链接最多的父目录，合并到预算以内为止', async (t) => {
+  const h = sandbox(t); configure(h);
+  const outside = path.join(h.home, 'outside');
+  fs.mkdirSync(outside);
+  manyLinks(h, outside, 'many', 50);
+  manyLinks(h, outside, 'medium', 40);
+  const few = manyLinks(h, outside, 'few', 20);
+  const s = h.scenario({ last_message: report });
+  const r = output(await h.bridge(taskArgs(h), { env: s.env }));
+  const edit = injectedPermission(runs(s)[0]).edit;
+  assert.deepEqual(edit, Object.fromEntries(editRules(denyPaths([...few, 'many', 'medium']))));
+  assert.equal(r.notes.at(-1), M.opencodeWriteBlocked(M.list(['many', 'medium'])));
+});
+
+test('opencode 根目录规则超预算或名字无法表示时拒绝启动子进程', async (t) => {
+  for (const reason of ['budget', 'unsafe-name', 'home']) {
+    const h = sandbox(t); configure(h);
+    const outside = path.join(h.home, 'outside');
+    fs.mkdirSync(outside);
+    if (reason === 'budget') manyLinks(h, outside, '', 50);
+    // opencode 会展开规则开头的 ~ 和 $HOME，这种名字写不成原样的规则。
+    else dirLink(outside, path.join(h.cwd, reason === 'home' ? '$HOME' : '~unsafe'));
+    const s = h.scenario({ last_message: report });
+    const r = output(await h.bridge(taskArgs(h), { env: s.env }), 1);
+    assert.equal(r.status, 'failed');
+    assert.deepEqual(r.errors, [M.opencodeUnsafeWriteRules()]);
+    assert.deepEqual(s.calls(), []);
+    assert.equal(h.records()[0].status, 'failed');
+    // 模型一次也没调用，统计里不算这一席。
+    assert.equal(r.not_started, true);
+  }
+});
+
+test('opencode 注入配置会超过环境变量上限时拒绝启动', async (t) => {
+  const h = sandbox(t); configure(h);
+  // 留出的余量是 4000：用户配置超过上限减去余量，就装不下任何规则了。
+  const limit = windows ? 32000 : 120000, filler = windows ? 29000 : 117000;
+  const s = h.scenario({ last_message: report });
+  const r = output(await h.bridge(taskArgs(h), { env: { ...s.env, OPENCODE_CONFIG_CONTENT: JSON.stringify({ theme: 'x'.repeat(filler) }) } }), 1);
+  assert.equal(r.status, 'failed');
+  assert.deepEqual(r.errors, [M.opencodeConfigTooLarge(limit)]);
+  assert.equal(r.not_started, true);
+  assert.deepEqual(s.calls(), []);
+});
+
+test('opencode 拒绝写登记在项目里的工作树，名字含 $HOME 的链接改为拒绝上层目录', async (t) => {
+  const h = sandbox(t); configure(h); h.initGit();
+  h.git(['worktree', 'add', '--quiet', 'inner-wt']);
+  const outside = path.join(h.home, 'outside');
+  fs.mkdirSync(outside);
+  fs.mkdirSync(path.join(h.cwd, 'nested'));
+  dirLink(outside, path.join(h.cwd, 'nested', '$HOME'));
+  const s = h.scenario({ last_message: report });
+  const r = output(await h.bridge(taskArgs(h), { env: s.env }));
+  // inner-wt 本身也带一个 .git 文件；worktree_remove 按 edit 判断权限，所以整个工作树都要拒绝。
+  // 仓库自己的 .git 和受保护目录是同一个键，规则里只出现一次，所以 Git 目录这里只列 .git/hooks。
+  assert.deepEqual(Object.entries(injectedPermission(runs(s)[0]).edit), editRules(denyPaths(['nested']), ['.git/hooks', 'inner-wt']));
+  assert.deepEqual(r.notes, [M.opencodeLinksDenied('nested/$HOME'), M.opencodeWriteBlocked(M.list(['inner-wt', 'nested']))]);
+});
+
+test('opencode 钩子目录经过目标不存在的链接时，拒绝它将来真正落到的目录', async (t) => {
+  const h = sandbox(t); configure(h); h.initGit();
+  // hook-future 指向项目里还没建的 future；git 以后会在 future/hooks 里找钩子。
+  dirLink(path.join(h.cwd, 'future'), path.join(h.cwd, 'hook-future'));
+  h.git(['config', 'core.hooksPath', 'hook-future/hooks']);
+  const s = h.scenario({ last_message: report });
+  output(await h.bridge(taskArgs(h), { env: s.env }));
+  assert.deepEqual(Object.entries(injectedPermission(runs(s)[0]).edit), editRules(denyPaths(['hook-future']), ['future/hooks']));
+});
+
+test('opencode 在 POSIX 上按先跟随链接、再处理 .. 的顺序找钩子目录', async (t) => {
+  if (windows) return t.skip('Windows 先按字面合并 ..，再解析链接');
+  const h = sandbox(t); configure(h); h.initGit();
+  fs.mkdirSync(path.join(h.cwd, 'deep', 'inner'), { recursive: true });
+  dirLink(path.join(h.cwd, 'deep', 'inner'), path.join(h.cwd, 'alias'));
+  h.git(['config', 'core.hooksPath', 'alias/../hooks']);
+  const s = h.scenario({ last_message: report });
+  output(await h.bridge(taskArgs(h), { env: s.env }));
+  // alias 先展开成 deep/inner，.. 回到 deep，所以真正的钩子目录是 deep/hooks，不是字面合并出来的 hooks。
+  assert.deepEqual(Object.entries(injectedPermission(runs(s)[0]).edit), editRules(denyPaths(['alias']), ['deep/hooks']));
+});
+
+test('opencode 名字含不安全字段或花括号时拒绝可表示的上层目录', async (t) => {
+  const h = sandbox(t); configure(h);
+  const outside = path.join(h.home, 'outside');
+  fs.mkdirSync(outside);
+  const links = ['assets/{name}', 'braces/end}', 'data/__proto__', 'files/constructor/alias', 'tree/prototype/alias'];
+  for (const link of links) {
+    const file = path.join(h.cwd, link);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    dirLink(outside, file);
+  }
+  const dirs = ['assets', 'braces', 'data', 'files', 'tree'];
+  const s = h.scenario({ last_message: report });
+  const r = output(await h.bridge(taskArgs(h), { env: s.env }));
+  const edit = injectedPermission(runs(s)[0]).edit;
+  assert.deepEqual(edit, Object.fromEntries(editRules(denyPaths(dirs))));
+  assert.equal(r.notes.at(-1), M.opencodeWriteBlocked(M.list(Object.keys(edit).filter((file) => dirs.includes(file)))));
+});
+
+test('opencode 拒绝写 .git 文件对应的元数据目录和自定义钩子的真实路径', async (t) => {
+  const h = sandbox(t); configure(h);
+  h.git(['init', '--quiet', '--separate-git-dir', 'metadata']);
+  assert.ok(fs.statSync(path.join(h.cwd, '.git')).isFile());
+  const hooks = path.join(h.cwd, 'real-hooks');
+  fs.mkdirSync(hooks);
+  dirLink(hooks, path.join(h.cwd, 'hook-alias'));
+  h.git(['config', 'core.hooksPath', 'hook-alias/new']);
+  const s = h.scenario({ last_message: report });
+  const r = output(await h.bridge(taskArgs(h), { env: s.env }));
+  assert.deepEqual(Object.entries(injectedPermission(runs(s)[0]).edit),
+    editRules(denyPaths(['hook-alias']), ['metadata', 'real-hooks/new']));
+  assert.deepEqual(r.notes, [M.opencodeLinksDenied('hook-alias')]);
+});
+
+test('opencode 在 Linux 扫描 .Git 里的链接', async (t) => {
+  if (process.platform !== 'linux') return t.skip('只有 Linux 按大小写区分 .Git 和 .git');
+  const h = sandbox(t); configure(h);
+  h.write('.Git/file.txt', 'synthetic');
+  dirLink(h.home, path.join(h.cwd, '.Git/alias'));
+  const s = h.scenario({ last_message: report });
+  output(await h.bridge(taskArgs(h), { env: s.env }));
+  assert.deepEqual(Object.entries(injectedPermission(runs(s)[0]).edit), editRules(denyPaths(['.Git/alias'])));
+});
+
+test('opencode 在 POSIX 的规则里保留链接名中的反斜杠', async (t) => {
+  if (windows) return t.skip('Windows 把反斜杠作为路径分隔符，不能用于单个目录名');
+  const h = sandbox(t); configure(h);
+  const link = 'literal\\backslash';
+  dirLink(h.home, path.join(h.cwd, link));
+  const s = h.scenario({ last_message: report });
+  const r = output(await h.bridge(taskArgs(h), { env: s.env }));
+  assert.deepEqual(Object.entries(injectedPermission(runs(s)[0]).edit), editRules(denyPaths([link])));
+  assert.deepEqual(r.notes, [M.opencodeLinksDenied(link)]);
 });
 
 test('opencode 输出包含推理，压缩请求用量计入本轮并按主模型计价', async (t) => {
@@ -250,6 +561,7 @@ test('opencode 保留用户代理配置，执行和同会话修复共用随机�
     agents: { 'foreman-discuss': { description: 'User discussion agent' } },
     mode: { 'foreman-run': { description: 'User execution mode' } },
     agent: { 'foreman-review': { description: 'User review agent' }, 'foreman-run': { mode: 'subagent' } },
+    formatter: { synthetic: { command: ['node', '--version'], extensions: ['.txt'] } },
     theme: 'synthetic',
   };
   const s = h.scenario({ calls: [{ last_message: 'not json' }, { last_message: report }] });
@@ -267,7 +579,8 @@ test('opencode 保留用户代理配置，执行和同会话修复共用随机�
   for (const [call, agentName, permission] of [[run, runAgent, permissions('edit')], [repair, repairAgent, { '*': 'deny' }]]) {
     const config = JSON.parse(call.env.OPENCODE_CONFIG_CONTENT);
     const { [agentName]: injected, ...agent } = config.agent;
-    assert.deepEqual({ ...config, agent }, userConfig);
+    // edit 档的执行会话把用户配置里的格式化命令也关掉；报告修复不写文件，原样保留。
+    assert.deepEqual({ ...config, agent }, call === run ? { ...userConfig, formatter: false } : userConfig);
     assert.deepEqual(injected.permission, permission);
   }
 });

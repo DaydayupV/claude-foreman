@@ -538,7 +538,7 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
       mode,
       kind,
       status: meta.status,
-      ...(snapshotError ? { not_started: true } : {}),
+      ...(snapshotError || r.not_started ? { not_started: true } : {}),
       title: meta.title,
       cwd,
       track,
