@@ -17,6 +17,7 @@ import { spawnSync } from 'node:child_process';
 const capabilities = { modes: ['run', 'discuss', 'review'], isolation: 'tools', reads_code: true, reads_images: false, native_schema: false,
   native_review: false, images: false, resume: true, command_start_events: true };
 const PROGRESS_MS = Number(process.env.FOREMAN_TEST_PROGRESS_MS) || 5000;
+const TOOL_FAILED = 'tool failed';
 const modelProblem = (e) => e.code === 'agyModelMissing' ? M.agyModelMissing(e.args[0], closestMatches(e.args[0], e.args[1]).join(', '))
   : e.args ? M[e.code](...e.args) : e.message;
 const usageOf = (u) => ({ input_tokens: (u.input_tokens || 0) + (u.cache_read_tokens || 0), cached_input_tokens: u.cache_read_tokens || 0,
@@ -27,13 +28,14 @@ function normalizeEvent(ev) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
   return { event: ev.event, ...body, conversation_id: ev.conversation_id ?? body.conversation_id };
 }
+// run_command 的状态行在最前面，"Command output:" 之后是命令自己打印的内容。
+const commandStatus = (output) => output.split(/\r?\nCommand output:/, 1)[0];
 function toolInfo(ev, tool) {
   const raw = ev.tool_info?.error ?? ev.error;
   const output = String(ev.tool_info?.output ?? '');
-  // run_command 的输出先是状态行（前面常有守卫改写参数的提示），"Command output:" 之后才是命令自己打印的内容：只在状态行里找。
-  const status = tool === 'run_command' ? output.split(/\r?\nCommand output:/)[0] : '';
+  const status = tool === 'run_command' ? commandStatus(output) : '';
   // 命令没能启动（比如 agy 自己的沙箱建不起来）时 agy 仍报 DONE，只在状态行里写 Command failed to run。
-  const error = (typeof raw === 'string' ? raw : raw?.message) || (ev.state === 'ERROR' ? 'tool failed' : /^Command failed to run:.*$/m.exec(status)?.[0].trim() || null);
+  const error = (typeof raw === 'string' ? raw : raw?.message) || /^Command failed to run:.*$/m.exec(status)?.[0].trim() || (ev.state === 'ERROR' ? TOOL_FAILED : null);
   return { args: ev.tool_info?.parameters || {}, output, error,
     exit_code: error ? 1 : Number(/^Command exited with code (-?\d+)\./m.exec(status)?.[1] ?? 0) };
 }
@@ -57,9 +59,9 @@ async function runAgy(options) {
   return out;
 }
 async function runOnce({ agent, model = agent.model, cwd, addDirs = [], access = 'read', runDir, prompt, timeoutMs = 120000,
-  stallMin = 0, session, sandbox = false, probeCommands, stopOnStartFailure = false, onEvent, onRetry, deadline = Date.now() + timeoutMs }) {
+  stallMin = 0, session, sandbox = false, probeCommands, web, stopOnStartFailure = false, onEvent, onRetry, deadline = Date.now() + timeoutMs }) {
   const out = { status: null, code: null, errors: [], notes: [], text: '', stderrTail: '', steps: 0, tools: [], result: null, retries: [] };
-  const policy = policyFor({ cwd, addDirs, access, runDir, sandbox, probeCommands });
+  const policy = policyFor({ cwd, addDirs, access, runDir, sandbox, probeCommands, web });
   let prepared;
   try { prepared = await prepareAgyRun(agent, policy, deadline); out.notes.push(...prepared.notes); }
   catch (e) { return { ...out, status: e.code === 'ETIMEDOUT' || Date.now() >= deadline ? 'timeout' : 'failed', errors: [e.message], errorCode: e.code }; }
@@ -201,7 +203,7 @@ async function executeAgy(ctx) {
   } else if (exec) prompt = ctx.parent
     ? `${brief}${focusFiles(files)}\n\n${M.resumeFooter}\n\n${M.opencodeRunResumeFooter}\n`
     // 附加目录对 agy 的执行只能读（守卫拒绝写入），不能照通用写法写成“另可改动”。
-    : `${brief}\n\n${M.footer(cwd, [])}${ctx.addDirs.length ? `\n${M.agyReadOnlyDirs(M.list(ctx.addDirs))}` : ''}\n\n${M.opencodeRunFooter(schemaText, ctx.agent.run_access)}\n`;
+    : `${brief}\n\n${M.footer(cwd, [], true)}${ctx.addDirs.length ? `\n${M.agyReadOnlyDirs(M.list(ctx.addDirs))}` : ''}\n\n${M.opencodeRunFooter(schemaText, ctx.agent.run_access, true)}\n`;
   else promptFor = (shell) => `${brief}${focusFiles(files)}\n\n${ctx.parent ? M.opencodeResumeFooter : M.agyDiscussFooter(cwd, schemaText, shell)}\n`;
   const { id, dir, release } = await newRunDir(ctx);
   const split = splitAgyModel(ctx.model);
@@ -273,12 +275,21 @@ async function agySession(run, schema, promptFor) {
       return;
     }
     completed.add(key); currentTools.delete(key);
-    const denial = /^tool call denied by pre-tool hook: foreman guard: (.*)/s.exec(String(info.error || info.output))?.[1];
+    const status = tool === 'run_command' ? commandStatus(info.output) : info.output;
+    const guardDenial = /^tool call denied by pre-tool hook: foreman guard: (.*)/s;
+    const denied = guardDenial.exec(info.error ?? '') ?? guardDenial.exec(status);
+    const denial = denied?.[1];
     // 只读工具因为守卫不认识的参数被拦（agy 新版本加了参数）：用户没有什么可决定的，agy 会去掉参数重试，记成说明。
-    const unknownArg = /^unexpected argument (\S+) for (read_file|view_file|run_command)$/.exec(denial?.trim() ?? '');
+    const unknownArg = /^unexpected argument (\S+) for (read_file|view_file|run_command|search_web|read_url_content)$/.exec(denial?.trim() ?? '');
     if (unknownArg) notes.push(M.agyGuardUnknownArg(unknownArg[2], unknownArg[1]));
     else if (denial !== undefined) observed.questions.push({ source: 'permission_denied',
       question: `${tool} ${JSON.stringify(args)}`, detail: JSON.stringify({ tool, input: args }) });
+    if (denial === undefined && !info.error && (tool === 'search_web' || tool === 'read_url_content'
+      || tool === 'call_mcp_tool' && args.ServerName === 'web' && args.ToolName === 'read_url_content')) {
+      const query = tool === 'search_web' ? args.query : tool === 'read_url_content' ? args.Url : args.Arguments?.url ?? args.Arguments?.Url;
+      event({ type: 'item.completed', item: { id: item.id, type: 'web_search', query } });
+      return;
+    }
     if (['edit_file', 'write_file'].includes(tool)) {
       const changes = [];
       if (exec && ev.state === 'DONE' && !info.error && denial === undefined && typeof args.Path === 'string' && args.Path) {
@@ -296,14 +307,14 @@ async function agySession(run, schema, promptFor) {
       return;
     }
     // 被钩子拦下、或者没能启动的命令没有运行，不计数；启动后以非零状态退出的照样算。
-    if (tool === 'run_command' && !/^tool call denied by pre-tool hook/.test(String(info.error || info.output))
-      && !String(info.error || '').startsWith('Command failed to run:')) commands++;
+    if (tool === 'run_command' && ![info.error ?? '', status].some((text) => /^(?:tool call denied by pre-tool hook|Command failed to run:)/m.test(text))) commands++;
     const category = tool === 'run_command' ? 'shell' : 'read', target = args.Path;
     const shown = target ? relativePath(cwd, target) : '';
+    const output = denied?.[0] ?? (info.error === TOOL_FAILED && info.output ? info.output : info.error || info.output);
     event({ type: 'item.completed', item: { id: item.id, tool, type: 'command_execution', category,
       command: tool === 'run_command' ? args.CommandLine : `${tool}${shown ? ` ${shown}` : ''}`,
       ...(tool === 'run_command' ? {} : { label: toolLabel(category, tool, { path: shown }) }),
-      exit_code: info.error ? 1 : info.exit_code ?? 0, aggregated_output: (info.error || info.output).slice(0, 2000) } });
+      exit_code: denial !== undefined || info.error ? 1 : info.exit_code ?? 0, aggregated_output: output.slice(0, 2000) } });
   };
   let modelId = model;
   const lowLevel = (options) => runAgy({ agent, model: modelId, cwd, addDirs, deadline, ...options });
@@ -351,6 +362,7 @@ async function agySession(run, schema, promptFor) {
     if (Date.now() >= deadline) { meta.status = 'timeout'; return null; }
     currentTools = new Map(); completed = new Set(); responses = new Map(); usageSteps = new Set();
     const out = await lowLevel({ access: repairing ? 'none' : access, runDir: dir, session: meta.session_id, sandbox: !repairing && sandbox,
+      ...(!repairing && (exec || ctx.kind === 'discuss') ? { web: true } : {}),
       prompt: nextPrompt, timeoutMs: deadline - Date.now(), stallMin, onEvent: translate,
       onRetry: (retry) => event({ type: 'api.retry', reason: agyRetryReason(retry.error), wait_s: retry.wait_s, attempt: retry.attempt }) });
     errors.push(...out.errors); notes.push(...out.notes);

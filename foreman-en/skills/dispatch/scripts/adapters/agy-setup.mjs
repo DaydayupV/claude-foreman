@@ -52,8 +52,8 @@ export function guardEnvironment(policy) {
   return env;
 }
 const gitConfigFor = (policy) => path.join(os.tmpdir(), `foreman-agy-${policy.nonce}.gitconfig`);
-export function policyFor({ cwd, addDirs = [], access = 'none', runDir, sandbox = false, probeCommands }) {
-  return { root: cwd, add_dirs: addDirs, access, run_dir: runDir, log_file: path.join(runDir, 'agy.log'), nonce: randomUUID(),
+export function policyFor({ cwd, addDirs = [], access = 'none', runDir, sandbox = false, probeCommands, web = false }) {
+  return { root: cwd, add_dirs: addDirs, access, web, run_dir: runDir, log_file: path.join(runDir, 'agy.log'), nonce: randomUUID(),
     sandbox, sandbox_available: sandbox && access === 'read', ...(probeCommands ? { probe_commands: probeCommands } : {}),
     // 运行记录可以放在项目里（dispatch.runs_dir），守卫按它拒绝写入，免得改到决定记录和改动快照。
     ...(RUNS_ROOT ? { runs_root: path.resolve(RUNS_ROOT) } : {}) };
