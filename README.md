@@ -64,7 +64,7 @@ Upgrading from codex-bridge? See [below](#upgrading-from-codex-bridge).
 
 ### Running setup
 
-After installing, run `/foreman-en:setup`. Its output always has the same structure: which tools this machine has, every model available and the efforts each supports, then the current config (who gets each level of each task type, how many outside models each level uses, who is required, which agents aren't used, and anything to watch out for), then suggested changes (including leftovers from older versions that can be removed). After reading it all you confirm or adjust the suggestions in a pop-up at the end, and it changes the config and reports what changed. Last, it creates or fills out the [model notes](#model-notes) and asks you to write in each model's strengths and weaknesses from your own experience. Run it again after installing a new tool or to change models.
+After installing, run `/foreman-en:setup`. Its output always has the same structure: which tools this machine has, every model available and the efforts each supports, then the current config (who gets each level of each task type, how many outside models each level uses, who is required, which agents aren't used, and anything to watch out for), then suggested changes (including leftovers from older versions that can be removed). On a first setup or right after an update, the suggestions start with what's new in this version and whether any of it needs you; after them, a sentence or two explains each kind of option in the tables. After reading it all you confirm or adjust the suggestions in a pop-up: each question makes sense on its own, each option says what choosing it does, the recommended one comes first, and related consents (such as installing the agy guard) are asked in the same pop-up. It changes the config, reports what changed, and creates or fills out the [model notes](#model-notes), asking you to write in each model's strengths and weaknesses from your own experience. Last, it lists the five files you can edit yourself (user config, project config, user preferences, project preferences, model notes) with their full paths on your computer, what each controls and when a change takes effect. Run it again after installing a new tool or to change models.
 
 ## How it works
 
@@ -272,6 +272,18 @@ Another way to watch besides the terminal live view, off by default: set `dispat
 - **Browser**: it needs a recent browser: Chrome or Edge 111, Firefox 113, Safari 16.2 or later.
 
 ## Configuration
+
+There are five files you can edit yourself (`/foreman-en:setup` ends by listing their full paths on your computer):
+
+| File | Where | What it controls | When a change takes effect |
+|---|---|---|---|
+| User config | `~/.claude/foreman/config.json` | Agents, who takes each level of each task type, how many agents each level sends, who's required, and switches such as pause points and the web board | From the next handoff or command |
+| Project config | `<project dir>/.claude/foreman.json` | This project only: overrides cells and time limits of the same name, see [Project config](#project-config) | Same as above |
+| User preferences | `~/.claude/foreman/preferences.md` | How you'd like things done, in your own words, and scene routing, see [Preference files](#preference-files) | When a new session starts; after editing mid-session, ask Claude Code to read it again |
+| Project preferences | `<project dir>/.claude/foreman.md` | This project only; wins over the user preferences where they conflict | Same as above |
+| Model notes | `~/.claude/foreman/models.md` | What each model is good and bad at, see [Model notes](#model-notes) | Same as above |
+
+When the `FOREMAN_CONFIG` environment variable points to another user config, the user preferences and the model notes live in that file's folder.
 
 The user config is `~/.claude/foreman/config.json`, and a project config is `<project dir>/.claude/foreman.json`. Edit the file directly, or tell Claude Code something like "use `/foreman-en:config` to switch complex tasks to ultra". Every setting is described in [references/config.md](foreman-en/skills/dispatch/references/config.md). `modules` reads best one entry per line: each candidate on one line, `seats` and `gap` on one line each; `/foreman-en:setup` can rewrite an existing config this way without changing the content.
 
