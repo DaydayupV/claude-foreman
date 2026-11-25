@@ -34,8 +34,36 @@ for (const lang of ['zh', 'en']) test(`生成 ${lang} 模型特长，标题只�
   const liveBench = lang === 'zh' ? '- LiveBench（2026-10-18）：弱档，长处 推理，短处 Agentic（很弱）'
     : '- LiveBench (2026-10-18): weak tier; strong in Reasoning; weak in Agentic (very weak)';
   assert.ok(text.includes([m.modelNotes.notRated, m.modelNotes.strengths, m.modelNotes.weaknesses].join('\n')));
-  assert.ok(text.endsWith([liveBench, m.modelNotes.hostStrengths, m.modelNotes.weaknesses, ''].join('\n')), text);
+  assert.ok(text.endsWith([liveBench, m.modelNotes.defaultLine(m.modelNotes.strengths, m.modelNotes.hostStrengths), m.modelNotes.weaknesses, ''].join('\n')), text);
   assert.equal(read(h.userConfig), original);
+});
+
+for (const lang of ['zh', 'en']) test(`${lang} 默认版本按系列填上插件自带的判断，Opus 主持方合并原来的分工，没改过的默认行不算写过`, async (t) => {
+  const h = sandbox(t), c = baseConfig(), m = MESSAGES[lang].modelNotes;
+  const file = path.join(path.dirname(h.userConfig), 'models.md');
+  h.env.FOREMAN_LANG = lang;
+  c.agents.codex.model = 'gpt-6.2-astra';
+  for (const [agent, model] of [['sol', 'gpt-6.2-sol'], ['neon', 'gemini-4-neon-xhigh'], ['opus', 'claude-opus-4-8'], ['flash', 'deepseek-flash']]) {
+    c.agents[agent] = { ...c.agents.codex, model };
+  }
+  c.modules.default.run.complex = ['codex', 'sol', 'neon', 'opus', 'flash'].map((agent) => ({ agent }));
+  h.config(c);
+  const ids = ['gpt-6.2-astra', 'gpt-6.2-sol', 'gemini-4-neon', 'claude-opus-4-8', 'deepseek-flash', 'claude-opus-5-5'];
+  assert.deepEqual((await notes(h, '--write', '--host-model', 'claude-opus-5-5')).unwritten, ids);
+  // 每节去掉标题和 LiveBench 那一行，只看擅长、短处两行
+  const lines = () => Object.fromEntries(read(file).split(/^## /m).slice(1).map((block) => {
+    const [heading, , ...rest] = block.trim().split('\n');
+    return [heading, rest];
+  }));
+  const [gpt, gemini, opus] = m.defaults, both = (d) => [m.defaultLine(m.strengths, d.strengths), m.defaultLine(m.weaknesses, d.weaknesses)];
+  assert.deepEqual(lines(), {
+    'gpt-6.2-astra': both(gpt), 'gpt-6.2-sol': both(gpt), 'gemini-4-neon': both(gemini),
+    'claude-opus-4-8': [m.defaultLine(m.strengths, opus.strengths), m.weaknesses],
+    'deepseek-flash': [m.strengths, m.weaknesses],
+    'claude-opus-5-5': [m.defaultLine(m.strengths, opus.host), m.weaknesses],
+  });
+  write(file, read(file).replace(both(gpt)[1], `${m.weaknesses} ${lang === 'zh' ? '实测不明显' : 'not seen here'}`));
+  assert.deepEqual((await notes(h, '--host-model', 'claude-opus-5-5')).unwritten, ids.filter((id) => id !== 'gpt-6.2-astra'));
 });
 
 test('状态跟随 FOREMAN_CONFIG，忽略项目覆盖，只在文末追加缺少的节并保留每个原字节', async (t) => {
