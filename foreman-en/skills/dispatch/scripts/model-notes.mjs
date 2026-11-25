@@ -63,14 +63,18 @@ function fits(term, name) {
 // 一个标题可以并列几个模型（中英文逗号、顿号隔开）；括号里的备注（里面的逗号也一样）、反引号和标题末尾的 # 不算。
 const headingTerms = (heading) => heading.replace(/\s+#+\s*$/, '').replace(/[（(][^（()）]*[）)]/g, '').split(/[（(]/, 1)[0]
   .split(/[,，、]/).map((part) => part.replace(/`/g, '').trim()).filter(Boolean);
-// 默认版本里的行：LiveBench 那一行、空着的擅长和短处，以及 Claude 主持方原样的默认擅长行。
-const HOST_DEFAULTS = new Set(Object.values(MESSAGES).map((m) => m.modelNotes.hostStrengths));
+// 默认版本里的行：LiveBench 那一行、空着的擅长和短处，以及原样没改的插件默认判断（两种语言都算）。
+const DEFAULT_LINES = new Set(Object.values(MESSAGES).flatMap(({ modelNotes: t }) => [
+  t.defaultLine(t.strengths, t.hostStrengths),
+  ...t.defaults.flatMap((d) => [[t.strengths, d.strengths], [t.weaknesses, d.weaknesses], [t.strengths, d.host]]
+    .filter(([, text]) => text).map(([label, text]) => t.defaultLine(label, text))),
+]));
 
 function notesStatus(file, content, models) {
   const placeholder = /^(?:-\s+)?(?:LiveBench(?:[：:]|（| \()|(?:擅长：|短处：|Strengths:|Weaknesses:)$)/;
   const sections = (content?.toString('utf8') ?? '').replace(/^﻿/, '').split(/^## /m).slice(1).map((block) => {
     const [heading, ...lines] = block.split(/\r?\n/);
-    return { terms: headingTerms(heading), written: lines.map((line) => line.trim()).some((line) => line && !placeholder.test(line) && !HOST_DEFAULTS.has(line)) };
+    return { terms: headingTerms(heading), written: lines.map((line) => line.trim()).some((line) => line && !placeholder.test(line) && !DEFAULT_LINES.has(line)) };
   });
   const ids = [...models.keys()];
   const sectionsOf = (id) => sections.filter(({ terms }) => terms.some((term) => [...models.get(id)].some((name) => fits(term, name))));
@@ -84,13 +88,18 @@ export function modelNotesStatus(cfg, { hostModel } = {}) {
   return notesStatus(file, readNotes(file), usedModels(cfg, hostModel));
 }
 
-function section(id, hostId) {
+// names 是这个模型的各种写法（身份 ID、别名、配置里的写法），插件默认判断和标题一样按模糊匹配找
+function section(id, names, hostId) {
   const t = M.modelNotes, rating = tierOf(id);
   const strengths = M.list(rating.strengths.map((dim) => M.dimNames[dim]));
   const weaknesses = M.list(rating.weaknesses.map(({ dim, level }) => M.dimNames[dim] + (level === 'very_weak' ? t.veryWeak : '')));
   const liveBench = rating.rated ? t.liveBench(rating.checked, M.tierNames[rating.tier], strengths, weaknesses) : t.notRated;
-  return [t.heading(id), liveBench,
-    id === hostId && modelInfo(id).family === 'claude' ? t.hostStrengths : t.strengths, t.weaknesses].join('\n');
+  const preset = t.defaults.find(({ terms }) => terms.some((term) => [...names].some((name) => fits(term, name))));
+  // Claude 当主持方时，擅长里带上插件以前固定的分工（界面视觉定稿、给人读的文字）
+  const host = id === hostId && modelInfo(id).family === 'claude';
+  const line = (label, text) => text ? t.defaultLine(label, text) : label;
+  return [t.heading(id), liveBench, line(t.strengths, host ? preset?.host ?? t.hostStrengths : preset?.strengths),
+    line(t.weaknesses, preset?.weaknesses)].join('\n');
 }
 
 export function writeModelNotes(cfg, { hostModel } = {}) {
@@ -105,7 +114,7 @@ export function writeModelNotes(cfg, { hostModel } = {}) {
   const prefix = status.exists ? separator : M.modelNotes.header + '\n\n';
   const hostId = modelIdentity(hostModel);
   const added = status.missing;
-  const sections = added.map((id) => section(id, hostId) + '\n').join('\n');
+  const sections = added.map((id) => section(id, models.get(id), hostId) + '\n').join('\n');
   const next = Buffer.concat([original ?? Buffer.alloc(0), Buffer.from((prefix + sections).replaceAll('\n', eol))]);
   try {
     fs.writeFileSync(tmp, next);
