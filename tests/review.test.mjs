@@ -23,10 +23,12 @@ for (const lang of ['zh', 'en']) test(`opencode 审查注入只读 foreman-revie
   assert.deepEqual(c.agents_status.oc.capabilities.modes, ['review', 'discuss']); // 没写 run_access，不列 run
   const r = output(await h.bridge(args(h, ['--brief', '-']), { env: { ...s.env, FOREMAN_LANG: lang }, input: '重点检查重复扣款' }));
   const calls = s.calls().filter((c) => c.operation === 'run'), call = calls[0];
-  assert.equal(calls.length, 2); assert.equal(call.args[call.args.indexOf('--agent') + 1], 'foreman-review');
+  assert.equal(calls.length, 2);
+  const agentName = call.args[call.args.indexOf('--agent') + 1];
+  assert.match(agentName, /^foreman-review-[0-9a-f]{8}$/);
   assert.equal(call.args[call.args.indexOf('--title') + 1], 'foreman review'); // 不带标题时 opencode 会另发请求起标题
   assert.equal(call.env.PWD, h.cwd);
-  const permission = JSON.parse(call.env.OPENCODE_CONFIG_CONTENT).agent['foreman-review'].permission;
+  const permission = JSON.parse(call.env.OPENCODE_CONFIG_CONTENT).agent[agentName].permission;
   assert.deepEqual(permission, { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow' });
   for (const tool of ['shell', 'bash', 'write', 'edit', 'question', 'external_directory']) assert.equal(permission[tool] ?? permission['*'], 'deny');
   const patch = read(path.join(r.run_dir, 'review.patch')), scope = json(path.join(r.run_dir, 'review-scope.json'));

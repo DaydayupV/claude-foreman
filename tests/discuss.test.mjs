@@ -257,14 +257,17 @@ test('opencode 注入只读代理、设置 PWD 并翻译工具事件和导出用
   assert.equal(call.env.PWD, h.cwd);
   assert.equal(config.theme, 'synthetic');
   assert.deepEqual(config.agent.existing, { mode: 'subagent' });
-  assert.deepEqual(config.agent['foreman-discuss'], { mode: 'primary', description: 'Read-only code discussion for foreman',
+  const agentName = call.args[call.args.indexOf('--agent') + 1];
+  assert.match(agentName, /^foreman-discuss-[0-9a-f]{8}$/);
+  assert.deepEqual(config.agent[agentName], { mode: 'primary', description: 'Read-only code discussion for foreman',
     permission: { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow', webfetch: 'allow', websearch: 'allow' } });
-  assert.deepEqual(call.args, ['run', '--standalone', '--format', 'json', '--agent', 'foreman-discuss', '-m', 'fake/model#high', '--title', '合成讨论']);
+  assert.deepEqual(call.args, ['run', '--standalone', '--format', 'json', '--agent', agentName, '-m', 'fake/model#high', '--title', '合成讨论']);
   assert.ok(call.stdin.includes('不能运行命令'));
   assert.ok(call.stdin.includes('也可以搜网页、读网页查资料；不能运行命令，也不能修改文件。'));
   assert.ok(call.stdin.includes('从网上查到的说法要附上链接。'));
   assert.ok(call.stdin.includes(h.cwd));
   assert.deepEqual(exported.args, ['session', 'export', '--standalone', 'synthetic-opencode-session']);
+  assert.ok(Object.hasOwn(JSON.parse(exported.env.OPENCODE_CONFIG_CONTENT).agent, agentName));
   assert.deepEqual(r.usage, { input_tokens: 157, cached_input_tokens: 22, cache_write_input_tokens: 5, output_tokens: 60, reasoning_output_tokens: 10 }); // 输出含推理
   assert.equal(r.cost_usd, null); assert.equal(r.cost_source, 'unknown'); assert.equal(r.reported_cost_usd, 0.375);
   assert.equal(r.commands_executed, 0);
@@ -297,7 +300,9 @@ for (const [label, scenario, content, ready] of [
   const s = h.scenario(scenario);
   const r = output(await h.bridge(discussArgs(h, 'oc'), { env: { ...s.env, OPENCODE_CONFIG_CONTENT: content } }));
   const call = s.calls().find((c) => c.operation === 'run');
-  assert.deepEqual(JSON.parse(call.env.OPENCODE_CONFIG_CONTENT).agent['foreman-discuss'].permission,
+  const agentName = call.args[call.args.indexOf('--agent') + 1];
+  assert.match(agentName, /^foreman-discuss-[0-9a-f]{8}$/);
+  assert.deepEqual(JSON.parse(call.env.OPENCODE_CONFIG_CONTENT).agent[agentName].permission,
     { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow', webfetch: 'allow', ...(ready ? { websearch: 'allow' } : {}) });
   assert.equal(call.stdin.includes('也可以搜网页、读网页查资料；'), ready);
   assert.equal(call.stdin.includes('也可以读网页查资料（这次不能搜网页，只能读已知网址）；'), !ready);
@@ -316,8 +321,10 @@ test('opencode 修复报告时续接同一会话且仍使用只读权限', async
   assert.ok(!calls[0].args.includes('--session'));
   assert.equal(calls[1].args[calls[1].args.indexOf('--session') + 1], r.session_id);
   assert.equal(calls[1].stdin, M.reportRepairPrompt('Reply is not valid JSON'));
+  const agentName = calls[1].args[calls[1].args.indexOf('--agent') + 1];
+  assert.match(agentName, /^foreman-discuss-[0-9a-f]{8}$/);
   assert.deepEqual(JSON.parse(calls[1].env.OPENCODE_CONFIG_CONTENT), { agent: {
-    'foreman-discuss': { mode: 'primary', description: 'Read-only code discussion for foreman',
+    [agentName]: { mode: 'primary', description: 'Read-only code discussion for foreman',
       permission: { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow' } },
   } });
 });

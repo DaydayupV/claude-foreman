@@ -29,6 +29,13 @@ for (const lang of ['zh', 'en']) {
       ? 'medium (modules.default.review.normal[0])' : 'medium（modules.default.review.normal[0]）'));
     const calls = s.calls().filter((c) => c.operation === 'run');
     assert.deepEqual(calls.map((c) => c.args[c.args.indexOf('-m') + 1]), ['fake/model', 'fake/model#low', 'fake/override#medium']);
+    // check 用带随机后缀的讨论代理，同一个进程里几次请求共用后缀，权限是讨论的只读白名单。
+    const agentNames = calls.map((c) => c.args[c.args.indexOf('--agent') + 1]);
+    assert.ok(agentNames.every((name) => /^foreman-discuss-[0-9a-f]{8}$/.test(name) && name === agentNames[0]), JSON.stringify(agentNames));
+    for (const c of calls) {
+      assert.deepEqual(JSON.parse(c.env.OPENCODE_CONFIG_CONTENT).agent[agentNames[0]].permission,
+        { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow' });
+    }
     assert.ok(calls.every((c) => c.stdin === 'Reply with the single word OK.'));
   });
 }

@@ -162,7 +162,9 @@ for (const agent of ['oc', 'pi']) for (const lang of ['zh', 'en']) test(`${agent
   assert.ok(!call.stdin.includes('x'.repeat(100))); assert.ok(call.stdin.length < MAX_REVIEW_CHARS);
   assert.ok(read(path.join(r.run_dir, 'review.patch')).length > MAX_REVIEW_CHARS);
   if (agent === 'oc') {
-    assert.deepEqual(JSON.parse(call.env.OPENCODE_CONFIG_CONTENT).agent['foreman-review'].permission,
+    const agentName = call.args[call.args.indexOf('--agent') + 1];
+    assert.match(agentName, /^foreman-review-[0-9a-f]{8}$/);
+    assert.deepEqual(JSON.parse(call.env.OPENCODE_CONFIG_CONTENT).agent[agentName].permission,
       { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow' });
   } else {
     assert.equal(call.args[call.args.indexOf('--tools') + 1], 'read,grep,find,ls');

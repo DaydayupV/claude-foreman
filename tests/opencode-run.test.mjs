@@ -173,8 +173,10 @@ for (const [access, websearch] of [['edit', true], ['shell', false]]) test(`open
   assert.equal(r.session_id, 'synthetic-opencode-session');
   assert.deepEqual(json(path.join(r.run_dir, 'result.json')), r);
   assert.equal(json(path.join(r.run_dir, 'meta.json')).run_access, access);
-  assert.deepEqual(Object.keys(config.agent), ['foreman-run']);
-  assert.deepEqual(config.agent['foreman-run'].permission, permissions(access, websearch));
+  const agentName = call.args[call.args.indexOf('--agent') + 1];
+  assert.match(agentName, /^foreman-run-[0-9a-f]{8}$/);
+  assert.deepEqual(Object.keys(config.agent), [agentName]);
+  assert.deepEqual(config.agent[agentName].permission, permissions(access, websearch));
   assert.ok(call.args.includes('--standalone'));
   assert.ok(execution.stderr.includes(M.unsandboxedRun(access)));
   assert.ok(call.stdin.includes(M.footer(h.cwd, [], true)));
@@ -234,10 +236,40 @@ for (const access of ['edit', 'shell']) test(`opencode ${access} 报告只修复
   assert.equal(calls.length, 2); assert.deepEqual(r.report, report);
   assert.equal(calls[1].args[calls[1].args.indexOf('--session') + 1], r.session_id);
   assert.equal(calls[1].stdin, M.reportRepairPrompt('Reply is not valid JSON'));
+  const agentName = calls[1].args[calls[1].args.indexOf('--agent') + 1];
+  assert.match(agentName, /^foreman-repair-[0-9a-f]{8}$/);
   assert.deepEqual(JSON.parse(calls[1].env.OPENCODE_CONFIG_CONTENT).agent, {
-    'foreman-repair': { mode: 'primary', description: 'Report format repair for foreman', permission: { '*': 'deny' } },
+    [agentName]: { mode: 'primary', description: 'Report format repair for foreman', permission: { '*': 'deny' } },
   });
   assert.deepEqual(r.changes.files, [{ status: 'A', path: 'once.txt', by: 'agent' }]);
+});
+
+test('opencode 保留用户代理配置，执行和同会话修复共用随机后缀', async (t) => {
+  const h = sandbox(t); configure(h);
+  const userConfig = {
+    agents: { 'foreman-discuss': { description: 'User discussion agent' } },
+    mode: { 'foreman-run': { description: 'User execution mode' } },
+    agent: { 'foreman-review': { description: 'User review agent' }, 'foreman-run': { mode: 'subagent' } },
+    theme: 'synthetic',
+  };
+  const s = h.scenario({ calls: [{ last_message: 'not json' }, { last_message: report }] });
+  const r = output(await h.bridge(taskArgs(h), { env: { ...s.env, OPENCODE_CONFIG_CONTENT: JSON.stringify(userConfig) } }));
+  const calls = runs(s);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(r.report, report);
+  const [run, repair] = calls;
+  const runAgent = run.args[run.args.indexOf('--agent') + 1];
+  const repairAgent = repair.args[repair.args.indexOf('--agent') + 1];
+  assert.match(runAgent, /^foreman-run-[0-9a-f]{8}$/);
+  assert.match(repairAgent, /^foreman-repair-[0-9a-f]{8}$/);
+  assert.equal(runAgent.slice(-8), repairAgent.slice(-8));
+  assert.equal(repair.args[repair.args.indexOf('--session') + 1], r.session_id);
+  for (const [call, agentName, permission] of [[run, runAgent, permissions('edit')], [repair, repairAgent, { '*': 'deny' }]]) {
+    const config = JSON.parse(call.env.OPENCODE_CONFIG_CONTENT);
+    const { [agentName]: injected, ...agent } = config.agent;
+    assert.deepEqual({ ...config, agent }, userConfig);
+    assert.deepEqual(injected.permission, permission);
+  }
 });
 
 test('opencode 修复仍不合格只警告，最终提问不修复', async (t) => {
@@ -302,7 +334,12 @@ test('opencode 续接同一会话和组范围 track，权限变化记入 notes',
   assert.ok(second.notes.includes(M.runAccessChanged('edit', 'shell')));
   const call = runs(s).at(-1);
   assert.equal(call.args[call.args.indexOf('--session') + 1], first.session_id);
-  assert.deepEqual(JSON.parse(call.env.OPENCODE_CONFIG_CONTENT).agent['foreman-run'].permission, permissions('shell'));
+  const agentName = call.args[call.args.indexOf('--agent') + 1];
+  assert.match(agentName, /^foreman-run-[0-9a-f]{8}$/);
+  // 续接是另一个进程，后缀要重新随机：固定的后缀能被配置事先写出来。
+  const firstAgent = runs(s)[0].args[runs(s)[0].args.indexOf('--agent') + 1];
+  assert.notEqual(firstAgent.slice(-8), agentName.slice(-8));
+  assert.deepEqual(JSON.parse(call.env.OPENCODE_CONFIG_CONTENT).agent[agentName].permission, permissions('shell'));
   assert.equal(call.stdin, `续接合成任务\n\n${M.resumeFooter}\n\n${M.opencodeRunResumeFooter}\n`);
   failed(await h.bridge([...resume(second), '--no-snapshot']), M.snapshotRequired);
 });

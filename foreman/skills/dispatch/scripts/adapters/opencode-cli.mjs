@@ -1,5 +1,6 @@
 // Opencode CLI：代理权限与环境、事件翻译、会话导出和检查项。
 import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -17,6 +18,7 @@ function opencodeCommand(agent) {
 }
 
 const OPENCODE_AGENT = 'foreman-discuss';
+const AGENT_SUFFIX = randomBytes(4).toString('hex');
 const RUN_ACCESS = ['edit', 'shell'];
 const capabilities = { modes: ['run', 'review', 'discuss'], isolation: 'tools', reads_code: true, reads_images: false, native_schema: false, native_review: false, images: false, resume: true, command_start_events: false };
 const websearchByCwd = new Map();
@@ -49,6 +51,11 @@ function opencodeWebsearchReady(agent, cwd) {
   return ready;
 }
 
+// 代理名在每个进程加一个随机后缀，任何配置都事先写不出同名条目。同一份配置里同名的 agents、mode 条目，{env:}、{file:} 展开出来的名字，顶层 __proto__ 继承来的条目，都会顶掉插件写的代理和它的权限（opencode 2.3.2 实测）。
+function opencodeAgentName(agentId) {
+  return `${agentId}-${AGENT_SUFFIX}`;
+}
+
 function opencodeEnv(agentId = OPENCODE_AGENT, access, web) {
   let config = {};
   try { config = opencodeUserConfig(); } catch { /* 无效配置由本次注入替代 */ }
@@ -65,11 +72,13 @@ function opencodeEnv(agentId = OPENCODE_AGENT, access, web) {
     if (access === 'shell') permission.shell = 'allow';
   }
   const agent = { mode: 'primary', description: descriptions[agentId], permission };
-  return { ...process.env, OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...config, agent: { ...(isObject(config.agent) ? config.agent : {}), [agentId]: agent } }) };
+  return { ...process.env, OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...config,
+    agent: { ...(isObject(config.agent) ? config.agent : {}), [opencodeAgentName(agentId)]: agent } }) };
 }
 
 // 私有服务才会读取本次注入的代理配置，也能随 run 一起终止。
-const opencodeArgs = (model, effort, agentId = OPENCODE_AGENT) => ['run', '--standalone', '--format', 'json', '--agent', agentId, '-m', `${model}${effort != null ? `#${effort}` : ''}`];
+const opencodeArgs = (model, effort, agentId = OPENCODE_AGENT) =>
+  ['run', '--standalone', '--format', 'json', '--agent', opencodeAgentName(agentId), '-m', `${model}${effort != null ? `#${effort}` : ''}`];
 
 function permissionQuestions(actions, lines, cwd) {
   // 路径按工作目录解析：项目里的显示相对路径，项目外的显示绝对路径（模型常给出一长串 ../）。

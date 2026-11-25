@@ -119,8 +119,9 @@ for (const agent of ['oc', 'pi', 'api']) for (const valid of [true, false]) test
     assert.ok(r.warnings.includes(M.reportInvalid(agent, path.join(r.run_dir, 'last-message.txt'))));
   }
   if (agent === 'oc') {
-    assert.equal(calls[1].args[calls[1].args.indexOf('--agent') + 1], 'foreman-review');
-    assert.deepEqual(JSON.parse(calls[1].env.OPENCODE_CONFIG_CONTENT).agent['foreman-review'].permission,
+    const agentName = calls[1].args[calls[1].args.indexOf('--agent') + 1];
+    assert.match(agentName, /^foreman-review-[0-9a-f]{8}$/);
+    assert.deepEqual(JSON.parse(calls[1].env.OPENCODE_CONFIG_CONTENT).agent[agentName].permission,
       { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow' });
   }
   if (agent === 'pi') assert.ok(calls[1].args.includes('--no-tools'));

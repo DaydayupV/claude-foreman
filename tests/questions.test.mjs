@@ -122,7 +122,9 @@ test('opencode 收集权限拒绝并跨 stderr 去重，项目内路径相对、
   assert.ok(r.notes.includes(M.needsDecisionNote(3, 'discuss')));
   assert.equal(r.notes.filter((note) => note === M.opencodeWebsearchUnconfigured).length, 1);
   const call = s.calls().find((c) => c.operation === 'run');
-  const permission = JSON.parse(call.env.OPENCODE_CONFIG_CONTENT).agent['foreman-discuss'].permission;
+  const agentName = call.args[call.args.indexOf('--agent') + 1];
+  assert.match(agentName, /^foreman-discuss-[0-9a-f]{8}$/);
+  const permission = JSON.parse(call.env.OPENCODE_CONFIG_CONTENT).agent[agentName].permission;
   assert.equal(permission.question ?? permission['*'], 'deny');
   assert.ok(!Object.entries(permission).some(([name, value]) => name === 'question' && value === 'allow'));
 });
