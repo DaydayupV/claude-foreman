@@ -1,4 +1,4 @@
-// foreman 1.2.0 的 agy 守卫；正文 sha256: fd06e38301940e8fa3b8aab7f422a87312df4231e40cfe695e32ed16659ae3b5
+// foreman 1.2.0 的 agy 守卫；正文 sha256: b5ee91a043d68bbcc984836dba1bebf035e1aee95c87c6815dbdb926c83db912
 // 只依赖 Node 内置模块，复制到用户目录后仍可独立运行。
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,7 +9,9 @@ import { spawnSync } from 'node:child_process';
 // read_file 实测会带 StartLine / EndLine 只读一段；agy 1.4.9 起有时还带 ByteOffset（从第几个字节读起）。
 const READ_KEYS = ['Path', 'StartLine', 'EndLine', 'ByteOffset'];
 const KEYS = { read_file: READ_KEYS, view_file: READ_KEYS, edit_file: ['Path', 'Target', 'Replacement'],
-  write_file: ['Path', 'Content', 'Overwrite'], run_command: ['CommandLine', 'WaitMsBeforeAsync', 'toolSummary'] };
+  write_file: ['Path', 'Content', 'Overwrite'], run_command: ['CommandLine', 'WaitMsBeforeAsync', 'toolSummary'],
+  search_web: ['query', 'domain', 'toolSummary'], read_url_content: ['Url', 'toolSummary'],
+  invoke_subagent: ['Prompt', 'Role', 'TypeName', 'toolSummary'] };
 // 写进这些目录等于改 git、Claude Code、agy 的配置或钩子，能绕开“edit 档不跑命令”，被忽略的文件在验收的 diff 里也看不到。
 const PROTECTED_DIRS = new Set(['.git', '.claude', '.gemini', '.agents', '.agent', '_agents', '_agent']);
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -68,17 +70,21 @@ function protectedTargets(root) {
   for (const name of PROTECTED_DIRS) {
     const entry = path.join(root, name), stat = fs.lstatSync(entry, { throwIfNoEntry: false });
     if (!stat) continue;
-    let target = null, base = root;
+    let target = null;
     if (stat.isSymbolicLink()) {
       target = fs.readlinkSync(entry);
       if (share(target)) continue;
       const linked = path.resolve(root, target);
-      // .git 链接到一个写着 gitdir: 的文件时，git 用的是那个文件里写的目录，按那个文件所在的目录解析。
-      if (name === '.git' && fs.statSync(linked, { throwIfNoEntry: false })?.isFile()) { base = path.dirname(linked); target = gitdirOf(linked); }
+      // 相对 gitdir 以项目根的 .git 为准，链接目标文件本身也可能经普通名字被改写。
+      if (name === '.git' && fs.statSync(linked, { throwIfNoEntry: false })?.isFile()) {
+        const file = realPath(linked);
+        if (within(root, file)) targets.push({ name, dir: file });
+        target = gitdirOf(file);
+      }
     } else if (name === '.git' && stat.isFile()) target = gitdirOf(entry);
     if (!target || share(target)) continue;
     // 按真实落点判断在不在项目里：经项目外的别名绕回项目的也算。
-    const dir = realPath(path.resolve(base, target));
+    const dir = realPath(path.resolve(root, target));
     if (within(root, dir)) targets.push({ name, dir });
   }
   return targets;
@@ -146,6 +152,49 @@ function currentMarkers(markers) {
     return false;
   });
 }
+const mcpName = (name) => name.toLowerCase().replace(/[^a-z0-9]/g, '_');
+// 用户服务器规整后的名称可能与内置服务撞名，预载工具的前缀也可能来自较短的服务器名。
+function mcpConfigError(tool, serverName) {
+  const unreadable = `${tool} is not allowed because agy's mcp_config.json can't be read`;
+  let config;
+  try {
+    const file = path.join(os.homedir(), '.gemini', 'config', 'mcp_config.json');
+    if (!fs.lstatSync(file, { throwIfNoEntry: false })) return;
+    // agy 自己会留一个空文件；空文件和不写 mcpServers 都等于没有用户服务器。
+    const text = fs.readFileSync(file, 'utf8');
+    if (!text.trim()) return;
+    config = JSON.parse(text);
+  } catch {
+    return unreadable;
+  }
+  const servers = !object(config) ? null : Object.hasOwn(config, 'mcpServers') ? config.mcpServers : {};
+  if (!object(servers)) return unreadable;
+  const preloaded = tool.startsWith('mcp_') ? mcpName(tool) : '';
+  const server = typeof serverName === 'string' ? mcpName(serverName) : undefined;
+  const name = Object.keys(servers).find((candidate) => {
+    const normalized = mcpName(candidate);
+    return preloaded ? preloaded.startsWith(`mcp_${normalized}_`) : normalized === server;
+  });
+  if (name !== undefined) return `${tool} may belong to the MCP server ${name} configured in agy's mcp_config.json, which agy tasks may not use`;
+}
+// 网址要能解析出 http 或 https 协议和主机名，光有前缀（比如 "https://"）不算。
+const httpUrl = (value) => {
+  if (typeof value !== 'string' || !/^https?:\/\//i.test(value)) return false;
+  try { const url = new URL(value); return (url.protocol === 'http:' || url.protocol === 'https:') && url.hostname !== ''; } catch { return false; }
+};
+// 逐层检查参数，防止网页和浏览器工具借文件路径或非 HTTP(S) 网址访问本机文件。
+function webArgumentError(tool, args) {
+  const pending = [args];
+  while (pending.length) {
+    const current = pending.pop();
+    if (current === null || typeof current !== 'object') continue;
+    for (const [key, value] of Object.entries(current)) {
+      if (/path|file/i.test(key)) return `${tool} argument ${key} looks like a local file path, which agy's browser and web tools may not use`;
+      if (/url|uri/i.test(key) && !httpUrl(value)) return `${tool} argument ${key} must be an http or https URL`;
+      if (value !== null && typeof value === 'object') pending.push(value);
+    }
+  }
+}
 function decide(input, policy) {
   if (!policy) {
     const markers = activeMarkers();
@@ -162,22 +211,47 @@ function decide(input, policy) {
     // 第 3.2 节：丢失环境变量时，跳过权限不能把 ask 变成放行。
     return marker ? deny(`foreman is running agy in this folder (run ${path.basename(marker.run_dir || '') || 'unknown'}), so tool calls here are paused until that run ends (at the latest ${marker.expires_at}); run "agy-guard status" in foreman to see it`) : { decision: 'ask' };
   }
-  if (!object(policy) || !['none', 'read', 'probe', 'edit', 'shell'].includes(policy.access) || !path.isAbsolute(policy.root || '')
+  if (!object(policy) || Object.hasOwn(policy, 'web') && typeof policy.web !== 'boolean'
+    || !['none', 'read', 'probe', 'edit', 'shell'].includes(policy.access) || !path.isAbsolute(policy.root || '')
     || !fs.statSync(policy.root).isDirectory() || !Array.isArray(policy.add_dirs)
     || !policy.add_dirs.every((p) => typeof p === 'string' && path.isAbsolute(p) && fs.statSync(p).isDirectory())
     || !path.isAbsolute(policy.run_dir || '') || !path.isAbsolute(policy.log_file || '') || !policy.nonce) return deny('invalid policy for this run');
   const tool = input.toolCall?.name, args = input.toolCall?.args;
   // 第 4 节：任务清单（manage_task；agy 1.5 起是 update_steps）不执行命令，也不读写项目文件。
   if (tool === 'manage_task' || tool === 'update_steps') return { decision: 'allow' };
+  // 浏览器子 agent 经远程调试操作用户自己的 Chrome，按用户 2026-11-25 的决定在讨论和执行中放开，并拦截本机路径和非 HTTP(S) 网址参数以保护只读和写入范围。
+  const mcpTool = ['call_mcp_tool', 'list_resources', 'read_resource'].includes(tool);
+  const preloadedMcp = typeof tool === 'string' && tool.startsWith('mcp_');
+  const webTool = mcpTool || ['search_web', 'read_url_content', 'invoke_subagent', 'send_message', 'schedule', 'manage_subagents',
+    'open_browser_url', 'capture_browser_screenshot', 'capture_browser_console_logs', 'click_browser_pixel',
+    'execute_browser_javascript', 'list_browser_pages', 'read_browser_page'].includes(tool)
+    || typeof tool === 'string' && /^(mcp_chrome_devtools_|browser_)/.test(tool);
+  if ((webTool || preloadedMcp) && (policy.web !== true || !['read', 'edit', 'shell'].includes(policy.access))) return deny(`${tool} is not allowed in this run`);
+  if (mcpTool || preloadedMcp) {
+    const reason = mcpConfigError(tool, args?.ServerName);
+    if (reason) return deny(reason);
+  }
   if (KEYS[tool]) {
     if (!object(args)) return deny('tool arguments must be an object');
     // 第 4 节：升级后出现新参数时，先拒绝再人工核对。
     const extra = Object.keys(args).find((k) => !KEYS[tool].includes(k));
     if (extra) return deny(`unexpected argument ${extra} for ${tool}`);
   }
+  if (webTool) {
+    if (tool === 'invoke_subagent' && args.TypeName !== 'browser') return deny('invoke_subagent is only allowed for the browser subagent in this run');
+    if (mcpTool && args?.ServerName !== 'chrome_devtools') {
+      if (tool !== 'call_mcp_tool' || args?.ServerName !== 'web') return deny(args?.ServerName === undefined
+        ? `${tool} is not allowed in this run` : `${tool} is only allowed for agy's built-in chrome_devtools and web servers in this run`);
+      if (!object(args) || !['read_url_content', 'open_browser_url'].includes(args.ToolName)
+        || !Object.keys(args).every((k) => ['ServerName', 'ToolName', 'Arguments', 'toolSummary'].includes(k))
+        || !object(args.Arguments) || !Object.keys(args.Arguments).every((k) => k === 'url' || k === 'Url'))
+        return deny('call_mcp_tool is not allowed in this run');
+    }
+    const reason = webArgumentError(tool, args);
+    return reason ? deny(reason) : { decision: 'allow' };
+  }
   // 第 4 节：none 用于报告修复，只保留上面的任务清单例外。
   if (policy.access === 'none') return deny(`${tool} is not allowed in this run`);
-  // 第 4 节：子 agent、MCP、浏览器、联网、提问和未知工具均不放行。
   const writing = tool === 'edit_file' || tool === 'write_file';
   if (!['read_file', 'view_file', 'run_command'].includes(tool) && !(writing && ['edit', 'shell'].includes(policy.access))) return deny(tool === 'ask_question'
     ? 'ask_question is not allowed in this run; put questions in the report' : `${tool} is not allowed in this run`);

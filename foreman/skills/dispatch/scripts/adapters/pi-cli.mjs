@@ -191,8 +191,8 @@ async function executePi(ctx) {
     prompt = [...parts, M.reviewFooter(ctx.reviewTarget), M.reviewSchemaFooter(schemaText)].join('\n\n') + '\n';
   } else if (exec) prompt = ctx.parent
     ? `${brief}${focusFiles(files)}\n\n${M.resumeFooter}\n\n${M.opencodeRunResumeFooter}\n`
-    : `${brief}\n\n${M.footer(cwd, ctx.addDirs || [])}\n\n${M.opencodeRunFooter(schemaText, access)}\n`;
-  else prompt = `${brief}${focusFiles(files)}\n\n${ctx.parent ? M.opencodeResumeFooter : M.opencodeDiscussFooter(cwd, schemaText)}\n`;
+    : `${brief}\n\n${M.footer(cwd, ctx.addDirs || [], false)}\n\n${M.opencodeRunFooter(schemaText, access, false)}\n`;
+  else prompt = `${brief}${focusFiles(files)}\n\n${ctx.parent ? M.opencodeResumeFooter : M.opencodeDiscussFooter(cwd, schemaText, false)}\n`;
   const { id, dir, release } = await newRunDir(ctx);
   const context = { ...ctx, ...(exec ? {} : { readonly: readonlyLevel(agent, ctx.kind) }), id, dir, release, prompt };
   if (exec) return execute(context, {

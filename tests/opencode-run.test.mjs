@@ -19,7 +19,8 @@ const configure = (h, access = 'edit') => {
 const runs = (s) => s.calls().filter((c) => c.operation === 'run');
 const tool = (name, input, files, status = 'completed') => ({ files,
   event: { type: 'tool_use', part: { tool: name, state: { status, input, output: 'synthetic output' } } } });
-const permissions = (access) => ({ '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow', edit: 'allow', ...(access === 'shell' ? { shell: 'allow' } : {}) });
+const permissions = (access, websearch = false) => ({ '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow',
+  webfetch: 'allow', ...(websearch ? { websearch: 'allow' } : {}), edit: 'allow', ...(access === 'shell' ? { shell: 'allow' } : {}) });
 
 test('opencode step_finish 在运行中写分段用量，缺 tokens 时跳过并保留当前步骤', async (t) => {
   const h = sandbox(t); configure(h); h.initGit();
@@ -149,11 +150,12 @@ test('opencode 执行和续接需要用户授权，项目 agents 被忽略后仍
   assert.equal(h.calls().filter((c) => ['run', 'exec'].includes(c.operation)).length, 0, JSON.stringify(h.calls()));
 });
 
-for (const access of ['edit', 'shell']) test(`opencode ${access} 执行：权限、归属、报告、用量及 watch 时间线`, async (t) => {
+for (const [access, websearch] of [['edit', true], ['shell', false]]) test(`opencode ${access} 执行：权限、归属、报告、用量及 watch 时间线`, async (t) => {
   const h = sandbox(t); configure(h, access); h.initGit();
   const changed = { ...report, files_changed: [{ path: 'reported.txt', change: '模型自报' }] };
   const edits = [['edit', 'source.txt'], ['write', 'write.txt'], ['custom_edit', 'edit.txt'], ['custom_write', 'custom.txt'], ['apply_patch', 'patch.txt']];
-  const s = h.scenario({ last_message: `\`\`\`json\n${JSON.stringify(changed)}\n\`\`\``, files: { 'unknown.txt': 'unknown', 'reported.txt': 'claim' }, steps: [
+  const debug_config = websearch ? [{ type: 'document', path: 'synthetic-config.json', info: { websearch: { provider: 'synthetic' } } }] : undefined;
+  const s = h.scenario({ debug_config, last_message: `\`\`\`json\n${JSON.stringify(changed)}\n\`\`\``, files: { 'unknown.txt': 'unknown', 'reported.txt': 'claim' }, steps: [
     tool('read', { filePath: path.join(h.cwd, 'source.txt') }), tool('grep', { pattern: 'before' }),
     ...edits.map(([name, file], i) => tool(name, { [i % 2 ? 'path' : 'filePath']: path.join(h.cwd, file) }, { [file]: 'after\n' })),
     tool('edit', { path: 'denied.txt' }, { 'denied.txt': 'outside actor' }, 'error'),
@@ -172,12 +174,14 @@ for (const access of ['edit', 'shell']) test(`opencode ${access} 执行：权限
   assert.deepEqual(json(path.join(r.run_dir, 'result.json')), r);
   assert.equal(json(path.join(r.run_dir, 'meta.json')).run_access, access);
   assert.deepEqual(Object.keys(config.agent), ['foreman-run']);
-  assert.deepEqual(config.agent['foreman-run'].permission, permissions(access));
+  assert.deepEqual(config.agent['foreman-run'].permission, permissions(access, websearch));
   assert.ok(call.args.includes('--standalone'));
   assert.ok(execution.stderr.includes(M.unsandboxedRun(access)));
-  assert.ok(call.stdin.includes(M.footer(h.cwd, [])));
+  assert.ok(call.stdin.includes(M.footer(h.cwd, [], true)));
+  assert.ok(call.stdin.includes('需要时可以上网查资料；报告里用到网上查来的说法时，附上链接。'));
   const schema = read(path.join(ROOT, 'foreman/skills/dispatch/schemas/report.schema.json'));
-  assert.ok(call.stdin.includes(M.opencodeRunFooter(schema, access)));
+  assert.ok(call.stdin.includes(M.opencodeRunFooter(schema, access, true)));
+  assert.equal(call.stdin.includes('不要下载或安装软件和依赖。'), access === 'shell');
   assert.equal(r.changes.agent_total, edits.length); assert.equal(r.changes.reported_total, 1); assert.equal(r.changes.unknown_total, 2);
   for (const f of r.changes.files) assert.equal(f.by, edits.some(([, name]) => name === f.path) ? 'agent' : f.path === 'reported.txt' ? 'reported' : 'unknown');
   assert.match(read(path.join(r.run_dir, 'diff.patch')), /-before\n\+after/);

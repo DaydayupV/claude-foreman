@@ -76,7 +76,8 @@ for (const tool of ['codex', 'oc', 'api']) {
     assert.equal(r.needs_decision, true);
     // 讨论的续接不写 --reason，提示也不带
     assert.deepEqual(r.notes, [M.needsDecisionNote(1, 'discuss')]); assert.ok(!r.notes[0].includes('--reason answer'));
-    assert.equal(api ? api.requests.length : s.calls().filter((c) => c.operation !== 'export').length, 1);
+    if (api) assert.equal(api.requests.length, 1);
+    else assert.deepEqual(s.calls().map((c) => c.operation), tool === 'oc' ? ['debug', 'run', 'export'] : ['exec']);
     assert.ok(!h.events(r.run_id).some((e) => e.type === 'api.repair'));
   });
 
@@ -103,9 +104,11 @@ test('opencode 收集权限拒绝并跨 stderr 去重，项目内路径相对、
   const denied = { type: 'tool_use', part: { tool: 'read', state: { status: 'error', input: { filePath: outside },
     error: JSON.stringify({ error: { type: 'permission.rejected', message: 'This non-interactive run cannot ask the user for permission, so the request was rejected. Continue without this action.' } }) } } };
   const textDenied = { type: 'tool_use', part: { tool: 'write', state: { status: 'error', input: { path: path.join(h.cwd, 'file.txt') }, error: 'not allowed' } } };
+  const searchDenied = { type: 'tool_use', part: { tool: 'websearch', state: { status: 'error', input: { query: 'synthetic query' }, error: 'permission denied' } } };
   const log = `! permission requested: external_directory (${path.join(h.home, 'outside/*')}); auto-rejecting\n`;
   const s = h.scenario({ steps: [{ stderr: log }, { event: denied }, { event: denied }, { event: textDenied },
     { stderr: '! permission requested: bash (npm test); auto-rejecting\n' },
+    { event: searchDenied }, { stderr: '! permission requested: websearch (another synthetic query); auto-rejecting\n' },
     { event: { type: 'tool_use', part: { tool: 'read', state: { status: 'error', error: 'ENOENT' } } } },
   ] });
   const r = output(await h.bridge(discussArgs(h, 'oc'), { env: s.env }));
@@ -117,7 +120,9 @@ test('opencode 收集权限拒绝并跨 stderr 去重，项目内路径相对、
   assert.ok(!JSON.stringify(permissions[1]).includes(h.home));
   assert.equal(r.needs_decision, true);
   assert.ok(r.notes.includes(M.needsDecisionNote(3, 'discuss')));
-  const permission = JSON.parse(s.calls()[0].env.OPENCODE_CONFIG_CONTENT).agent['foreman-discuss'].permission;
+  assert.equal(r.notes.filter((note) => note === M.opencodeWebsearchUnconfigured).length, 1);
+  const call = s.calls().find((c) => c.operation === 'run');
+  const permission = JSON.parse(call.env.OPENCODE_CONFIG_CONTENT).agent['foreman-discuss'].permission;
   assert.equal(permission.question ?? permission['*'], 'deny');
   assert.ok(!Object.entries(permission).some(([name, value]) => name === 'question' && value === 'allow'));
 });
@@ -147,7 +152,8 @@ for (const tool of ['codex', 'oc']) {
     assert.equal(r.needs_decision, true);
     assert.deepEqual(r.errors, [M.inputWaitDetected(0.005, 'Continue? (y/n)')]);
     assert.equal(json(path.join(r.run_dir, 'meta.json')).status, 'needs_input');
-    for (const pid of [s.calls()[0].pid, Number(read(childPid))]) assert.throws(() => process.kill(pid, 0));
+    const call = s.calls().find((c) => c.operation === (tool === 'oc' ? 'run' : 'exec'));
+    for (const pid of [call.pid, Number(read(childPid))]) assert.throws(() => process.kill(pid, 0));
     const context = output(await h.hook('session-reminder.mjs')).hookSpecificOutput.additionalContext;
     assert.ok(context.includes(r.run_id));
     assert.ok(context.includes('等人回答，已结束')); // 会话提醒是给 Claude 的提示，跟着插件的语言

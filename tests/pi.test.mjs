@@ -88,6 +88,8 @@ test('讨论：只读工具和守卫、隔离参数、事件翻译、用量和�
   assert.deepEqual(policies(guardFile), [{ root: h.cwd, access: 'read' }]);
   assert.ok(call.stdin.startsWith('合成议题'));
   assert.ok(call.stdin.includes('不能运行命令'));
+  const schema = read(path.join(SCRIPTS, '../schemas/discuss.schema.json'));
+  assert.equal(call.stdin, `合成议题\n\n${M.opencodeDiscussFooter(h.cwd, schema, false)}\n`);
   assert.deepEqual(r.usage, { input_tokens: 17, cached_input_tokens: 3, cache_write_input_tokens: 4, output_tokens: 5, reasoning_output_tokens: 2 });
   assert.equal(r.cost_usd, null); assert.equal(r.cost_source, 'unknown'); assert.equal(r.reported_cost_usd, 0.25);
   assert.equal(r.session_id, 'synthetic-pi-session');
@@ -144,6 +146,8 @@ for (const access of ['edit', 'shell']) test(`执行（${access}）：工具、�
   assert.equal(r.isolation, 'tools'); assert.equal(r.run_access, access);
   assert.ok(execution.stderr.includes(M.unsandboxedRun(access)));
   assert.equal(call.args[call.args.indexOf('--tools') + 1], access === 'shell' ? 'read,grep,find,ls,edit,write,bash' : 'read,grep,find,ls,edit,write');
+  const schema = read(path.join(SCRIPTS, '../schemas/report.schema.json'));
+  assert.equal(call.stdin, `合成执行任务\n\n${M.footer(h.cwd, [], false)}\n\n${M.opencodeRunFooter(schema, access, false)}\n`);
   assert.deepEqual(policies(guardFile), [{ root: h.cwd, access }]);
   assert.equal(r.commands_executed, access === 'shell' ? 1 : 0);
   assert.deepEqual(r.changes.files.map((f) => [f.path, f.by]).sort(), [['new.txt', 'agent'], ['source.txt', 'agent']]);

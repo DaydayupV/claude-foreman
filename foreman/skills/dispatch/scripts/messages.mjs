@@ -78,9 +78,9 @@ const zh = {
   agyUninstalled: '已卸载 agy 的 foreman 守卫。',
   agyNotInstalled: '没有找到 agy 的 foreman 守卫，不用卸载。',
   agyTimeout: 'agy 已达到本轮总时限。',
-  agyDiscussFooter: (cwd, schema, shell) => zh.opencodeDiscussFooter(cwd, schema).replace(/^- .+$/m, shell
-    ? `- 这是方案讨论，不是执行任务。你可以用 read_file 读 ${cwd} 下的文件，也可以用 run_command 在 agy 的沙箱里跑只读命令（比如 git log、git grep、Get-ChildItem、Select-String）：沙箱里改不了项目内外的文件、不能联网。不要修改任何文件。`
-    : `- 这是方案讨论，不是执行任务。你只能用 read_file 读 ${cwd} 下的文件，不能运行命令，也没有搜索和列目录的工具；项目的文件清单附在最后，按清单里的路径读。不要修改任何文件。`),
+  agyDiscussFooter: (cwd, schema, shell) => zh.opencodeDiscussFooter(cwd, schema, true).replace(/^- .+$/m, shell
+    ? `- 这是方案讨论，不是执行任务。你可以用 read_file 读 ${cwd} 下的文件，也可以用 run_command 在 agy 的沙箱里跑只读命令（比如 git log、git grep、Get-ChildItem、Select-String）：沙箱里改不了项目内外的文件、不能联网。查资料可以用 search_web 搜网页。不要修改任何文件。`
+    : `- 这是方案讨论，不是执行任务。你只能用 read_file 读 ${cwd} 下的文件，不能运行命令，也没有在代码里搜索、列目录的工具；项目的文件清单附在最后，按清单里的路径读。查资料可以用 search_web 搜网页。不要修改任何文件。`),
   agyReviewPrompt: (cwd, scope, shell) => `你在做代码审查，只审查，不改任何文件。项目目录：${cwd}。审查范围：${scope}。下面"要审查的改动"是调度方用 git 算好的改动材料；需要更多上下文时，用 read_file 读 ${cwd} 下的文件${shell
     ? '，也可以用 run_command 在 agy 的沙箱里跑只读命令（比如 git log、git grep）' : '（这次不能运行命令，也没有搜索工具，按改动里的路径读）'}。运行期间没有人能回答你，不要提问后等待。`,
   agyGuardUsage: '用法：agy-guard install|uninstall|status',
@@ -476,6 +476,7 @@ ${brief}`,
   snapshotFailedNoStart: (err) => `拍改动快照失败（${err}）。没有系统沙箱时不能在追踪不到改动的情况下执行，已取消`,
   runAccessChanged: (old, now) => `配置里的 run_access 从 ${old} 改成了 ${now}，这一轮按 ${now}`,
   opencodeExportFailed: (err) => `读取 opencode 会话用量失败（${err}），这次没有 token 统计`,
+  opencodeWebsearchUnconfigured: 'opencode 没有配网页搜索服务，模型调用的 websearch 被拒绝了（读网页照常能用）。要让它能搜网页，在 opencode 的配置里加上 "websearch": {"provider": "random"}，或者写一家指定的服务。',
   opencodeRecovered: (errors) => `opencode 中途报错（${errors}），自动重试后正常结束，不按失败处理；回复可能被拆成了几段，报告格式不对时会请它把完整报告重发一遍`,
   piStopLength: '回复超过了模型的输出上限，被截断了',
   codexSandboxFailed: (error) => `Codex 的沙箱启动不了命令（${error}）。这不是任务本身的问题，重试也一样：沙箱修好之前，Codex 在这台电脑上跑不了任何命令。运行 check 看诊断和修法，把选项告诉用户，由用户决定`,
@@ -504,23 +505,31 @@ ${schema}`,
   ].join('\n\n'),
   apiResumeFooter: '---\n（调度方提示：前面的讨论规则仍然有效：只依据给出的材料、不迎合、说人话、有依据。最后同样只输出符合 schema 的 JSON 对象。）',
   reportRepairPrompt: (errors) => `你上一条回答不符合要求的 JSON 格式：\n${errors}\n请只输出修正后的完整 JSON 对象，不要输出其他文字。`,
-  opencodeDiscussFooter: (cwd, schema) => `---
+  opencodeDiscussFooter: (cwd, schema, web) => `---
 ## 讨论规则（调度方自动附加）
-- 这是方案讨论，不是执行任务。你只能用读文件和搜索工具查看 ${cwd} 下的代码和数据，不能运行命令，也不能修改文件。
+${web === 'read'
+    ? `- 这是方案讨论，不是执行任务。你可以用读文件和搜索工具查看 ${cwd} 下的代码和数据，也可以读网页查资料（这次不能搜网页，只能读已知网址）；不能运行命令，也不能修改文件。`
+    : web
+      ? `- 这是方案讨论，不是执行任务。你可以用读文件和搜索工具查看 ${cwd} 下的代码和数据，也可以搜网页、读网页查资料；不能运行命令，也不能修改文件。`
+      : `- 这是方案讨论，不是执行任务。你只能用读文件和搜索工具查看 ${cwd} 下的代码和数据，不能运行命令，也不能修改文件。`}
 - 运行期间没有人能回答你：不要提问后等待。需要的信息或拿不准要人决定的事，写进 open_questions。
 - 独立思考，不要迎合。不同意就直说，并给出理由；同意也要说清楚为什么。
 - 觉得问题本身问错了、或者某条约束该改，直接说出来，写进 critiques（target 写"议题本身"或那条约束）。
 - 结论先行，用直白的话，像跟同事当面讲清楚一样，不要堆砌术语和套话。理由和成立的条件要写完整，复杂的方案可以展开写，不要为了简短删掉推理。
-- 每个观点都要有依据：代码位置（文件路径和行号）、数据或清楚的推理。拿不准的明确标出来；没看过的代码不要假装看过。
+${web
+    ? '- 每个观点都要有依据：代码位置（文件路径和行号）、数据、网页链接或清楚的推理；从网上查到的说法要附上链接。拿不准的明确标出来；没看过的代码不要假装看过。'
+    : '- 每个观点都要有依据：代码位置（文件路径和行号）、数据或清楚的推理。拿不准的明确标出来；没看过的代码不要假装看过。'}
 - 用议题的语言回答。
 - 最后只输出一个 JSON 对象，符合下面的 JSON schema。不要输出 JSON 以外的文字，也不要用代码块包起来。
 
 JSON schema：
 ${schema}`,
   opencodeResumeFooter: '---\n（调度方提示：前面的讨论规则仍然有效：只读、不迎合、说人话、有依据，运行中没人回答。最后同样只输出符合 schema 的 JSON 对象，不要用代码块包起来。）',
-  opencodeRunFooter: (schema, access) => `---
+  opencodeRunFooter: (schema, access, web) => `---
 ## 交付格式（调度方自动附加）
-- ${access === 'edit' ? '你没有运行命令的工具：不要尝试运行测试或脚本。完成标准里要求运行的命令，在报告的 verification 里写明"未运行，由调度方运行"。' : '你可以运行命令，但命令以用户的账户权限运行：只在项目目录里做事；任务说明没有允许的，不要碰项目以外的文件，不要联网下载或安装东西。'}
+- ${access === 'edit'
+    ? '你没有运行命令的工具：不要尝试运行测试或脚本。完成标准里要求运行的命令，在报告的 verification 里写明"未运行，由调度方运行"。'
+    : `你可以运行命令，但命令以用户的账户权限运行：只在项目目录里做事；任务说明没有允许的，不要碰项目以外的文件，${web && access === 'shell' ? '不要下载或安装软件和依赖。' : '不要联网下载或安装东西。'}`}
 - 运行期间没有人能回答你：不要提问后等待，问题写进报告的 decision_requests。
 - 最后只输出一个 JSON 对象，符合下面的 JSON schema。不要输出 JSON 以外的文字，也不要用代码块包起来。
 
@@ -717,9 +726,9 @@ ${schema}`,
   metaUnreadable: (file) => `读不了 ${file}：别的程序占着它、不许别人读。关掉占用它的程序（比如备份或同步软件）再试`,
 
   // ---------- 发给 Codex 的约束 ----------
-  footer: (cwd, addDirs) => `---
+  footer: (cwd, addDirs, web) => `---
 ## 固定约束（调度方自动附加）
-- 工作目录：${cwd}${addDirs.length ? `；另可改动：${addDirs.join('、')}` : ''}。只改任务说明列出的文件和范围。任务说明"允许的适配"一节写明的事可以直接做，在报告里说明做了什么、为什么等效；没写明的越界都不要做。
+- 工作目录：${cwd}${addDirs.length ? `；另可改动：${addDirs.join('、')}` : ''}。只改任务说明列出的文件和范围。任务说明"允许的适配"一节写明的事可以直接做，在报告里说明做了什么、为什么等效；没写明的越界都不要做。${web ? '\n- 需要时可以上网查资料；报告里用到网上查来的说法时，附上链接。' : ''}
 - 开始前先花很少的成本做预检：解释器和依赖能用、测试能被发现、任务需要的输入存在。只做检查，不要因此跑耗时的完整验收。
 - 验证先跑任务说明"完成标准"里分给你的定向测试和检查；改了代码之后，重跑受改动影响的那些。排查或验证需要时，可以另跑和这次改动直接相关、很快能跑完的定向检查，包括你按下面测试那一条为这次改动写的测试。不要跑全量测试，任务说明明确要求的除外：全量由调度方在最终版本上统一跑一次。在报告的 verification 里写明跑了哪些命令、结果如何，另跑的写明为什么跑。
 - 运行期间没有人能回答你：不要在中途提问后等答复，问题只在最终报告里提。
@@ -734,14 +743,18 @@ ${schema}`,
 - 完成后按给定的 JSON schema 输出最终报告，如实填写：没做到或没验证的写进 open_issues，不要粉饰。`,
   resumeFooter: `---
 （调度方提示：前面的固定约束仍然有效。完成后同样按 JSON schema 输出最终报告。）`,
-  discussFooter: (cwd) => `---
+  discussFooter: (cwd, web) => `---
 ## 讨论规则（调度方自动附加）
-- 这是方案讨论，不是执行任务。可以阅读 ${cwd} 下的代码和数据、运行只读命令来支撑观点，但不要修改、创建或删除任何文件。
+${web
+    ? `- 这是方案讨论，不是执行任务。可以阅读 ${cwd} 下的代码和数据、运行只读命令，也可以搜网页、读网页查资料来支撑观点，但不要修改、创建或删除任何文件。`
+    : `- 这是方案讨论，不是执行任务。可以阅读 ${cwd} 下的代码和数据、运行只读命令来支撑观点，但不要修改、创建或删除任何文件。`}
 - 运行期间没有人能回答你：不要提问后等待。需要的信息或拿不准要人决定的事，写进 open_questions。
 - 独立思考，不要迎合。不同意就直说，并给出理由；同意也要说清楚为什么。
 - 觉得问题本身问错了、或者某条约束该改，直接说出来，写进 critiques（target 写"议题本身"或那条约束）。
 - 结论先行，用直白的话，像跟同事当面讲清楚一样，不要堆砌术语和套话。理由和成立的条件要写完整，复杂的方案可以展开写，不要为了简短删掉推理。
-- 每个观点都要有依据：代码位置、数据或清楚的推理。拿不准的明确标出来。
+${web
+    ? '- 每个观点都要有依据：代码位置、数据、网页链接或清楚的推理；从网上查到的说法要附上链接。拿不准的明确标出来。'
+    : '- 每个观点都要有依据：代码位置、数据或清楚的推理。拿不准的明确标出来。'}
 - 最后按给定的 JSON schema 输出。`,
   discussResumeFooter: `---
 （调度方提示：前面的讨论规则仍然有效：只读、不迎合、说人话、有依据，运行中没人回答。最后同样按 JSON schema 输出。）`,
@@ -953,9 +966,9 @@ const en = {
   agyUninstalled: 'Removed the foreman guard for agy.',
   agyNotInstalled: "The foreman guard for agy isn't installed; nothing to remove.",
   agyTimeout: "agy reached this round's total time limit.",
-  agyDiscussFooter: (cwd, schema, shell) => en.opencodeDiscussFooter(cwd, schema).replace(/^- .+$/m, shell
-    ? `- This is a design discussion, not a hands-on task. You can read files under ${cwd} with read_file, and run read-only commands in agy's sandbox with run_command (for example git log, git grep, Get-ChildItem, Select-String): the sandbox can't change files inside or outside the project or reach the network. Don't change any files.`
-    : `- This is a design discussion, not a hands-on task. You can only read files under ${cwd} with read_file; you can't run commands and have no search or listing tools. The project's file list is attached at the end, so read files by the paths in it. Don't change any files.`),
+  agyDiscussFooter: (cwd, schema, shell) => en.opencodeDiscussFooter(cwd, schema, true).replace(/^- .+$/m, shell
+    ? `- This is a design discussion, not a hands-on task. You can read files under ${cwd} with read_file, and run read-only commands in agy's sandbox with run_command (for example git log, git grep, Get-ChildItem, Select-String): the sandbox can't change files inside or outside the project or reach the network. To look things up on the web, use search_web. Don't change any files.`
+    : `- This is a design discussion, not a hands-on task. You can only read files under ${cwd} with read_file; you can't run commands and have no tools for searching or listing the code. The project's file list is attached at the end, so read files by the paths in it. To look things up on the web, use search_web. Don't change any files.`),
   agyReviewPrompt: (cwd, scope, shell) => `You are doing a code review: review only, don't change any files. Project directory: ${cwd}. Scope: ${scope}. "Changes to review" below is the review material computed by the dispatcher with git; for more context, read files under ${cwd} with read_file${shell
     ? ", or run read-only commands in agy's sandbox with run_command (for example git log, git grep)" : " (you can't run commands this time and have no search tool, so read by the paths in the changes)"}. Nobody can answer you while you run, so don't ask and wait.`,
   agyGuardUsage: 'Usage: agy-guard install|uninstall|status',
@@ -1349,6 +1362,7 @@ ${brief}`,
   opencodeNoChanges: "opencode agents can only read and search files, not change them, so changes aren't tracked",
   piNoChanges: "pi agents can only read and search files in the project, not change them, so changes aren't tracked",
   opencodeExportFailed: (err) => `Couldn't read token usage from the opencode session (${err}), so there are no token counts this time`,
+  opencodeWebsearchUnconfigured: `opencode has no web search provider configured, so the model's websearch call was refused (reading web pages still works). To let it search the web, add "websearch": {"provider": "random"} to opencode's config, or name a specific provider.`,
   opencodeRecovered: (errors) => `opencode hit an error mid-run (${errors}), retried on its own and finished normally, so the run isn't counted as failed; the reply may have been split into pieces, and if the report isn't in the right format it's asked to send the whole report again`,
   piStopLength: 'The reply hit the model\'s output limit and was cut off',
   codexSandboxFailed: (error) => `Codex's sandbox couldn't start commands (${error}). This isn't about the task itself, and retrying won't help: until the sandbox is fixed, Codex can't run any command on this machine. Run check for the diagnosis and fixes, pass the options to the user, and let them decide`,
@@ -1385,14 +1399,20 @@ ${schema}`,
   ].join('\n\n'),
   apiResumeFooter: "---\n(Note from the dispatcher: the discussion rules above still apply: work only from the material given, don't just agree, speak plainly, back it up. Finish with a single JSON object matching the schema.)",
   reportRepairPrompt: (errors) => `Your last reply wasn't valid JSON in the required format:\n${errors}\nOutput only the corrected, complete JSON object and nothing else.`,
-  opencodeDiscussFooter: (cwd, schema) => `---
+  opencodeDiscussFooter: (cwd, schema, web) => `---
 ## Discussion rules (added by the dispatcher)
-- This is a design discussion, not a task to carry out. You may only use file-reading and search tools to inspect the code and data under ${cwd}. Don't run commands or change files.
+${web === 'read'
+    ? `- This is a design discussion, not a task to carry out. You can use file-reading and search tools to inspect the code and data under ${cwd}, and read web pages (web search isn't available this time, so read pages whose address you know). Don't run commands or change files.`
+    : web
+      ? `- This is a design discussion, not a task to carry out. You can use file-reading and search tools to inspect the code and data under ${cwd}, and search and read web pages. Don't run commands or change files.`
+      : `- This is a design discussion, not a task to carry out. You may only use file-reading and search tools to inspect the code and data under ${cwd}. Don't run commands or change files.`}
 - Nobody can answer you while you run: don't ask and wait. Put information you need, or anything someone else has to decide, in open_questions.
 - Think independently; don't just agree. If you disagree, say so and give your reasons; if you agree, say why.
 - If you think the question itself is the wrong one, or a constraint should change, say so in critiques (target: "the question itself" or that constraint).
 - Lead with the conclusion, in plain words, as if explaining it to a colleague in person; no jargon piles, no filler. Give your reasons and the conditions they depend on in full: a complex option can take the space it needs, so don't cut the reasoning to keep it short.
-- Back every point up: a code location (file path and line number), data, or clear reasoning. Flag anything you're unsure about; don't pretend you've read code you haven't seen.
+${web
+    ? "- Back every point up: a code location (file path and line number), data, a web link, or clear reasoning; give the link for anything you found on the web. Flag anything you're unsure about; don't pretend you've read code you haven't seen."
+    : "- Back every point up: a code location (file path and line number), data, or clear reasoning. Flag anything you're unsure about; don't pretend you've read code you haven't seen."}
 - Answer in the language of the topic.
 - Finish with a single JSON object that matches the JSON schema below. No text outside the JSON, and don't wrap it in a code block.
 
@@ -1406,9 +1426,11 @@ ${schema}`,
   snapshotRequired: "Runs without an OS sandbox must take a change snapshot first; --no-snapshot isn't allowed",
   snapshotFailedNoStart: (err) => `Couldn't take the change snapshot (${err}). Without an OS sandbox, a run can't go ahead untracked, so it was cancelled`,
   runAccessChanged: (old, now) => `run_access in the config changed from ${old} to ${now}; this round uses ${now}`,
-  opencodeRunFooter: (schema, access) => `---
+  opencodeRunFooter: (schema, access, web) => `---
 ## Delivery format (added by the dispatcher)
-- ${access === 'edit' ? 'You have no tools for running commands: do not try to run tests or scripts. For commands required by the acceptance criteria, write "Not run; the dispatcher will run them" in the report\'s verification.' : "You may run commands, but they run with the user's account permissions: work only in the project directory; unless the brief allows it, do not touch files outside the project or download or install anything from the network."}
+- ${access === 'edit'
+    ? 'You have no tools for running commands: do not try to run tests or scripts. For commands required by the acceptance criteria, write "Not run; the dispatcher will run them" in the report\'s verification.'
+    : `You may run commands, but they run with the user's account permissions: work only in the project directory; unless the brief allows it, do not touch files outside the project or download or install ${web && access === 'shell' ? 'software or dependencies.' : 'anything from the network.'}`}
 - Nobody can answer you while you run: do not ask and wait. Put questions in the report's decision_requests.
 - Finish with a single JSON object matching the JSON schema below. Do not write anything outside the JSON or wrap it in a code block.
 
@@ -1616,9 +1638,9 @@ ${schema}`,
   metaUnreadable: (file) => `Can't read ${file}: another program is holding it open and not letting others read. Close that program (backup or sync software, for example) and try again`,
 
   // ---------- constraints sent to Codex ----------
-  footer: (cwd, addDirs) => `---
+  footer: (cwd, addDirs, web) => `---
 ## Standing rules (added by the dispatcher)
-- Working directory: ${cwd}${addDirs.length ? `; you may also change: ${addDirs.join(', ')}` : ''}. Only change the files and scope listed in the brief. Things written in the brief's "Allowed adaptations" section may be done directly; say in the report what you did and why it is equivalent. Don't go beyond the scope in any other way.
+- Working directory: ${cwd}${addDirs.length ? `; you may also change: ${addDirs.join(', ')}` : ''}. Only change the files and scope listed in the brief. Things written in the brief's "Allowed adaptations" section may be done directly; say in the report what you did and why it is equivalent. Don't go beyond the scope in any other way.${web ? '\n- You may look things up on the web when needed; when the report relies on something you found there, give the link.' : ''}
 - Before starting, do a cheap preflight: the interpreter and dependencies work, tests can be discovered, and the inputs the task needs exist. Only check; don't run a long full verification for this.
 - For verification, start with the targeted tests and checks the brief's "Done when" section gives to you; after changing code, rerun the ones the change affects. When investigating or verifying needs it, you may also run quick targeted checks directly tied to this change, including tests you wrote for it under the testing rule below. Don't run the full test suite unless the brief explicitly asks for it: the dispatcher runs it once on the final version. In the report's verification, say which commands you ran and what came out, and why you ran any extra ones.
 - Nobody can answer you while you run: don't ask a question mid-run and wait for a reply. Questions go only in the final report.
@@ -1633,14 +1655,18 @@ ${schema}`,
 - When done, output the final report in the given JSON schema, in English. Be honest: anything not done or not verified goes in open_issues.`,
   resumeFooter: `---
 (Note from the dispatcher: the standing rules above still apply. When done, output the final report in the same JSON schema.)`,
-  discussFooter: (cwd) => `---
+  discussFooter: (cwd, web) => `---
 ## Discussion rules (added by the dispatcher)
-- This is a design discussion, not a task to carry out. You may read the code and data under ${cwd} and run read-only commands to back up your points, but don't change, create or delete any files.
+${web
+    ? `- This is a design discussion, not a task to carry out. You may read the code and data under ${cwd}, run read-only commands, and search and read web pages to back up your points, but don't change, create or delete any files.`
+    : `- This is a design discussion, not a task to carry out. You may read the code and data under ${cwd} and run read-only commands to back up your points, but don't change, create or delete any files.`}
 - Nobody can answer you while you run: don't ask and wait. Put information you need, or anything someone else has to decide, in open_questions.
 - Think for yourself; don't just agree. If you disagree, say so and give your reasons. If you agree, say why.
 - If you think the question itself is the wrong one, or a constraint should change, say so in critiques (target: "the question itself" or that constraint).
 - Lead with the conclusion, in plain words, as if explaining it to a colleague in person; no jargon piles, no filler. Give your reasons and the conditions they depend on in full: a complex option can take the space it needs, so don't cut the reasoning to keep it short.
-- Back every point with evidence: a code location, data or clear reasoning. Mark anything you're unsure about.
+${web
+    ? "- Back every point with evidence: a code location, data, a web link or clear reasoning; give the link for anything you found on the web. Mark anything you're unsure about."
+    : "- Back every point with evidence: a code location, data or clear reasoning. Mark anything you're unsure about."}
 - Finish with output in the given JSON schema, in English.`,
   discussResumeFooter: `---
 (Note from the dispatcher: the discussion rules above still apply: read-only, don't just agree, speak plainly, back it up; nobody can answer you while you run. Finish with output in the same JSON schema.)`,

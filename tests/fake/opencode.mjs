@@ -9,6 +9,10 @@ else if (operation === 'models') {
   if (s.models_delay_ms) await replay([{ delay_ms: s.models_delay_ms }]);
   console.log((s.models || ['fake/model']).join('\n'));
 }
+else if (operation === 'debug' && args[1] === 'config') {
+  if (s.debug_config_error) { process.stderr.write(s.debug_config_error); process.exitCode = 1; }
+  else console.log(JSON.stringify(s.debug_config ?? [{ type: 'document', path: 'synthetic-config.json', info: {} }]));
+}
 else if (operation === 'catalog') {
   // opencode api GET /api/model：剧本没给 opencode_catalog 时当作读不到清单
   if (s.opencode_catalog) console.log(JSON.stringify({ data: s.opencode_catalog }));

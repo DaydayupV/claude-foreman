@@ -19,15 +19,47 @@ function opencodeCommand(agent) {
 const OPENCODE_AGENT = 'foreman-discuss';
 const RUN_ACCESS = ['edit', 'shell'];
 const capabilities = { modes: ['run', 'review', 'discuss'], isolation: 'tools', reads_code: true, reads_images: false, native_schema: false, native_review: false, images: false, resume: true, command_start_events: false };
+const websearchByCwd = new Map();
 
-function opencodeEnv(agentId = OPENCODE_AGENT, access) {
-  let config;
-  try { config = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT || '{}'); } catch { /* 无效配置由本次注入替代 */ }
-  if (!isObject(config)) config = {};
+function opencodeUserConfig() {
+  const config = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT ?? '{}');
+  return isObject(config) ? config : {};
+}
+
+// 没配搜索服务时，无头运行一调用 websearch 就会整轮失败。
+function opencodeWebsearchReady(agent, cwd) {
+  if (websearchByCwd.has(cwd)) return websearchByCwd.get(cwd);
+  let ready = false;
+  try {
+    // 无法注入的用户配置不能用于判断网页搜索权限。
+    const config = opencodeUserConfig();
+    const { file, pre } = opencodeCommand(agent);
+    // 和 opencode run 一样把 PWD 设成项目目录：opencode 按 PWD 找项目里的配置。
+    const r = spawnSync(file, [...pre, 'debug', 'config', '--standalone'], { cwd, env: { ...process.env, PWD: cwd }, encoding: 'utf8', windowsHide: true, timeout: 10000 });
+    const documents = !r.error && r.status === 0 ? JSON.parse(r.stdout) : null;
+    if (Array.isArray(documents)) {
+      const websearch = [
+        ...documents.filter((doc) => doc?.type === 'document').map((doc) => doc.info?.websearch),
+        config.websearch,
+      ].findLast((value) => value !== undefined);
+      ready = isObject(websearch) && typeof websearch.provider === 'string' && websearch.provider.trim() !== '';
+    }
+  } catch { /* 读取失败时保持关闭 */ }
+  websearchByCwd.set(cwd, ready);
+  return ready;
+}
+
+function opencodeEnv(agentId = OPENCODE_AGENT, access, web) {
+  let config = {};
+  try { config = opencodeUserConfig(); } catch { /* 无效配置由本次注入替代 */ }
   const descriptions = { 'foreman-discuss': 'Read-only code discussion for foreman', 'foreman-review': 'Read-only code review for foreman',
     'foreman-run': 'Hands-on work for foreman', 'foreman-repair': 'Report format repair for foreman' };
   const permission = { '*': 'deny' };
   if (agentId !== 'foreman-repair') Object.assign(permission, { read: 'allow', grep: 'allow', glob: 'allow', list: 'allow' });
+  if (web && [OPENCODE_AGENT, 'foreman-run'].includes(agentId)) {
+    permission.webfetch = 'allow';
+    if (web === true) permission.websearch = 'allow';
+  }
   if (agentId === 'foreman-run') {
     permission.edit = 'allow';
     if (access === 'shell') permission.shell = 'allow';
@@ -67,14 +99,14 @@ function permissionQuestions(actions, lines, cwd) {
   return [...new Map(questions.map((q) => [q.detail, q])).values()];
 }
 
-function runOpencode({ agent, args, cwd, prompt = '', timeoutMs, stallMin = 0, runDir, onEvent, agentId }) {
+function runOpencode({ agent, args, cwd, prompt = '', timeoutMs, stallMin = 0, runDir, onEvent, agentId, web }) {
   return new Promise((resolve) => {
     const { file, pre } = opencodeCommand(agent);
     const out = { code: null, status: null, stdout: '', stderrTail: '', text: '', errors: [], recovered: [], events: 0, messages: [], questions: [] };
     const denied = [], stderrLines = [], eventErrors = [];
     let stopped = false, endedOnText = false;
     // opencode 按环境变量 PWD 认工作目录，不看进程真实的 cwd；PWD 是从调用方的 shell 继承来的，可能指向别的目录。
-    const child = spawnCli(file, [...pre, ...args], { cwd, env: { ...opencodeEnv(agentId, agent.run_access), PWD: cwd }, windowsHide: true,
+    const child = spawnCli(file, [...pre, ...args], { cwd, env: { ...opencodeEnv(agentId, agent.run_access, web), PWD: cwd }, windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' }, {
       onStderrLine: (line) => { if (/permission requested:/i.test(line)) stderrLines.push(line); },
       onInput: (line, min) => {
@@ -159,6 +191,7 @@ async function executeOpencode(ctx) {
   const schema = JSON.parse(schemaText);
   const files = readAttachments(opts.file, cwd, false), outside = filesOutside(files, [cwd]);
   if (outside.length) die(M.filesOutsideCwd(ctx.agentName, M.list(outside), false));
+  const discussWeb = !review && !exec && (opencodeWebsearchReady(agent, cwd) || 'read');
   let prompt;
   if (review) {
     const scope = ctx.reviewScope;
@@ -174,22 +207,22 @@ async function executeOpencode(ctx) {
     prompt = [...parts, M.reviewFooter(ctx.reviewTarget), M.reviewSchemaFooter(schemaText)].join('\n\n') + '\n';
   } else if (exec) prompt = ctx.parent
     ? `${brief}${focusFiles(files)}\n\n${M.resumeFooter}\n\n${M.opencodeRunResumeFooter}\n`
-    : `${brief}\n\n${M.footer(cwd, ctx.addDirs || [])}\n\n${M.opencodeRunFooter(schemaText, agent.run_access)}\n`;
-  else prompt = `${brief}${focusFiles(files)}\n\n${ctx.parent ? M.opencodeResumeFooter : M.opencodeDiscussFooter(cwd, schemaText)}\n`;
+    : `${brief}\n\n${M.footer(cwd, ctx.addDirs || [], true)}\n\n${M.opencodeRunFooter(schemaText, agent.run_access, true)}\n`;
+  else prompt = `${brief}${focusFiles(files)}\n\n${ctx.parent ? M.opencodeResumeFooter : M.opencodeDiscussFooter(cwd, schemaText, discussWeb)}\n`;
   const { id, dir, release } = await newRunDir(ctx);
   const context = { ...ctx, ...(exec ? {} : { readonly: readonlyLevel(agent, ctx.kind) }), id, dir, release, prompt };
   if (exec) return execute(context, {
     capabilities, describe: () => ({ sandbox: null, modelShown: model, modelName: model }),
-    run: ({ run }) => opencodeSession(run, schema, agentId),
+    run: ({ run }) => opencodeSession(run, schema, agentId, opencodeWebsearchReady(agent, cwd) || 'read'),
   });
   const run = startRun(context);
   fs.writeFileSync(path.join(dir, 'brief.md'), prompt);
   process.stderr.write(`foreman: ${D.started(mode, modelLabel(run.meta), level, dir)}\n`);
   announceBoard(ctx.cfg, mode, modelLabel(run.meta), level);
-  return finishDiscussion(run, { ...await opencodeSession(run, schema, agentId), files, changesNote: M.opencodeNoChanges });
+  return finishDiscussion(run, { ...await opencodeSession(run, schema, agentId, discussWeb), files, changesNote: M.opencodeNoChanges });
 }
 
-async function opencodeSession(run, schema, agentId) {
+async function opencodeSession(run, schema, agentId, web) {
   const { ctx, started, meta, writeMeta } = run;
   const { dir, agentName, agent, model, effort, cwd, prompt } = ctx;
   const exec = ctx.kind === 'exec';
@@ -235,10 +268,15 @@ async function opencodeSession(run, schema, agentId) {
     } else if (ev.type === 'tool_use') {
       const { tool, state = {} } = ev.part || {};
       const input = state.input || {};
+      const id = `opencode-${++items}`;
+      if ((tool === 'websearch' || tool === 'webfetch') && state.status === 'completed') {
+        event({ type: 'item.completed', item: { id, type: 'web_search', query: tool === 'websearch' ? input.query : input.url } });
+        return;
+      }
       const target = input.filePath || input.path;
       const category = ['edit', 'write'].includes(tool) || (typeof target === 'string' && /edit|write|patch/i.test(tool)) ? 'edit'
         : ['shell', 'bash'].includes(tool) ? 'shell' : ['grep', 'glob', 'list', 'search'].includes(tool) ? 'search' : 'read';
-      const item = { id: `opencode-${++items}`, tool, category };
+      const item = { id, tool, category };
       if (category === 'edit') {
         const changes = typeof target === 'string' && state.status === 'completed' ? [{ path: target, kind: tool === 'write' ? 'add' : 'update' }] : [];
         for (const change of changes) fileChanges.add(change.path);
@@ -263,11 +301,15 @@ async function opencodeSession(run, schema, agentId) {
     // 总是带标题：不带时 opencode 会另发一个请求让模型起标题，和主请求同时占用账号的并发名额（Moonshot 等只允许 1 个时会被 429 拒绝）。
     args.push('--title', meta.title || `foreman ${ctx.kind}`);
     const out = await runOpencode({ agent, args, cwd, agentId: currentAgent, prompt: nextPrompt, runDir: dir, onEvent: translate,
-      timeoutMs: deadline - Date.now(), stallMin });
+      timeoutMs: deadline - Date.now(), stallMin, web: !repairing && web });
     usageTo = Date.now();
     errors.push(...out.errors);
     for (const error of out.recovered) recovered.add(error);
-    observed.questions.push(...out.questions);
+    for (const q of out.questions) {
+      if (web === 'read' && q.source === 'permission_denied' && JSON.parse(q.detail).tool === 'websearch') {
+        if (!notes.includes(M.opencodeWebsearchUnconfigured)) notes.push(M.opencodeWebsearchUnconfigured);
+      } else observed.questions.push(q);
+    }
     if (!repairing) observed.messages = out.messages;
     meta.status = out.status;
     return meta.status === 'done' ? { last, canRepair: !!meta.session_id } : null;

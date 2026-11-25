@@ -12,12 +12,13 @@ import { M, die, isObject, binCommand, pathCommand, npmEntry, killTree, isReconn
 const capabilities = { modes: ['run', 'review', 'discuss'], isolation: 'os', reads_code: true, reads_images: true, native_schema: true, native_review: true, images: true, resume: true, command_start_events: true };
 
 // 模型、推理强度、沙箱、审批这几项 exec / resume / review 都接受 -m 和 -c。
-function codexOptions(agent, { model, effort, mode }) {
+function codexOptions(agent, { model, effort, mode, webSearch }) {
   const args = [];
   if (model) args.push('-m', model);
   if (effort != null) args.push('-c', `model_reasoning_effort="${effort}"`);
   if (agent.sandbox?.[mode]) args.push('-c', `sandbox_mode="${agent.sandbox[mode]}"`);
   args.push('-c', `approval_policy="${agent.approval ?? 'never'}"`);
+  if ((mode === 'discuss' || mode === 'run') && webSearch === null) args.push('-c', 'web_search="live"');
   return args;
 }
 
@@ -38,6 +39,22 @@ function codexConfigValue(key, table = null) {
 }
 
 const codexConfigFile = () => path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'config.toml');
+
+function codexWebSearch() {
+  let text;
+  try { text = fs.readFileSync(codexConfigFile(), 'utf8'); } catch { return null; }
+  // 跳过注释和字符串里的示例，只认赋值前的完整键。任何一处明确禁用都优先。
+  const tokens = /#[^\r\n]*|"""(?:\\[\s\S]|[^"\\]|"{1,2}(?!"))*"{3,5}|'''(?:[^']|'{1,2}(?!'))*'{3,5}|"(?:\\.|[^"\\\r\n])*"|'[^'\r\n]*'|[\w-]+/g;
+  let result = null;
+  for (const { 0: key, index } of text.matchAll(tokens)) {
+    if (!['web_search', '"web_search"', "'web_search'"].includes(key)) continue;
+    const rest = text.slice(index + key.length);
+    if (!/^[ \t]*=/.test(rest)) continue;
+    if (/^[ \t]*=[ \t]*(?:false|"disabled"|'disabled'|"""(?:\r?\n)?disabled"""|'''(?:\r?\n)?disabled''')[ \t]*(?:[#\r\n,}]|$)/.test(rest)) return 'disabled';
+    result = 'set';
+  }
+  return result;
+}
 
 // 续接的 -c 会覆盖整个数组，先读出用户配的可写目录；不解析 profile。
 // 没配这一项返回空数组；配了但读不懂返回 null，调用方这时不能再用 -c 覆盖它。
@@ -478,29 +495,30 @@ async function executeCodex(ctx) {
   const nativeReview = kind === 'review' && git && ctx.reviewTarget === 'diff' && !brief && !files.length;
   const { id, dir, release } = await newRunDir(ctx);
   const last = path.join(dir, 'last-message.txt');
+  const discuss = kind === 'discuss', optionMode = mode === 'resume' ? (discuss ? 'discuss' : 'run') : mode;
+  const webSearch = optionMode === 'review' ? null : codexWebSearch();
+  const codexOpts = codexOptions(agent, { model, effort, mode: optionMode, webSearch });
   let args, prompt;
   if (mode === 'run') {
-    args = ['exec', '--json', '--skip-git-repo-check', ...codexOptions(agent, { model, effort, mode: 'run' }),
+    args = ['exec', '--json', '--skip-git-repo-check', ...codexOpts,
       '-C', cwd, '--output-schema', SCHEMA, '-o', last];
     for (const d of addDirs) args.push('--add-dir', d);
     args.push('-');
-    prompt = `${brief}\n\n${M.footer(cwd, addDirs)}\n`;
+    prompt = `${brief}\n\n${M.footer(cwd, addDirs, webSearch !== 'disabled')}\n`;
   } else if (mode === 'discuss') {
-    args = ['exec', '--json', '--skip-git-repo-check', ...codexOptions(agent, { model, effort, mode: 'discuss' }),
+    args = ['exec', '--json', '--skip-git-repo-check', ...codexOpts,
       '-C', cwd, '--output-schema', DISCUSS_SCHEMA, '-o', last, '-'];
-    prompt = `${brief}${focusFiles(files)}\n\n${M.discussFooter(cwd)}\n`;
+    prompt = `${brief}${focusFiles(files)}\n\n${M.discussFooter(cwd, webSearch !== 'disabled')}\n`;
   } else if (mode === 'resume') {
-    const discuss = kind === 'discuss';
     const configured = addDirs.length ? codexWritableRoots() : [];
     if (configured === null) notice(M.codexWritableRootsUnread(codexConfigFile()));
     const writable = addDirs.length && configured ? [...new Map([...configured, ...addDirs]
       .map((dir) => [pathKey(path.resolve(cwd, dir)), dir])).values()] : [];
-    args = ['exec', 'resume', '--json', '--skip-git-repo-check', ...codexOptions(agent, { model, effort, mode: discuss ? 'discuss' : 'run' }),
+    args = ['exec', 'resume', '--json', '--skip-git-repo-check', ...codexOpts,
       ...(writable.length ? ['-c', `sandbox_workspace_write.writable_roots=[${writable.map((dir) => JSON.stringify(dir)).join(',')}]`] : []),
       '--output-schema', discuss ? DISCUSS_SCHEMA : SCHEMA, '-o', last, ctx.sessionId, '-'];
     prompt = `${brief}${focusFiles(files)}\n\n${discuss ? M.discussResumeFooter : M.resumeFooter}\n`;
   } else {
-    const codexOpts = codexOptions(agent, { model, effort, mode: 'review' });
     if (nativeReview) {
       // 原生审查不能附加说明或重点文件，只有无附件的 git diff 审查使用它。
       args = ['exec', 'review', '--json', ...codexOpts, '-o', last];

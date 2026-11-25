@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { plannedSandbox as sandbox, taskArgs, output, failed, poll, json, read, write, baseConfig, apiAgent, opencodeAgent, piAgent, seedRun, MESSAGES } from './helpers.mjs';
-import { discussion } from './fixtures/reports.mjs';
+import { discussion, report, review } from './fixtures/reports.mjs';
 import { apiServer } from './fake/api-server.mjs';
 const M = MESSAGES.zh;
 const D = MESSAGES.en; // 实时查看、status 和开工那一行的显示文字中英两个插件一样，用英文那一套
@@ -41,7 +41,36 @@ test('Codex 讨论解析报告并传递只读规则和附件范围', async (t) =
   const call = s.calls()[0];
   assert.ok(call.args[call.args.indexOf('--output-schema') + 1].endsWith('discuss.schema.json'));
   assert.ok(call.stdin.includes('source.txt（第 2–2 行）'));
-  assert.ok(call.stdin.includes(M.discussFooter(h.cwd)));
+  assert.ok(call.stdin.includes(M.discussFooter(h.cwd, true)));
+  assert.deepEqual(call.args.slice(call.args.indexOf('web_search="live"') - 1, call.args.indexOf('web_search="live"') + 1), ['-c', 'web_search="live"']);
+});
+
+for (const [label, toml, web, defaultsLive] of [
+  ['未设置', '# web_search = "disabled"\nnotes = """\nweb_search = "disabled"\n"""\n[features]\nweb_search_request = true\nweb_search_cached = false\n', true, true],
+  ['cached', 'web_search = "cached"\n', true, false],
+  ['profile 禁用', '[profiles.synthetic]\nweb_search = "disabled" # offline\n', false, false],
+  ['点号布尔禁用优先', 'web_search = "cached"\ntools . "web_search" = false\n', false, false],
+]) test(`Codex 网页配置（${label}）决定讨论、续接和执行参数，审查无覆盖`, async (t) => {
+  const h = sandbox(t);
+  h.initGit(); h.write('source.txt', 'review change\n');
+  const config = write(path.join(h.env.CODEX_HOME, 'config.toml'), toml);
+  const s = h.scenario({ calls: [{ last_message: discussion, rollout_prompt: true }, { last_message: discussion },
+    { last_message: report }, { last_message: review }] });
+  const opts = { env: s.env };
+  const first = output(await h.bridge(discussArgs(h, 'codex'), opts));
+  output(await h.bridge(['resume', '--run', first.run_id, '--level', 'complex', '--brief', '-'], opts));
+  output(await h.bridge(taskArgs(h), opts));
+  output(await h.bridge(taskArgs(h, 'review'), opts));
+  const calls = s.calls().filter((c) => c.operation === 'exec'), [discussCall, , runCall] = calls;
+  const live = defaultsLive ? [['-c', 'web_search="live"']] : [];
+  assert.deepEqual(calls.map(({ args }) => args.flatMap((arg, i) => arg.startsWith('web_search=') ? [args.slice(i - 1, i + 1)] : [])),
+    [live, live, live, []]);
+  assert.ok(discussCall.stdin.endsWith(M.discussFooter(h.cwd, web) + '\n'));
+  assert.equal(discussCall.stdin.includes('也可以搜网页、读网页查资料'), web);
+  assert.equal(discussCall.stdin.includes('从网上查到的说法要附上链接。'), web);
+  assert.ok(runCall.stdin.endsWith(M.footer(h.cwd, [], web) + '\n'));
+  assert.equal(runCall.stdin.includes('需要时可以上网查资料；报告里用到网上查来的说法时，附上链接。'), web);
+  assert.equal(read(config), toml);
 });
 
 test('讨论记录写下项目覆盖后的实际时长，命令行覆盖含 stall 为 0', async (t) => {
@@ -197,46 +226,89 @@ test('API 回答中途断开后重试一次且不拼接残缺回答', async (t) 
   assert.equal(read(path.join(r.run_dir, 'last-message.txt')), JSON.stringify(discussion));
 });
 
+const websearchDocument = { type: 'document', path: 'synthetic-config.json', info: { websearch: { provider: 'random' } } };
+const websearchDisabledDocument = { type: 'document', path: 'synthetic-disabled.json', info: { websearch: false } };
+
 test('opencode 注入只读代理、设置 PWD 并翻译工具事件和导出用量', async (t) => {
   const h = sandbox(t);
   configure(h, { oc: opencodeAgent() });
-  const s = h.scenario({ steps: [
+  const s = h.scenario({ debug_config: [{ type: 'directory', path: 'synthetic-config-dir' }, websearchDocument], steps: [
     { event: { type: 'reasoning', part: { text: '合成推理' } } },
     { event: { type: 'tool_use', part: { tool: 'read', state: { status: 'completed', input: { filePath: path.join(h.cwd, 'src/file.mjs') }, output: 'synthetic source' } } } },
+    { event: { type: 'tool_use', part: { tool: 'websearch', state: { status: 'completed', input: { query: 'synthetic query' } } } } },
+    { event: { type: 'tool_use', part: { tool: 'webfetch', state: { status: 'completed', input: { url: 'https://example.invalid' } } } } },
+    { event: { type: 'tool_use', part: { tool: 'webfetch', state: { status: 'error', input: { url: 'https://example.invalid/missing' }, error: 'synthetic fetch error' } } } },
   ], export_messages: [
     { type: 'assistant', created: 'old', tokens: { input: 9000, output: 9000 }, cost: 99 },
     { type: 'user', tokens: { input: 8000 }, cost: 88 },
     { type: 'assistant', tokens: { input: 100, output: 40, reasoning: 10, cache: { read: 20, write: 5 } }, cost: 0.125 },
     { type: 'assistant', tokens: { input: 30, output: 10, cache: { read: 2 } }, cost: 0.25 },
   ] });
-  const r = output(await h.bridge(discussArgs(h, 'oc', ['--title', '合成讨论']), { env: { ...s.env, PWD: path.join(h.home, 'wrong'), OPENCODE_CONFIG_CONTENT: JSON.stringify({ theme: 'synthetic', agent: { existing: { mode: 'subagent' } } }) } }));
+  const userConfig = JSON.stringify({ theme: 'synthetic', agent: { existing: { mode: 'subagent' } } });
+  const pwd = path.join(h.home, 'wrong');
+  const r = output(await h.bridge(discussArgs(h, 'oc', ['--title', '合成讨论']), { env: { ...s.env, PWD: pwd, OPENCODE_CONFIG_CONTENT: userConfig } }));
   assert.deepEqual(r.report, discussion);
-  const call = s.calls()[0], config = JSON.parse(call.env.OPENCODE_CONFIG_CONTENT);
+  const [debug, call, exported] = s.calls(), config = JSON.parse(call.env.OPENCODE_CONFIG_CONTENT);
+  assert.deepEqual(debug.args, ['debug', 'config', '--standalone']);
+  assert.equal(debug.cwd, h.cwd);
+  assert.equal(debug.env.OPENCODE_CONFIG_CONTENT, userConfig);
+  assert.equal(debug.env.PWD, h.cwd);
   assert.equal(call.cwd, h.cwd);
   assert.equal(call.env.PWD, h.cwd);
   assert.equal(config.theme, 'synthetic');
   assert.deepEqual(config.agent.existing, { mode: 'subagent' });
-  assert.deepEqual(config.agent['foreman-discuss'], { mode: 'primary', description: 'Read-only code discussion for foreman', permission: { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow' } });
+  assert.deepEqual(config.agent['foreman-discuss'], { mode: 'primary', description: 'Read-only code discussion for foreman',
+    permission: { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow', webfetch: 'allow', websearch: 'allow' } });
   assert.deepEqual(call.args, ['run', '--standalone', '--format', 'json', '--agent', 'foreman-discuss', '-m', 'fake/model#high', '--title', '合成讨论']);
   assert.ok(call.stdin.includes('不能运行命令'));
+  assert.ok(call.stdin.includes('也可以搜网页、读网页查资料；不能运行命令，也不能修改文件。'));
+  assert.ok(call.stdin.includes('从网上查到的说法要附上链接。'));
   assert.ok(call.stdin.includes(h.cwd));
-  assert.deepEqual(s.calls()[1].args, ['session', 'export', '--standalone', 'synthetic-opencode-session']);
+  assert.deepEqual(exported.args, ['session', 'export', '--standalone', 'synthetic-opencode-session']);
   assert.deepEqual(r.usage, { input_tokens: 157, cached_input_tokens: 22, cache_write_input_tokens: 5, output_tokens: 60, reasoning_output_tokens: 10 }); // 输出含推理
   assert.equal(r.cost_usd, null); assert.equal(r.cost_source, 'unknown'); assert.equal(r.reported_cost_usd, 0.375);
   assert.equal(r.commands_executed, 0);
   const events = h.events(r.run_id);
   // 流里没有 step_finish：导出的用量整块补成最后一条 step.usage
-  assert.deepEqual(events.map((e) => e.type), ['thread.started', 'item.completed', 'item.completed', 'item.completed', 'step.usage']);
+  assert.deepEqual(events.map((e) => e.type), ['thread.started', 'item.completed', 'item.completed', 'item.completed', 'item.completed', 'item.completed', 'item.completed', 'step.usage']);
   assert.deepEqual(events.at(-1).usage, r.usage); assert.equal(events.at(-1).final, true);
   assert.deepEqual(events[2].item, { id: 'opencode-1', tool: 'read', category: 'read', type: 'command_execution', command: 'read src/file.mjs', label: 'src/file.mjs', exit_code: 0, aggregated_output: 'synthetic source' });
+  assert.deepEqual(events.slice(3, 5).map((e) => e.item), [
+    { id: 'opencode-2', type: 'web_search', query: 'synthetic query' },
+    { id: 'opencode-3', type: 'web_search', query: 'https://example.invalid' },
+  ]);
+  assert.deepEqual(events[5].item, { id: 'opencode-4', tool: 'webfetch', category: 'read', type: 'command_execution',
+    command: 'webfetch', label: 'webfetch', exit_code: 1, aggregated_output: 'synthetic fetch error' });
   assert.ok(!read(path.join(r.run_dir, 'opencode.jsonl')).includes('step_finish'));
   assert.equal(r.changes.note, M.opencodeNoChanges);
+});
+
+for (const [label, scenario, content, ready] of [
+  ['未配置', {}, '{}', false],
+  ['后续文档启用', { debug_config: [websearchDisabledDocument, websearchDocument] }, '{}', true],
+  ['后续文档关闭', { debug_config: [websearchDocument, websearchDisabledDocument] }, '{}', false],
+  ['环境变量关闭', { debug_config: [websearchDocument] }, '{"websearch":false}', false],
+  ['环境变量无法解析', { debug_config: [websearchDocument] }, '{"websearch":{"provider":"random"},}', false],
+  ['探测失败', { debug_config_error: 'synthetic config failure' }, JSON.stringify(websearchDocument.info), false],
+  ['环境变量配置', {}, JSON.stringify(websearchDocument.info), true],
+]) test(`opencode 讨论按搜索配置决定权限和提示词（${label}）`, async (t) => {
+  const h = sandbox(t);
+  configure(h, { oc: opencodeAgent() });
+  const s = h.scenario(scenario);
+  const r = output(await h.bridge(discussArgs(h, 'oc'), { env: { ...s.env, OPENCODE_CONFIG_CONTENT: content } }));
+  const call = s.calls().find((c) => c.operation === 'run');
+  assert.deepEqual(JSON.parse(call.env.OPENCODE_CONFIG_CONTENT).agent['foreman-discuss'].permission,
+    { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow', webfetch: 'allow', ...(ready ? { websearch: 'allow' } : {}) });
+  assert.equal(call.stdin.includes('也可以搜网页、读网页查资料；'), ready);
+  assert.equal(call.stdin.includes('也可以读网页查资料（这次不能搜网页，只能读已知网址）；'), !ready);
+  assert.ok(call.stdin.includes('从网上查到的说法要附上链接。'));
+  assert.deepEqual(r.errors, []);
 });
 
 test('opencode 修复报告时续接同一会话且仍使用只读权限', async (t) => {
   const h = sandbox(t);
   configure(h, { oc: opencodeAgent() });
-  const s = h.scenario({ calls: [{ last_message: 'not json' }, { last_message: discussion }] });
+  const s = h.scenario({ debug_config: [websearchDocument], calls: [{ last_message: 'not json' }, { last_message: discussion }] });
   const r = output(await h.bridge(discussArgs(h, 'oc'), { env: s.env }));
   const calls = s.calls().filter((c) => c.operation === 'run');
   assert.equal(calls.length, 2);
@@ -244,7 +316,10 @@ test('opencode 修复报告时续接同一会话且仍使用只读权限', async
   assert.ok(!calls[0].args.includes('--session'));
   assert.equal(calls[1].args[calls[1].args.indexOf('--session') + 1], r.session_id);
   assert.equal(calls[1].stdin, M.reportRepairPrompt('Reply is not valid JSON'));
-  assert.equal(calls[1].env.OPENCODE_CONFIG_CONTENT, calls[0].env.OPENCODE_CONFIG_CONTENT);
+  assert.deepEqual(JSON.parse(calls[1].env.OPENCODE_CONFIG_CONTENT), { agent: {
+    'foreman-discuss': { mode: 'primary', description: 'Read-only code discussion for foreman',
+      permission: { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow' } },
+  } });
 });
 
 test('opencode 会话导出失败时保留报告并提示缺少用量', async (t) => {

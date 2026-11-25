@@ -220,27 +220,111 @@ test('agy 同族不同档位在 stats 合并，不能再充当不同基础模型
 
 test('agy 守卫逐档逐工具校验放行范围，拒绝未知工具和未知参数', (t) => {
   const h = sandbox(t); h.write('source.txt', 'readable');
+  const url = 'https://example.invalid', webMcp = { ServerName: 'web', ToolName: 'read_url_content', Arguments: { url }, toolSummary: 'read page' };
   const inputs = { read_file: { Path: path.join(h.cwd, 'source.txt') }, view_file: { Path: path.join(h.cwd, 'source.txt') },
     run_command: { CommandLine: 'git --version' }, edit_file: { Path: path.join(h.cwd, 'source.txt'), Target: 'readable', Replacement: 'bad' },
     write_file: { Path: path.join(h.cwd, 'other.txt'), Content: 'bad', Overwrite: true }, manage_task: {}, ask_question: {},
-    invoke_subagent: {}, define_subagent: {}, manage_subagents: {}, send_message: {}, schedule: {}, search_web: {}, read_url: {}, browser_open: {},
+    define_subagent: {}, read_url: {}, list_resources: {}, read_resource: {},
     list_dir: {}, grep_search: {}, call_mcp_tool: {}, generate_image: {}, notebook_edit: {}, unknown: {} };
+  const webCalls = [
+    ['search_web', { query: 'synthetic query', domain: 'example.invalid', toolSummary: 'search' }],
+    ['read_url_content', { Url: url, toolSummary: 'read page' }],
+    ['call_mcp_tool', webMcp],
+    ['invoke_subagent', { Prompt: 'synthetic prompt', Role: 'Browser Assistant', TypeName: 'browser' }],
+    ['mcp_chrome_devtools_list_pages', { toolSummary: 'list pages' }],
+    ['mcp_chrome_devtools_new_page', { toolSummary: 'new page', url }],
+    ['mcp_chrome_devtools_navigate_page', { pageId: 0, toolSummary: 'navigate', type: 'url', url }],
+    ['call_mcp_tool', { ServerName: 'chrome_devtools', ToolName: 'list_pages', Arguments: {} }],
+    ['call_mcp_tool', { ServerName: 'web', ToolName: 'open_browser_url', Arguments: { url } }],
+    ['list_resources', { ServerName: 'chrome_devtools' }],
+    ['send_message', { Message: 'synthetic result' }],
+    ['schedule', { DurationSeconds: 10, Prompt: 'synthetic follow-up' }],
+    ['manage_subagents', { Action: 'list' }],
+    ['open_browser_url', { url }],
+    ['browser_open', {}],
+  ];
+  const mcpDenied = (tool) => `${tool} is only allowed for agy's built-in chrome_devtools and web servers in this run`;
+  const pathDenied = (tool) => `${tool} argument filePath looks like a local file path, which agy's browser and web tools may not use`;
+  const urlDenied = (tool, key) => `${tool} argument ${key} must be an http or https URL`;
+  const rejectedWebCalls = [
+    ['invoke_subagent', { TypeName: 'general' }, 'invoke_subagent is only allowed for the browser subagent in this run'],
+    ['call_mcp_tool', { ServerName: 'synthetic-mcp', ToolName: 'list_pages', Arguments: {} }, mcpDenied('call_mcp_tool')],
+    ['list_resources', { ServerName: 'synthetic-mcp' }, mcpDenied('list_resources')],
+    ['mcp_chrome_devtools_take_screenshot', { filePath: 'C:/x.png' }, pathDenied('mcp_chrome_devtools_take_screenshot')],
+    ['call_mcp_tool', { ServerName: 'chrome_devtools', ToolName: 'upload_file', Arguments: { uid: '1', filePath: 'C:/x' } }, pathDenied('call_mcp_tool')],
+    ['mcp_chrome_devtools_navigate_page', { type: 'url', url: 'file:///C:/Windows/win.ini' }, urlDenied('mcp_chrome_devtools_navigate_page', 'url')],
+    ['read_url_content', { Url: 'file:///C:/x' }, urlDenied('read_url_content', 'Url')],
+    ['read_resource', { ServerName: 'chrome_devtools', Uri: 'file:///C:/x' }, urlDenied('read_resource', 'Uri')],
+    ['read_resource', { ServerName: 'chrome_devtools', Uri: 'https://' }, urlDenied('read_resource', 'Uri')],
+    ['call_mcp_tool', { ...webMcp, Arguments: { url: 'file:///C:/x' } }, urlDenied('call_mcp_tool', 'url')],
+    ['mcp_chrome_devtools_take_screenshot', { items: [{ filePath: 'C:/x' }] }, pathDenied('mcp_chrome_devtools_take_screenshot')],
+  ];
   const readTools = ['manage_task', 'read_file', 'view_file'], editTools = [...readTools, 'write_file', 'edit_file'];
-  const allowedTools = { none: ['manage_task'], read: readTools, edit: editTools, shell: [...editTools, 'run_command'] };
-  for (const [access, tools] of Object.entries(allowedTools)) for (const [tool, args] of Object.entries(inputs)) {
-    const result = guard(h, policy(h, { access }), tool, args);
-    const allowed = tools.includes(tool);
-    assert.equal(result.decision, allowed ? 'allow' : 'deny', `${access}/${tool}`);
-    if (!allowed) assert.match(result.reason, /^foreman guard: /);
+  const tiers = [
+    ['none', true, ['manage_task'], false], ['probe', true, readTools, false],
+    ['read', undefined, readTools, false], ['read', true, readTools, true],
+    ['edit', true, editTools, true], ['shell', true, [...editTools, 'run_command'], true],
+  ];
+  for (const [access, web, tools, allowsWeb] of tiers) {
+    const p = policy(h, { access, web });
+    for (const [tool, args] of Object.entries(inputs)) {
+      const result = guard(h, p, tool, args), allowed = tools.includes(tool);
+      assert.equal(result.decision, allowed ? 'allow' : 'deny', `${access}/${web}/${tool}`);
+      if (!allowed) assert.match(result.reason, /^foreman guard: /);
+      if (['call_mcp_tool', 'list_resources', 'read_resource', 'define_subagent'].includes(tool))
+        assert.equal(result.reason, `foreman guard: ${tool} is not allowed in this run`);
+      if (tool === 'ask_question') assert.equal(result.reason, access === 'none' ? 'foreman guard: ask_question is not allowed in this run'
+        : 'foreman guard: ask_question is not allowed in this run; put questions in the report');
+    }
+    for (const [tool, args] of webCalls) assert.deepEqual(guard(h, p, tool, args), allowsWeb ? { decision: 'allow' }
+      : { decision: 'deny', reason: `foreman guard: ${tool} is not allowed in this run` }, `${access}/${web}/${tool}`);
+    for (const [tool, args, reason] of rejectedWebCalls) assert.deepEqual(guard(h, p, tool, args),
+      { decision: 'deny', reason: `foreman guard: ${allowsWeb ? reason : `${tool} is not allowed in this run`}` },
+      `${access}/${web}/${tool} ${JSON.stringify(args)}`);
   }
   for (const tool of ['read_file', 'view_file', 'run_command', 'edit_file', 'write_file']) {
     const r = guard(h, policy(h), tool, { ...inputs[tool], Cwd: h.cwd });
     assert.equal(r.decision, 'deny'); assert.match(r.reason, /Cwd/);
   }
+  const withWeb = policy(h, { web: true });
+  for (const [tool, args] of webCalls.slice(0, 2)) assert.deepEqual(guard(h, withWeb, tool, { ...args, FutureArg: 1 }),
+    { decision: 'deny', reason: `foreman guard: unexpected argument FutureArg for ${tool}` });
+  for (const args of [{ ...webMcp, FutureArg: 1 }, { ...webMcp, Arguments: [] }, { ...webMcp, Arguments: { url, FutureArg: 1 } }])
+    assert.deepEqual(guard(h, withWeb, 'call_mcp_tool', args), { decision: 'deny', reason: 'foreman guard: call_mcp_tool is not allowed in this run' });
+  assert.deepEqual(guard(h, withWeb, 'call_mcp_tool', { ...webMcp, Arguments: { Url: url } }), { decision: 'allow' });
+  for (const web of [null, 'true', 1]) assert.deepEqual(guard(h, policy(h, { web }), 'manage_task', {}),
+    { decision: 'deny', reason: 'foreman guard: invalid policy for this run' });
   for (const bad of ['{', {}, { access: 'read' }, policy(h, { access: 'all' }), policy(h, { root: 'relative' }),
     policy(h, { add_dirs: ['relative'] }), policy(h, { root: path.join(h.cwd, 'missing') })])
     assert.equal(guard(h, bad).decision, 'deny');
   assert.equal(read(path.join(h.cwd, 'source.txt')), 'readable');
+});
+
+test('agy 浏览器 MCP 拒绝与用户配置撞名的工具和服务器', (t) => {
+  const h = sandbox(t), p = policy(h, { web: true }), config = path.join(globalDir(h), 'mcp_config.json');
+  const listPages = 'mcp_chrome_devtools_list_pages';
+  const reason = (tool, name) => `foreman guard: ${tool} may belong to the MCP server ${name} configured in agy's mcp_config.json, which agy tasks may not use`;
+  for (const [name, tool] of [['chrome-devtools', listPages], ['chrome_devtools_x', 'mcp_chrome_devtools_X_list_pages'], ['chrome', listPages]]) {
+    write(config, { mcpServers: { [name]: { command: 'synthetic' } } });
+    assert.deepEqual(guard(h, p, tool, {}), { decision: 'deny', reason: reason(tool, name) });
+  }
+  write(config, { mcpServers: { 'synthetic-mcp': { command: 'synthetic' } } });
+  assert.deepEqual(guard(h, p, listPages, {}), { decision: 'allow' });
+  write(config, { mcpServers: { 'chrome-devtools': { command: 'synthetic' } } });
+  for (const tool of ['call_mcp_tool', 'list_resources', 'read_resource']) {
+    const args = { ServerName: 'chrome_devtools', ...(tool === 'call_mcp_tool' ? { ToolName: 'list_pages', Arguments: {} } : {}) };
+    assert.deepEqual(guard(h, p, tool, args), { decision: 'deny', reason: reason(tool, 'chrome-devtools') });
+  }
+  const unreadable = { decision: 'deny', reason: `foreman guard: ${listPages} is not allowed because agy's mcp_config.json can't be read` };
+  for (const bad of ['{', { mcpServers: 1 }, { mcpServers: null }, '[]']) {
+    write(config, bad);
+    assert.deepEqual(guard(h, p, listPages, {}), unreadable);
+  }
+  // agy 自己会留一个空的 mcp_config.json；空文件和没有 mcpServers 都等于没有用户服务器。
+  for (const empty of ['', ' \n', {}]) {
+    write(config, empty);
+    assert.deepEqual(guard(h, p, listPages, {}), { decision: 'allow' });
+  }
 });
 
 test('agy 守卫执行两档只写项目，附加目录只读并按真实路径拦截受保护位置', (t) => {
@@ -352,6 +436,36 @@ test('agy gitdir 照 git 的规则读，经项目外别名绕回项目的受保�
     assert.deepEqual(guard(h, policy(h, { root: spaced, access }), 'write_file', { Path: inSpaced }), { decision: 'deny', reason: reason(inSpaced) });
     assert.equal(guard(h, policy(h, { root: spaced, access }), 'write_file', { Path: path.join(spaced, 'meta', 'config') }).decision, 'allow');
     assert.deepEqual(guard(h, policy(h, { root: looped, access }), 'write_file', { Path: inLooped }), { decision: 'deny', reason: reason(inLooped) });
+  }
+});
+
+test('agy 的 .git 链接到 gitfile 时按项目根解析相对 gitdir，并保护项目内的目标文件', (t) => {
+  const h = sandbox(t), inside = path.join(h.cwd, 'inside'), outside = path.join(h.cwd, 'outside');
+  const cases = [[inside, path.join(inside, 'nested', 'gitfile')], [outside, path.join(h.home, 'nested', 'gitfile')]];
+  const links = cases.map(([root, file]) => {
+    fs.mkdirSync(path.join(root, 'meta'), { recursive: true });
+    write(file, 'gitdir: meta\n');
+    return [path.join(fs.realpathSync.native(root), '.git'), file];
+  });
+  if (process.platform === 'win32') {
+    // 普通 Windows 会话可能没有创建文件软链接的权限，只模拟守卫查询链接的两次调用。
+    const fixture = h.write('gitfile-link-fixture.mjs', `import fs from 'node:fs';
+const links = new Map(${JSON.stringify(links)});
+const lstat = fs.lstatSync, readlink = fs.readlinkSync;
+fs.lstatSync = (file, ...args) => links.has(file) ? { isSymbolicLink: () => true } : lstat(file, ...args);
+fs.readlinkSync = (file, ...args) => links.get(file) ?? readlink(file, ...args);
+`);
+    h.env.NODE_OPTIONS = `--import=${pathToFileURL(fixture).href}`;
+  } else {
+    for (const [link, file] of links) fs.symlinkSync(file, link, 'file');
+  }
+  for (const [root, file] of cases) {
+    const p = policy(h, { root, access: 'edit' }), config = path.join(root, 'meta', 'config');
+    for (const target of root === inside ? [config, file] : [config]) {
+      assert.deepEqual(guard(h, p, 'write_file', { Path: target }), {
+        decision: 'deny', reason: `foreman guard: ${target} is in a protected folder (.git) that agy tasks may not change`,
+      });
+    }
   }
 });
 
@@ -710,30 +824,52 @@ test('agy 工具错误对象和字符串识别守卫拒绝，命令输出解析�
     { event: { event: 'step_update', step_update: { step_index: 52, state: 'DONE', step_type: 'tool', tool_name: 'run_command', tool_info: {
       name: 'run_command', parameters: { CommandLine: 'real format' }, output: 'A pre-tool hook changed the arguments of this tool call before it ran. Changed: CommandLine.\n\n'
         + 'Command exited with code 3.\n\nCommand output:\nCommand failed to run: copied from a log\r\n' } } } },
+    ...[
+      ['hook blocked', 'tool call denied by pre-tool hook: synthetic rejection'],
+      ['launch failed', 'A pre-tool hook changed the arguments of this tool call before it ran. Changed: CommandLine.\n\n'
+        + 'Command failed to run: synthetic unavailable\n\nNo output from the command.'],
+    ].map(([CommandLine, output], i) => ({ event: { event: 'step_update', step_update: {
+      step_index: 53 + i, state: 'ERROR', step_type: 'tool', tool_name: 'run_command',
+      tool_info: { name: 'run_command', parameters: { CommandLine }, error: { type: 'TOOL_ERROR' }, output },
+    } } })),
   ] });
   const result = output(await run(h)), timeline = h.events(result.run_id);
   assert.equal(timeline.find((e) => e.type === 'item.completed' && e.item?.command === 'synthetic failure').item.exit_code, 7);
   assert.equal(timeline.find((e) => e.item?.command === 'plain output').item.exit_code, 0);
   const real = timeline.find((e) => e.type === 'item.completed' && e.item?.command === 'real format').item;
   assert.equal(real.exit_code, 3); assert.match(real.aggregated_output, /Command output:\nCommand failed to run: copied from a log/);
+  assert.equal(result.commands_executed, 3);
   assert.equal(result.questions.filter((q) => q.source === 'permission_denied').length, 2);
-  const errors = timeline.filter((e) => e.type === 'item.completed' && e.item?.exit_code === 1);
+  const errors = timeline.filter((e) => e.type === 'item.completed' && e.item?.tool === 'read_file' && e.item.exit_code === 1);
   assert.equal(errors.length, 2); assert.ok(errors.every((e) => e.item.aggregated_output.startsWith('tool call denied by pre-tool hook: foreman guard:')));
   assert.ok(lines(path.join(result.run_dir, 'agy.jsonl')).some((e) => e.step_update?.tool_info?.error?.type === 'TOOL_ERROR'));
 });
 
-test('agy 守卫放行 ByteOffset；只读工具因不认识的参数被拦时记成说明，不算要决定的问题', async (t) => {
+test('agy 守卫放行 ByteOffset，网页工具写入搜索事件，未知参数记成说明', async (t) => {
   const h = sandbox(t); configure(h); await install(h); h.write('source.txt', 'safe');
   const file = path.join(h.cwd, 'source.txt');
+  const query = 'synthetic query', Url = 'https://example.invalid/direct', url = 'https://example.invalid/mcp';
   h.scenario({ steps: [
     { tool: { name: 'read_file', args: { Path: file, StartLine: 1, EndLine: 5, ByteOffset: 0 } } },
     { tool: { name: 'read_file', args: { Path: file, FutureArg: 1 } } },
+    { tool: { name: 'search_web', args: { query } } },
+    { tool: { name: 'read_url_content', args: { Url } } },
+    { tool: { name: 'call_mcp_tool', args: { ServerName: 'web', ToolName: 'read_url_content', Arguments: { url } } } },
+    { tool: { name: 'search_web', args: { query, FutureArg: 1 } } },
+    { tool: { name: 'read_url_content', args: { Url, FutureArg: 1 } } },
   ] });
   const r = output(await run(h)), decisions = lines(path.join(r.run_dir, 'agy-guard.jsonl'));
   assert.equal(r.status, 'done');
-  assert.deepEqual(decisions.map((d) => d.decision), ['allow', 'deny']);
+  assert.deepEqual(decisions.map((d) => d.decision), ['allow', 'deny', 'allow', 'allow', 'allow', 'deny', 'deny']);
   assert.equal(r.questions.filter((q) => q.source === 'permission_denied').length, 0);
-  assert.ok(r.notes.includes(M.agyGuardUnknownArg('read_file', 'FutureArg')));
+  for (const tool of ['read_file', 'search_web', 'read_url_content']) assert.ok(r.notes.includes(M.agyGuardUnknownArg(tool, 'FutureArg')));
+  const tools = h.events(r.run_id).filter((e) => e.type === 'item.completed' && e.item.id).map((e) => e.item);
+  assert.deepEqual(tools.map(({ type, query }) => [type, query]), [
+    ['command_execution', undefined], ['command_execution', undefined], ...[query, Url, url].map((target) => ['web_search', target]),
+    ['command_execution', undefined], ['command_execution', undefined],
+  ]);
+  assert.deepEqual(tools.slice(-2).map(({ tool, exit_code, aggregated_output }) => [tool, exit_code, aggregated_output]),
+    ['search_web', 'read_url_content'].map((tool) => [tool, 1, `tool call denied by pre-tool hook: foreman guard: unexpected argument FutureArg for ${tool}`]));
 });
 
 test('agy 真启动器拒绝写工具，工具事件、权限问题、进度、用量与价格进入公共结果', async (t) => {
@@ -763,21 +899,23 @@ test('agy 真启动器拒绝写工具，工具事件、权限问题、进度、�
 test('agy 下一轮、回答和报告修复续接同一会话，修复用 none，用量只算本轮各步', async (t) => {
   const h = sandboxWithProbe(t); configure(h, (c) => { c.dispatch.discuss_max_rounds = 3; }); await install(h);
   const captured = path.join(h.home, 'policies.jsonl');
-  h.scenario({ guard_file: captured, calls: [{ last_message: 'invalid JSON' }, { last_message: discussion }] });
+  const tool = 'search_web', input = { query: 'synthetic repair' };
+  h.scenario({ guard_file: captured, calls: [{ last_message: 'invalid JSON' }, { last_message: discussion, steps: [{ tool: { name: tool, args: input } }] }] });
   const first = output(await run(h)), requests = h.calls().filter((c) => c.operation === 'run');
   assert.equal(first.sandbox, 'agy-sandbox'); assert.equal(JSON.parse(read(path.join(first.run_dir, 'meta.json'))).sandbox, first.sandbox);
   assert.equal(requests.length, 2); assert.ok(requests[1].args.includes('--conversation')); assert.equal(requests[1].args.includes('--sandbox'), false);
   const events = h.events(first.run_id).filter((e) => e.type === 'step.usage'); assert.equal(events.length, 2); assert.equal(events[0].final, undefined); assert.equal(events[1].final, true);
   assert.equal(first.usage.input_tokens, 26); assert.equal(first.usage.output_tokens, 10);
+  assert.deepEqual(first.questions.filter((q) => q.source === 'permission_denied').map((q) => JSON.parse(q.detail)), [{ tool, input }]);
   h.scenario({ guard_file: captured });
   const second = output(await h.bridge(['resume', '--run', first.run_id, '--level', 'complex', '--brief', '-']));
   assert.equal(second.session_id, first.session_id); assert.equal(second.usage.input_tokens, 13);
   const third = output(await h.bridge(['resume', '--run', second.run_id, '--level', 'complex', '--brief', '-'], { input: '回答上一轮的问题' }));
   assert.equal(third.session_id, first.session_id);
   const policies = lines(captured); assert.ok(policies.every((c) => c.policy?.nonce));
-  assert.ok(policies.some((c) => c.operation === 'probe' && c.policy.access === 'probe'));
-  assert.ok(policies.some((c) => c.operation === 'run' && c.policy.access === 'none'));
-  assert.ok(policies.some((c) => c.operation === 'run' && c.policy.access === 'read'));
+  assert.ok(policies.some((c) => c.operation === 'probe' && c.policy.access === 'probe' && c.policy.web === false));
+  assert.deepEqual(policies.filter((c) => c.operation === 'run').map(({ policy: p }) => [p.access, p.web]),
+    [['read', true], ['none', false], ['read', true], ['read', true]]);
 });
 
 for (const access of ['edit', 'shell']) test(`agy 执行 ${access} 使用执行报告和快照，只有成功的文件工具计为 agent`, async (t) => {
@@ -817,10 +955,10 @@ for (const access of ['edit', 'shell']) test(`agy 执行 ${access} 使用执行�
   assert.ok(request.args.includes('--dangerously-skip-permissions'));
   assert.equal(request.args.includes('--sandbox') || request.args.includes('--settings'), false);
   assert.equal(fs.existsSync(networkCapture), false);
-  assert.deepEqual(lines(capture).filter((c) => c.operation === 'run').map(({ policy: p, sandbox }) => [p.access, p.sandbox, sandbox]), [[access, false, false]]);
+  assert.deepEqual(lines(capture).filter((c) => c.operation === 'run').map(({ policy: p, sandbox }) => [p.access, p.sandbox, sandbox, p.web]), [[access, false, false, true]]);
   const schema = read(path.join(SCRIPTS, '../schemas/report.schema.json'));
   // 附加目录对 agy 的执行只能读，提示里不能写成“另可改动”。
-  const prompt = `${brief}\n\n${M.footer(h.cwd, [])}\n${M.agyReadOnlyDirs(M.list([addDir]))}\n\n${M.opencodeRunFooter(schema, access)}\n`
+  const prompt = `${brief}\n\n${M.footer(h.cwd, [], true)}\n${M.agyReadOnlyDirs(M.list([addDir]))}\n\n${M.opencodeRunFooter(schema, access, true)}\n`
     + (shell ? '' : `\n\n${M.agyFileList(tracked)}`);
   assert.equal(JSON.parse(request.stdin).message.content, prompt);
   assert.equal(read(path.join(r.run_dir, 'brief.md')), prompt);
@@ -888,7 +1026,8 @@ test('agy 执行返工沿用会话和档位，报告修复只用 none', async (t
   assert.equal(requests[0].args.includes('--conversation'), false);
   for (const { args } of requests.slice(1)) assert.equal(args[args.indexOf('--conversation') + 1], first.session_id);
   assert.ok(requests.every(({ args }) => args.includes('--dangerously-skip-permissions') && !args.includes('--sandbox')));
-  assert.deepEqual(lines(capture).filter((c) => c.operation === 'run').map((c) => c.policy.access), ['edit', 'none', 'edit']);
+  assert.deepEqual(lines(capture).filter((c) => c.operation === 'run').map(({ policy: p }) => [p.access, p.web]),
+    [['edit', true], ['none', false], ['edit', true]]);
   const prompt = JSON.parse(requests.at(-1).stdin).message.content;
   assert.equal(prompt, `合成返工说明\n\n${M.resumeFooter}\n\n${M.opencodeRunResumeFooter}\n\n\n${M.agyFileList(h.git(['ls-files']))}`);
 });
@@ -1359,20 +1498,24 @@ test('agy check 按 --cwd 扫描和探针，令牌读取仍在 agy-work', async 
   assert.equal(h.calls().find((c) => c.operation === 'probe').cwd, target);
   const policies = lines(capture); assert.equal(policies.find((c) => c.operation === 'probe').policy.root, target);
   assert.ok(policies.find((c) => c.operation === 'run').policy.root.startsWith(path.join(stateDir(h), 'agy-work')));
+  assert.ok(policies.every((c) => c.policy.web === false));
 });
 
 test('agy 提示词在探针后选择读命令权限，讨论和审查无 shell 都附清单', async (t) => {
   const h = sandboxWithProbe(t); configure(h); await install(h); h.initGit(); h.write('source.txt', 'review this change\n');
+  const capture = path.join(h.home, 'prompt-policy.jsonl');
   const permissions_output = permissionsOutput([{ scope: 'global', allow: ['read_file(extra)', 'read_url(example.invalid)'],
     deny: ['read_file(private)', 'read_url(*)', 'read_file(private)'], ask: ['command(synthetic)'] }]);
   for (const shell of [true, false]) {
-    h.scenario({ sandbox: shell, version: shell ? 'prompt-shell' : 'prompt-no-shell', permissions_output });
+    h.scenario({ sandbox: shell, version: shell ? 'prompt-shell' : 'prompt-no-shell', permissions_output, guard_file: capture });
     for (const mode of ['discuss', 'review']) {
       const result = output(await h.bridge(taskArgs(h, mode, ['--agent', 'agy'])));
       const prompt = read(path.join(result.run_dir, 'brief.md'));
       const request = h.calls().filter((c) => c.operation === 'run').at(-1);
       assert.equal(JSON.parse(request.stdin).message.content, prompt);
       assert.equal(request.args.includes('--sandbox'), shell);
+      const p = lines(capture).filter((c) => c.operation === 'run').at(-1).policy;
+      assert.deepEqual([p.access, p.web], ['read', mode === 'discuss']);
       if (process.platform === 'win32' && shell) {
         assert.equal(request.args.includes('--dangerously-skip-permissions'), false);
         assert.deepEqual(JSON.parse(request.args[request.args.indexOf('--settings') + 1]), {
@@ -1381,6 +1524,8 @@ test('agy 提示词在探针后选择读命令权限，讨论和审查无 shell 
       }
       if (mode === 'discuss') assert.ok(prompt.includes(M.agyDiscussFooter(h.cwd, read(path.join(SCRIPTS, '../schemas/discuss.schema.json')), shell)));
       else assert.ok(prompt.includes(shell ? '也可以用 run_command 在 agy 的沙箱里跑只读命令' : '这次不能运行命令，也没有搜索工具'));
+      assert.equal(prompt.includes('查资料可以用 search_web 搜网页。'), mode === 'discuss');
+      assert.equal(prompt.includes('从网上查到的说法要附上链接。'), mode === 'discuss');
       assert.equal(prompt.includes('你只能用读文件和搜索工具'), false);
       assert.equal(prompt.includes('项目的 git ls-files 清单'), !shell);
       if (!shell) assert.ok(prompt.endsWith('source.txt'));
@@ -1392,9 +1537,12 @@ test('agy 提示词在探针后选择读命令权限，讨论和审查无 shell 
   }
   for (const locale of ['zh', 'en']) {
     const text = MESSAGES[locale];
+    const common = text.opencodeDiscussFooter('project', 'schema', true);
     for (const shell of [true, false]) {
       const footer = text.agyDiscussFooter('project', 'schema', shell);
-      assert.equal(footer.slice(footer.indexOf('\n- ', footer.indexOf('\n- ') + 1)), text.opencodeDiscussFooter('project', 'schema').slice(text.opencodeDiscussFooter('project', 'schema').indexOf('\n- ', text.opencodeDiscussFooter('project', 'schema').indexOf('\n- ') + 1)));
+      assert.equal(footer.replace(/^- .+$/m, ''), common.replace(/^- .+$/m, ''));
+      assert.ok(footer.includes(locale === 'en' ? 'To look things up on the web, use search_web.' : '查资料可以用 search_web 搜网页。'));
+      assert.ok(footer.includes(locale === 'en' ? 'give the link for anything you found on the web.' : '从网上查到的说法要附上链接。'));
       const review = text.agyReviewPrompt('project', 'scope', shell);
       assert.ok(review.includes(shell ? 'run_command' : locale === 'en' ? "you can't run commands this time and have no search tool" : '这次不能运行命令，也没有搜索工具'));
     }
