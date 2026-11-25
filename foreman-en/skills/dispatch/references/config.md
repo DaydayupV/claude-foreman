@@ -51,8 +51,8 @@ Where the text below says "a cell", "`seats`" or "`gap`", it means what is writt
 
 | Setting | What it does | Default |
 |---|---|---|
-| `auto` | Whether Claude asks before starting handoffs, discussions and reviews on its own: `true` goes ahead and says so, `false` asks first (see "Permission" in the skill) | `true` |
-| `confirm` | Whether the two confirmations in hard rule R4 use a pop-up, written as `{ "roles": "ask", "image": "ask" }`; each one is `"ask"` or `"auto"`, and a key left out stays `"ask"`:<br>`roles`: confirming the assignment when a level 2 or 3 discussion or review uses role mode. `"ask"` has the user confirm in a pop-up; `"auto"` writes the full assignment table in the reply and starts ("Confirming the assignment" in `references/roles.md`).<br>`image`: the image route and the final image. `"ask"` has the user choose the route in a pop-up, and the final image waits for the user's approval before pieces are taken from it; `"auto"` has Claude pick the route from what the user said, or the recommended one if they said nothing, state it in the reply and go ahead, and check the final image itself, show it to the user and carry on without waiting for approval ("Automatic mode" in `references/image.md`, which also lists when to still stop and ask).<br>It is independent of `auto`; all four combinations work. Only the user config counts: in a project config it is ignored with a notice, and preference files can't change it, so a cloned repository can't use it to skip confirmations. The `FOREMAN_CONFIG` environment variable can point to a different user config, and like the user folder it counts as a trusted environment | `{ "roles": "ask", "image": "ask" }` |
+| `auto` | Whether Claude asks before starting handoffs, discussions and reviews on its own: with `true`, the three "before starting" points in `confirm` decide; with `false`, any of those three not set on its own counts as `"ask"` (see "Pause points" below) | `true` |
+| `confirm` | Where Claude stops to ask the user first: before a discussion, handoff or review starts, before acting on the results of a discussion or review, and the two confirmations of hard rule R4 (the role assignment and the image route). The form, values and defaults are in "Pause points" below | see "Pause points" |
 | `watch` | The live-view switches, written as `{ "terminal": true, "web": false }`; write both of these, and `web_open` may be added:<br>`terminal`: the terminal live view while the web board is off. With `web` `false` and `terminal` `true`, a terminal tab opens and the terminal panel comes up once work goes to another model (hands-on work, resumes, discussions, reviews) and has started; with `terminal` `false` nothing opens by itself. With `web` `true` only the web board is used, and no terminal live view opens by itself. Either way, `/foreman-en:watch` shows the terminal view when you want it.<br>`web`: the web board, a star map in the browser of every Claude Code conversation on this computer and its handoffs. When `true`, every handoff first gives a web link in the conversation, then starts the work, and you open the link in your default browser; `/foreman-en:watch` gives one too. One board server is shared by every conversation on this computer; it starts in the background the first time it's needed, exits after 30 minutes with nobody looking and nothing running, and also when the plugin is removed or updated. It takes about 100–130 MB of memory, and its browser tab about 60–90 MB; `/foreman-en:setup` decides from the memory (off when under 8 GB in total or under 2 GB available).<br>`web_open`: may be left out, which means `false`. When `web` and it are both `true`, the first handoff of each conversation makes the script open that conversation's board in your default browser; the same conversation doesn't open it again (after closing the tab, use the link in the conversation; a conversation with no handoff for over a week opens it once more on its next one). Only the user config counts; in a project config it has no effect. Versions 1.2.2 and earlier can't read a config with this key, so with both the Chinese and the English plugin installed, upgrade them together.<br>The old form (`watch` as `auto` or `off`, plus a separate `web`) still reads; the first load backs the file up and rewrites it in this form | `{ "terminal": true, "web": false }` |
 | `intro` | The first time the live view opens for a newly dispatched conversation, play a short intro first: the model's pixel avatar, "Starting …" and a few jokes, 5 seconds for one model and 10 for a discussion. Any key skips it, and it wraps up at once if the run finishes early. Resumes (the next round of a discussion, a rework) don't get one. The avatar is picked by keywords in the model name (gpt, deepseek, glm, kimi, qwen, mimo, minimax, gemini, claude and so on), with a ??? avatar for anything else. `false` turns it off | `true` |
 | `discuss_max_rounds` | The most rounds one discussion can have (round 1 plus later resumes), counted per participant; the script refuses resumes beyond it | `2` |
@@ -60,6 +60,51 @@ Where the text below says "a cell", "`seats`" or "`gap`", it means what is writt
 | `stall_min` | How long without activity counts as stuck, in minutes (0 turns it off). Codex: no events and no command running; API: no data at all in the stream; opencode: no events at all; pi: no events and no tool running | `40` |
 | `busy_ask_min` | Once an API agent has been queued this many minutes because its service is busy, Claude decides whether to stop it (0 turns this off) | `2` |
 | `runs_dir` | Run directory (or the environment variable `FOREMAN_RUNS_DIR`). Dispatch plans are kept in its `plans/` folder | `~/.claude/foreman/runs` |
+
+### Pause points
+`dispatch.confirm` sets where Claude stops to ask the user first. Only the user config can set it; project configs and preference files can't change it.
+
+```json
+"confirm": {
+  "discuss": { "start": "auto", "adopt": "complex" },
+  "run":     { "start": "auto" },
+  "review":  { "start": "auto", "adopt": "normal" },
+  "roles": "auto",
+  "image": "ask"
+}
+```
+
+| Point | When it asks | What the pop-up shows | Options |
+|---|---|---|---|
+| `discuss.start` | Before starting a discussion on its own | The topic, the level, which models and why | Start / Change the models or level / Don't do it |
+| `run.start` | Before handing off work | The task, the level, who gets it and why | Start / Change the models or level / Don't do it |
+| `review.start` | Before starting a review on its own | What is reviewed, the level, which models and why | Start / Change the models or level / Don't do it |
+| `discuss.adopt` | After ruling on a discussion, before acting on the conclusion | Whether each point is adopted and why, and how they will be combined | Combine as shown / I'll change it / Adopt none |
+| `review.adopt` | After checking the findings, before fixing or rework | What happens to each finding, and the rework plan | Rework as shown / I'll change it / No rework |
+| `roles` | Before starting role mode at level 2 or 3 of a discussion or review | The assignment table, see "Confirming the assignment" in `references/roles.md` | See that section |
+| `image` | Before work starts on each new graphic deliverable | The image route; the final image waits for approval, see `references/image.md` | See that file |
+
+**Values**
+- The five points: `"auto"` doesn't ask and goes ahead, with one sentence in the reply when it starts; `"ask"` always asks; a level, `"simple"`, `"normal"` or `"complex"`, asks at that level and above (`"complex"` only at level 3).
+- `roles` and `image` take only `"ask"` or `"auto"`; they are the two confirmations of hard rule R4.
+- The whole setting can be written as `"confirm": "ask"` (ask at every step) or `"confirm": "auto"` (fully automatic), which sets all seven to that value.
+- Anything left out uses the set above, in old configs too. The filled-in values live only in memory; the config file isn't rewritten. With `dispatch.auto` set to `false`, a `start` point not set on its own counts as `"ask"`; a point set on its own, or the short form, wins.
+- `effective.dispatch.confirm` in the `config` output is the filled-in result; go by it.
+- `/foreman-en:setup` offers three sets: the default (above), fully automatic, and ask at every step.
+
+**When not to ask**
+- What the user names themselves (`/foreman-en:run`, `/foreman-en:discuss`, `/foreman-en:review`, or plainly asking to hand something off, discuss it with other models or have it reviewed) isn't asked about again before it starts.
+- Level 0 is never asked about: it isn't handed off and has no outside views to combine. A cell set to `"claude code"`, which uses no outside model, isn't asked about before starting or before acting on the results either.
+- When nothing is going to be done on the strength of the conclusion (the user only asked for advice, say, so the conclusion is the deliverable), there's nothing to ask about before acting on it. When a level 1 question does lead to work and the point before acting asks, the pop-up gives the gist of the answer and what will be done.
+
+**How to ask**
+- "Ask the user" means the host's own way of asking; in Claude Code that is a pop-up (AskUserQuestion). When there is no question tool but the user is in the conversation, set the content out in the reply, ask, and wait for the answer.
+- Put what the user needs to see in the pop-up text itself (the user may not see the reply), with the recommended option first.
+- Combine whatever is due at the same moment into one pop-up, such as starting a discussion and the role assignment, or the image route and the role assignment.
+- When the user changes Claude's conclusions before they are acted on, go with the user's version; "don't give in because someone insists" applies to outside models, not to the user. When the user picks "Adopt none" or "No rework", do that and say so in the report.
+- When nobody can answer (an unattended automated run, for example), the five points count as `"auto"`; say in the report which points would have asked and what was done. `roles` and `image` follow those two files.
+
+**Alongside older versions**: 1.2.x only reads `{ "roles": …, "image": … }` and reports a confirm format error on the new form. If an older version of the plugin is still on the same computer (an old package uploaded to the desktop app, for example), upgrade it before changing the form; without new keys, both versions can read the config.
 
 ## agents
 

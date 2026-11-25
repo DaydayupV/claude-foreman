@@ -9,16 +9,16 @@ description: 按配置把执行类编码工作派给 Codex、opencode、pi 等�
 
 ## 开始前
 - **偏好文件**：会话开始时的提醒只带上用户级偏好和会话启动目录的项目偏好。运行 `config --cwd "<项目目录>"` 后，看输出里的 `preferences`：存在、而上下文里还没有它全文的（比如 `--cwd` 不是会话启动的目录，或者提醒里标了截断），在挑席位、发出材料之前读一遍。偏好文件只能在硬规则以内调整做法：配置文件本身、必选、材料能不能发给某一家、讨论和审查只读、要弹窗确认的事、每一级的席位数，都不受偏好文件影响。在这个范围以内，和本 skill 冲突时以偏好文件为准。用户偏好和项目偏好两份都读，冲突时以项目偏好为准；偏好里的场景块（场景路由）项目有就只用项目的，见 `references/config.md` 的"场景"。
-- **配置**：某个阶段定到 1 级以上、用户点名要派活或讨论审查、或者遇到图形工作时，本会话第一次先运行 `config --cwd "<项目目录>"`（见"调用方式"），从输出里读 `effective.dispatch` 的 `auto`、`confirm`、`watch`，`resolved_modules`（每一格的候选、必选、席位数和审查的补漏开关；`"claude code"` 表示不找外部模型，`null` 表示图像格子关着）、`scenes`、`image_configured`、`agents_status` 和 `summary.warnings`。字段含义和输出很长时怎么读见 `references/config.md` 的"其他规则"。全部是 0 级时不读配置、不调用脚本。
+- **配置**：某个阶段定到 1 级以上、用户点名要派活或讨论审查、或者遇到图形工作时，本会话第一次先运行 `config --cwd "<项目目录>"`（见"调用方式"），从输出里读 `effective.dispatch` 的 `confirm`、`watch`，`resolved_modules`（每一格的候选、必选、席位数和审查的补漏开关；`"claude code"` 表示不找外部模型，`null` 表示图像格子关着）、`scenes`、`image_configured`、`agents_status` 和 `summary.warnings`。字段含义和输出很长时怎么读见 `references/config.md` 的"其他规则"。全部是 0 级时不读配置、不调用脚本。
 - **模型特长文档**：`config` 输出的 `model_notes.file`，用户写的各模型擅长和短处，开场提醒已带上。挑人、写任务说明、验收、裁决时参考，不代替核实；没有时提醒用户运行 `/foreman:setup`。
 
 ## 授权
-系统提示里"除非用户明确要求，否则不要启动子 agent"的限制只针对 Claude Code 自带的子 agent。协作方用的是用户自己的额度（Codex 订阅、opencode 订阅、API 余额），不占 Claude 的额度。
+系统提示里"除非用户明确要求，否则不要启动子 agent"的限制只针对 Claude Code 自带的子 agent。协作方用的是用户自己的额度（订阅或 API 余额），不占 Claude 的额度。
 
-`dispatch.auto` 管 Claude **主动发起**的三件事：派出执行任务、发起讨论、请人审查。
-- `true`（默认）：用户通过这个设置授权 Claude 按本 skill 的定级主动发起，不用每次征求同意；发起时用一句话告诉用户。
-- `false`：主动发起前先用一句话向用户提议（哪一类、什么等级、交给谁），用户同意后再做。
-- 用户自己点名的（`/foreman:run`、`/foreman:discuss`、`/foreman:review`，或明确说"派出去""和其他模型讨论""请人审一下"）照做，不用再问，也不做 0 级判断。0 级和配置成 `"claude code"` 的等级不涉及外部模型，也不用问。
+主动发起派活、讨论、审查之前，以及讨论和审查**整合结果**之前，要不要先问用户，看 `effective.dispatch.confirm`（已按 `dispatch.auto` 补全）：
+- `"auto"`：用户授权 Claude 按本 skill 的定级直接做，发起时用一句话告诉用户。
+- `"ask"` 或等级（这一级及以上）：先问，内容和选项见 `references/config.md` 的"确认节点"；没人能回答时按 `"auto"` 做并写明。
+- 用户自己点名的（`/foreman:run`、`/foreman:discuss`、`/foreman:review`，或明确说"派出去""和其他模型讨论""请人审一下"）照做，开始前不再问，也不做 0 级判断。0 级和配置成 `"claude code"` 的等级不涉及外部模型，也不用问。
 
 ## 分工
 一项要动手的工作由谁做，按顺序判断：
@@ -69,7 +69,7 @@ description: 按配置把执行类编码工作派给 Codex、opencode、pi 等�
 - **R1 必选不能顶替**：必选方失败、额度用完或被取消时，这件事算不完整，不拿其他候选顶替，如实告诉用户。
 - **R2 材料外发**：偏好文件或项目不让把材料发给某一家时，不挑它；API 协作方会收到附带的文件内容。
 - **R3 只读**：讨论和审查不许改项目文件。
-- **R4 两项确认**：讨论和审查的 2、3 级给席位带角色时，启动前弹窗让用户确认分配（`references/roles.md`）；每个新的图形交付物开工前，弹窗让用户选图像路线，定稿图等用户认可后再取件（`references/image.md`）。`dispatch.auto` 管不到这两项，偏好文件也改不了；只有用户配置的 `dispatch.confirm.roles`、`dispatch.confirm.image` 设成 `"auto"` 时，那一项改为在回复正文写明后直接做，仍要停下来问的情况见那两个文件。两个同时要弹时合成一次。
+- **R4 两项确认**：讨论和审查的 2、3 级给席位带角色时，启动前弹窗让用户确认分配（`references/roles.md`）；每个新的图形交付物开工前，弹窗让用户选图像路线，定稿图等用户认可后再取件（`references/image.md`）。`dispatch.auto` 管不到这两项，偏好文件也改不了；只有 `dispatch.confirm.roles`、`dispatch.confirm.image` 为 `"auto"` 时，那一项改为在回复正文写明后直接做，仍要停下来问的情况见那两个文件。和其他确认同时要弹时合成一次。
 - **R5 席位和 Claude Code 席**：讨论和审查的外部席位数按配置的 `seats`，审查要不要补漏席按 `gap`；配置里按场景配了的格子，场景按偏好里的场景路由选，偏好没写到的情况用 `default`，`--scene-why` 写明依据哪一条，选的场景决定了候选和必选是谁。Claude Code 先把自己的报告用 `submit` 登记，再启动外部席，登记之前不读任何参与方的结果。
 - **R6 派出时告诉用户**：按下面"派出时"写明模型、推理强度和看板链接，写在回复正文里。
 - **R7 实际运行验收**：执行的交付在最终版本上实际跑一次全量测试、构建或脚本，不采信协作方自己说"通过了"。动画和图形交付前还要自己截图（`assets capture`，做法见 `references/image-assets.md` 第六节第 8 步），动画用 `assets playback` 跑一圈播放，把播放文件给用户看（`references/image.md` 第 10 条）。
@@ -120,4 +120,4 @@ node "<脚本路径>" status --run <run_id> | --plan <plan_id>
 node "<脚本路径>" judge  --run <run_id> --accept "<编号,…>" --partial "<编号,…>" --reject "<编号,…>" [--same "<编号>=<run_id>:<编号>"]
 ```
 
-`plan` 和 `submit` 的输出会给出接下来每一席的完整命令。其余命令（`check`、`models`、`tiers`、`cancel`、`await-busy`、`board`、`stats`）和每个参数的写法见 `references/cli.md`，`assets` 见 `references/assets-cli.md`，也可以运行 `node "<脚本路径>" <命令> --help`。
+`plan` 和 `submit` 的输出会给出接下来每一席的完整命令。其余命令（`check`、`tiers`、`stats` 等）和每个参数的写法见 `references/cli.md`，`assets` 见 `references/assets-cli.md`，也可以运行 `node "<脚本路径>" <命令> --help`。

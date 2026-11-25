@@ -99,7 +99,7 @@ flowchart TD
     d0 -- "1 级" --> dqa["请一个模型给第二意见"]
     d0 -- "2–3 级" --> dmode{"选模式"}
     dmode -- "普通" --> dnormal["同一份议题<br/>各方独立出方案"]
-    dmode -- "多角色" --> droles["按能力分配角色<br/>弹窗请你确认"]
+    dmode -- "多角色" --> droles["按能力分配角色<br/>分配表写在回复里"]
     droles --> dcards["各方从自己的角色出方案"]
     dnormal --> dcross["有实质分歧时<br/>第 2 轮交叉挑错"]
     dcards --> dcross
@@ -173,11 +173,26 @@ flowchart TD
 - 交付之前，按改动的风险判断要不要请另一个模型审查。
 - 大任务能拆成互不相干的几份时，同时派给几个会话，缩短等待（每个协作方的并发上限见 `max_parallel`）。
 
-不想让 Claude Code 自己发起，把 `dispatch.auto` 设成 `false`：派活、讨论和审查之前它都会先问你。
+Claude Code 在哪几处先停下来问你，由用户配置里的 `dispatch.confirm` 决定。默认是这一套：
 
-下文的两项确认（多角色讨论的分配、图像路线和定稿图）不归 `dispatch.auto` 管，默认都弹窗。想让 Claude Code 不弹窗、按推荐直接做，在用户配置里把 `dispatch.confirm.roles` 或 `dispatch.confirm.image` 设成 `"auto"`：它会在回复里写明分配或路线，然后直接开始。这个开关只认用户配置，写在项目配置里不生效，免得克隆来的仓库借它跳过确认。
+```json
+"confirm": {
+  "discuss": { "start": "auto", "adopt": "complex" },
+  "run":     { "start": "auto" },
+  "review":  { "start": "auto", "adopt": "normal" },
+  "roles": "auto",
+  "image": "ask"
+}
+```
 
-上面表格里的命令只由你来输入，Claude Code 不会自己调用它们：这些命令表示"你点名要做"，会跳过 0 级判断。Claude Code 自己发起时走插件的 skill，照样定级、照样遵守 `dispatch.auto`。
+- `start` 管讨论、执行、审查开始前问不问；`adopt` 管讨论和审查结束后、按结论动手之前问不问。每项写 `"auto"`（不问）、`"ask"`（每次都问），或者一个等级 `"simple"`、`"normal"`、`"complex"`（这一级及以上才问）。默认只在 3 级的讨论、2 级及以上的审查整合结果之前问你。
+- `roles`（多角色讨论的分配）和 `image`（图像路线和定稿图）见下文，只能写 `"ask"` 或 `"auto"`。
+- 整体写成 `"confirm": "ask"` 就是每步都问，写成 `"confirm": "auto"` 就是全自动；`/foreman:setup` 里可以直接选这三套。
+- 旧开关 `dispatch.auto` 设成 `false` 时，开始前的三个节点没单独写的都会先问你。
+- 你点名要做的事，开始前不再问；0 级的小事不问。没人能回答的场合（比如无人值守的自动运行），开始前和整合前这五个节点按"不问"继续，在汇报里写明；`roles`、`image` 照下文的规定。
+- 这个开关只认用户配置，写在项目配置里不生效，免得克隆来的仓库借它跳过确认。1.2.x 读不懂新写法，同一台电脑上还装着旧版本时，先都升级。
+
+上面表格里的命令只由你来输入，Claude Code 不会自己调用它们：这些命令表示"你点名要做"，会跳过 0 级判断。Claude Code 自己发起时走插件的 skill，照样定级、照样遵守 `dispatch.confirm`。
 
 ### 多角色讨论
 
@@ -186,7 +201,7 @@ flowchart TD
 - **按能力分配**：先看工具能不能做到（比如实证核查员要跑命令，只能给 Codex），再看长处和模型档位：需要复杂思考的角色先给强档模型，档位只作参考，不是能不能参加的资格。模型档位按第三方评测分强、中、弱三档，见 [references/model-tiers.md](foreman/skills/dispatch/references/model-tiers.md)。
 - **优先一个模型一个角色**：合格的模型不够时，让强档模型多开一个会话扮另一个角色；多开的会话各占一个并发名额，结论一致也只算一份证据。中档、弱档模型可以作"广度席"，默认只参加第 1 轮（它提出的关键观点还没解决时可以续接），观点由 Claude 逐条核实。
 - **核心角色不合并**：这个议题最需要的视角各占一席，3 级时同一个核心角色可以由两个不同的模型各扮一遍。席位数按这一级的 `seats`，必选的模型一定占一席。
-- **先请你确认**：启动前弹窗列出"模型 → 角色"的分配，`dispatch.auto` 开着也一样；你可以按推荐开始、调整，或者改用普通讨论。`dispatch.confirm.roles` 设成 `"auto"` 时不弹窗：Claude Code 在回复里写出分配表后直接开始，你随时可以叫它调整。
+- **分配表**：默认（`dispatch.confirm.roles` 为 `"auto"`）Claude Code 在回复里写出"模型 → 角色"的分配表后直接开始，你随时可以叫它调整；设成 `"ask"` 时启动前先弹窗，你可以按推荐开始、调整，或者改用普通讨论。
 - 角色只决定各方重点检查什么，不决定结论；裁决照样按证据，几个角色意见一致不算多一份证据。
 - 自定义角色、某类议题默认用多角色模式，可以写进偏好文件；对某个模型的看法（档位、擅长和短处）写进[模型特长文档](#模型特长文档)。角色表和分配规则见 [references/roles.md](foreman/skills/dispatch/references/roles.md)。
 
@@ -423,7 +438,13 @@ CodeBuddy 的两档由插件注入的守卫钩子检查每一次读写：写文�
 {
   "dispatch": {
     "auto": true,
-    "confirm": { "roles": "ask", "image": "ask" },
+    "confirm": {
+      "discuss": { "start": "auto", "adopt": "complex" },
+      "run": { "start": "auto" },
+      "review": { "start": "auto", "adopt": "normal" },
+      "roles": "auto",
+      "image": "ask"
+    },
     "watch": { "terminal": true, "web": false },
     "intro": true,
     "discuss_max_rounds": 2,
@@ -623,7 +644,7 @@ Claude Code 每个会话开始时会读它，用在这几处：
 - **代码会发给协作方背后的厂商。** 派给 Codex 的发给 OpenAI；opencode、pi 和 API 模型发给对应的厂商，agy 发给 Google，CodeBuddy 发给腾讯云，API 模型还会收到 Claude Code 附上的文件。涉及敏感代码的项目先确认没问题，必要时在项目配置里去掉 API 候选，或者把讨论、审查整格写成 `"claude code"`。
 - **项目配置和项目偏好能覆盖你的设置。** 项目里的 `.claude/foreman.json` 能加候选（只能用你在用户配置里定义的协作方）、调高席位、延长时长，`.claude/foreman.md` 能改场景路由；从别人那里克隆来的仓库也一样。打开陌生仓库时先看看这两个文件，`config --cwd` 的 `project_config` 会列出它覆盖了什么。
 - **API key 可以写在用户配置里，也可以放在环境变量里。** 写在配置里是明文，`~/.claude/foreman/config.json` 不要提交或分享；项目配置里写的 key 不生效。`config` 命令不显示 key，脚本也不会把 key 写进运行记录。配置的备份（`.bak`）和迁移时改写出来的新文件继承所在目录的权限：想只让自己能读，就让整个目录只有自己能读（默认的 `~/.claude/foreman` 就是这样），别只给配置文件单独设权限。
-- **按量计费的都会产生费用。** Codex 用 API key 计费时、API 模型、opencode 和 pi 接入的按量计费厂商，每次派活或讨论都会花钱。不想让 Claude Code 自己发起派活、讨论和审查，就把 `dispatch.auto` 设成 `false`，它会先问你。
+- **按量计费的都会产生费用。** Codex 用 API key 计费时、API 模型、opencode 和 pi 接入的按量计费厂商，每次派活或讨论都会花钱。不想让 Claude Code 自己发起派活、讨论和审查，就把 `dispatch.confirm` 里三个开始前的节点设成 `"ask"`，它会先问你；没单独写过这几个节点时，把 `dispatch.auto` 设成 `false` 也一样。
 - **协作方不会因为等人回答而卡住。** Codex 默认不需要审批，opencode 不开放提问和需要确认的权限，pi 没有提问工具，agy 的提问工具被守卫拒绝。它们要人回答的事都收集在结果里，由 Claude Code 判断：你已有授权内的直接决定后续接，业务取舍、扩大范围、花钱和不可逆的操作才问你。
 
 ## 运行记录

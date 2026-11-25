@@ -99,7 +99,7 @@ flowchart TD
     d0 -- "Level 1" --> dqa["One model gives a second opinion"]
     d0 -- "Levels 2–3" --> dmode{"Choose the mode"}
     dmode -- "Normal" --> dnormal["Same brief for everyone<br/>independent proposals"]
-    dmode -- "Role mode" --> droles["Roles assigned by ability<br/>you confirm in a pop-up"]
+    dmode -- "Role mode" --> droles["Roles assigned by ability<br/>assignment shown in the reply"]
     droles --> dcards["Each proposes from its role"]
     dnormal --> dcross["Round 2 critique<br/>when they really disagree"]
     dcards --> dcross
@@ -173,11 +173,26 @@ The bundled skill has Claude Code level each discussion, piece of hands-on work 
 - Before delivering, decide by the risk of the change whether another model should review it.
 - When a big task splits into parts that don't touch each other, hand them to several sessions at once to cut the wait (each agent's limit is `max_parallel`).
 
-If you'd rather Claude Code didn't start these on its own, set `dispatch.auto` to `false`: it asks you before handing off work, starting a discussion or asking for a review.
+Where Claude Code stops to ask you first is set by `dispatch.confirm` in the user config. The default is:
 
-The two confirmations below (the role assignment of a role-mode discussion, and the image route and final image) aren't covered by `dispatch.auto` and use a pop-up by default. If you'd rather Claude Code went ahead on its recommendation without a pop-up, set `dispatch.confirm.roles` or `dispatch.confirm.image` to `"auto"` in the user config: it states the assignment or the route in its reply and starts. Only the user config counts; in a project config the setting has no effect, so a cloned repository can't use it to skip confirmations.
+```json
+"confirm": {
+  "discuss": { "start": "auto", "adopt": "complex" },
+  "run":     { "start": "auto" },
+  "review":  { "start": "auto", "adopt": "normal" },
+  "roles": "auto",
+  "image": "ask"
+}
+```
 
-Only you type the commands in the table above; Claude Code doesn't call them itself. They mean "you asked for this by name" and skip the level 0 check. When Claude Code starts something on its own, it goes through the plugin's skill, which still levels the step and follows `dispatch.auto`.
+- `start` covers whether it asks before a discussion, a handoff or a review starts; `adopt` covers whether it asks after a discussion or review, before it acts on the results. Each takes `"auto"` (don't ask), `"ask"` (always ask) or a level, `"simple"`, `"normal"` or `"complex"` (ask at that level and above). By default it only asks before acting on the results of a level 3 discussion or a review at level 2 or above.
+- `roles` (the role assignment of a role-mode discussion) and `image` (the image route and final image) are described below and take only `"ask"` or `"auto"`.
+- `"confirm": "ask"` asks at every step and `"confirm": "auto"` is fully automatic; `/foreman-en:setup` offers these three sets directly.
+- With the older switch `dispatch.auto` set to `false`, it asks before each start that isn't set on its own.
+- What you ask for by name doesn't get asked again before it starts, and level 0 small things are never asked about. When nobody can answer (an unattended automated run, for example), the five points before starting and before acting on results go ahead as if set to "don't ask", and the report says so; `roles` and `image` follow the rules below.
+- Only the user config counts; in a project config the setting has no effect, so a cloned repository can't use it to skip confirmations. Version 1.2.x can't read the new form, so if an older version is still installed on the same computer, upgrade both first.
+
+Only you type the commands in the table above; Claude Code doesn't call them itself. They mean "you asked for this by name" and skip the level 0 check. When Claude Code starts something on its own, it goes through the plugin's skill, which still levels the step and follows `dispatch.confirm`.
 
 ### Role-mode discussions
 
@@ -186,7 +201,7 @@ When a topic has several goals pulling against each other (such as security and 
 - **Assigned by ability**: first whether the tools can do it (the fact checker has to run commands, so only Codex can take it), then strengths and the model tier: roles that need hard thinking go to strong models first, but the tier is only a guide, not a condition for taking part. Models are sorted into strong, mid and weak tiers from a third-party leaderboard; see [references/model-tiers.md](foreman-en/skills/dispatch/references/model-tiers.md).
 - **One model per role first**: when there aren't enough qualifying models, a strong model opens another session for another role; each extra session takes a parallel slot, and its agreeing conclusions still count as one piece of evidence. Mid and weak models can take "breadth seats" that join round 1 only by default (one can be resumed when a key point it raised is still open), with Claude checking each of their points.
 - **Core roles are never merged**: the angles a topic needs most get a seat each, and at level 3 one core role can be played by two different models. The number of seats follows the level's `seats`, and required models always get one.
-- **You confirm first**: before it starts, a pop-up lists the "model → role" assignment, even with `dispatch.auto` on; you can start as suggested, adjust it, or use a normal discussion instead. With `dispatch.confirm.roles` set to `"auto"` there is no pop-up: Claude Code writes the assignment table in its reply and starts, and you can ask for changes at any time.
+- **The assignment table**: by default (`dispatch.confirm.roles` set to `"auto"`) Claude Code writes the "model → role" assignment in its reply and starts, and you can ask for changes at any time; set to `"ask"`, a pop-up comes first, and you can start as suggested, adjust it, or use a normal discussion instead.
 - A role only sets what each model checks most closely, not its conclusion; decisions still go by evidence, and several roles agreeing doesn't count as more evidence.
 - Custom roles and using role mode by default for some kinds of topics can go in the preference files; views on a model (its tier, strengths and weaknesses) go in the [model notes](#model-notes). The role table and assignment rules are in [references/roles.md](foreman-en/skills/dispatch/references/roles.md).
 
@@ -279,7 +294,7 @@ It has three parts:
 
 | Part | What it covers |
 |---|---|
-| `dispatch` | How the plugin hands off work: whether to do it on its own, whether the two confirmations use a pop-up, the live view, the intro, discussion rounds, time limits, the run directory |
+| `dispatch` | How the plugin hands off work: where it stops to ask you first, the live view, the intro, discussion rounds, time limits, the run directory |
 | `agents` | Which agents there are and how to reach them |
 | `modules` | Which candidates each cell of each task type has, who is required, and with what effort; how many seats each discussion and review level uses, and whether a review adds a gap seat |
 
@@ -423,7 +438,13 @@ For CodeBuddy, the guard hook the plugin injects checks every read and write at 
 {
   "dispatch": {
     "auto": true,
-    "confirm": { "roles": "ask", "image": "ask" },
+    "confirm": {
+      "discuss": { "start": "auto", "adopt": "complex" },
+      "run": { "start": "auto" },
+      "review": { "start": "auto", "adopt": "normal" },
+      "roles": "auto",
+      "image": "ask"
+    },
     "watch": { "terminal": true, "web": false },
     "intro": true,
     "discuss_max_rounds": 2,
@@ -623,7 +644,7 @@ The notes are only input: whether a point holds, Claude Code still checks agains
 - **Your code goes to the providers behind your agents.** Work handed to Codex goes to OpenAI; opencode, pi and API models send it to their providers, agy to Google, CodeBuddy to Tencent Cloud, and API models also receive the files Claude Code attaches. Check that this is acceptable for sensitive projects; if needed, drop the API candidates in the project config, or set discussions and reviews to `"claude code"` as a whole.
 - **The project config and project preferences can override your settings.** A project's `.claude/foreman.json` can add candidates (only agents you defined in the user config), raise seat counts and lengthen time limits, and `.claude/foreman.md` can change the scene routing; that includes repositories cloned from someone else. Look at both files when you open an unfamiliar repository; `project_config` in the `config --cwd` output lists what it overrides.
 - **API keys can go in the user config or in environment variables.** In the config they're plain text, so don't commit or share `~/.claude/foreman/config.json`; keys in a project config are ignored. The `config` command never shows keys, and the script never writes them into run records. Config backups (`.bak`) and the new file a migration writes take the permissions of their folder: to keep them readable only by you, restrict the whole folder (the default `~/.claude/foreman` already is), not just the config file.
-- **Pay-as-you-go means real costs.** Codex with API-key billing, API models, and pay-as-you-go providers reached through opencode or pi all cost money for each handoff or discussion. Set `dispatch.auto` to `false` if you don't want Claude Code starting handoffs, discussions and reviews on its own; it asks you first instead.
+- **Pay-as-you-go means real costs.** Codex with API-key billing, API models, and pay-as-you-go providers reached through opencode or pi all cost money for each handoff or discussion. Set the three starts in `dispatch.confirm` to `"ask"` if you don't want Claude Code starting handoffs, discussions and reviews on its own; it asks you first instead. If you haven't set those three yourself, `dispatch.auto` set to `false` does the same.
 - **Agents don't get stuck waiting for an answer.** Codex needs no approvals by default, opencode gets no way to ask questions or request confirmable permissions, pi has no question tool, and the guard blocks agy's question tool. Anything they need answered is collected in the result, and Claude Code decides: within the authority you've already given, it decides and resumes; it only asks you about business trade-offs, wider scope, extra cost and irreversible steps.
 
 ## Run records
