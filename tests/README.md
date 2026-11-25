@@ -158,6 +158,7 @@
 | 74 模块场景与可配置补漏 | scenes.test.mjs、seats.test.mjs、migration.test.mjs | 场景块解析、保留名 default、项目替换和空块；modules.default 迁移共用备份和锁、写入失败内存补齐、项目平铺只读迁移；混写和缺 default 拒绝，逐场景整体校验，旧 seats/gap 对象拒绝；sceneView/isScened、按层合并、resolved_scenes 和差异表；所有模块的场景参数、一致性阻断、不同场景的必选及提示；直派与计划启动、图像计划和续接沿用场景，换级不换场景；补漏任意候选、CLI 默认模型查重、submit 和启动时 Claude Code 模型查重；check/models 覆盖场景专用协作方和模型 |
 
 | 75 场景统计与看板 | judge-stats.test.mjs、watch-group.test.mjs、scene-display.test.mjs | stats --by scene 优先 meta、再取计划，及 effort/cell 组合；缺失或不可读计划记 null、中英文列名及非法维度提示；终端组标题按 M.list 显示多个场景；fplan 和直派 meta 传递 scene/scene_why，组标题优先计划、无带场景计划时取任务，悬停显示选择理由；终端和网页 groupTask 源码一致，兼容旧计划和未启动席位 |
+| 76 模型特长文档 | model-notes.test.mjs、hooks.test.mjs | 生成默认版本：标题写确切的模型 ID，按别名合并、按场景收录在用模型和主持方；GPT Astra 和 Sol、Gemini 4、Claude Opus 按系列填插件默认判断，Opus 当主持方时合并界面视觉定稿和给人读的文字，其他 Claude 主持方只带这一条；没改过的默认行不算写过。标题模糊匹配：只写一部分、版本号按前缀比、并列几个、括号备注、反引号和末尾的 #；只在文末给对不上的模型补节，保留原有每个字节；会话开始的钩子注入全文 |
 
 ## 说明
 

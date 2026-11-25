@@ -616,7 +616,7 @@ Preferences can change how things are done, but not the plugin's hard rules: req
 
 ### Model notes
 
-`~/.claude/foreman/models.md` is where you write what you've learned about each model. `/foreman-en:setup` creates it with a section for each model you use: a line with its LiveBench tier, strengths and weaknesses, and "Strengths" and "Weaknesses" lines for you to fill in. Claude's section starts out saying it's good at UI and visual design sign-off and at text people read; change that if your experience differs. Later setup runs only add sections for new models; they never change what you wrote.
+`~/.claude/foreman/models.md` is where you write what you've learned about each model. `/foreman-en:setup` creates it with a section for each model you use: a line with its LiveBench tier, strengths and weaknesses, then "Strengths" and "Weaknesses" lines. For the GPT Astra and Sol, Gemini 4 and Claude Opus families those lines start out with the plugin's own judgments, marked "plugin default" (GPT, for example, is strong at backend programming but codes defensively and writes stiff prose); for other models they're left for you. When Claude is the host, its section's strengths also carry the plugin's former fixed split of the work: UI and visual design sign-off and text people read. Change or delete any of it where your experience differs. Later setup runs only add sections for new models; they never change what you wrote.
 
 ```markdown
 ## gpt-6-astra
