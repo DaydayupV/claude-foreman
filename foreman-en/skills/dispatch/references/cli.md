@@ -23,7 +23,7 @@ node "<script path>" check  [--agent <agent>] [--cwd "<project dir>"] [--format 
 node "<script path>" models [--format json|md]
 node "<script path>" agy-guard <install|uninstall|status> (agy's global guard; see check below)
 node "<script path>" tiers  [--model <name>]... [--all] [--cwd "<project dir>"] [--format json|md] (model tiers, overall scores, strengths and weaknesses; rules in references/model-tiers.md)
-node "<script path>" model-notes [--write] [--host-model <model ID>] (the state of the model notes models.md; --write creates it or adds a section for each missing model, see "The model notes" in references/config.md)
+node "<script path>" model-notes [--write] [--host-model <model ID>] (the state of the model notes models.md; --write creates it or adds a section for each model no heading fits, see "The model notes" in references/config.md)
 node "<script path>" await-busy (--group <name> | --run <run_id>) [--after minutes]
 node "<script path>" cancel --run <run_id>
 node "<script path>" judge  --run <run_id> [--accept "<ids>"] [--partial "<ids>"] [--reject "<ids>"] [--same "<id>=<run_id>:<id>,…"] [--clear "<ids>"]

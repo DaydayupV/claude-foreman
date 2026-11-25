@@ -609,20 +609,25 @@ Custom roles for role-mode discussions go here too; the format is under "Custom 
 
 ### Model notes
 
-Write what each model is good and bad at, from your own experience, in `~/.claude/foreman/models.md` (next to the user config). `/foreman-en:setup` creates a default version: a section for each model in use, with a LiveBench line giving its tier, strengths and weaknesses, and "Strengths" and "Weaknesses" lines left for you to fill in. Claude's section starts out saying it's good at UI and visual design sign-off and text people read: that used to be a fixed rule of the plugin, and now it lives here, where you can change it. Later setup runs only add a section for newly used models and never change what you wrote.
+Write what each model is good and bad at, from your own experience, in `~/.claude/foreman/models.md` (next to the user config). `/foreman-en:setup` creates a default version: a section for each model in use, with a LiveBench line giving its tier, strengths and weaknesses, and "Strengths" and "Weaknesses" lines left for you to fill in. Claude's section starts out saying it's good at UI and visual design sign-off and text people read: that used to be a fixed rule of the plugin, and now it lives here, where you can change it. Later setup runs only add a section for models no heading fits yet and never change what you wrote.
 
 ```markdown
-## gpt-6-astra (Codex CLI)
+## gpt-6-astra
 - LiveBench (…): strong tier; …
 - Strengths: back end, concurrency and data migrations
 - Weaknesses: codes defensively, likes adding fallbacks, compatibility branches and validation
 
-## kimi-k2.6 (API)
+## claude-opus, claude-fable
+- Strengths: UI and visual design sign-off, text people read
+
+## kimi-k2.6
 - Strengths: treat it as a strong model
 
-## deepseek-v4.1-flash (API)
+## deepseek-flash
 - Strengths: local results from stats show it finding many issues no one else does in reviews; treat it as strong for reviews
 ```
+
+Headings are model names, without the access route: a model has one section whichever CLI or API it runs through. A heading can be part of a name: it fits a model when each of its parts appears in the model name in the same order, so versions can be left out. `claude-opus` fits Opus 5.5 and 4.8, and `deepseek-flash` fits deepseek-v4.1-flash. You can also list several models separated by commas. When several sections fit one model, all of them are read; where they disagree, the more specific one wins, and an exact model name is the most specific. The full rule is under ["The model notes" in `config.md`](foreman-en/skills/dispatch/references/config.md).
 
 Claude Code reads it at the start of every session and uses it in these places:
 - **Picking agents**: when a cell has several candidates, it picks by strengths and weaknesses. When hands-on candidates include Claude Code, it does the work itself only when the notes say its model is better at this kind of work.
@@ -630,7 +635,7 @@ Claude Code reads it at the start of every session and uses it in these places:
 - **Checking results**: it looks hardest at the executor's weaknesses.
 - **Weighing review and discussion points**: a hardening suggestion from a model that codes defensively, for example, is weighed by the actual risk and cost.
 
-The notes are only input: whether a point holds, Claude Code still checks against the code and the evidence. Where they disagree with the LiveBench tiers, the notes win. Write them however you like; headings like `## <model ID>` let setup tell which models already have a section. There's only this one user-level file. When Claude Code sees a model making the same kind of mistake again and again, it will suggest adding it.
+The notes are only input: whether a point holds, Claude Code still checks against the code and the evidence. Where they disagree with the LiveBench tiers, the notes win. Write them however you like; only the `## ` headings are matched to models. There's only this one user-level file. When Claude Code sees a model making the same kind of mistake again and again, it will suggest adding it.
 
 ## Safety notes
 

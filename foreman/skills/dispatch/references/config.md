@@ -433,9 +433,13 @@
 
 ## 模型特长文档（models.md）
 用户写的各模型擅长和短处，和用户配置在同一个目录：`~/.claude/foreman/models.md`（设了 `FOREMAN_CONFIG` 时跟着它换目录）。它不是配置，脚本不解析里面的判断，只由 Claude 读：挑人（`references/seats.md` 第 4、6 条，`references/roles.md`），写任务说明时提醒短处（`references/run.md`），验收时对照短处（`references/acceptance.md`），权衡审查和讨论意见（`references/review.md`、`references/discuss.md`）。和档位冲突时以它为准（`references/model-tiers.md`）。
-- **写法**：每个模型一节，标题 `## <模型 ID>（<接入方式>）`，下面怎么写都行。认节时只看标题的第一个词，按 `scripts/models.json` 的身份表归一，所以大小写、服务商前缀不影响。默认版本每节有一行 LiveBench 的档位和长短处，加上空着的"擅长""短处"两行。
-- **生成**：`model-notes --write [--host-model <模型 ID>]`，`/foreman:setup` 会运行它。文件不存在就新建；已存在只在末尾给缺的模型补一节，写过的内容一个字节都不改。"在用的模型"是用户配置各格（各场景）引用到的协作方的模型，再加上 `--host-model`。主持方的模型是 Claude 系列时，它那一节的擅长行默认写"界面视觉定稿、给人读的文字"（插件原来的默认，可改）。不带 `--write` 时只报告状态，不写文件。
-- **状态**：`config` 输出的 `model_notes` 是 `{ "file", "exists", "missing", "unwritten" }`。`missing` 是在用、但文件里还没有这一节的模型；`unwritten` 是有这一节、但除了默认的几行什么都还没写的模型。文件不存在时 `summary.warnings` 里有一条 `models_doc_missing`。
+- **写法**：标题写模型名，下面怎么写都行。一个模型不管经哪种 CLI 或 API 调用，都用同一节。
+  - **模糊匹配**：拿标题和这个模型的每一种写法比：身份 ID、`scripts/models.json` 里登记的别名、配置里写的模型名，任意一种对得上就算。比较前两边按同样的规则归一（大小写、服务商前缀、Claude 的小数版本号写成连字符都不影响），再切成段：在 `-`、`_` 处，以及字母和数字的交界处切开，连续的纯数字段算一个版本号（`claude-opus-4-5` 的版本是 4.5）。标题写出的每一段都按顺序出现在模型名里，这一节就对得上这个模型，没写的段可以省略。词要完全相同，版本号按整段前缀比：`claude-opus` 对得上 claude-opus-5-5 和 claude-opus-4-8，`claude-opus-5` 对得上 5.5、对不上 4.5，`deepseek-flash` 对得上 deepseek-v4.1-flash，`glm-flash` 对不上 glm-5.3-flashx。也可以写展示名，比如 `Claude Opus 5.5`。
+  - **一节写几个模型**：用中英文逗号或顿号隔开，比如 `## claude-opus, claude-fable`。括号里的内容是备注（里面的逗号也不算分隔），不参与匹配。
+  - **几节都对得上一个模型**：都读；说法冲突时以更具体的那一节为准。和模型名完全一样的最具体，其余写出的段越多越具体。
+  - **默认版本**：每个在用的模型一节，标题是确切的模型 ID，下面一行 LiveBench 的档位和长短处，加上空着的"擅长""短处"两行。标题可以自己改宽，几节也可以合并。
+- **生成**：`model-notes --write [--host-model <模型 ID>]`，`/foreman:setup` 会运行它。文件不存在就新建；已存在只在末尾给哪一节都对不上的模型补一节，写过的内容一个字节都不改。"在用的模型"是用户配置各格（各场景）引用到的协作方的模型，再加上 `--host-model`。主持方的模型是 Claude 系列时，它那一节的擅长行默认写"界面视觉定稿、给人读的文字"（插件原来的默认，可改）。不带 `--write` 时只报告状态，不写文件。
+- **状态**：`config` 输出的 `model_notes` 是 `{ "file", "exists", "missing", "unwritten" }`。`missing` 是在用、但哪一节都对不上的模型；`unwritten` 是有节对得上、但这些节除了默认的几行什么都还没写的模型。文件不存在时 `summary.warnings` 里有一条 `models_doc_missing`。
 - **注入**：会话开始的提醒钩子把整份文件接在偏好文件后面注入，长度上限和偏好文件一样，超出的部分截掉并提示。
 - **补充**：验收或审查时发现某个模型反复出现同一类问题、文档里还没写的，向用户汇报时提议补进 models.md，用户同意再改。
 - 只有用户级这一份，项目里不能另写。

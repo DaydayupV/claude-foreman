@@ -23,7 +23,7 @@ node "<脚本路径>" check  [--agent <协作方>] [--cwd "<项目目录>"] [--f
 node "<脚本路径>" models [--format json|md]
 node "<脚本路径>" agy-guard <install|uninstall|status>（agy 的全局守卫，见下面 check 一节）
 node "<脚本路径>" tiers  [--model <名字>]... [--all] [--cwd "<项目目录>"] [--format json|md]（模型档位、综合分和长短处，规则见 references/model-tiers.md）
-node "<脚本路径>" model-notes [--write] [--host-model <模型 ID>]（模型特长文档 models.md 的状态；--write 新建或给缺的模型补一节，见 references/config.md 的"模型特长文档"）
+node "<脚本路径>" model-notes [--write] [--host-model <模型 ID>]（模型特长文档 models.md 的状态；--write 新建，或者给哪一节都对不上的模型补一节，见 references/config.md 的"模型特长文档"）
 node "<脚本路径>" await-busy (--group <组名> | --run <run_id>) [--after 分钟]
 node "<脚本路径>" cancel --run <run_id>
 node "<脚本路径>" judge  --run <run_id> [--accept "<编号,…>"] [--partial "<编号,…>"] [--reject "<编号,…>"] [--same "<编号>=<run_id>:<编号>,…"] [--clear "<编号,…>"]
