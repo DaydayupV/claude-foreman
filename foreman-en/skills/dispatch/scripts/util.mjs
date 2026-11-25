@@ -89,6 +89,70 @@ function filesOutside(files, roots) {
   }));
 }
 
+// 按系统查找路径的顺序求真实路径：不先合并 ..（POSIX 上要先跟随链接，再处理 ..）。还不存在的部分，从最近一层存在的目录接上；
+// 途中遇到目标不存在的链接，读出它指向哪里接着解析。查不清落点时返回 null。
+export function resolveRealPath(target, base) {
+  let current = path.isAbsolute(target) ? target : `${base}${path.sep}${target}`;
+  for (let hops = 0; hops < 40; hops++) {
+    const rest = [];
+    let probe = current, next = null;
+    for (;;) {
+      try { return path.join(fs.realpathSync.native(probe), ...rest.reverse()); }
+      catch (error) { if (!['ENOENT', 'ENOTDIR'].includes(error.code)) return null; }
+      let link = null;
+      try { if (fs.lstatSync(probe).isSymbolicLink()) link = fs.readlinkSync(probe); } catch { /* 这一层不存在 */ }
+      if (link !== null) {
+        const tail = [...rest].reverse().join(path.sep);
+        next = (path.isAbsolute(link) ? link : `${path.dirname(probe)}${path.sep}${link}`) + (tail ? path.sep + tail : '');
+        break;
+      }
+      const parent = path.dirname(probe);
+      if (parent === probe) return null;
+      rest.push(path.basename(probe));
+      probe = parent;
+    }
+    current = next;
+  }
+  return null;
+}
+
+const DEFAULT_LINK_SCAN_LIMIT = 100000;
+// 记录所有链接但不沿链接往下扫，调用方可以拒绝经由别名写入。列不出的目录和扫满时留下的目录也返回，让调用方封住扫描盲区。
+export function scanLinks(root, { limit = DEFAULT_LINK_SCAN_LIMIT, skip = [] } = {}) {
+  const absoluteRoot = path.resolve(root), realRoot = fs.realpathSync.native(root);
+  const key = (rel) => process.platform === 'win32' ? rel.toLowerCase() : rel;
+  const relative = (file) => path.relative(realRoot, file).split(path.sep).join('/') || '.';
+  const skipped = new Set(skip.map((dir) => key(path.relative(absoluteRoot, dir))));
+  const dirs = [realRoot], links = [], unreadable = [];
+  let visited = 0;
+  while (dirs.length) {
+    const dir = dirs.pop();
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+    catch { unreadable.push(relative(dir)); continue; }
+    for (const entry of entries) {
+      if ((process.platform === 'linux' ? entry.name : entry.name.toLowerCase()) === '.git') continue;
+      const file = path.join(dir, entry.name);
+      if (skipped.has(key(path.relative(realRoot, file)))) continue;
+      if (++visited > limit) return { links, unreadable, unscanned: [dir, ...dirs].map(relative), capped: true };
+      if (entry.isSymbolicLink()) {
+        let outside = false;
+        try {
+          const rel = path.relative(realRoot, fs.realpathSync.native(file));
+          outside = rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel);
+        } catch { /* 仍记下目标无法解析的链接，CodeBuddy 不把它当成外链。 */ }
+        links.push({ path: relative(file), outside });
+      } else if (entry.isDirectory()) dirs.push(file);
+    }
+  }
+  return { links, unreadable, unscanned: [], capped: false };
+}
+
+export function outsideLinks(root, limit = DEFAULT_LINK_SCAN_LIMIT, skip = []) {
+  const { links, capped } = scanLinks(root, { limit, skip });
+  return { links: links.filter((link) => link.outside).map((link) => link.path), capped };
+}
+
 function focusFiles(files) {
   return files.length ? `\n\n${M.focusFiles(files.map((f) => `- ${f.shown}${f.range ? (LANGUAGE === 'en' ? ` (lines ${f.range[0]}–${f.range[1]})` : `（第 ${f.range[0]}–${f.range[1]} 行）`) : ''}`).join('\n'))}` : '';
 }

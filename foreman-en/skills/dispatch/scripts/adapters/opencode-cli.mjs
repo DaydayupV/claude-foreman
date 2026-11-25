@@ -8,7 +8,7 @@ import { SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA } from '../config.mjs';
 import { MAX_REVIEW_CHARS, reviewPatchText } from '../review-scope.mjs';
 import { newRunDir, isCancelled, cancelSource, announceBoard } from '../records.mjs';
 import { startRun, finishDiscussion, execute, eventWriter, runLimits, reportWithRepair, spawnCli, validateSchema } from '../runner.mjs';
-import { M, LANGUAGE, die, isObject, binCommand, pathCommand, npmEntry, killTree, readAttachments, filesOutside, focusFiles, relativePath, closestMatches } from '../util.mjs';
+import { M, LANGUAGE, die, isObject, binCommand, pathCommand, npmEntry, killTree, readAttachments, filesOutside, scanLinks, resolveRealPath, focusFiles, relativePath, closestMatches } from '../util.mjs';
 import { D, modelLabel, toolLabel } from '../format.mjs';
 
 function opencodeCommand(agent) {
@@ -20,6 +20,14 @@ function opencodeCommand(agent) {
 const OPENCODE_AGENT = 'foreman-discuss';
 const AGENT_SUFFIX = randomBytes(4).toString('hex');
 const RUN_ACCESS = ['edit', 'shell'];
+const WRITE_SCAN_LIMIT = 300000;
+const WRITE_RULES_BUDGET = 12000;
+// 单个环境变量的长度上限（留了余量），以及注入代理里除链接规则以外的部分预留的长度。
+const ENV_LIMIT = process.platform === 'win32' ? 32000 : 120000;
+const FIXED_RULES_ROOM = 4000;
+// 写进这些目录和文件，等于改 git 钩子、Claude Code 和各协作方的配置，之后会被执行；执行档不许写，项目里哪一层都一样。目录和 agy、CodeBuddy 的守卫保护的一致。
+const PROTECTED_DIRS = ['.git', '.claude', '.opencode', '.codebuddy', '.gemini', '.agents', '.agent', '_agents', '_agent', '.pnpm', '.pnpm-store'];
+const PROTECTED_FILES = ['opencode.json', 'opencode.jsonc'];
 const capabilities = { modes: ['run', 'review', 'discuss'], isolation: 'tools', reads_code: true, reads_images: false, native_schema: false, native_review: false, images: false, resume: true, command_start_events: false };
 const websearchByCwd = new Map();
 
@@ -56,7 +64,137 @@ function opencodeAgentName(agentId) {
   return `${agentId}-${AGENT_SUFFIX}`;
 }
 
-function opencodeEnv(agentId = OPENCODE_AGENT, access, web) {
+function writePathPatterns(file) {
+  // opencode 读配置时会把数字键排到默认允许规则前面，根下的纯数字路径用 * 后缀保住拒绝顺序。
+  return [/^\d+$/.test(file) ? `${file}*` : file, `${file}/*`];
+}
+
+function safeWritePath(file) {
+  // opencode 会展开规则开头的 ~ 和 $HOME，也会替换 {env:…}、{file:…}，这些名字写进规则就不再是原来的路径。
+  while (file === '*' || file.startsWith('~') || /[{}]/.test(file) || file.includes('$HOME')
+    || file.split('/').some((part) => ['__proto__', 'constructor', 'prototype'].includes(part))) {
+    file = path.posix.dirname(file);
+  }
+  if (file === '.') throw new Error(M.opencodeUnsafeWriteRules());
+  return file;
+}
+
+function gitWriteDirs(cwd) {
+  const dirs = new Set(), worktrees = new Set(), root = fs.realpathSync.native(cwd);
+  const inside = (target) => {
+    const rel = path.relative(root, target);
+    return rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel) ? null : rel.split(path.sep).join('/') || '.';
+  };
+  for (const args of [['--absolute-git-dir'], ['--git-common-dir'], ['--git-path', 'hooks']]) {
+    const r = spawnSync('git', ['rev-parse', ...args], { cwd, timeout: 10000, encoding: 'utf8', windowsHide: true });
+    if (r.status !== 0) break;
+    const raw = r.stdout.replace(/\r?\n$/, ''), target = resolveRealPath(raw, cwd);
+    if (target === null) throw new Error(M.opencodeGitPathUnresolved(raw));
+    const rel = inside(target);
+    if (rel !== null) dirs.add(rel);
+  }
+  // worktree_remove 按 edit 判断权限，按工具名拒绝管不住它；登记在项目里的工作树整个不许写。
+  const list = spawnSync('git', ['worktree', 'list', '--porcelain'], { cwd, timeout: 10000, encoding: 'utf8', windowsHide: true });
+  if (list.status === 0) for (const line of list.stdout.split(/\r?\n/)) {
+    if (!line.startsWith('worktree ')) continue;
+    const target = resolveRealPath(line.slice('worktree '.length), cwd);
+    const rel = target === null ? null : inside(target);
+    // 用 --separate-git-dir 建的仓库，git 会把元数据目录也当成一个工作树列出来，它已经在 dirs 里了。
+    if (rel !== null && rel !== '.' && !dirs.has(rel)) worktrees.add(rel);
+  }
+  return { dirs, worktrees };
+}
+
+// 规则太多时优先合并项最多的父目录，避免注入的配置过大。按组大小记索引，只更新受合并影响的组。
+function boundWritePaths(paths, budget) {
+  const counts = new Map();
+  let size = 1; // 每条规则的长度计入一个逗号，首尾括号再净加一个字符。
+  const count = (file, delta) => {
+    for (const pattern of writePathPatterns(file)) {
+      const before = counts.get(pattern) || 0, after = before + delta;
+      if (after) counts.set(pattern, after);
+      else counts.delete(pattern);
+      if (!before || !after) size += delta * (JSON.stringify(pattern).length + ':"deny",'.length);
+    }
+  };
+  for (const file of paths.keys()) count(file, 1);
+  if (size <= budget) return;
+
+  const children = new Map(), parentsBySize = [];
+  let largest = 0;
+  const group = (file) => {
+    const parent = path.posix.dirname(file);
+    if (parent === '.' || parent === '*') return;
+    let siblings = children.get(parent);
+    if (siblings) parentsBySize[siblings.length].delete(parent);
+    else children.set(parent, siblings = []);
+    siblings.push(file);
+    (parentsBySize[siblings.length] ??= new Set()).add(parent);
+    largest = Math.max(largest, siblings.length);
+  };
+  for (const file of paths.keys()) group(file);
+  while (size > budget) {
+    while (largest && !parentsBySize[largest].size) largest--;
+    if (!largest) throw new Error(M.opencodeUnsafeWriteRules());
+    const parents = parentsBySize[largest], parent = parents.values().next().value;
+    parents.delete(parent);
+    for (const child of children.get(parent)) {
+      paths.delete(child);
+      count(child, -1);
+    }
+    children.delete(parent);
+    if (!paths.has(parent)) {
+      count(parent, 1);
+      group(parent);
+    }
+    paths.set(parent, true);
+  }
+}
+
+function opencodeWriteRules(cwd) {
+  const { links, unreadable, unscanned } = scanLinks(cwd, { limit: WRITE_SCAN_LIMIT });
+  const edit = Object.create(null), paths = new Map(), gitBlocked = [];
+  const deny = (file) => { for (const pattern of writePathPatterns(file)) edit[pattern] = 'deny'; };
+  const add = (file, blocked) => {
+    const safe = safeWritePath(file);
+    paths.set(safe, blocked || safe !== file || paths.get(safe) === true);
+  };
+  for (const { path: file } of links) add(file, false);
+  for (const dir of unreadable) add(dir, true);
+  for (const dir of unscanned) add(dir, true);
+  // 整份注入配置（加上用户自己的 OPENCODE_CONFIG_CONTENT）要装进一个环境变量：Windows 约 3.2 万字符，Linux 约 12.8 万字节。
+  const userConfig = process.env.OPENCODE_CONFIG_CONTENT ?? '';
+  const size = (text) => process.platform === 'win32' ? text.length : Buffer.byteLength(text);
+  const budget = Math.min(WRITE_RULES_BUDGET, ENV_LIMIT - size(userConfig) - FIXED_RULES_ROOM);
+  if (budget <= 0) throw new Error(M.opencodeConfigTooLarge(ENV_LIMIT));
+  boundWritePaths(paths, budget);
+
+  edit['*'] = 'allow';
+  for (const name of PROTECTED_DIRS) { deny(name); deny(`*/${name}`); }
+  for (const name of PROTECTED_FILES) { edit[name] = 'deny'; edit[`*/${name}`] = 'deny'; }
+  for (const rule of ['/*', '..', '../*']) edit[rule] = 'deny';
+  const git = gitWriteDirs(cwd);
+  for (const dir of [...git.dirs, ...git.worktrees]) {
+    const safe = safeWritePath(dir);
+    deny(safe);
+    if (safe !== dir || git.worktrees.has(dir)) gitBlocked.push(safe);
+  }
+  for (const file of paths.keys()) deny(file);
+  // Windows 短名和 NTFS 流写法都能绕过仅用原名的规则。
+  if (process.platform === 'win32') Object.assign(edit, { '*~*': 'deny', '*:*': 'deny' });
+  if (size(userConfig) + size(JSON.stringify(edit)) + FIXED_RULES_ROOM > ENV_LIMIT) throw new Error(M.opencodeConfigTooLarge(ENV_LIMIT));
+  const blocked = new Set(gitBlocked);
+  for (const [file, wholeDirectory] of paths) if (wholeDirectory) blocked.add(file);
+  return { edit, links: links.map((link) => link.path), blocked: [...blocked] };
+}
+
+function writeRuleList(paths) {
+  const more = paths.length - 10;
+  const rest = more > 0 ? (LANGUAGE === 'en' ? ` and ${more} more` : ` 等 ${more} 个`) : '';
+  return M.list(paths.slice(0, 10)) + rest;
+}
+
+function opencodeEnv(agentId = OPENCODE_AGENT, access, web, edit) {
   let config = {};
   try { config = opencodeUserConfig(); } catch { /* 无效配置由本次注入替代 */ }
   const descriptions = { 'foreman-discuss': 'Read-only code discussion for foreman', 'foreman-review': 'Read-only code review for foreman',
@@ -68,11 +206,15 @@ function opencodeEnv(agentId = OPENCODE_AGENT, access, web) {
     if (web === true) permission.websearch = 'allow';
   }
   if (agentId === 'foreman-run') {
-    permission.edit = 'allow';
+    permission.edit = edit;
+    permission.worktree_remove = 'deny';
+    permission.worktree_create = 'deny';
     if (access === 'shell') permission.shell = 'allow';
   }
   const agent = { mode: 'primary', description: descriptions[agentId], permission };
-  return { ...process.env, OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...config,
+  // edit 档不能跑命令，但 opencode 写完文件会执行配置里的格式化命令，项目的 opencode.json 里的也算。formatter: false 能关掉它们，项目配置盖不过这一项（opencode 2.3.2 实测）。shell 档本来就能跑命令，照旧。
+  const formatter = agentId === 'foreman-run' && access === 'edit' ? { formatter: false } : {};
+  return { ...process.env, OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...config, ...formatter,
     agent: { ...(isObject(config.agent) ? config.agent : {}), [opencodeAgentName(agentId)]: agent } }) };
 }
 
@@ -108,14 +250,14 @@ function permissionQuestions(actions, lines, cwd) {
   return [...new Map(questions.map((q) => [q.detail, q])).values()];
 }
 
-function runOpencode({ agent, args, cwd, prompt = '', timeoutMs, stallMin = 0, runDir, onEvent, agentId, web }) {
+function runOpencode({ agent, args, cwd, prompt = '', timeoutMs, stallMin = 0, runDir, onEvent, agentId, web, edit }) {
   return new Promise((resolve) => {
     const { file, pre } = opencodeCommand(agent);
     const out = { code: null, status: null, stdout: '', stderrTail: '', text: '', errors: [], recovered: [], events: 0, messages: [], questions: [] };
     const denied = [], stderrLines = [], eventErrors = [];
     let stopped = false, endedOnText = false;
     // opencode 按环境变量 PWD 认工作目录，不看进程真实的 cwd；PWD 是从调用方的 shell 继承来的，可能指向别的目录。
-    const child = spawnCli(file, [...pre, ...args], { cwd, env: { ...opencodeEnv(agentId, agent.run_access, web), PWD: cwd }, windowsHide: true,
+    const child = spawnCli(file, [...pre, ...args], { cwd, env: { ...opencodeEnv(agentId, agent.run_access, web, edit), PWD: cwd }, windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' }, {
       onStderrLine: (line) => { if (/permission requested:/i.test(line)) stderrLines.push(line); },
       onInput: (line, min) => {
@@ -222,7 +364,7 @@ async function executeOpencode(ctx) {
   const context = { ...ctx, ...(exec ? {} : { readonly: readonlyLevel(agent, ctx.kind) }), id, dir, release, prompt };
   if (exec) return execute(context, {
     capabilities, describe: () => ({ sandbox: null, modelShown: model, modelName: model }),
-    run: ({ run }) => opencodeSession(run, schema, agentId, opencodeWebsearchReady(agent, cwd) || 'read'),
+    run: ({ run }) => opencodeSession(run, schema, agentId),
   });
   const run = startRun(context);
   fs.writeFileSync(path.join(dir, 'brief.md'), prompt);
@@ -242,6 +384,17 @@ async function opencodeSession(run, schema, agentId, web) {
   fs.appendFileSync(path.join(dir, 'events.jsonl'), '');
   for (const file of ['opencode.jsonl', 'stderr.log']) fs.writeFileSync(path.join(dir, file), '');
   const errors = [], warnings = [], notes = [];
+  let writeRules;
+  if (exec) {
+    try { writeRules = opencodeWriteRules(cwd); }
+    catch (error) {
+      // 预检就拒绝启动，模型一次也没调用：标成没启动，统计里不算这一席。
+      return { status: 'failed', code: 1, errors: [error.message], warnings, fileChanges: new Set(), images: [], commands: 0, usage: null, cost: null, not_started: true };
+    }
+    if (writeRules.links.length) notes.push(M.opencodeLinksDenied(writeRuleList(writeRules.links)));
+    if (writeRules.blocked.length) notes.push(M.opencodeWriteBlocked(writeRuleList(writeRules.blocked)));
+    web = opencodeWebsearchReady(agent, cwd) || 'read';
+  }
   const recovered = new Set();
   const observed = { messages: [], questions: [] };
   let repairing = false;
@@ -310,7 +463,7 @@ async function opencodeSession(run, schema, agentId, web) {
     // 总是带标题：不带时 opencode 会另发一个请求让模型起标题，和主请求同时占用账号的并发名额（Moonshot 等只允许 1 个时会被 429 拒绝）。
     args.push('--title', meta.title || `foreman ${ctx.kind}`);
     const out = await runOpencode({ agent, args, cwd, agentId: currentAgent, prompt: nextPrompt, runDir: dir, onEvent: translate,
-      timeoutMs: deadline - Date.now(), stallMin, web: !repairing && web });
+      timeoutMs: deadline - Date.now(), stallMin, web: !repairing && web, edit: !repairing ? writeRules?.edit : undefined });
     usageTo = Date.now();
     errors.push(...out.errors);
     for (const error of out.recovered) recovered.add(error);

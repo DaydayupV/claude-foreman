@@ -8,7 +8,7 @@ import { SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA } from '../config.mjs';
 import { MAX_REVIEW_CHARS, reviewPatchText } from '../review-scope.mjs';
 import { RUNS_ROOT, newRunDir, isCancelled, cancelSource, announceBoard } from '../records.mjs';
 import { startRun, finishDiscussion, execute, eventWriter, runLimits, reportWithRepair, spawnCli, validateSchema } from '../runner.mjs';
-import { M, die, isObject, binCommand, pathCommand, npmEntry, killTree, readAttachments, filesOutside, focusFiles, relativePath, closestMatches } from '../util.mjs';
+import { M, die, isObject, binCommand, pathCommand, npmEntry, killTree, readAttachments, filesOutside, outsideLinks, focusFiles, relativePath, closestMatches } from '../util.mjs';
 import { D, modelLabel, toolLabel } from '../format.mjs';
 import { codebuddyConfigDir } from './codebuddy-guard.mjs';
 
@@ -87,35 +87,6 @@ const capabilities = { modes: ['run', 'review', 'discuss'], isolation: 'tools', 
 
 const FILE_LIST_BUDGET = 60000;
 const DENIAL = /^(?:Error:\s*)?(?:PreToolUse:\S+ hook blocked this tool call|Permission to use \S+ has been denied)/;
-
-// CodeBuddy 在 Windows 上搜索时会跟随链接，工具钩子只能检查搜索起点。
-// skip 是要跳过的目录（绝对路径）：CodeBuddy 的 ripgrep 默认遵守 .gitignore，被忽略的目录它不会搜。
-export function outsideLinks(root, limit = SEARCH_SCAN_LIMIT, skip = []) {
-  const realRoot = fs.realpathSync.native(root);
-  const key = (dir) => { const rel = path.relative(path.resolve(root), dir); return process.platform === 'win32' ? rel.toLowerCase() : rel; };
-  const skipped = new Set(skip.map(key));
-  const dirs = [realRoot], links = [];
-  let visited = 0;
-  while (dirs.length) {
-    const dir = dirs.pop();
-    let entries;
-    // A folder foreman can't list can't be searched by CodeBuddy either (same account), so skip it.
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
-    for (const entry of entries) {
-      if (entry.name.toLowerCase() === '.git') continue;
-      const file = path.join(dir, entry.name);
-      if (skipped.has(key(path.join(path.resolve(root), path.relative(realRoot, file))))) continue;
-      if (++visited > limit) return { links, capped: true };
-      if (entry.isSymbolicLink()) {
-        let target;
-        try { target = fs.realpathSync.native(file); } catch { continue; }
-        const rel = path.relative(realRoot, target);
-        if (rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) links.push(relativePath(realRoot, file));
-      } else if (entry.isDirectory()) dirs.push(file);
-    }
-  }
-  return { links, capped: false };
-}
 
 // git 忽略的目录（--directory 把整个被忽略的目录合成一项，以 / 结尾）。不是 git 仓库时返回空，也就是全都扫描。
 function ignoredDirs(cwd) {
@@ -352,6 +323,7 @@ async function executeCodebuddy(ctx) {
 
   let searchNote;
   if (process.platform === 'win32' && (access === 'read' || access === 'edit')) {
+    // CodeBuddy 在 Windows 上搜索时会跟随链接，工具钩子只能检查搜索起点。它的 ripgrep 默认遵守 .gitignore，被忽略的目录不会搜，所以扫描时跳过；
     // ignoreGitIgnore 为 true 时 CodeBuddy 也搜被 git 忽略的文件，这时一个目录也不跳过。
     const skip = readUserSettings(codebuddyConfigDir())?.ignoreGitIgnore === true ? [] : ignoredDirs(cwd);
     const { links, capped } = outsideLinks(cwd, SEARCH_SCAN_LIMIT, skip);
