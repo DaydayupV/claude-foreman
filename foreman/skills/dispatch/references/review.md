@@ -61,6 +61,7 @@
 
 ## 审查之后
 1. **逐条核实**：审查意见在结果的 `report` 里：`verdict`（`issues_found` 发现问题、`no_issues` 没发现、`incomplete` 没审完）、`findings`（每条有编号、位置、问题、触发场景、严重程度、证据和修复建议）、`coverage`（查了哪些、没覆盖哪些）和 `unverified`（拿不准的地方）。几席的结果（包括 Claude Code 席的报告）按问题去重后逐条核实，确实存在的才算，Claude Code 席自己报的问题同样要核实；误报直接忽略，在汇报里简要说明为什么不成立。`verdict` 为 `incomplete`、或者 `coverage.not_checked` 里有关键部分时，这份审查不完整，需要时补审。没有 `report` 时（Codex 原生审查，或者两次都没交回合格的格式），意见在 `last_message` 的原文里。
+   - 问题成立以后，决定改不改、改多少时，可以参考 models.md 里提出者的倾向。比如偏防御的模型提出的加固建议，按实际风险和成本取舍，记成部分成立并在理由里写明。某个模型反复出现同一类误报或过度建议、文档里还没写的，汇报时提议用户补进 models.md。
 2. **记下去留**：核实完，每一席都用 `judge` 记下每条的去留，Claude Code 席的记在它的报告记录上：`judge --run <run_id> --accept "F1,F3" --reject "F2"`（部分成立的用 `--partial`），编号用报告里的。几席报的是同一个问题时，在其中一席加 `--same "F1=<另一席的 run_id>:F4"` 连起来，`stats` 靠它判断"只有它发现"。越界写入、记为失败的席位，交回的意见照样记。没有结构化报告的（Codex 原生审查），按 Claude 在汇报里给的编号记。结构化报告是 `no_issues`、一条都没报的席位不用记，`stats` 自动按 0 条算。
 3. **谁来修**：
    - Claude 主动发起的审查：小问题 Claude 直接改；问题多或涉及逻辑的，把核实后的问题写进返工说明，用 `resume --reason rework` 续接原来的执行方去改，算一次返工（次数按 `references/acceptance.md` 的"返工"）。改动本来就是 Claude 做的，由 Claude 改。`severity` 为 `low` 的问题不单独返工：不碰 3 级行为的小修 Claude 顺手改，其余在汇报里合成一条列给用户，用户要改再改。

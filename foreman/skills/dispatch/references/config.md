@@ -64,7 +64,7 @@
 ## agents
 
 - 键是协作方的**代号**，`modules` 和 `--agent` 用它引用。建议直接用模型名。
-- 代号只能用字母、数字、`.`、`-`、`_`，以字母或数字开头；不能叫 `claude` 或 `claude code`。
+- 代号只能用字母、数字、`.`、`-`、`_`，以字母或数字开头；不能叫 `claude`、`claude code` 或 `self`。
 - `type` 决定怎么连接、要填哪些字段，只有六种。同一种可以配多个，各用不同的模型。
 - Codex 不是必需的，一个协作方都不配也行：那样所有任务都由 Claude 自己做。
 
@@ -220,8 +220,13 @@
 | `image` | 位图和矢量部件 | `generate`（出图）、`draw`（手画矢量），不分等级 |
 
 另有一个 0 级（未达门槛、不值得找外部模型），固定由 Claude 自己做，不进配置。每一格可以写：
-- `"claude code"`（只限 discuss、run、review）：执行由 Claude 自己做；审查和讨论表示这一格不找外部协作方。
+- `"claude code"`（只限 discuss、run、review，也可以写成 `"self"`）：执行由 Claude 自己做；审查和讨论表示这一格不找外部协作方。
 - 候选列表：`[{ "agent": "<代号>", "effort": "<推理强度>", "required": true }, …]`。只有一项时也可以写成单个对象，效果一样。同一个协作方在一格里只能出现一次。
+- 混合候选（只限 run）：列表里可以加一项 `{ "agent": "claude code" }`（也可以写 `"self"`）代表主持方，和外部协作方一起当候选，比如 `[{ "agent": "claude code" }, { "agent": "gpt-6.1-sol", "effort": "max" }]`。Claude 按 models.md 挑：文档写明主持方的模型更擅长这类活时自己做，不建计划、不调用 `run`；没写出差别就派给外部候选（见 `references/seats.md` 第 4 条）。
+  - 这一项只能写 `agent`：推理强度和模型在 Claude Code 里选；要主持方每次都做，把整格写成 `"claude code"`。它也不能标必选，一格只能写一次。这一格有必选的外部候选时，照常交给必选方。
+  - 列表里只有它一项时，等于整格 `"claude code"`。
+  - `resolved_modules` 里它显示成 `{ "agent": "claude code", "host": true }`，不带档位、推理强度和模型。单席派发不写 `--agent` 时，"只有一个候选就用它"只数外部候选；`run --agent` 和 `plan --seat` 不能点主持方。
+  - discuss 和 review 的列表不能写它：主持方本来就固定占 Claude Code 席（0 号席）。image 的格子也不能写。
 - `null`（只限 image）：关掉这一格。generate 关掉就不出图；draw 关掉时，会弯的部件和纯矢量绘制由 Claude 自己画。Claude 不能出位图，所以 image 的格子不能写 `"claude code"`。
 
 `discuss` 和 `review` 另有一项 `seats`，写每一级找几个外部模型；`review` 还有一项 `gap`，写每一级要不要补漏席。三级都写在配置文件里，改直接改它们。新建的配置自带这两项；没写全的用户配置，第一次读的时候由脚本补全写进文件。默认值和规则见下文"候选和必选"，按场景整套配置见"场景"。
@@ -302,6 +307,7 @@
 - 同一个文件里同时写了 `levels`（对象）和 `modules` 时直接报错，不猜以哪个为准；`levels` 是上面那行说明文字时不算。项目配置里的 `levels` 不改写文件，只在内存里按 `modules` 读，并提示改成新写法。
 - 用户配置里的 `projects`（按项目目录写的覆盖）已经不用了：读到时不生效，每次都提示一次，`summary.warnings` 里有一条 `obsolete_projects`。改成在各项目里写 `.claude/foreman.json`（见文末），`/foreman:setup` 可以帮着搬过去，并从用户配置里删掉 `projects`。
 - 从 1.2 及更早的版本升级时，项目配置从"只能收紧"变成了"覆盖用户配置"：以前写了会被忽略的放宽项（加候选、调高席位、延长超时等），升级后会生效；项目在某一格写 `"claude code"` 也不再挡住 `--agent` 点名派出（以前会挡住，并列在 `closed_by_project` 里，这个字段已经去掉）。`config` 和 `check` 会把还是平铺写法的项目配置列进 `summary.warnings`（`project_modules_flat`），`/foreman:setup` 会提醒你核对里面的放宽项。
+- 从 1.2 及更早的版本升级时，界面视觉定稿和给人读的文字不再固定由 Claude 做，和其余实现一样按 run 的格子和 models.md 决定。想保持原来的做法，在 run 写了外部候选的格子里加上 `{ "agent": "claude code" }`，并在 models.md 里 Claude 那一节写明它擅长这些（`/foreman:setup` 生成的默认版本就是这样写的，也会问要不要加进格子）。混合候选和整格 `"self"` 是这一版新加的写法，旧版插件读到会报错：每台电脑都要升级，中英两个包都装了的两个都要升级（它们读同一份配置）。
 - 第一次读到平铺的 `modules`（下面直接是 `discuss`、`run`、`review`、`image`）时，脚本把它整体放进 `modules.default`，原文件先备份，并提示改写了什么；格子的内容一点不变。项目配置里的平铺写法不改写文件，只在内存里按 `default` 读，并提示改成新写法。同一个 `modules` 里既有平铺的模块又有场景时直接报错。不认识场景写法的旧版插件读到 `modules.default` 会报错，所以每台电脑都要升级。
 
 ## 场景
@@ -380,11 +386,20 @@
 - 只认项目目录本身的 `.claude/foreman.json`：`--cwd` 是哪个目录就读哪个目录下的。这个文件不存在、而改名前的旧文件名 `.claude/codex-bridge.json` 存在时，照常读旧文件，并提示改名。
 - `config --cwd` 输出的 `project_config` 是 `{ "path": "<文件路径>", "cells": [<覆盖了哪些场景的哪些格子和时长>] }`，没有项目配置时为 `null`；`check` 的总配置里也会列出来。
 
+## 模型特长文档（models.md）
+用户写的各模型擅长和短处，和用户配置在同一个目录：`~/.claude/foreman/models.md`（设了 `FOREMAN_CONFIG` 时跟着它换目录）。它不是配置，脚本不解析里面的判断，只由 Claude 读：挑人（`references/seats.md` 第 4、6 条，`references/roles.md`），写任务说明时提醒短处（`references/run.md`），验收时对照短处（`references/acceptance.md`），权衡审查和讨论意见（`references/review.md`、`references/discuss.md`）。和档位冲突时以它为准（`references/model-tiers.md`）。
+- **写法**：每个模型一节，标题 `## <模型 ID>（<接入方式>）`，下面怎么写都行。认节时只看标题的第一个词，按 `scripts/models.json` 的身份表归一，所以大小写、服务商前缀不影响。默认版本每节有一行 LiveBench 的档位和长短处，加上空着的"擅长""短处"两行。
+- **生成**：`model-notes --write [--host-model <模型 ID>]`，`/foreman:setup` 会运行它。文件不存在就新建；已存在只在末尾给缺的模型补一节，写过的内容一个字节都不改。"在用的模型"是用户配置各格（各场景）引用到的协作方的模型，再加上 `--host-model`。主持方的模型是 Claude 系列时，它那一节的擅长行默认写"界面视觉定稿、给人读的文字"（插件原来的默认，可改）。不带 `--write` 时只报告状态，不写文件。
+- **状态**：`config` 输出的 `model_notes` 是 `{ "file", "exists", "missing", "unwritten" }`。`missing` 是在用、但文件里还没有这一节的模型；`unwritten` 是有这一节、但除了默认的几行什么都还没写的模型。文件不存在时 `summary.warnings` 里有一条 `models_doc_missing`。
+- **注入**：会话开始的提醒钩子把整份文件接在偏好文件后面注入，长度上限和偏好文件一样，超出的部分截掉并提示。
+- **补充**：验收或审查时发现某个模型反复出现同一类问题、文档里还没写的，向用户汇报时提议补进 models.md，用户同意再改。
+- 只有用户级这一份，项目里不能另写。
+
 ## 其他规则
 - 每个协作方的并发上限按它自己正在运行的任务算，不分任务组、不分会话；达到上限时派发命令默认按先来后到排队：在记录目录的 `.state/queue/<协作方>/` 下领一张票据，每秒检查一次，排到最前面并且有空名额时启动；stderr 写出排在第几位和最多还等几分钟。`--queue-timeout <分钟>` 改最长等待时间（默认 60，最多 1440），写 0 时不排队、名额满了立即拒绝，报错里列出占着名额的任务。排队的进程被结束时票据随之删掉；被强制结束留下的票据，由下一个检查者按进程是否还在、票据是否过期回收。`status` 列出排队中的票据。派发计划本身不占名额。
 - 同组任务的写入范围不能重叠，这条只查会写文件的任务（执行），讨论和审查不查。
 - 沙箱不是 `read-only` / `workspace-write` 时（比如 `danger-full-access`），Codex 能写任何目录，`--cwd` 只决定它从哪里开始工作，**不限制写入范围**。这时范围只能靠任务说明约束，再靠事后审查 diff 把关。
-- `config` 输出的 JSON 很长（几十 KB，大头是 `summary` 和 `effective`），派活前只需要 skill 列的那几项：`effective.dispatch` 里的 `auto`、`confirm`、`watch`，`scenes` 是场景定义和对不上的地方，`agents_status` 是各协作方的能力和 API key 是否已设置，`summary.warnings` 是没有价格或档位的在用模型、明文 key 等提醒。要看排好的总配置时用 `config --format md`（几 KB），`summary` 的内容都在里面，开头一段写明 `auto` 和 `confirm` 的当前设置。
+- `config` 输出的 JSON 很长（几十 KB，大头是 `summary` 和 `effective`），派活前只需要 skill 列的那几项：`effective.dispatch` 里的 `auto`、`confirm`、`watch`，`scenes` 是场景定义和对不上的地方，`agents_status` 是各协作方的能力和 API key 是否已设置，`model_notes` 是模型特长文档的位置和还没写的模型，`summary.warnings` 是没有价格或档位的在用模型、明文 key 等提醒。要看排好的总配置时用 `config --format md`（几 KB），`summary` 的内容都在里面，开头一段写明 `auto` 和 `confirm` 的当前设置。
 - 用户改了配置，改完运行 `config` 确认：
   - `resolved_modules` 列出 `default` 里每一格最终有哪些候选，每个候选的模型、推理强度和是否必选；
   - `resolved_scenes` 按场景列出和 `default` 不同的格子、`seats` 和 `gap`（没有场景时为空对象）；
@@ -400,6 +415,7 @@
 - 脚本输出"用户配置里的 projects 已经不用了"时，告诉用户哪几项不再生效，建议运行 `/foreman:setup` 把它们搬到各项目的 `.claude/foreman.json`。
 - 脚本输出"已把配置文件 … 的 modules 改成按场景写"时，告诉用户：配置换成了按场景的写法，原来的内容原样放进了 `modules.default`，用起来和以前一样；想按场景配时在 `modules` 下加场景块（见"场景"）；原文件备份在哪里。
 - 脚本输出"偏好里定义的场景 … 在 modules 里没有场景块"时，告诉用户这些场景现在和 `default` 一样，想让它们不同就按"场景"一节在 `modules` 下加场景块。`config` 的 `scenes.problems` 不为空时，把每一条转告用户：修好之前派活、建计划和续接都会被拒绝。脚本输出"这个项目的偏好 … 没有定义场景 …"时，告诉用户这些场景在这个项目里不生效，是项目偏好的场景块决定的；想在这个项目里也用，就在项目偏好的场景块里加上。
+- `summary.warnings` 里有 `models_doc_missing` 时，告诉用户：还没有模型特长文档，界面视觉和给人读的文字现在按 run 的格子和这份文档决定由谁做，不再固定由 Claude 做；建议运行 `/foreman:setup` 生成默认版本，并决定要不要把 `claude code` 加进 run 的格子。
 - `summary.warnings` 里有 `project_modules_flat` 时，告诉用户这份项目配置还是旧的平铺写法，建议改成 `{ "modules": { "default": { … } } }`；从 1.2 及更早的版本升级来的，提醒用户核对里面的放宽项（加候选、调高席位、延长时长），它们现在会生效。有 `project_ignored_keys` 时，告诉用户这几个键只能写在用户配置里，在项目配置里不生效。
 - 脚本输出"已把配置文件 … 改成新写法"时，告诉用户：配置换成了新写法（`type` 改为 `codex cli` / `opencode cli` / `api`，`"claude"` 改为 `"claude code"`），协作方代号改成了模型名（转告脚本列出的对照），实际用的模型和推理强度都没变，原文件备份在哪里。
 - 脚本输出"已把配置文件 … 里的 levels 改写成 modules"时，告诉用户：配置换成了 `modules` 写法，每一格的协作方、推理强度和顺序都没变；有一处行为变化，以前讨论一级里的协作方全员参加，现在是候选、由 Claude 挑，想保留全员参加就给它们标 `"required": true`；配置里还没有图像两格；文件里的 `levels` 留成了一行说明，旧版插件读到会报错，不会悄悄改成全由 Claude 做；原文件备份在哪里。建议运行 `/foreman:setup` 标必选、加图像两格。改配置时保留 `levels` 那行说明。

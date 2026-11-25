@@ -24,7 +24,7 @@
 - 其他工具的出图对接（只留入口）。
 
 **不变的原则**
-- 决策、设计、给人读的文字只由 Claude 做。
+- 决策、设计、给人读的文字只由 Claude 做。（2026-11-25 起改为：编排和把关仍只由 Claude 做；界面视觉定稿和给人读的文字按 run 的格子和模型特长文档 models.md 决定，见 `foreman/skills/dispatch/references/config.md` 的"模型特长文档"。）
 - 出图只交给能出图的协作方（目前只有 Codex CLI）。
 - 所有外部调用只经过 `cli.mjs`，钩子照旧拦下直接调用。
 - 项目配置只能收紧。（2026-10-29 起改为覆盖用户配置，见 `docs/foreman-seat-scenes-design.md`。）

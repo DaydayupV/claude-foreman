@@ -23,6 +23,7 @@ node "<脚本路径>" check  [--agent <协作方>] [--cwd "<项目目录>"] [--f
 node "<脚本路径>" models [--format json|md]
 node "<脚本路径>" agy-guard <install|uninstall|status>（agy 的全局守卫，见下面 check 一节）
 node "<脚本路径>" tiers  [--model <名字>]... [--all] [--cwd "<项目目录>"] [--format json|md]（模型档位、综合分和长短处，规则见 references/model-tiers.md）
+node "<脚本路径>" model-notes [--write] [--host-model <模型 ID>]（模型特长文档 models.md 的状态；--write 新建或给缺的模型补一节，见 references/config.md 的"模型特长文档"）
 node "<脚本路径>" await-busy (--group <组名> | --run <run_id>) [--after 分钟]
 node "<脚本路径>" cancel --run <run_id>
 node "<脚本路径>" judge  --run <run_id> [--accept "<编号,…>"] [--partial "<编号,…>"] [--reject "<编号,…>"] [--same "<编号>=<run_id>:<编号>,…"] [--clear "<编号,…>"]
@@ -30,7 +31,7 @@ node "<脚本路径>" stats  [--module discuss|run|review|image] [--since <天�
 node "<脚本路径>" assets <template|cut|check|diff|layers|patch|trace|capture|playback> …（各命令的参数见 references/assets-cli.md）
 ```
 
-- 执行单席直派时，`--agent <协作方>` 只能从这一格的候选里选。不写时：这一格只有一个候选就用它，有一个必选就用它，否则必须写。这一格还有别的必选时，单席派发会被拒绝，要先建计划。格子是 `"claude code"` 时，可以用 `--agent` 点名派出（结果标 `outside_cell`）；讨论和审查遇到这种格子时，用户点名的协作方照样写进计划的 `--seat`，计划标 `outside_cell`，推理强度用内置默认值。每个协作方能做哪些任务看 `capabilities.modes`：`api` 协作方能参加 `discuss` 和 `review`（只审文本，不能审 `visual`）；`opencode cli`、`pi cli` 和 `codebuddy cli` 能做 `review` 和 `discuss`，配置里写了 `run_access` 的还能做 `run`；`agy cli` 也一样，写了 `run_access` 才能做 `run`。升级前的旧代号（比如 `codex`）照样认，脚本会提示新代号。
+- 执行单席直派时，`--agent <协作方>` 只能从这一格的候选里选。不写时：这一格只有一个外部候选就用它（候选里的主持方不算），有一个必选就用它，否则必须写。`--agent` 不能写主持方（`claude code` 或 `self`）：挑中主持方时 Claude 自己做，不调用 `run`。这一格还有别的必选时，单席派发会被拒绝，要先建计划。格子是 `"claude code"` 时，可以用 `--agent` 点名派出（结果标 `outside_cell`）；讨论和审查遇到这种格子时，用户点名的协作方照样写进计划的 `--seat`，计划标 `outside_cell`，推理强度用内置默认值。每个协作方能做哪些任务看 `capabilities.modes`：`api` 协作方能参加 `discuss` 和 `review`（只审文本，不能审 `visual`）；`opencode cli`、`pi cli` 和 `codebuddy cli` 能做 `review` 和 `discuss`，配置里写了 `run_access` 的还能做 `run`；`agy cli` 也一样，写了 `run_access` 才能做 `run`。升级前的旧代号（比如 `codex`）照样认，脚本会提示新代号。
 - 用户点名要某个推理强度（比如"用 ultra 跑"）时，照常写 `--level`，再加 `--effort <强度>`：它只换推理强度，协作方还是按格子选。
 - 用户点名要某个模型时，加 `--model <模型>`。只能换同一个提供方的模型：`codex cli` 和 `api` 协作方可以换成任意模型，`opencode cli` 和 `pi cli` 的新模型要和原来的有同一个 `提供方/` 前缀；换了模型的结果标 `model_overridden`。
 - 交给谁、模型、推理强度、沙箱、审批、超时由配置文件决定；Codex 没有配置的项沿用它自己的 `~/.codex/config.toml`。拿不准当前设置时先运行 `config --cwd "<项目目录>"`。
@@ -64,7 +65,7 @@ node "<脚本路径>" submit --plan <plan_id> --report "<报告.json>" [--model 
 node "<脚本路径>" plan --cwd "<项目目录>" --module image --cell <generate|draw> --route <1|2|3|4> --group <组名> --seat "<代号>" [--seat …] [--why "<选择理由>"] [--route-auto "<理由>"]
 ```
 
-- 校验都在发出任何请求之前做完：格子没关（不是 `"claude code"` 或 `null`）；每个席位都在这一格的候选里（旧代号会换成新代号）；必选都有席位；执行和手画（draw）席位能执行；`visual` 审查的席位能看图（`reads_images`）；出图（generate）席位能出图。
+- 校验都在发出任何请求之前做完：格子没关（不是 `"claude code"` 或 `null`）；每个席位都在这一格的候选里（旧代号会换成新代号），而且不是主持方（`claude code` 或 `self`）；必选都有席位；执行和手画（draw）席位能执行；`visual` 审查的席位能看图（`reads_images`）；出图（generate）席位能出图。
 - 审查计划还检查补漏席（角色为 `补漏` 或 `gap`）：一份计划最多一个；讨论计划不能有。补漏席的基础模型要和其余每一席都不同，否则拒绝；启动补漏席时还要和 Claude Code 席 `submit --model` 报的模型不同。这一级的 `gap` 开着、还有合适的候选（主席位以外、基础模型和各主席位都不同）却没列补漏席，或者 `gap` 关着却列了补漏席，都要带 `--count-why`，否则拒绝。同一个模型的各种写法算同一个：去掉 `提供方/` 前缀、Bedrock 的 `…anthropic.` 前缀，Claude 的小数版本号写成连字符（`claude-fable-5.1` 即 `claude-fable-5-1`），以及插件价格表 `prices.json` 的 `aliases` 里记下的官方别名（比如 `deepseek-v4.1-flash` 即 `deepseek-flash`）。`stats` 按同一套规则把同一个模型合成一行。
 - 讨论和审查计划另外检查外部席位数（审查不算补漏席，也就是角色为 `补漏` 或 `gap` 的席位；其他模块里这个角色名照常计数）：要等于 `min(这一级的 seats, 这一格能用的不同候选数)`（按场景配了的格子取 `--scene` 这个场景的值），`visual` 审查只算能看图的候选。不一致时要带 `--count-why "<理由>"`，否则拒绝；`--count-why` 用在别的模块上也拒绝。计划里记 `seat_target`（上面算出的数，`outside_cell` 计划为 `null`，也不做这项检查）和 `count_why`（没写为 `null`）。
 - 场景：`--scene <场景>` 和 `--scene-why "<理由>"` 要一起写（只写其中一个会被拒绝），所有模块都能用，`run --level` 直接派执行也能用。要用的这一格在某个生效的场景里和 `default` 不同（格子本身，或者这一级的 `seats`、`gap`）时必须写，不写时报错会列出是哪个场景的哪一项不同；值是 `default` 或 `config` 输出的 `scenes.names` 里的一个（`scenes.inactive` 里的场景在这个项目里不能用）；没按场景配的格子写了也照收，`notes` 说明只作记录、用 `default` 的配置；没有场景定义、`modules` 里也只有 `default` 时，只能写 `default`。`scenes.problems` 不为空时，建计划、直接派执行、启动计划席和续接都会被拒绝。计划和校验都按这个场景合并后的配置算；选的场景比 `default` 同一格少了某个必选时，输出的 `notes` 里有一句提示，不拦。计划里记 `scene`、`scene_why` 和 `gap`（这份计划生效的补漏开关）；直接派出的执行任务把 `scene`、`scene_why` 记在 meta 里。计划席启动时用计划的场景，`resume` 沿用原任务的场景，这两种情况再写 `--scene` 或 `--scene-why` 会被拒绝；原任务的场景已经不在配置里时，`resume` 拒绝。席位数、补漏席和"这一格按场景配了要写 `--scene`"这几项只在建计划时检查，启动席位时不再检查，配置改了以后已有的计划照样能启动；场景对不上（`scenes.problems` 不为空）时启动席位仍会被拒绝。Claude Code 席的 `submit` 不检查场景。

@@ -64,7 +64,7 @@ Upgrading from codex-bridge? See [below](#upgrading-from-codex-bridge).
 
 ### Running setup
 
-After installing, run `/foreman-en:setup`. Its output always has the same structure: which tools this machine has, every model available and the efforts each supports, then the current config (who gets each level of each task type, how many outside models each level uses, who is required, which agents aren't used, and anything to watch out for), then suggested changes (including leftovers from older versions that can be removed). After reading it all you confirm or adjust the suggestions in a pop-up at the end, and it changes the config and reports what changed. Run it again after installing a new tool or to change models.
+After installing, run `/foreman-en:setup`. Its output always has the same structure: which tools this machine has, every model available and the efforts each supports, then the current config (who gets each level of each task type, how many outside models each level uses, who is required, which agents aren't used, and anything to watch out for), then suggested changes (including leftovers from older versions that can be removed). After reading it all you confirm or adjust the suggestions in a pop-up at the end, and it changes the config and reports what changed. Last, it creates or fills out the [model notes](#model-notes) and asks you to write in each model's strengths and weaknesses from your own experience. Run it again after installing a new tool or to change models.
 
 ## How it works
 
@@ -87,7 +87,7 @@ flowchart LR
     class discuss,run,review module
 ```
 
-Each time it enters a module, Claude Code levels that step by the module's own criteria. Small things not worth an outside model are level 0, which Claude Code does itself; the rest are simple, normal or complex (`simple` / `normal` / `complex`). Which candidate models levels 1–3 have, who is required, and with what effort is up to you in the config, and Claude Code picks from the candidates each time; a level set to `"claude code"` is done by Claude Code itself too. Once something is handed off, a live view in the terminal shows each step the model takes, and at the end Claude Code reports which model did the work and how many tokens it used.
+Each time it enters a module, Claude Code levels that step by the module's own criteria. Small things not worth an outside model are level 0, which Claude Code does itself; the rest are simple, normal or complex (`simple` / `normal` / `complex`). Which candidate models levels 1–3 have, who is required, and with what effort is up to you in the config, and Claude Code picks from the candidates each time, consulting the [model notes](#model-notes) you write; a level set to `"claude code"` is done by Claude Code itself too. Hands-on candidates can also include Claude Code, alongside outside models. Once something is handed off, a live view in the terminal shows each step the model takes, and at the end Claude Code reports which model did the work and how many tokens it used.
 
 Inside each module (purple steps are done by Claude Code; green ones involve an agent):
 
@@ -115,12 +115,14 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    r0{"Who does what"} -- "Decisions, design, text" --> rself["Claude Code does it"]
+    r0{"Who does what"} -- "Decisions and checks" --> rself["Claude Code does it"]
     r0 -- "Drawing (incl. illustrations used whole in SVG animations)" --> rroute["You choose the route<br/>in a pop-up"]
     rroute --> rimg["Image module:<br/>generate and draw cells"]
-    r0 -- "Other hands-on work" --> rlevel{"Level the work"}
+    r0 -- "Other hands-on work<br/>(UI and text included)" --> rlevel{"Level the work"}
     rlevel -- "Level 0" --> rself
-    rlevel -- "Levels 1–3" --> rrun["Handed off per the config"]
+    rlevel -- "Levels 1–3" --> rpick{"Pick among the level's<br/>candidates by the model notes"}
+    rpick -- "Claude Code<br/>(when it's a candidate)" --> rself
+    rpick -- "An outside agent" --> rrun["Handed off"]
     rrun --> rcheck["Check: read the diff<br/>run it"]
     rimg --> rasset["assets removes backgrounds,<br/>splits and names parts, checks"]
     rasset --> rimgcheck["Claude Code looks at<br/>the contact sheet"]
@@ -130,7 +132,7 @@ flowchart TD
 
     classDef claude fill:#EEEDFE,stroke:#534AB7,color:#3C3489
     classDef agent fill:#E1F5EE,stroke:#0F6E56,color:#085041
-    class r0,rself,rroute,rlevel,rcheck,rasset,rimgcheck claude
+    class r0,rself,rroute,rlevel,rpick,rcheck,rasset,rimgcheck claude
     class rimg,rrun,rrework,rimgredo agent
 ```
 
@@ -167,7 +169,7 @@ You can also just ask Claude Code to "check the environment" (`check`: whether e
 The bundled skill has Claude Code level each discussion, piece of hands-on work and review as it comes up, and start what crosses the threshold on its own:
 
 - Before giving an approach, and when judging the result of work already done to decide what to adjust, talk complex, uncertain questions through with other models first; Claude Code rules on the conclusion.
-- Before starting work, hand off hands-on work as the levels and config say; work only Claude Code does (decisions, design, text) and level 0 small things aren't handed off.
+- Before starting work, hand off hands-on work (UI and text included) as the levels and config say; decisions and checks (planning, levelling, picking agents, writing briefs, checking results, ruling) and level 0 small things stay with Claude Code.
 - Before delivering, decide by the risk of the change whether another model should review it.
 - When a big task splits into parts that don't touch each other, hand them to several sessions at once to cut the wait (each agent's limit is `max_parallel`).
 
@@ -186,9 +188,9 @@ When a topic has several goals pulling against each other (such as security and 
 - **Core roles are never merged**: the angles a topic needs most get a seat each, and at level 3 one core role can be played by two different models. The number of seats follows the level's `seats`, and required models always get one.
 - **You confirm first**: before it starts, a pop-up lists the "model → role" assignment, even with `dispatch.auto` on; you can start as suggested, adjust it, or use a normal discussion instead. With `dispatch.confirm.roles` set to `"auto"` there is no pop-up: Claude Code writes the assignment table in its reply and starts, and you can ask for changes at any time.
 - A role only sets what each model checks most closely, not its conclusion; decisions still go by evidence, and several roles agreeing doesn't count as more evidence.
-- Custom roles, using role mode by default for some kinds of topics, and a different view of a model's tier can all go in the preference files. The role table and assignment rules are in [references/roles.md](foreman-en/skills/dispatch/references/roles.md).
+- Custom roles and using role mode by default for some kinds of topics can go in the preference files; views on a model (its tier, strengths and weaknesses) go in the [model notes](#model-notes). The role table and assignment rules are in [references/roles.md](foreman-en/skills/dispatch/references/roles.md).
 
-So that Claude Code doesn't forget (easy when a project has its own skills), the plugin reminds it once at the start of every session and includes your preference files.
+So that Claude Code doesn't forget (easy when a project has its own skills), the plugin reminds it once at the start of every session and includes your preference files and the model notes.
 
 ### Image assets
 
@@ -305,6 +307,7 @@ A minimal example: Codex does complex hands-on work and every review, complex di
 - Each of the three task types (`discuss`, `run` for hands-on work, `review`) has three levels, plus a level 0 that isn't in the config (see "Task levels" below); images (`image`) have no levels, just two cells: `generate` for image generation and `draw` for hand-drawing.
 - Each cell lists candidates. When a cell has several, Claude Code picks by its rules each time: for discussions and reviews, `seats` sets how many per level (defaults in ["Candidates and required agents" in `config.md`](foreman-en/skills/dispatch/references/config.md), not counting Claude Code itself), using different models where possible and all of them when there are fewer candidates; whether a review level adds a gap seat is set by `gap`, off by default; for hands-on work, one agent per piece of work. An entry marked `"required": true` is required and always takes part when the cell is used.
 - `"claude code"` means Claude Code does it itself; for reviews and discussions, that cell uses no outside model. `null` turns an image cell off.
+- In hands-on cells, a candidate list can also include Claude Code: `"normal": [{ "agent": "claude code" }, { "agent": "gpt-6.1-sol", "effort": "high" }]` (`"claude code"` can also be written `"self"`). Claude Code picks by the [model notes](#model-notes): when they say its model is better at this kind of work (UI design or text people read, say), it does the work itself, and the rest goes to the outside candidates. The entry takes only `agent`. In discussions and reviews Claude Code always has a seat of its own, so their lists can't include it. This format is new, and older versions of the plugin fail on it: if both the Chinese and English packages are installed, upgrade both.
 - `effort` is the reasoning effort; leave it out for the default. For Codex it's `low` to `ultra`; for opencode, the model's variant; for pi, its thinking level; for agy, a level such as `low` / `medium` / `high` (agy puts it in the model ID suffix, and the plugin adds it back when dispatching); for API models it's sent as `reasoning_effort` as is.
 - Image tasks start by settling the route (by default you choose it in a pop-up), and the route decides which cells are used: a pure vector route that only draws never touches the generate cell, so that cell's required agents don't take part.
 
@@ -334,7 +337,7 @@ Each time Claude Code enters a discussion, hands-on work or a review, it levels 
 | 2 `normal` | A few options to compare, limited impact | There's a spec, details need designing | Larger ordinary features and fixes |
 | 3 `complex` | Complex, uncertain and costly to get wrong | Unknown cause, costly mistakes, cross-module | High-risk code: money, data, concurrency, auth |
 
-Level 0 is always done by Claude Code and isn't in the config; which candidates levels 1–3 have, who is required and with what effort is up to you in `modules`, and Claude Code only picks from the cell's candidates. Levels go by judgement and risk, not by how much changes: renaming across 20 files from a list is simple, while changing an interface between modules is complex. A review goes only by the change under review: level 3 hands-on work or a cause that was hard to find doesn't make the review level 3 by itself; only changes that alter high-risk behaviour, or whose effect on it can't be ruled out, do. After fixes, there's a second review only when the fix itself touches high-risk behaviour, and it covers just the fix. Every call that goes out must carry a level; if it's missing, the script errors out rather than quietly picking one.
+Level 0 is always done by Claude Code and isn't in the config; which candidates levels 1–3 have, who is required and with what effort is up to you in `modules`, and Claude Code only picks from the cell's candidates, consulting the model notes. Levels go by judgement and risk, not by how much changes: renaming across 20 files from a list is simple, while changing an interface between modules is complex. A review goes only by the change under review: level 3 hands-on work or a cause that was hard to find doesn't make the review level 3 by itself; only changes that alter high-risk behaviour, or whose effect on it can't be ruled out, do. After fixes, there's a second review only when the fix itself touches high-risk behaviour, and it covers just the fix. Every call that goes out must carry a level; if it's missing, the script errors out rather than quietly picking one.
 
 - To choose on the spot, tell Claude Code "run it with ultra" or "use such-and-such model"; Claude Code adds `--effort` (it only changes the effort) or `--model` (only another model from the same provider).
 - When a level is `"claude code"`, you can still explicitly ask for a task to be handed off, and Claude Code names an agent with `--agent`.
@@ -460,7 +463,7 @@ For CodeBuddy, the guard hook the plugin injects checks every read and write at 
       "run": {
         "simple":  "claude code",
         "normal":  "claude code",
-        "complex": [{ "agent": "gpt-6.1-sol", "effort": "max" }]
+        "complex": [{ "agent": "claude code" }, { "agent": "gpt-6.1-sol", "effort": "max" }]
       },
       "review": {
         "simple":  [{ "agent": "gpt-6-astra", "effort": "medium" }],
@@ -487,7 +490,7 @@ For CodeBuddy, the guard hook the plugin injects checks every read and write at 
 | `mimo-v2.6-pro` | pi | A candidate for complex discussions |
 | `kimi-k2.6` | API, with the key in the `KIMI_API_KEY` environment variable | A candidate for complex discussions |
 
-Claude Code does simple and normal hands-on work itself. Discussions and reviews get more candidates as the level rises: each time Claude Code picks a few seats from them (as many as `seats` says, with all three levels written in the config), and `gpt-6-astra` is required for complex discussions and reviews, so it always takes part. Complex reviews also add a gap seat (`gap`): after the seats finish, one more model that hasn't taken part looks only for "what the list still misses".
+Claude Code does simple and normal hands-on work itself; complex hands-on work is picked between Claude Code and `gpt-6.1-sol`: what the model notes say Claude is better at (UI design or text people read, say) Claude Code does itself, and the rest goes to `gpt-6.1-sol`. Discussions and reviews get more candidates as the level rises: each time Claude Code picks a few seats from them (as many as `seats` says, with all three levels written in the config), and `gpt-6-astra` is required for complex discussions and reviews, so it always takes part. Complex reviews also add a gap seat (`gap`): after the seats finish, one more model that hasn't taken part looks only for "what the list still misses".
 
 Fields this config doesn't use but that are often adjusted:
 
@@ -578,11 +581,35 @@ Preference files only adjust how things are done within the plugin's hard rules:
 - Treat billing and reconciliation code in this project as high-risk: hand it off as complex, and always have Codex review the changes.
 - Don't hand off database migration scripts; Claude Code writes them.
 - Ask Codex for a review when a change is over 200 lines.
-- Use role mode for discussions where performance and maintainability pull against each other; treat kimi-k2.6 as a strong model.
-- Local results from stats show deepseek-v4.1-flash finding many issues no one else does in reviews; treat it as strong for reviews.
+- Use role mode for discussions where performance and maintainability pull against each other.
 ```
 
-Custom roles for role-mode discussions go here too; the format is under "Custom roles" in [references/roles.md](foreman-en/skills/dispatch/references/roles.md).
+Custom roles for role-mode discussions go here too; the format is under "Custom roles" in [references/roles.md](foreman-en/skills/dispatch/references/roles.md). Views on a model go in the model notes below.
+
+### Model notes
+
+Write what each model is good and bad at, from your own experience, in `~/.claude/foreman/models.md` (next to the user config). `/foreman-en:setup` creates a default version: a section for each model in use, with a LiveBench line giving its tier, strengths and weaknesses, and "Strengths" and "Weaknesses" lines left for you to fill in. Claude's section starts out saying it's good at UI and visual design sign-off and text people read: that used to be a fixed rule of the plugin, and now it lives here, where you can change it. Later setup runs only add a section for newly used models and never change what you wrote.
+
+```markdown
+## gpt-6-astra (Codex CLI)
+- LiveBench (…): strong tier; …
+- Strengths: back end, concurrency and data migrations
+- Weaknesses: codes defensively, likes adding fallbacks, compatibility branches and validation
+
+## kimi-k2.6 (API)
+- Strengths: treat it as a strong model
+
+## deepseek-v4.1-flash (API)
+- Strengths: local results from stats show it finding many issues no one else does in reviews; treat it as strong for reviews
+```
+
+Claude Code reads it at the start of every session and uses it in these places:
+- **Picking agents**: when a cell has several candidates, it picks by strengths and weaknesses. When hands-on candidates include Claude Code, it does the work itself only when the notes say its model is better at this kind of work.
+- **Writing briefs**: it turns the executor's weaknesses into concrete reminders, such as "add fallbacks and validation only where the brief asks for them" for a model that codes defensively.
+- **Checking results**: it looks hardest at the executor's weaknesses.
+- **Weighing review and discussion points**: a hardening suggestion from a model that codes defensively, for example, is weighed by the actual risk and cost.
+
+The notes are only input: whether a point holds, Claude Code still checks against the code and the evidence. Where they disagree with the LiveBench tiers, the notes win. Write them however you like; headings like `## <model ID>` let setup tell which models already have a section. There's only this one user-level file. When Claude Code sees a model making the same kind of mistake again and again, it will suggest adding it.
 
 ## Safety notes
 
@@ -646,7 +673,7 @@ The marketplace has two plugins that differ only in the language of their rules 
 - `foreman-en`: English, commands are `/foreman-en:…`
 - `foreman`: Chinese, commands are `/foreman:…`
 
-Install just one. Both share the same config file, preference files and run records, so switching doesn't mean setting things up again.
+Install just one. Both share the same config file, preference files, model notes and run records, so switching doesn't mean setting things up again. If you have both, upgrade them together: an older version fails on config formats a newer one added.
 
 ## Development
 
