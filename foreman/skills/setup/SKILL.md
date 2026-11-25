@@ -179,7 +179,7 @@ $ARGUMENTS
 - **讨论和执行能上网**：Codex 自动生效。想让 opencode 搜网页，要在 opencode 里配网页搜索服务；想让 agy 用浏览器，要在 Chrome 里开远程调试（`chrome://inspect/#remote-debugging`）。审查不上网。
 - **agy 可以做执行**：要你同意并选好 `edit` 或 `shell` 才开，默认不开。
 - **CodeBuddy 协作方**：装了 CodeBuddy CLI 才用得上，Windows 上还要装 Git for Windows。
-- **不用操作**：opencode 每次运行换一个随机的代理名，你自己的 opencode 配置盖不掉插件给它的只读和写入限制；Windows 上 agy 讨论和审查不跑命令，也不再做几分钟的沙箱检测；审查的改动量只算产品代码；网页看板在 Retina 屏和低配机器上更省资源。
+- **不用操作**：opencode 每次运行换一个随机的代理名，你自己的 opencode 配置盖不掉插件给它的只读和写入限制；opencode 的 edit 档不再执行项目配置里的格式化命令；opencode 做执行时，不能经由项目里的链接写文件，也不能写受保护的目录（`.git`、`.claude`、`.opencode` 等）、Git 实际用的目录和项目里登记的工作树，要改链接指向的文件就用真实路径；Windows 上 agy 讨论和审查不跑命令，也不再做几分钟的沙箱检测；审查的改动量只算产品代码；网页看板在 Retina 屏和低配机器上更省资源。
 
 ## 特殊情况
 **只有 API、没有 Codex、opencode、pi 和 CodeBuddy 时**：在 ④ 前面说明，执行只能由 Claude Code 自己做，讨论和审查可以交给 API（审查只审文本材料，不能看截图）；想让外部模型干活，需要装 Codex、opencode、pi 或 CodeBuddy；看图目前只有 Codex。
