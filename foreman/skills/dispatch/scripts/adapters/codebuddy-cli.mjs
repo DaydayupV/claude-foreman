@@ -174,9 +174,13 @@ function runCodebuddy({ agent, args, access, cwd, prompt = '', timeoutMs = 12000
     const configDir = codebuddyConfigDir();
     const settingsError = access == null ? null : unsafeUserSettings(configDir, access);
     if (settingsError) { out.status = 'failed'; out.errors.push(settingsError); resolve(out); return; }
-    const env = { ...process.env, CODEBUDDY_CONFIG_DIR: configDir };
-    // Plugins listed in CODEBUDDY_PLUGIN_DIRS are enabled by default and their hooks would run in every call.
-    delete env.CODEBUDDY_PLUGIN_DIRS;
+    // foreman's tool list, permission flags and hook are meant to be the whole policy. Plugins listed in
+    // CODEBUDDY_PLUGIN_DIRS are enabled by default and bring their own hooks; a standing "main agent"
+    // (settings mainAgent, or CODEBUDDY_MAIN_AGENT_*) would swap in another agent; the MCP and project
+    // config variables point CodeBuddy at other configuration. The environment wins over settings for the
+    // main agent, so turning it off here also covers a mainAgent block in the user's settings.
+    const env = { ...process.env, CODEBUDDY_CONFIG_DIR: configDir, CODEBUDDY_MAIN_AGENT_ENABLED: '0' };
+    for (const key of ['CODEBUDDY_PLUGIN_DIRS', 'CODEBUDDY_MAIN_AGENT_ALLOW_UNOPTED', 'CODEBUDDY_MCP_CONFIG', 'CODEBUDDY_PROJECT_CONFIG_DIR']) delete env[key];
     if (process.platform === 'win32' && access != null) {
       const bash = gitBashPath();
       if (!bash) { out.status = 'failed'; out.errors.push(M.codebuddyNeedsGitBash); resolve(out); return; }

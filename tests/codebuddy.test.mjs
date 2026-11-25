@@ -301,8 +301,11 @@ test('Windows：钩子固定用找到的 Git Bash，找不到时拒绝启动；�
   const capture = path.join(h.home, 'env.json');
   const s = h.scenario({ env_capture: capture });
   const discuss = (env) => h.bridge(taskArgs(h, 'discuss', ['--agent', 'cb']), { env: { ...s.env, ...env }, input: '合成议题' });
-  output(await discuss({ CODEBUDDY_CODE_GIT_BASH_PATH: bash, CODEBUDDY_PLUGIN_DIRS: path.join(h.home, 'plugins') }));
-  assert.deepEqual(JSON.parse(fs.readFileSync(capture, 'utf8')), { plugin_dirs: null, git_bash: path.resolve(bash) });
+  output(await discuss({ CODEBUDDY_CODE_GIT_BASH_PATH: bash, CODEBUDDY_PLUGIN_DIRS: path.join(h.home, 'plugins'),
+    CODEBUDDY_MAIN_AGENT_ENABLED: '1', CODEBUDDY_MAIN_AGENT_ALLOW_UNOPTED: '1', CODEBUDDY_MCP_CONFIG: '{}',
+    CODEBUDDY_PROJECT_CONFIG_DIR: path.join(h.home, 'elsewhere') }));
+  assert.deepEqual(JSON.parse(fs.readFileSync(capture, 'utf8')), { plugin_dirs: null, git_bash: path.resolve(bash),
+    main_agent: '0', allow_unopted: null, mcp_config: null, project_config_dir: null });
   // 没有设置、PATH 上没有 git、Program Files 下也没有 Git 时拒绝启动，不启动 CodeBuddy。
   const empty = { CODEBUDDY_CODE_GIT_BASH_PATH: '', CLAUDE_CODE_GIT_BASH_PATH: '', PATH: path.join(h.home, 'no-tools'),
     ProgramW6432: path.join(h.home, 'pf'), ProgramFiles: path.join(h.home, 'pf'), 'ProgramFiles(x86)': path.join(h.home, 'pf') };
