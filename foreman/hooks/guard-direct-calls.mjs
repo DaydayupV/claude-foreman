@@ -45,6 +45,23 @@ const CB_VALUE_OPTIONS = new Set(['--output-format', '--input-format', '--json-s
 const CB_OPTIONAL_VALUES = new Set(['--resume', '--worktree', '-r', '-w']);
 const CB_SHORT_OPTIONS = new Set(['-p', '-c', '-y', '-r', '-w', '-H']);
 
+// CodeBuddy's npm package installs a `cbc` command too. When the `cbc` the shell would run is that
+// launcher (a small text file that names codebuddy), it is CodeBuddy and gets no solver exemption;
+// a COIN-OR CBC binary, or no cbc at all, keeps the exemption.
+function cbcIsCodebuddy() {
+  const exts = process.platform === 'win32' ? ['', '.cmd', '.ps1', '.bat', '.exe'] : [''];
+  for (const dir of (process.env.PATH || '').split(path.delimiter).filter(Boolean)) {
+    for (const ext of exts) {
+      const file = path.join(dir, `cbc${ext}`);
+      const stat = fs.statSync(file, { throwIfNoEntry: false });
+      if (!stat?.isFile()) continue;
+      if (stat.size > 65536) return false;
+      try { return /codebuddy/i.test(fs.readFileSync(file, 'latin1')); } catch { return false; }
+    }
+  }
+  return false;
+}
+
 function codebuddyRunsModel(words, bareCbc = false) {
   if (CB_ADMIN.has(words[0])) return false;
   let codebuddyOption = false, solverInput = false;
@@ -142,7 +159,7 @@ function callsAgentDirectly(command) {
     else continue;
     const words = dropRedirects(rest).map((t) => t.replace(/^["']|["']$/g, ''));
     if (agy) { if (agyRunsModel(words)) return true; continue; }
-    if (codebuddy) { if (codebuddyRunsModel(words, /^cbc(?:\.exe|\.cmd|\.ps1)?$/.test(first))) return true; continue; }
+    if (codebuddy) { if (codebuddyRunsModel(words, /^cbc(?:\.exe|\.cmd|\.ps1)?$/.test(first) && !cbcIsCodebuddy())) return true; continue; }
     if (pi) {
       if (piRunsModel(words)) return true;
       continue;

@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { outsideLinks } from '../foreman/skills/dispatch/scripts/adapters/codebuddy-cli.mjs';
+import { outsideLinks, boundedList, gitBashPath } from '../foreman/skills/dispatch/scripts/adapters/codebuddy-cli.mjs';
 import { toolDecision } from '../foreman/skills/dispatch/scripts/adapters/codebuddy-guard.mjs';
 import { plannedSandbox as sandbox, seedRun, baseConfig, codebuddyAgent, taskArgs, output, failed, ROOT, MESSAGES } from './helpers.mjs';
 import { report, discussion } from './fixtures/reports.mjs';
@@ -278,6 +278,41 @@ test('项目树扫描跳过 .git，并在超过条目上限时停止', (t) => {
   assert.deepEqual(outsideLinks(h.cwd, 2), { links: [], capped: true });
 });
 
+test('Windows：git 忽略的目录里的外部链接不影响搜索，ignoreGitIgnore 打开时照样算', { skip: process.platform !== 'win32' }, (t) => {
+  const h = sandbox(t);
+  const outside = path.join(h.home, 'outside');
+  fs.mkdirSync(outside);
+  fs.mkdirSync(path.join(h.cwd, 'vendor'));
+  fs.symlinkSync(outside, path.join(h.cwd, 'vendor/linkdir'), 'junction');
+  assert.deepEqual(outsideLinks(h.cwd, 100, [path.join(h.cwd, 'vendor')]), { links: [], capped: false });
+  assert.deepEqual(outsideLinks(h.cwd, 100, []), { links: ['vendor/linkdir'], capped: false });
+});
+
+test('文件清单按字符预算截断，并写明列出了几个、一共几个', () => {
+  const files = ['a.txt', 'b.txt', 'c.txt'];
+  assert.equal(boundedList(files, 100), M.codebuddyFileList('a.txt\nb.txt\nc.txt'));
+  assert.equal(boundedList(files, 12), `${M.codebuddyFileList('a.txt\nb.txt')}\n${M.codebuddyFileListTruncated(2, 3)}`);
+});
+
+test('Windows：钩子固定用找到的 Git Bash，找不到时拒绝启动；子进程不继承 CODEBUDDY_PLUGIN_DIRS', { skip: process.platform !== 'win32' }, async (t) => {
+  const h = sandbox(t);
+  configure(h, {}, c => { c.modules.default.discuss.complex = [{ agent: 'cb' }]; });
+  const bash = h.write('git/bin/bash.exe', 'synthetic');
+  const capture = path.join(h.home, 'env.json');
+  const s = h.scenario({ env_capture: capture });
+  const discuss = (env) => h.bridge(taskArgs(h, 'discuss', ['--agent', 'cb']), { env: { ...s.env, ...env }, input: '合成议题' });
+  output(await discuss({ CODEBUDDY_CODE_GIT_BASH_PATH: bash, CODEBUDDY_PLUGIN_DIRS: path.join(h.home, 'plugins') }));
+  assert.deepEqual(JSON.parse(fs.readFileSync(capture, 'utf8')), { plugin_dirs: null, git_bash: path.resolve(bash) });
+  // 没有设置、PATH 上没有 git、Program Files 下也没有 Git 时拒绝启动，不启动 CodeBuddy。
+  const empty = { CODEBUDDY_CODE_GIT_BASH_PATH: '', CLAUDE_CODE_GIT_BASH_PATH: '', PATH: path.join(h.home, 'no-tools'),
+    ProgramW6432: path.join(h.home, 'pf'), ProgramFiles: path.join(h.home, 'pf'), 'ProgramFiles(x86)': path.join(h.home, 'pf') };
+  assert.equal(gitBashPath(empty), null);
+  const before = runs(s).length;
+  const r = await discuss(empty);
+  assert.ok(`${r.stdout}${r.stderr}`.includes(M.codebuddyNeedsGitBash), r.stdout + r.stderr);
+  assert.equal(runs(s).length, before);
+});
+
 test('执行：失败的 Write 带调用 ID 和失败码，不获得改动归属', async (t) => {
   const h = sandbox(t);
   configure(h, { run_access: 'edit' }, (c) => { c.modules.default.run.complex = { agent: 'cb' }; });
@@ -317,6 +352,26 @@ test('工具结果：保留拒绝原文和路径，API 错误对象转成 JSON',
   const edit = h.events(r.run_id).find(e => e.item?.id === 'deny-edit').item;
   assert.equal(edit.aggregated_output, detail + '\n' + tail);
   assert.deepEqual(edit.changes, []);
+});
+
+test('工具结果：成功的读取里引用了拒绝原话不算被拦；被拦的搜索在问题里写明模式', async (t) => {
+  const h = sandbox(t);
+  configure(h, {}, c => { c.modules.default.discuss.complex = [{ agent: 'cb' }]; });
+  const quoted = 'Error: PreToolUse:Write hook blocked this tool call: foreman guard: path is outside the project';
+  const blocked = 'Error: PreToolUse:Glob hook blocked this tool call: foreman guard: path is outside the project';
+  const s = h.scenario({ tool_calls: [
+    { type: 'tool_use', id: 'read-doc', name: 'Read', input: { file_path: 'notes.md' } },
+    { type: 'tool_use', id: 'glob-a', name: 'Glob', input: { pattern: '/etc/*.conf' } },
+    { type: 'tool_use', id: 'glob-b', name: 'Glob', input: { pattern: '/var/*.log' } },
+  ], tool_results: [
+    { is_error: false, content: [{ type: 'text', text: quoted }] },
+    { is_error: true, content: [{ type: 'text', text: blocked }] },
+    { is_error: true, content: [{ type: 'text', text: blocked }] },
+  ] });
+  const r = output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'cb']), { env: s.env, input: '合成议题' }));
+  assert.deepEqual(r.questions.filter(q => q.source === 'permission_denied').map(q => q.question),
+    ['Glob (pattern /etc/*.conf)', 'Glob (pattern /var/*.log)']);
+  assert.equal(h.events(r.run_id).find(e => e.item?.id === 'read-doc').item.exit_code, 0);
 });
 
 test('执行报告不合格时，同一会话、不给工具修复一次，用量累加', async (t) => {
@@ -462,6 +517,13 @@ test('守卫决定表：三档的文件工具权限和歧义路径', (t) => {
     const glob = pattern => toolDecision(mode, h.cwd, { tool_name: 'Glob', tool_input: { pattern } }, { runsDir: h.runs });
     assert.deepEqual(glob(path.join(h.home, '*.txt')), deny(OUTSIDE));
     assert.deepEqual(glob('nested/../*.txt'), deny(AMBIGUOUS));
+    assert.deepEqual(glob('{src/**,/etc/**}'), deny(OUTSIDE));
+    // Grep 的 glob 过滤条件和 Glob 的模式一样检查；Grep 的 pattern 是正则，不当路径看。
+    const grep = filter => toolDecision(mode, h.cwd, { tool_name: 'Grep', tool_input: { pattern: '../x', glob: filter } }, { runsDir: h.runs });
+    assert.deepEqual(grep('src/**/*.js'), { decision: null, reason: null });
+    assert.deepEqual(grep(path.join(h.home, '**/*')), deny(OUTSIDE));
+    assert.deepEqual(grep('{*.js,/etc/*}'), deny(OUTSIDE));
+    assert.deepEqual(grep('../outside/**'), deny(AMBIGUOUS));
   }
 });
 
@@ -568,14 +630,14 @@ test('check：版本、清单、最小请求，推理强度按清单核对', asy
   assert.equal(out.agents.cb.model_listed, true);
   assert.equal(out.agents.cb.reply, 'OK');
   assert.deepEqual(out.agents.cb.efforts.map((e) => [e.variant, e.ok]), [['high', true]]);
-  // 依次是 --version、--help、最小真实请求；最小请求只给只读工具
+  // 依次是 --version、--help、最小真实请求；最小请求不给任何工具，所以也不注入守卫
   const list = s.calls();
   assert.deepEqual(list.map((c) => c.operation), ['version', 'help', 'run']);
   const probe = list.at(-1);
   assert.ok(probe.args.includes('--no-session-persistence'));
-  assert.equal(argsOf(probe, '--tools'), 'Read,Glob,Grep');
+  assert.equal(argsOf(probe, '--tools'), '');
   assert.equal(probe.cwd, cwd);
-  assertGuard(probe, 'read', cwd, runsDir);
+  assert.ok(!probe.args.includes('--settings'));
   // 配置里的模型不在清单里：报出最接近的写法，不通过
   configure(h, { model: 'fake-9' }, (c) => { c.modules.default.discuss.complex = [{ agent: 'cb' }]; });
   const missing = output(await h.bridge(['check', '--agent', 'cb'], { env: h.scenario({ models: ['fake-1', 'fake-2'] }).env }), 1);
@@ -614,6 +676,23 @@ test('拦截钩子：拦下直接用 codebuddy 跑任务，放行查询和管理
     'cbc model.LP.bz2 -ratioGap 0.01 -solve', 'cbc -import model.data -solve',
     'codebuddy --resume --help', 'codebuddy --worktree --help', 'codebuddy -r --help', 'codebuddy -w --help'])
     assert.equal((await h.hook('guard-direct-calls.mjs', { tool_input: { command } })).code, 0, command);
+});
+
+test('拦截钩子：PATH 上的 cbc 是 CodeBuddy 的启动脚本时不再按求解器放行，是求解器程序时照常放行', async (t) => {
+  const h = sandbox(t);
+  const hook = (command, dir) => h.hook('guard-direct-calls.mjs', { tool_input: { command } },
+    { env: { PATH: [dir, process.env.PATH].join(path.delimiter) } });
+  // npm 装的 cbc 是一个很小的文本启动脚本，里面写着 codebuddy-code 的入口。
+  const shim = path.join(h.home, 'npm-bin');
+  h.write('npm-bin/cbc', '#!/bin/sh\nexec node "$basedir/node_modules/@tencent-ai/codebuddy-code/bin/codebuddy" "$@"\n');
+  assert.equal((await hook('cbc model.mps -solve', shim)).code, 2);
+  assert.equal((await hook('cbc -import model.mps -solve', shim)).code, 2);
+  // COIN-OR CBC 是一个大的二进制程序。
+  const solver = path.join(h.home, 'solver-bin');
+  fs.mkdirSync(solver);
+  fs.writeFileSync(path.join(solver, process.platform === 'win32' ? 'cbc.exe' : 'cbc'), Buffer.alloc(70000, 1));
+  assert.equal((await hook('cbc model.mps -solve', solver)).code, 0);
+  assert.equal((await hook('cbc "review this diff"', solver)).code, 2);
 });
 
 test('讨论、审查和执行带 --add-dir 时直接报错', async (t) => {

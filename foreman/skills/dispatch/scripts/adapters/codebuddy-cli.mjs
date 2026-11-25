@@ -51,6 +51,29 @@ function unsafeUserSettings(configDir, access) {
   return rules.length ? M.codebuddyUnsafeSettings(file, rules.join(', ')) : null;
 }
 
+function readUserSettings(configDir) {
+  try { return JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8').replace(/^﻿/, '')); }
+  catch { return null; }
+}
+
+// On Windows CodeBuddy runs hooks with Git Bash when it finds one and falls back to PowerShell otherwise,
+// where the guard command (POSIX quoting) wouldn't start and the guard would silently not apply.
+// Pin a bash.exe that exists; CodeBuddy exits instead of falling back when this variable points nowhere.
+export function gitBashPath(env = process.env) {
+  for (const value of [env.CODEBUDDY_CODE_GIT_BASH_PATH, env.CLAUDE_CODE_GIT_BASH_PATH]) {
+    if (value && fs.statSync(value, { throwIfNoEntry: false })?.isFile()) return path.resolve(value);
+  }
+  const git = spawnSync('git', ['--exec-path'], { env, encoding: 'utf8', windowsHide: true, timeout: 10000 });
+  // git --exec-path is <Git>/mingw64/libexec/git-core.
+  const roots = git.status === 0 && git.stdout.trim() ? [path.resolve(git.stdout.trim(), '..', '..', '..')] : [];
+  for (const key of ['ProgramW6432', 'ProgramFiles', 'ProgramFiles(x86)']) if (env[key]) roots.push(path.join(env[key], 'Git'));
+  for (const root of roots) {
+    const bash = path.join(root, 'bin', 'bash.exe');
+    if (fs.statSync(bash, { throwIfNoEntry: false })?.isFile()) return bash;
+  }
+  return null;
+}
+
 const LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 const RUN_ACCESS = ['edit', 'shell'];
 const SEARCH_SCAN_LIMIT = 100000;
@@ -61,9 +84,15 @@ TOOLS.shell = [...TOOLS.edit, 'Bash', 'PowerShell'];
 const capabilities = { modes: ['run', 'review', 'discuss'], isolation: 'tools', reads_code: true, reads_images: false, native_schema: true,
   native_review: false, images: false, resume: true, command_start_events: false };
 
+const FILE_LIST_BUDGET = 60000;
+const DENIAL = /^(?:Error:\s*)?(?:PreToolUse:\S+ hook blocked this tool call|Permission to use \S+ has been denied)/;
+
 // CodeBuddy 在 Windows 上搜索时会跟随链接，工具钩子只能检查搜索起点。
-export function outsideLinks(root, limit = SEARCH_SCAN_LIMIT) {
+// skip 是要跳过的目录（绝对路径）：CodeBuddy 的 ripgrep 默认遵守 .gitignore，被忽略的目录它不会搜。
+export function outsideLinks(root, limit = SEARCH_SCAN_LIMIT, skip = []) {
   const realRoot = fs.realpathSync.native(root);
+  const key = (dir) => { const rel = path.relative(path.resolve(root), dir); return process.platform === 'win32' ? rel.toLowerCase() : rel; };
+  const skipped = new Set(skip.map(key));
   const dirs = [realRoot], links = [];
   let visited = 0;
   while (dirs.length) {
@@ -73,8 +102,9 @@ export function outsideLinks(root, limit = SEARCH_SCAN_LIMIT) {
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
     for (const entry of entries) {
       if (entry.name.toLowerCase() === '.git') continue;
-      if (++visited > limit) return { links, capped: true };
       const file = path.join(dir, entry.name);
+      if (skipped.has(key(path.join(path.resolve(root), path.relative(realRoot, file))))) continue;
+      if (++visited > limit) return { links, capped: true };
       if (entry.isSymbolicLink()) {
         let target;
         try { target = fs.realpathSync.native(file); } catch { continue; }
@@ -84,6 +114,33 @@ export function outsideLinks(root, limit = SEARCH_SCAN_LIMIT) {
     }
   }
   return { links, capped: false };
+}
+
+// git 忽略的目录（--directory 把整个被忽略的目录合成一项，以 / 结尾）。不是 git 仓库时返回空，也就是全都扫描。
+function ignoredDirs(cwd) {
+  const r = spawnSync('git', ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'],
+    { cwd, encoding: 'utf8', windowsHide: true, timeout: 60000, maxBuffer: 64 * 1024 * 1024 });
+  if (r.status !== 0) return [];
+  return r.stdout.split('\0').filter((entry) => entry.endsWith('/')).map((entry) => path.resolve(cwd, entry));
+}
+
+// 清单按字符预算截断，超出的部分写明总数。
+export function boundedList(files, budget = FILE_LIST_BUDGET) {
+  const shown = [];
+  let size = 0;
+  for (const file of files) {
+    if (size + file.length + 1 > budget) break;
+    shown.push(file);
+    size += file.length + 1;
+  }
+  return shown.length === files.length ? M.codebuddyFileList(shown.join('\n'))
+    : `${M.codebuddyFileList(shown.join('\n'))}\n${M.codebuddyFileListTruncated(shown.length, files.length)}`;
+}
+
+function fileList(cwd) {
+  const r = spawnSync('git', ['ls-files'], { cwd, encoding: 'utf8', windowsHide: true, timeout: 60000, maxBuffer: 64 * 1024 * 1024 });
+  const files = r.status === 0 ? r.stdout.split('\n').map((line) => line.trim()).filter(Boolean) : [];
+  return files.length ? boundedList(files) : M.codebuddyFileList('');
 }
 
 // --json-schema 只在结构化输出工具可用时才生效：不把它放进白名单，模型拿不到这个工具，只会把 JSON 写在正文里。
@@ -117,6 +174,14 @@ function runCodebuddy({ agent, args, access, cwd, prompt = '', timeoutMs = 12000
     const configDir = codebuddyConfigDir();
     const settingsError = access == null ? null : unsafeUserSettings(configDir, access);
     if (settingsError) { out.status = 'failed'; out.errors.push(settingsError); resolve(out); return; }
+    const env = { ...process.env, CODEBUDDY_CONFIG_DIR: configDir };
+    // Plugins listed in CODEBUDDY_PLUGIN_DIRS are enabled by default and their hooks would run in every call.
+    delete env.CODEBUDDY_PLUGIN_DIRS;
+    if (process.platform === 'win32' && access != null) {
+      const bash = gitBashPath();
+      if (!bash) { out.status = 'failed'; out.errors.push(M.codebuddyNeedsGitBash); resolve(out); return; }
+      env.CODEBUDDY_CODE_GIT_BASH_PATH = bash;
+    }
     const assistantUsage = new Map(), usageStages = new Map();
     let usageSnapshot = null, anonymousUsageId = 0, stopped = false, child;
     const deadline = Date.now() + Math.max(1, timeoutMs);
@@ -132,7 +197,6 @@ function runCodebuddy({ agent, args, access, cwd, prompt = '', timeoutMs = 12000
       if (child?.pid) killTree(child.pid);
     };
     const onSignal = () => stop('cancelled');
-    const env = { ...process.env, CODEBUDDY_CONFIG_DIR: configDir };
     child = spawnCli(file, [...pre, ...args], { cwd, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' }, {
       onInput: (line, min) => {
         out.questions.push({ source: 'input_prompt', question: line });
@@ -278,13 +342,12 @@ async function executeCodebuddy(ctx) {
 
   let searchNote;
   if (process.platform === 'win32' && (access === 'read' || access === 'edit')) {
-    const { links, capped } = outsideLinks(cwd);
+    // ignoreGitIgnore 为 true 时 CodeBuddy 也搜被 git 忽略的文件，这时一个目录也不跳过。
+    const skip = readUserSettings(codebuddyConfigDir())?.ignoreGitIgnore === true ? [] : ignoredDirs(cwd);
+    const { links, capped } = outsideLinks(cwd, SEARCH_SCAN_LIMIT, skip);
     if (capped) searchNote = M.codebuddySearchScanCapped(SEARCH_SCAN_LIMIT);
     else if (links.length) searchNote = M.codebuddyLinksNoSearch(M.list(links.slice(0, 3)));
-    if (searchNote) {
-      const list = spawnSync('git', ['ls-files'], { cwd, encoding: 'utf8', windowsHide: true, timeout: 60000 });
-      prompt += '\n\n' + M.codebuddyFileList(list.status === 0 ? list.stdout.trim() : '');
-    }
+    if (searchNote) prompt += '\n\n' + fileList(cwd);
   }
 
   const { id, dir, release } = await newRunDir(ctx);
@@ -321,13 +384,16 @@ async function codebuddySession(run, schema, access) {
     if (id && deniedTools.has(id)) return;
     if (id) deniedTools.add(id);
     const value = input?.file_path || input?.path || input?.notebook_path;
-    let question = tool;
+    const parts = [];
     if (typeof value === 'string' && value) {
       const fromHome = value === '~' || /^~[\\/]/.test(value);
       const absolute = fromHome ? path.resolve(os.homedir(), value.slice(2)) : path.resolve(cwd, value);
       const relative = relativePath(cwd, absolute);
-      question += ` (${relative === '..' || relative.startsWith('../') || path.isAbsolute(relative) ? absolute : relative})`;
+      parts.push(relative === '..' || relative.startsWith('../') || path.isAbsolute(relative) ? absolute : relative);
     }
+    // Glob and Grep: keep the pattern and glob filter so two different searches stay two questions.
+    if (tool === 'Glob' || tool === 'Grep') for (const name of ['pattern', 'glob']) if (typeof input?.[name] === 'string' && input[name]) parts.push(`${name} ${input[name]}`);
+    const question = parts.length ? `${tool} (${parts.join(', ')})` : tool;
     // The runner merges permission questions by detail, so keep the tool and path in it:
     // the same guard reason for two different files stays two questions.
     observed.questions.push({ source: 'permission_denied', question, detail: `${question}: ${detail}` });
@@ -338,7 +404,9 @@ async function codebuddySession(run, schema, access) {
     const resultText = Array.isArray(result?.content)
       ? result.content.flatMap(block => typeof block?.text === 'string' ? [block.text] : []).join('\n')
       : String(result?.content ?? '');
-    if (detail === null && (resultText.includes('hook blocked this tool call') || resultText.includes(`Permission to use ${call.name} has been denied`))) detail = resultText;
+    // Only failed results count, and only when they start with CodeBuddy's own denial wording:
+    // a successful Read of a file that quotes these phrases is not a denial.
+    if (detail === null && result?.is_error === true && DENIAL.test(resultText.trimStart())) detail = resultText.slice(0, 500);
     const denied = detail !== null;
     if (denied) addDenial(id, call.name, input, detail);
     const exitCode = denied ? 1 : Number.isInteger(result?.exit_code) ? result.exit_code : !result || result.is_error ? 1 : 0;
@@ -498,7 +566,8 @@ async function checkCodebuddyAgent(name, agent, efforts = [], catalog = () => co
     out.fix = M.fixCodebuddyModel(name, agent.model) + (near.length ? M.closestHint(M.list(near)) : '');
     return finish();
   }
-  const reply = await call(codebuddyArgs({ model: agent.model, effort: null, access: 'read', ephemeral: true, cwd }), 'read', 'Reply with the single word OK.');
+  // The probe needs no tools; with none, there is nothing for it to read or search.
+  const reply = await call(codebuddyArgs({ model: agent.model, effort: null, access: 'none', ephemeral: true, cwd }), 'none', 'Reply with the single word OK.');
   out.ok = reply.status === 'done';
   out.reply = reply.text.trim().slice(0, 40);
   if (!out.ok) { out.error = failed(reply); out.fix = M.fixCodebuddyRun(name, out.error); return finish(); }

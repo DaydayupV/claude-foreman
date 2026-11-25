@@ -8,6 +8,8 @@ const args = process.argv.slice(2);
 const operation = args.includes('--version') ? 'version' : args.includes('--help') ? 'help' : 'run';
 const { scenario: s, input } = await setup('codebuddy', operation, args);
 if (s.config_dir_capture) fs.writeFileSync(s.config_dir_capture, process.env.CODEBUDDY_CONFIG_DIR ?? '');
+if (s.env_capture) fs.writeFileSync(s.env_capture, JSON.stringify({ plugin_dirs: process.env.CODEBUDDY_PLUGIN_DIRS ?? null,
+  git_bash: process.env.CODEBUDDY_CODE_GIT_BASH_PATH ?? null }));
 const emit = (event) => console.log(JSON.stringify({ session_id: s.session_id || 'synthetic-codebuddy-session', ...event }));
 const turnUsage = () => ({ input_tokens: s.usage?.input ?? 10, output_tokens: s.usage?.output ?? 5,
   cache_read_input_tokens: s.usage?.cacheRead ?? 3, cache_creation_input_tokens: s.usage?.cacheWrite ?? 0 });

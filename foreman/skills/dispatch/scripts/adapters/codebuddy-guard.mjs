@@ -86,7 +86,9 @@ export function toolDecision(mode, root, event, options) {
     if (!path.isAbsolute(root) || !input || typeof input !== 'object' || Array.isArray(input)) return deny(UNRESOLVED);
     const project = path.resolve(root);
     const value = searching ? input.path ?? project : input.file_path;
-    const pattern = tool === 'Glob' ? input.pattern ?? '' : '';
+    // Glob's pattern and Grep's glob filter can name files outside the search folder
+    // (CodeBuddy's JavaScript search reads whatever its glob matches), so both are checked like paths.
+    const pattern = tool === 'Glob' ? input.pattern ?? '' : tool === 'Grep' ? input.glob ?? '' : '';
     if (typeof value !== 'string' || !value || typeof pattern !== 'string') return deny(UNRESOLVED);
     if (value.startsWith('@') || /^file:/i.test(value) || WINDOWS && /^\/[a-z]\//i.test(value)
       || value.includes('\0') || pattern.includes('\0')) {
@@ -94,7 +96,8 @@ export function toolDecision(mode, root, event, options) {
     }
     const candidates = targetPaths(project, value);
     if ([root, value, pattern, ...candidates].some(share)) return deny('path is on a network share');
-    if (path.isAbsolute(pattern)) return deny(OUTSIDE);
+    // An absolute alternative inside braces ({src/**,C:/x/**}) is as absolute as the whole pattern.
+    if (path.isAbsolute(pattern) || /(?:^|[{,])\s*(?:[\\/]|[a-z]:)/i.test(pattern)) return deny(OUTSIDE);
     if (segments(pattern).includes('..') || segments(value).some(part =>
       part === '..' || writing && (part === '.' || WINDOWS && /[. ]$/.test(part)))) return deny(AMBIGUOUS);
     if (mode === 'read' && writing) return deny('this tool is not allowed in this run');
