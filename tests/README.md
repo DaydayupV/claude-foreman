@@ -28,7 +28,7 @@
 
 | 要求 | 文件 | 测试名 |
 |---|---|---|
-| Agy CLI 第 1 期 | agy.test.mjs | agy 守卫逐档逐工具拒绝写入、未知工具和未知参数；agy 自检静态扫描四种目录、祖先、add-dir、插件和大小写，拒绝前不启动 agy；agy check 六步、models 两列、清理密钥环境以及模型身份和价格；项目配置可以调低、调高或改用 agy 默认档位；agy 默认并发准入、排队、status 和看板 channel 共用接线；agy 原文形状的嵌套事件归一后保留时间线、步骤用量和最终回复；agy /hooks 只核对 command.data 的来源和唯一动作，response 不参与判断；agy 查询遇到账号 EOF 等两秒仅重试一次，每次仍有策略并清理标记；agy check 只接受令牌及 read_file allow，额度只读各桶数值 |
+| Agy CLI 第 1、2 期 | agy.test.mjs | agy 守卫逐档逐工具校验放行范围，拒绝未知工具和未知参数；执行 edit、shell 两档只写项目、附加目录只读，按写法和真实路径拦截受保护目录（含链接目标和 gitdir），拒绝带 . 或 .. 段、Windows 段名末尾带点或空格的写入路径，项目外网络共享路径不碰文件系统就拒绝，agy 的设置、foreman 的状态目录和运行记录在项目里也不能写；shell 档延长命令的同步等待、决定记录写下完整命令行；执行不跑探针、不查 /permissions，改动按真实路径归属 agent，返工沿用会话和档位，项目根不安全时拒绝派出；任务清单 update_steps 各档放行；agy 自检静态扫描四种目录、祖先、add-dir、插件和大小写，拒绝前不启动 agy；agy check 六步、models 两列、清理密钥环境以及模型身份和价格；项目配置可以调低、调高或改用 agy 默认档位；agy 默认并发准入、排队、status 和看板 channel 共用接线；agy 原文形状的嵌套事件归一后保留时间线、步骤用量和最终回复；agy /hooks 只核对 command.data 的来源和唯一动作，response 不参与判断；agy 查询遇到账号 EOF 等两秒仅重试一次，每次仍有策略并清理标记；agy check 只接受令牌及 read_file allow，额度只读各桶数值 |
 | 1 初始配置和提示 | config.test.mjs | 没有用户配置时生成初始配置并提示首次使用；英文覆盖变量使用英文首次提示 |
 | 1 旧结构和备份 | config.test.mjs | 零点十以前的配置自动改写并保留原文备份 |
 | 1 校验错误 | config.test.mjs | 未知协作方类型被拒绝；执行等级不能使用 API 协作方；opencode 模型必须带厂商斜杠；讨论等级不能为空；同一讨论等级不能重复参与方 |

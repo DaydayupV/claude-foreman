@@ -64,7 +64,7 @@
 
 ## 2. 范围
 - 第一期：`discuss`、`review`（只读），以及 `check`、`models`、守卫的安装和自检、看板显示。
-- 第二期：`run` 的 `edit` / `shell` 两档、续接、返工，连同只在写入档才需要的安全措施（3.5、第 4 节的写入规则、异步命令）。安全措施和功能同一批上线、同一批测试。
+- 第二期（2026-11-25 实现）：`run` 的 `edit` / `shell` 两档、续接、返工，连同只在写入档才需要的安全措施（3.5、第 4 节的写入规则、异步命令）。安全措施和功能同一批上线、同一批测试。
 - 不做：图像（agy 有 `generate_image`，以后再评估）、子 agent、浏览器、联网搜索。
 - 平台：Windows、macOS、Linux 都支持，但只读 shell 依赖 agy 的终端沙箱（第 4 节）。只有 Windows 实测过；其他平台在 `check` 通过守卫自检和沙箱探针之前，不派 agy。
 
@@ -108,15 +108,21 @@
 
    只有 `skills.json` 或规则文件时照常派出，在结果里提示一句。
 2. **解析全局 hooks.json**：直接读文件，必须恰好有一个 `foreman-guard` 条目，`enabled` 不为 false，事件、`matcher`、`timeout`、命令和 3.1 写的完全一致。别的任何条目，不论什么事件都拒绝派出，并列出它们：其他事件的钩子也能执行命令、改文件，同样会破坏只读保证。
-3. **核对启动器和脚本**：哈希和插件内的副本一致，不一致就在锁内刷新后再核对一次；启动器里写的 node 路径存在。
+3. **核对启动器和脚本**：哈希和插件内的副本一致，不一致就在锁内刷新后再核对一次；启动器里写的 node 路径存在。插件升级、守卫正文变了的时候也走这一步，所以用户不用重装守卫；有别的 agy 任务在运行时不刷新，这次不派。
 4. **列出插件钩子**：在一个空的临时目录里跑 `agy -p "/hooks" --output-format json`，这样只会列出全局和插件来源（实测插件钩子会连同来源路径一起列出；这样跑不留会话）。除了 `foreman-guard` 还有别的条目就拒绝派出。在项目目录里跑会加载项目配置，所以不在那里跑。
 5. **用户的全局 MCP**：`~/.gemini/config/mcp_config.json` 里有启用的服务器时，在结果里提示：这些服务器会随 agy 启动，它们的工具会被守卫拒绝，但启动本身不受守卫限制。这和用户平时使用 agy 的情况相同，不拒绝派出。
 
 自检失败时不启动 agy，结果标为 `failed`，给出原因和修复办法。
 
-### 3.5 写入档的额外保护（第二期）
-- 守卫拒绝写入以下位置：项目里上面四种目录（不区分大小写，先求真实路径再逐段比较）；整个 `~/.gemini/` 目录；foreman 的状态目录。
-- 项目根本身包含 `~/.gemini/` 或 foreman 状态目录时（比如项目根就是用户主目录），直接拒绝派出 edit / shell 任务。
+### 3.5 写入档的额外保护
+- 守卫拒绝写入项目里的这些目录：上面四种 agy 配置目录，加上 `.git`、`.claude`、`.gemini`（不区分大小写，先求真实路径再逐段比较，经符号链接或 junction 指过去的也拦）。写进 `.git` 能改 git 的配置和钩子（比如 `core.fsmonitor`），写进 `.claude` 能改 Claude Code 的项目设置和钩子，以及 foreman 的项目配置和偏好：这些都会在别人之后运行 git 或 Claude Code 时执行命令，绕开“edit 档不跑命令”；被 `.gitignore` 忽略的话，验收看 diff 也看不到。
+- 段名按写法本身和真实路径各查一遍：经普通名字的链接指进受保护目录，或者经受保护目录名的链接指到别处，都拦。项目根上的受保护目录是链接、或者 `.git` 是写着 `gitdir:` 的文件（工作树、`--separate-git-dir`）时，它指向的项目内目录也一起保护：按真实落点判断在不在项目里，经项目外的别名绕回项目的也算；`gitdir:` 照 git 的规则读（只认开头的 `gitdir: `，只去掉末尾的换行），`.git` 链接到这样一个文件时也读那个文件。`core.hooksPath` 另设的钩子目录不在其内：那些钩子一般是被跟踪的文件，改了会出现在 diff 里。
+- 写入只能落在项目目录里，`--add-dir` 只扩展读取范围（在项目里面的附加目录也只能读）。agy 的设置目录（`~/.gemini`）、foreman 的状态目录和运行记录根（策略里的 `runs_root`）不论在不在项目里都不许写：改了它们等于改守卫、配置，或者验收要用的决定记录和改动快照。
+- 写入路径带 `.` 或 `..` 段（`file:///` 地址先解码再看），或者 Windows 上有段名以点、空格结尾时，agy 和系统可能按不同的规则解析，拿不准写到哪里，一律拒绝。另外两种解析（先按字面合并 `..` 再跟链接、先跟链接再处理 `..`，悬空链接也顺着查）仍然都做，两种都在项目里、都不碰受保护位置才放行。
+- 范围按 `realpathSync.native` 给出的真实路径逐字比较，不折叠大小写：Windows 上同一个父目录里可以有只差大小写的两个目录。受保护的段名仍然不区分大小写。
+- Windows 上指向网络共享（`\\服务器\共享`）的路径，项目根和附加目录都不在那个共享上时，碰文件系统之前就拒绝；写入时顺着走的链接指向共享，也不再跟下去。访问共享会让 Windows 先连上对方、送出登录凭据。项目里早就有的、指向共享的链接不在其内：守卫解析路径时，系统会先跟着链接过去，再判断要不要拒绝（读档从第 1 期起就是这样）。要拦住，得从根目录开始逐段展开链接、先查目标再访问，留待以后做（审查计划 `20261125-120430-9n66` 的 F2）。
+- 项目根本身包含用户主目录下的 `.gemini` 或 `.claude`（比如项目根就是用户主目录），或者项目根就在 `~/.gemini`、foreman 的状态目录或运行记录根里面时，直接拒绝派出 edit / shell 任务。
+- 守卫的决定记录（`agy-guard.jsonl`）里，`run_command` 一条带上完整的命令行（`command`）：stream-json 会把 `CommandLine` 截到约 512 个字符，验收时以这里为准。
 - shell 档的命令不受这些限制（和 pi 的 shell 档相同），文档里写明。
 
 ## 4. 访问档位
@@ -125,11 +131,13 @@
 |---|---|---|---|
 | `none` | 报告格式修复 | 什么都不放行 | 无 |
 | `read` | 讨论、审查 | `read_file` / `view_file`（项目目录和 `--add-dir` 范围内）；沙箱确认可用时放行 `run_command` | 沙箱可用时加 `--sandbox` |
-| `edit` | 执行 `run_access: "edit"`（第二期） | read 档的读，加 `edit_file`、`write_file`（限项目目录内，排除 3.5 的位置） | 无；不放行 `run_command` |
-| `shell` | 执行 `run_access: "shell"`（第二期） | edit 档全部，加 `run_command`（没有系统沙箱，和 pi 的 shell 档相同） | 无 |
+| `edit` | 执行 `run_access: "edit"` | read 档的读，加 `edit_file`、`write_file`（限项目目录内，排除 3.5 的位置） | 不加 `--sandbox`；不放行 `run_command`；任务说明末尾附 `git ls-files` 清单 |
+| `shell` | 执行 `run_access: "shell"` | edit 档全部，加 `run_command`（没有系统沙箱，和 pi 的 shell 档相同；守卫用 `overwrite` 把 `WaitMsBeforeAsync` 设成 30 分钟） | 不加 `--sandbox` |
+
+- 执行的两档在各系统上一样（Windows 也支持），都带 `--dangerously-skip-permissions`、不加 `--sandbox`，不跑沙箱探针、不查 `/permissions`：守卫是唯一的闸门，和没有沙箱的读档一样。Windows 沙箱不拦用户目录以外的读取，不影响执行：edit 档不跑命令，shell 档本来就没有沙箱。
 
 - **每个工具的参数白名单**：`read_file` / `view_file` 只认 `Path`、`StartLine`、`EndLine`、`ByteOffset`（`StartLine`、`EndLine` 第 1 期实测补上，`ByteOffset` 在 agy 1.4.9 的真机测试里补上，见第 12 节）；`edit_file` 只认 `Path`、`Target`、`Replacement`；`write_file` 只认 `Path`、`Content`、`Overwrite`；`run_command` 只认 `CommandLine`、`WaitMsBeforeAsync`、`toolSummary`。出现任何其他参数就拒绝，理由写明参数名。agy 自动升级后如果加了新参数，会先被拒绝，再由维护者核对后补进白名单。只读工具（`read_file`、`view_file`、`run_command`）因为不认识的参数被拒时，适配器记成一条说明，不算要用户决定的权限问题：用户没有什么可放行的，agy 一般会去掉参数重试。
-- 所有档位都拒绝：子 agent 三件套、`send_message`、`schedule`、`search_web`、`ask_question`（无头模式答不了，理由里提示把问题写进报告）、`browser_*`、`call_mcp_tool`、`generate_image`、`notebook_*`。不认识的工具也拒绝。`manage_task` 只是任务清单，各档放行。
+- 所有档位都拒绝：子 agent 三件套、`send_message`、`schedule`、`search_web`、`ask_question`（无头模式答不了，理由里提示把问题写进报告）、`browser_*`、`call_mcp_tool`、`generate_image`、`notebook_*`。不认识的工具也拒绝。`manage_task` 和 agy 1.5 起的 `update_steps` 只是任务清单，各档放行。
 - 路径按 agy 自己的规则解析，不照搬 pi 的规则。第 0b 期实测（Windows）：
   - agy 只接受绝对路径和 `file:///` 地址；
   - `@r.txt`、`~/…`、相对路径、`..\…` 都报 "must be an absolute path"；
@@ -160,8 +168,8 @@
   - 守卫进程本身不在沙箱里：实测加了 `--sandbox` 后，钩子照样能读 `~/.gemini/config`、写 run 目录、读 `--log-file` 日志，所以上面的日志核对和决定记录可行。
   - 沙箱不可用时 read 档不放行 shell，材料里附上 `git ls-files` 的文件清单代替；审查照常附 patch（和 opencode、pi 的审查材料相同）。
   - 本机实测沙箱拦网络（curl 返回 000，DNS 解析被拒），临时目录可写。别的系统以探针结果为准。只读档保证的是"项目文件不变、不能联网"，不是"整台机器不变"，文档里写明这一点。
-- **异步命令（第二期）**：命令跑得比 `WaitMsBeforeAsync` 久时会转到后台，但无头模式会在退出前等后台任务结束（stderr 写 `waiting up to 30m0s for 1 background task(s)`）；工具步骤的完成事件带着命令的最终输出（第 0b 期实测）。所以：
-  - 守卫照样用 `overwrite` 把 `WaitMsBeforeAsync` 调大（实测生效，agy 会告诉模型参数被钩子改过），让时间线上的命令时长准确；
+- **异步命令**：命令跑得比 `WaitMsBeforeAsync` 久时会转到后台，但无头模式会在退出前等后台任务结束（stderr 写 `waiting up to 30m0s for 1 background task(s)`）；工具步骤的完成事件带着命令的最终输出（第 0b 期实测）。所以：
+  - 守卫照样用 `overwrite` 把 `WaitMsBeforeAsync` 调大到 30 分钟（`1800000`，和无头模式等后台任务的上限一致；实测生效，agy 会告诉模型参数被钩子改过），让时间线上的命令时长准确；
   - 不会结束的命令（比如开发服务器）会让 agy 等满 30 分钟，由 foreman 的超时和卡死检测结束整棵进程树，并在结果里写明。
 
 ## 5. 调用与事件翻译
@@ -230,7 +238,7 @@ stream-json 输入下，模型名无效时退出码是 1（不是 3），`result
 | `model` | 必填，模型族（`agy models` 第一列去掉档位后缀），档位写在格子的 `effort` 里；也可以写完整 ID |
 | `bin` | 可选，agy 可执行文件路径。默认在 PATH 里找，Windows 上再找 `%LOCALAPPDATA%\agy\bin\agy.exe` |
 | `max_parallel` | 可选，默认 `2`：订阅额度按 5 小时窗口算，并发高了容易一起撞限额 |
-| `run_access` | 可选（第二期），`"edit"` 或 `"shell"`，只能写在用户配置里，含义和 opencode、pi 相同 |
+| `run_access` | 可选，`"edit"` 或 `"shell"`，只能写在用户配置里，含义和 opencode、pi 相同 |
 
 - 现在所有协作方共用 `DEFAULT_AGENT_PARALLEL = 4`。改成适配器可以声明自己的默认值（`defaultMaxParallel`），排队、准入、status 和看板都改读同一个函数，并加测试。
 - 协作方代号后缀为 `agy`。看板和消息里的接入方式标签用 `Agy CLI`（第 11 节）。登录由 agy 自己管，插件不碰。
@@ -254,7 +262,7 @@ stream-json 输入下，模型名无效时退出码是 1（不是 3），`result
   - `report.mjs`、`status.mjs`：工具类型清单
   - `hooks/guard-direct-calls.mjs`：拦下所有会运行模型的 `agy` 调用，包括任何带 `-p` / `--print` / `--prompt` / `-i` / `--input-format` 的形式和裸的 `agy`。只放行 `models`、`agents`、`changelog`、`help` 子命令和单独的 `--version`；额度和钩子状态由 foreman 的 `check` 去读
   - `hooks/session-reminder.mjs`
-  - setup skill：安装弹窗，以及（第二期）执行两档的说明
+  - setup skill：安装弹窗，以及执行两档的说明
   - references 下的 `config.md`、`cli.md`、`seats.md`
   - 两个 README（含手工恢复办法）
   - foreman-en 镜像
@@ -312,7 +320,7 @@ stream-json 输入下，模型名无效时退出码是 1（不是 3），`result
 - **第 0 期**：已完成（第 9 节）。
 - **第 0b 期**：已完成（第 9 节），只剩桌面版 / IDE 和自动模式两项因为没有条件没能验证。
 - **第 1 期**（2026-10-28 完成，真实 agy 1.4.8 / 1.4.9 上验证过 check、讨论、审查和两席并发）：守卫（启动器、启动标记、决定记录）、自检、`agy-guard` 子命令和锁、读档（讨论和审查）和沙箱探针、`check`、`models`、看板、价格和身份表、默认并发、直接调用守卫、假 agy 和测试。
-- **第 2 期**：执行的 `edit` / `shell` 两档、3.5 的写入保护、异步命令处理、续接、返工。
+- **第 2 期**（2026-11-25 实现，Issue #5）：执行的 `edit` / `shell` 两档、3.5 的写入保护、异步命令处理、续接、返工。真机验证结果见第 12 节；只在 Windows 11 上验证过。
 - **第 3 期**：原生 `--json-schema`、图像（`generate_image`）是否接入。
 
 ## 11. 用户拍板的取舍
@@ -323,6 +331,12 @@ stream-json 输入下，模型名无效时退出码是 1（不是 3），`result
 4. **接入方式标签**：用 `Agy CLI`，和命令名一致，也和 `Codex CLI`、`Pi CLI` 的叫法对齐。说明文字里第一次出现时写"Agy CLI（Google Antigravity CLI）"。
 5. **项目配置和其他钩子**：一律拒绝派出，不留按项目放行的开关。项目里（含 `--add-dir` 目录）有 agy 的钩子、MCP 或插件配置，或者全局 hooks.json 里有 foreman 以外的钩子时，这次不派 agy，结果里写明是哪个文件挡住的（3.4）。
 6. **启动标记**：接受。foreman 运行期间，同一目录里用户自己用 agy 会被启动标记拦下工具调用，拒绝理由写明原因和标记的过期时间；单元测试照样检查每条启动路径都带策略（3.2）。
+
+2026-11-25 做第二期前，用户定了下面四条：
+1. **两档都做**：`edit` 和 `shell` 和 pi、opencode 一致，用哪一档由用户在 `run_access` 里选。
+2. **Windows 也支持**：执行不靠沙箱，各系统行为一致。
+3. **agy 自带的联网工具一律不放行**：`search_web`、`read_url`、`browser_*` 在所有档位都拒绝；shell 档的命令没有沙箱，本来就能联网，这一条管不到。
+4. **守卫自动更新**：插件升级后守卫文件对不上时，派出和 `check` 前自动换成新版（`hooks.json` 不动），不用用户重装；这就是 3.4 自检里现有的重写行为，只把提示改成说明插件升级过。
 
 ## 12. 第 1 期实现时的实测补充（2026-10-28，Windows 11，agy 1.4.8）
 在真实 agy 上冒烟时发现、前面各节没写到的事实，代码已按这些实现：
@@ -352,3 +366,11 @@ stream-json 输入下，模型名无效时退出码是 1（不是 3），`result
 - **`/permissions`**：用户没配任何全局规则时，也正好返回一个 global 作用域。
 - **宿主网络对照**：经 TUN 代理上网时（DNS 返回代理分配的地址），探针后的 HTTPS 对照有一次超过了 12 秒，结论成了 `unconfirmed`。后来加过一次重试，审查指出它会把探针中途的断网误判成沙箱禁网，已经撤回。
 - **探针不一定跑全**：探针要模型照着跑六条命令，有一次只出了四条的结果（项目外写入、联网两项没有），读主目录以外那一项是 `allowed`。所以只要有一项读得到，探针没跑完也照样写缓存。
+
+### 2026-11-25 第二期的实测（Windows 11，agy 1.5.16，gemini-3.8-flash high）
+- **edit、shell 两档各跑了两次真实的执行任务**：edit 档修一个函数的错误、补一个测试；shell 档加一个函数、补测试，再自己运行 `node --test`。四次都正常完成，改动按 `by: agent` 归属，调度方自己再跑测试也全部通过。edit 档用时 167–353 秒、执行 0 条命令；shell 档用时 134–365 秒、执行 6–11 条命令（`Get-ChildItem`、`node --test`、`git status`、`git diff` 之类）。
+- **守卫拦下的写入**：项目外的文件、项目里的 `.git` 和 `.claude`，拒绝理由原文都对。测试前后项目外、`.git`、`.claude` 里都没有多出文件。
+- **模型会主动去读项目外的东西**：上一级目录的 `package.json`、`~\.gemini\antigravity-cli\` 下的 `settings.json` 和 `hooks.json`，都被守卫按项目外拒绝。shell 档的命令没有沙箱，用命令照样读得到，这一点文档里写明了。
+- **任务清单工具**：agy 1.5.16 用的是 `update_steps`（参数 `steps`），不是第 1 期见过的 `manage_task`。原来被当作不认识的工具拒绝，每次都多出一条要决定的问题，现在两个都各档放行。
+- **完整命令行**：决定记录里的 `command` 写下了每条命令的原文。
+- **守卫自动更新**：开发版和已装的守卫不一致时，派出前在锁里换成新版，结果的 `notes` 里有一句提示；测完把 `~/.gemini/config` 恢复成测试前的样子，sha256 核对一致。
