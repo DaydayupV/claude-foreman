@@ -61,7 +61,7 @@ const cellTable = (cfg, summary, module, checks) => {
   const names = [...new Set(values.flatMap((value) => cellList(value).map((item) => item.agent)))];
   for (const name of names) {
     const items = values.map((value) => cellList(value).find((item) => item.agent === name));
-    rows.push([name, ...items.map((item, i) => !item ? dash : (item.effort ?? M.reportDefault)
+    rows.push([name === CLAUDE_CODE ? M.reportHostCandidate : name, ...items.map((item) => !item ? dash : item.host ? M.reportCandidate : (item.effort ?? M.reportDefault)
       + (item.model && item.model !== summary.agents[name]?.model ? ` · ${item.model}` : '') + (item.required ? ' ★' : '') + (item.problem ? ' ⚠' : '')),
     ...(checks ? [checkMark(checks[name]?.ok, items.some((item) => item?.problem))] : [])]);
   }
@@ -100,7 +100,7 @@ const sceneTables = (cfg, summary) => Object.entries(cfg.scene_diff).flatMap(([s
     .map((cell) => {
       const value = view[module][cell];
       const candidates = value === CLAUDE_CODE ? CLAUDE_CODE : value === null ? M.reportOff : M.list(cellList(value).map((item) =>
-        `${item.agent} · ${item.effort ?? M.reportDefault}${item.model && item.model !== summary.agents[item.agent].model ? ` · ${item.model}` : ''}${item.required ? ' ★' : ''}`));
+        item.host ? M.reportHostCandidate : `${item.agent} · ${item.effort ?? M.reportDefault}${item.model && item.model !== summary.agents[item.agent].model ? ` · ${item.model}` : ''}${item.required ? ' ★' : ''}`));
       return [`${M.reportModuleNames[module]} ${cell}`, candidates, view[module].seats?.[cell] ?? dash,
         module === 'review' ? view.review.gap[cell] ? M.reportGapOn : M.reportGapOff : dash];
     }));

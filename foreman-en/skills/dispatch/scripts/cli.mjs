@@ -21,7 +21,7 @@ if (['status', 'stats', 'config', 'tiers'].includes(process.argv[2])) {
 }
 
 // 不带值的选项；其余选项都把下一个参数当作它的值。
-const FLAGS = new Set(['uncommitted', 'no-snapshot', 'verbose', 'no-intro', 'snap', 'vector', 'allow-edge', 'author', 'stop', 'all', 'reprobe', 'check', 'no-backup']);
+const FLAGS = new Set(['uncommitted', 'no-snapshot', 'verbose', 'no-intro', 'snap', 'vector', 'allow-edge', 'author', 'stop', 'all', 'reprobe', 'check', 'no-backup', 'write']);
 
 // --help（或 -h）只打印这一条子命令的用法（assets 可以带动作），退出码 0。和 parseArgs 一样走一遍参数，
 // 写在某个选项的值里的（比如 --title --help、--title -h）不算。
@@ -48,10 +48,11 @@ if (process.argv[2] === 'layout') {
 }
 
 // 其余模块在 --help 之后才加载：config.mjs 一加载就会迁移旧版的配置和偏好文件，--help 不该写任何文件。
-const { USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, agentMaxParallel, CLAUDE_CODE, cellList, eachEntry, mapCells, sceneView, selectScene, isScened, resolveAgentAlias, detectEnvironment, projectFile, loadConfig, readRawConfig, resolveProfile, validatePlan, unknownAgentError } = await import('./config.mjs');
+const { USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, agentMaxParallel, CLAUDE_CODE, cellList, eachEntry, mapCells, isHostAgent, sceneView, selectScene, isScened, resolveAgentAlias, detectEnvironment, projectFile, loadConfig, readRawConfig, resolveProfile, validatePlan, unknownAgentError } = await import('./config.mjs');
 const { cmdPlan, readPlan, loadPlan } = await import('./plan.mjs');
 const { buildSummary: summarize } = await import('./summary.mjs');
 const { modelIdentity } = await import('./models.mjs');
+const { modelNotesStatus, writeModelNotes } = await import('./model-notes.mjs');
 const { configReport, environmentReport, modelsReport } = await import('./report.mjs');
 const records = await import('./records.mjs');
 const { adapters } = await import('./adapters/index.mjs');
@@ -153,6 +154,7 @@ function dispatchProfile(o, module) {
 }
 
 async function cmdRun(o) {
+  if (isHostAgent(o.agent)) die(M.hostNotDispatchable);
   const { cwd, cfg, profile } = dispatchProfile(o, 'run');
   if (o.group != null && !o.scope.length) die(M.groupNeedsScope);
   const addDirs = o['add-dir'].map(resolveDir);
@@ -338,12 +340,16 @@ function cmdConfig(o) {
     ...adapters[agent.type].status(agent),
   }]));
   const resolved = (entry) => {
+    if (entry.agent === CLAUDE_CODE) return { agent: CLAUDE_CODE, host: true };
     const model = entry.model || agents_status[entry.agent].model || null;
     return { agent: entry.agent, model, effort: entry.effort ?? null, required: !!entry.required, tier: tierOf(model).tier };
   };
-  const resolved_modules = mapCells(effective.modules, (value) => value === CLAUDE_CODE || value === null ? value : cellList(value).map(resolved));
-  const resolved_scenes = Object.fromEntries(Object.entries(scene_diff).map(([scene, modules]) => [scene,
-    mapCells(modules, (value) => value === CLAUDE_CODE || value === null ? value : cellList(value).map(resolved))]));
+  const resolvedCells = (modules) => mapCells(modules, (value) => value === CLAUDE_CODE || value === null ? value : cellList(value).map(resolved));
+  const resolved_modules = resolvedCells(effective.modules);
+  const resolved_scenes = Object.fromEntries(Object.entries(scene_diff).map(([scene, modules]) => [scene, resolvedCells(modules)]));
+  const { file, exists, missing, unwritten } = modelNotesStatus(CONFIG);
+  const summary = buildSummary(cfg, adapters, null, o['keep-backup']);
+  if (!exists) summary.warnings.unshift({ kind: 'models_doc_missing', file, message: M.modelsDocMissing(file) });
   // 配置里写的 key 不打印出来。
   const shown = structuredClone(effective);
   shown.modules = scene_modules;
@@ -363,10 +369,16 @@ function cmdConfig(o) {
     watch_launcher_ascii: isAscii(path.join(RUNS_ROOT, 'watch.mjs')),
     preferences: [USER_PREFS, ...(o.cwd ? [projectFile(resolveDir(o.cwd), PROJECT_PREFS, LEGACY_PROJECT_PREFS)] : [])]
       .map((file) => ({ file, exists: fs.existsSync(file) })),
+    model_notes: { file, exists, missing, unwritten },
     environment: detectEnvironment(adapters, effective.agents),
-    summary: buildSummary(cfg, adapters, null, o['keep-backup']),
+    summary,
   };
   process.stdout.write(o.format === 'md' ? configReport(cfg, result.summary) : JSON.stringify(result, null, 2) + '\n');
+}
+
+function cmdModelNotes(o) {
+  const result = (o.write ? writeModelNotes : modelNotesStatus)(CONFIG, { hostModel: o['host-model'] });
+  process.stdout.write(JSON.stringify(result, null, 2) + '\n');
 }
 
 async function cmdBoard(o) {
@@ -650,6 +662,6 @@ if (['config', 'check', 'models', 'tiers'].includes(cmd) && opts.format !== unde
 // 新建任务组时组名只用 ASCII：实时查看要把它写进终端命令，桌面版的终端面板只接受 ASCII 命令。
 if (['run', 'discuss', 'resume', 'review', 'image', 'plan'].includes(cmd) && opts.group != null && !/^[A-Za-z0-9._-]{1,64}$/.test(opts.group)) die(M.badGroupName(opts.group));
 const statsOf = (meta) => adapters[agentTypeOf(meta)]?.stats?.(meta.session_id, meta.started_at);
-const commands = { run: cmdRun, discuss: cmdDiscuss, resume: cmdResume, review: cmdReview, image: cmdImage, plan: (o) => cmdPlan(o, load, adapters), submit: (o) => cmdSubmit(o, load), judge: cmdJudge, stats: (o) => cmdStats(o, statsOf), tiers: cmdTiers, status: (o) => cmdStatus(o, statsOf, CONFIG), watch: (o) => cmdWatch(o, load), board: cmdBoard, config: cmdConfig, check: cmdCheck, models: cmdModels, cancel: (o) => cmdCancel(o, statsOf), 'await-busy': (o) => cmdAwaitBusy(o, CONFIG, load), assets: cmdAssets };
+const commands = { run: cmdRun, discuss: cmdDiscuss, resume: cmdResume, review: cmdReview, image: cmdImage, plan: (o) => cmdPlan(o, load, adapters), submit: (o) => cmdSubmit(o, load), judge: cmdJudge, stats: (o) => cmdStats(o, statsOf), tiers: cmdTiers, status: (o) => cmdStatus(o, statsOf, CONFIG), watch: (o) => cmdWatch(o, load), board: cmdBoard, config: cmdConfig, check: cmdCheck, models: cmdModels, 'model-notes': cmdModelNotes, cancel: (o) => cmdCancel(o, statsOf), 'await-busy': (o) => cmdAwaitBusy(o, CONFIG, load), assets: cmdAssets };
 if (!commands[cmd]) die(M.usage);
 await commands[cmd](opts);

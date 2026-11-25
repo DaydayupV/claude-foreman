@@ -68,6 +68,7 @@ const DEFAULT_SEATS = { discuss: { simple: 2, normal: 4, complex: 8 }, review: {
 const DEFAULT_GAP = { review: { simple: false, normal: false, complex: false } };
 const MODES = ['run', 'review', 'discuss'];
 const CLAUDE_CODE = 'claude code';
+const isHostAgent = (name) => name === CLAUDE_CODE || name === 'self';
 const MODULE_CELLS = { discuss: LEVELS, run: LEVELS, review: LEVELS, image: ['generate', 'draw'] };
 const ROUTE_CELLS = { 1: ['generate'], 2: ['generate', 'draw'], 3: ['generate', 'draw'], 4: ['draw'] };
 // 出图声明和两项检测接口齐全，才可以接 generate 格子。
@@ -80,17 +81,37 @@ function eachCell(modules) {
 }
 function eachEntry(modules) {
   return eachCell(modules).flatMap(({ module, cell, key, value }) => cellList(value)
-    .map((item, index) => ({ module, cell, key, index, at: `${key}[${index}]`, item })));
+    .map((item, index) => ({ module, cell, key, index, at: `${key}[${index}]`, item }))
+    .filter(({ item }) => !isHostAgent(item?.agent)));
 }
 function mapCells(modules, fn) {
   const out = Object.fromEntries(Object.entries(modules).map(([module, cells]) => [module, isObject(cells) ? { ...cells } : cells]));
   for (const { module, cell, key, value } of eachCell(modules)) out[module][cell] = fn(value, { module, cell, key });
   return out;
 }
+function normalizeHostCell(value, { module }) {
+  if (module !== 'image' && isHostAgent(value)) return CLAUDE_CODE;
+  const [entry] = cellList(value);
+  if (module === 'run' && cellList(value).length === 1 && isHostAgent(entry?.agent) && Object.keys(entry).length === 1) return CLAUDE_CODE;
+  const normalize = (item) => item?.agent === 'self' ? { ...item, agent: CLAUDE_CODE } : item;
+  return Array.isArray(value) ? value.map(normalize) : normalize(value);
+}
+function normalizeHostAliases(config) {
+  if (!isObject(config)) return config;
+  const normalize = (modules) => isObject(modules) ? mapCells(modules, normalizeHostCell) : modules;
+  const result = { ...config };
+  if (isObject(config.levels)) result.levels = normalize(config.levels);
+  if (isObject(config.modules)) result.modules = Object.hasOwn(config.modules, 'default')
+    ? Object.fromEntries(Object.entries(config.modules).map(([scene, modules]) => [scene, normalize(modules)])) : normalize(config.modules);
+  return result;
+}
 function normalizeModules(cfg) {
   if (!isObject(cfg.modules) || !isObject(cfg.agents)) return cfg;
-  const modules = mapCells(cfg.modules, (value) => !isObject(value) && !Array.isArray(value) ? value
-    : cellList(value).map((item) => isObject(item) ? { ...item, agent: resolveAgentAlias(item.agent, cfg) } : item));
+  const modules = mapCells(cfg.modules, (raw, at) => {
+    const value = normalizeHostCell(raw, at);
+    return !isObject(value) && !Array.isArray(value) ? value : cellList(value).map((item) =>
+      isObject(item) && !isHostAgent(item.agent) ? { ...item, agent: resolveAgentAlias(item.agent, cfg) } : item);
+  });
   for (const module of ['discuss', 'review']) {
     const cells = modules[module];
     if (!isObject(cells) || Object.hasOwn(cells, 'seats') && !isObject(cells.seats)) continue;
@@ -320,8 +341,9 @@ function migrateConfig(config, file, base, project) {
   }
   if (isObject(result.modules)) result.modules = mapCells(result.modules, (value, { module, cell }) => {
     if (value === 'claude') return CLAUDE_CODE;
+    value = normalizeHostCell(value, { module });
     if (!isObject(value) && !Array.isArray(value)) return value;
-    if (old && !Object.hasOwn(config, 'modules') && module !== 'discuss' && isObject(value)) {
+    if (old && !Object.hasOwn(config, 'modules') && module !== 'discuss' && isObject(value) && !isHostAgent(value.agent)) {
       const target = resolveAgentAlias(value.agent ?? codexName, base);
       const prev = cellList(base.modules?.[module]?.[cell]).find((item) => resolveAgentAlias(item.agent, base) === target) || CODEX_LEVEL_FALLBACK[cell];
       return [{ ...prev, ...value, agent: value.agent ?? codexName }];
@@ -362,12 +384,13 @@ function migrateConfig(config, file, base, project) {
 function renameAgentsByModel(config, adapters) {
   const agents = {}, aliases = {};
   const nameOf = (name, agent) => {
+    if (name === 'self') return name;
     let model = agent.model || (agent.type === 'codex cli' ? adapters[agent.type].status(agent).model : null);
     if (!model) return name;
     if (agent.type === 'opencode cli' || agent.type === 'pi cli') model = model.split('/').at(-1);
     let id = model.replace(/[^A-Za-z0-9._-]/g, '-');
     if (!/^[A-Za-z0-9]/.test(id)) id = `agent-${id}`;
-    if (id === 'claude') id += '-agent';
+    if (id === 'claude' || isHostAgent(id)) id += '-agent';
     return id;
   };
   const add = (name, agent) => {
@@ -384,14 +407,14 @@ function renameAgentsByModel(config, adapters) {
   const entries = Object.entries(config.agents).sort(([a, x], [b, y]) => Number(nameOf(b, y) === b) - Number(nameOf(a, x) === a));
   for (const [name, agent] of entries) aliases[name] = add(name, agent);
   const convert = (item) => {
-    if (!isObject(item)) return item;
+    if (!isObject(item) || isHostAgent(item.agent)) return item;
     const original = config.agents[item.agent];
     const { model, ...rest } = item;
     return { ...rest, agent: model && original ? add(item.agent, { ...original, model }) : aliases[item.agent] || item.agent };
   };
   config.modules = Object.fromEntries(Object.entries(config.modules).map(([scene, modules]) => [scene,
     mapCells(modules, (value) => value === CLAUDE_CODE || value === null ? value
-      : cellList(value).map(convert).filter((item, i, list) => !list.slice(0, i).some((prev) => isDeepStrictEqual(prev, item))))]));
+      : cellList(value).map(convert).filter((item, i, list) => isHostAgent(item?.agent) || !list.slice(0, i).some((prev) => isDeepStrictEqual(prev, item))))]));
   return { config: { ...config, agents }, aliases: Object.fromEntries(Object.entries(aliases).filter(([a, b]) => a !== b)) };
 }
 
@@ -412,6 +435,7 @@ function migrateStructure(config, file, base, project, adapters) {
   // 只补 seats/gap 时配置本身有错，就留给后面的校验报出真正的错误。
   let held, invalid = false;
   try {
+    result = normalizeHostAliases(result);
     if (converted.old) { renamed = renameAgentsByModel(result, adapters); result = renamed.config; }
     for (const module of converted.seats) {
       const cells = result.modules.default[module] || {};
@@ -486,7 +510,7 @@ function validateConfig(cfg, adapters, fail = die, prefix = 'modules', own = nul
   check(cfg.dispatch.runs_dir === null || text(cfg.dispatch.runs_dir), 'dispatch.runs_dir', why.pathOrNull);
   for (const [name, agent] of Object.entries(cfg.agents)) {
     const key = `agents.${name}`;
-    check(/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) && !['claude', CLAUDE_CODE].includes(name), key, why.agentName);
+    check(/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) && name !== 'claude' && !isHostAgent(name), key, why.agentName);
     check(isObject(agent), key, why.object);
     check(Object.hasOwn(adapters, agent.type), `${key}.type`, why.agentType);
     check(agent.model == null || (text(agent.model) && agent.model !== CLAUDE_CODE), `${key}.model`, why.modelName);
@@ -496,11 +520,12 @@ function validateConfig(cfg, adapters, fail = die, prefix = 'modules', own = nul
   validateModuleKeys(cfg.modules, check, prefix);
   for (const { module, cell, key: flatKey, value } of eachCell(cfg.modules)) {
     const key = flatKey.replace('modules', prefix);
-    validateCell(value, module, key, check);
+    validateCell(value, module, key, fail);
     const seen = new Set();
     for (const [i, item] of cellList(value).entries()) {
       const at = `${key}[${i}]`;
       check(isObject(item), at, M.levelEntryChoices);
+      if (isHostAgent(item.agent)) continue;
       check(text(item.agent), `${at}.agent`, why.agentRef);
       // 条目只认这四项：拼错的键（比如 "requird"）不报错但会悄悄失效，提醒一句
       if (!own || own.has(`${module}.${cell}`)) for (const field of Object.keys(item)) if (!['agent', 'effort', 'required', 'model'].includes(field)) notice(M.unknownEntryField(`${at}.${field}`));
@@ -553,9 +578,17 @@ function validateModuleKeys(modules, check, prefix = 'modules') {
   }
 }
 
-function validateCell(value, module, key, check) {
+// run 的列表里可以有主持方，讨论和审查里主持方固定占 0 号席所以不能写。
+function validateCell(value, module, key, fail) {
   if (value === (module === 'image' ? null : CLAUDE_CODE)) return;
-  check((Array.isArray(value) || isObject(value)) && cellList(value).length > 0, key, module === 'image' ? M.invalid.imageCandidates : M.invalid.candidates);
+  const entries = cellList(value);
+  if (!entries.length) fail(M.configInvalid(key, module === 'image' ? M.invalid.imageCandidates : M.invalid.candidates));
+  const hosts = entries.filter((item) => isHostAgent(item?.agent));
+  if (!hosts.length) return;
+  if (module !== 'run') fail(M.hostEntryModule(key));
+  if (hosts.length > 1) fail(M.hostEntryDuplicate(key));
+  const fields = Object.keys(hosts[0]).filter((field) => field !== 'agent');
+  if (fields.length) fail(M.hostEntryFields(key, M.list(fields)));
 }
 
 function projectConfig(cfg, project, file, adapters) {
@@ -801,30 +834,33 @@ function defaultRunsRoot() {
 function resolveCell(cfg, module, cell) {
   if (!Object.hasOwn(MODULE_CELLS, module)) die(M.planModuleChoices(M.list(Object.keys(MODULE_CELLS))));
   if (!MODULE_CELLS[module].includes(cell) || !Object.hasOwn(cfg.modules[module], cell)) die(M.planCellChoices(module, M.list(MODULE_CELLS[module])));
-  const key = `modules.${cfg.selected_scene ? `${cfg.selected_scene}.` : ''}${module}.${cell}`, value = cfg.modules[module][cell];
-  const candidates = cellList(value).map((item) => ({ ...item, agent: resolveAgentAlias(item.agent, cfg), required: !!item.required }));
+  const key = `modules.${cfg.selected_scene ? `${cfg.selected_scene}.` : ''}${module}.${cell}`;
+  const value = normalizeHostCell(cfg.modules[module][cell], { module });
+  const candidates = cellList(value).map((item) => isHostAgent(item.agent) ? { agent: CLAUDE_CODE, host: true }
+    : { ...item, agent: resolveAgentAlias(item.agent, cfg), required: !!item.required });
   return { module, cell, key, closed: value === CLAUDE_CODE || value === null,
     candidates,
     required: candidates.filter((item) => item.required).map((item) => item.agent) };
 }
 
 function validatePlan(cfg, plan, adapters) {
+  if (plan.seats.some(({ agent }) => isHostAgent(agent))) die(M.hostNotDispatchable);
   if (plan.module === 'image') {
     if (plan.route == null) die(M.planRouteRequired);
     if (!Object.hasOwn(ROUTE_CELLS, plan.route)) die(M.planRouteChoices(plan.route));
     if (!ROUTE_CELLS[plan.route].includes(plan.cell)) die(M.planRouteCell('①②③④'[plan.route - 1], plan.cell, M.routeUses[plan.route]));
   } else if (plan.route != null) die(M.planRouteImageOnly);
   const cell = resolveCell(cfg, plan.module, plan.cell);
-  const outside = !!plan.host && ['discuss', 'review'].includes(plan.module) && cfg.modules[plan.module][plan.cell] === CLAUDE_CODE;
+  const outside = !!plan.host && ['discuss', 'review'].includes(plan.module) && cell.closed;
   if (cell.closed && !outside) die(M.planCellClosed(cell.key));
-  const names = cell.candidates.map((item) => item.agent);
+  const candidates = cell.candidates.filter((item) => item.agent !== CLAUDE_CODE), names = candidates.map((item) => item.agent);
   for (const seat of plan.seats) {
     if (plan.module === 'image' && plan.cell === 'generate' && seat.role) die(M.generateNoRoles);
     const name = resolveAgentAlias(seat.agent, cfg);
     if (!outside && !names.includes(name)) die(M.agentNotInLevel(name, cell.key, M.list(names)));
     if (!Object.hasOwn(cfg.agents, name)) die(unknownAgentError('--seat', name, cfg));
     const agent = cfg.agents[name], adapter = adapters[agent.type];
-    const candidate = outside ? { effort: adapter.defaultEffort?.(plan.cell) ?? null } : cell.candidates.find((item) => item.agent === name);
+    const candidate = outside ? { effort: adapter.defaultEffort?.(plan.cell) ?? null } : candidates.find((item) => item.agent === name);
     if (Object.hasOwn(seat, 'model') && seat.model !== (candidate.model || agent.model || null)
       || Object.hasOwn(seat, 'effort') && seat.effort !== (candidate.effort ?? null)) die(M.planSeatChanged(plan.plan_id, seat.seat, cell.key));
     const mode = plan.module === 'image' ? 'run' : plan.module;
@@ -867,7 +903,8 @@ function resolveProfile(cfg, seat, o, adapters, fallbackModel = null, parentAgen
   if (!image && !level) die(M.missingLevel(LEVELS.join(' / ')));
   if (!image && !LEVELS.includes(level)) die(M.levelChoices(LEVELS.join(' / ')));
   if (parentAgent && parentCell !== level && seat.plan) die(M.resumePlanCellChanged(seat.plan, parentCell, level));
-  const cell = resolveCell(cfg, seat.module, level), names = M.list(cell.candidates.map((item) => item.agent));
+  const cell = resolveCell(cfg, seat.module, level), candidates = cell.candidates.filter((item) => item.agent !== CLAUDE_CODE);
+  const names = M.list(candidates.map((item) => item.agent));
   const selected = parentAgent || (seat.agent && resolveAgentAlias(seat.agent, cfg)) || requested;
   let entry, outside = false;
   if (cell.closed) {
@@ -880,10 +917,10 @@ function resolveProfile(cfg, seat, o, adapters, fallbackModel = null, parentAgen
     outside = true;
   } else {
     const single = !image && (parentAgent ? parentCell !== level : !seat.seat);
-    if (parentAgent && !cell.candidates.some((item) => item.agent === parentAgent)) die(M.resumeAgentNotInCell(parentAgent, cell.key, names));
+    if (parentAgent && !candidates.some((item) => item.agent === parentAgent)) die(M.resumeAgentNotInCell(parentAgent, cell.key, names));
     if (single && cell.required.length > 1) die(M.severalRequired(cell.key, M.list(cell.required)));
-    entry = selected ? cell.candidates.find((item) => item.agent === selected)
-      : cell.candidates.length === 1 ? cell.candidates[0] : cell.required.length === 1 ? cell.candidates.find((item) => item.required) : null;
+    entry = selected ? candidates.find((item) => item.agent === selected)
+      : candidates.length === 1 ? candidates[0] : cell.required.length === 1 ? candidates.find((item) => item.required) : null;
     if (!entry) die(selected ? M.agentNotInLevel(selected, cell.key, names) : M.agentRequired(cell.key, names));
     if (single) {
       const others = cell.required.filter((name) => name !== entry.agent);
@@ -919,5 +956,5 @@ function resolveProfile(cfg, seat, o, adapters, fallbackModel = null, parentAgen
 }
 
 export { ENTRY, SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA, USER_CONFIG, USER_PREFS, PROJECT_PREFS, LEGACY_PROJECT_PREFS, DEFAULT_AGENT_PARALLEL, agentMaxParallel, foremanStateDir, DEFAULT_CONFIG, DEFAULT_SEATS, DEFAULT_GAP, CLAUDE_CODE, LEVELS,
-  MODULE_CELLS, ROUTE_CELLS, canGenerate, cellList, eachCell, eachEntry, mapCells, resolveCell, validatePlan, resolveProfile, projectFile, loadConfig, readScenes, sceneView, isScened, selectScene, defaultRunsRoot, runsMovedNow,
+  MODULE_CELLS, ROUTE_CELLS, canGenerate, cellList, eachCell, eachEntry, mapCells, isHostAgent, resolveCell, validatePlan, resolveProfile, projectFile, loadConfig, readScenes, sceneView, isScened, selectScene, defaultRunsRoot, runsMovedNow,
   readAgentAliases, readRawConfig, readOldBackups, resolveAgentAlias, migrateStructure, renameAgentsByModel, detectEnvironment, buildStarterConfig, staleAliases, unknownAgentError, fromProjectConfig };

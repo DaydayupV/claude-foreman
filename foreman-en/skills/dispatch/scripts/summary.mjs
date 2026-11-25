@@ -21,6 +21,7 @@ export function buildSummary(cfg, adapters, checks = null, keepBackup = null) {
   const scene_modules = Object.fromEntries(Object.entries(cfg.scene_modules).map(([scene, modules]) => [scene, mapCells(modules, (entry, { module, cell }) => {
     if (entry === CLAUDE_CODE || entry === null) return entry;
     return cellList(entry).map((item, i) => {
+      if (item.agent === CLAUDE_CODE) return { agent: CLAUDE_CODE, host: true };
       const project = cfg.project_config, own = project?.cells.includes(`${scene}.${module}.${cell}`);
       const inherited = scene !== 'default' && project?.cells.includes(`default.${module}.${cell}`);
       const written = scene === 'default' || own || !inherited && Object.hasOwn(userModules[scene]?.[module] || {}, cell);
