@@ -78,6 +78,8 @@
 | `sandbox` | `run` / `review` / `discuss` 各自的沙箱：`read-only` / `workspace-write` / `danger-full-access`。讨论和审查设成 `read-only` 时由系统沙箱拦下写入（结果的 `readonly` 为 `sandbox`），否则只靠规则约束和事后对比快照（`audited`）。Windows 上默认的 elevated 只读沙箱可能连读文件的命令都启动不了，见下文 | 全部 `null`，沿用 Codex 配置 |
 | `approval` | 审批策略：`never` 或 `on-request` | 不写时用 `never`：无人值守，没人能审批。命令被沙箱挡住时直接把失败交回给模型；沙箱坏了要修沙箱，见下文"Codex 的沙箱起不来时" |
 
+讨论和执行时（续接、图像任务也算），Codex 能搜网页、读网页：你的 `~/.codex/config.toml` 里没写 `web_search` 时，脚本加上 `-c web_search="live"`（实时搜索）；写了任何值（顶层、某个 profile 或 `[tools]` 里都算）就照你的，写成 `"disabled"` 时提示词里也不说能上网。审查不加。网页搜索由 Codex 的服务端完成，只读沙箱拦不到它。
+
 ### Codex 的沙箱起不来时
 现象：派给 Codex 的任务里每条命令都失败，报 `windows sandbox failed`、`helper_unknown_error`、`setup refresh had errors` 或 `Failed to create unified exec process`；结果的 `notes` 会提示沙箱坏了。最常见的原因是 Windows 上 Codex 默认的 elevated 沙箱设置坏了（它要以管理员身份完成一次设置）。
 
@@ -97,9 +99,9 @@
 | `max_parallel` | 可选，默认 `4` |
 | `run_access` | 可选，允许它做执行任务：`"edit"` 只能读写项目目录里的文件、不能运行命令；`"shell"` 还能运行命令。不写就不能放进 `run` 和 `draw` 格子，也不能被点名派执行 |
 
-登录和 key 都由 opencode 自己管（比如 OpenCode Go 要先在 opencode 里运行 `/connect` 登录），插件不碰。讨论和审查时，脚本给 opencode 注入一个只读代理，只有读文件、搜索和列目录的工具：它能自己翻项目里的代码，但不能运行命令，也不能改文件。审查改动（`diff`）时，要看的改动由脚本用 git 算好附给它；审已有文件时只给路径，由它自己读。
+登录和 key 都由 opencode 自己管（比如 OpenCode Go 要先在 opencode 里运行 `/connect` 登录），插件不碰。讨论和审查时，脚本给 opencode 注入一个只读代理，有读文件、搜索和列目录的工具：它能自己翻项目里的代码，但不能运行命令，也不能改文件。讨论时的代理另外放行 opencode 的 `webfetch`（读网页）；你在 opencode 里配了网页搜索服务（配置里写 `"websearch": {"provider": "random"}`，或者指定一家服务）时，再放行 `websearch`（搜网页）。没配时不放行：opencode 会想问你用哪家服务，无头运行答不了，整轮会失败。脚本派活前用 `opencode debug config` 查你配了没有。审查时这些都不放行。审查改动（`diff`）时，要看的改动由脚本用 git 算好附给它；审已有文件时只给路径，由它自己读。
 
-执行时注入的代理按 `run_access` 开放写文件，`shell` 档再开放运行命令。opencode **没有系统沙箱**：
+执行时注入的代理按 `run_access` 开放写文件，`shell` 档再开放运行命令，两档都放行 `webfetch`，配了网页搜索服务时再放行 `websearch`。opencode **没有系统沙箱**：
 - `edit` 档写不了项目目录以外的文件，也没有运行命令的工具；
 - `shell` 档的命令以你的账户权限运行，能访问整台机器。
 
@@ -135,7 +137,14 @@
 - 用之前要装守卫（`agy-guard install`，`/foreman:setup` 会先征求用户同意）：在 `~/.gemini/config/hooks.json` 里加一个 `foreman-guard` 条目，同目录写启动器和守卫脚本。没有 foreman 运行时守卫回答 `ask`，用户平时用 agy 不受影响；
 - 每次派出前自检：项目（从工作目录往上到仓库根，加上每个 `--add-dir`）的 `.agents` 等目录里有 agy 的钩子、MCP 或插件配置，或者全局 `hooks.json` 里有 foreman 以外的钩子，就不派，报错写明是哪个文件；守卫文件和插件里的不一致时在锁里重新写入；
 - 守卫只放行读文件（路径限定在项目目录和 `--add-dir` 里）和任务清单；本机 agy 的沙箱经探针确认可用时（Windows 上不探测、一律按不可用处理：agy 的 Windows 沙箱不拦用户目录以外的读取），读档再放行沙箱里的命令：沙箱里改不了项目内外的文件、上不了网，但系统临时目录仍然可写。沙箱不可用时没有 shell，讨论材料附上 `git ls-files` 的清单；
-- 执行时按 `run_access` 放行，和 pi 的两档相同，不用沙箱（各平台一样，Windows 也支持）：`edit` 再放行写文件，只能写项目目录里的文件（`--add-dir` 给的目录只能读，在项目里面的也一样），不能运行命令，任务说明末尾附上 `git ls-files` 的清单；`shell` 再放行运行命令，**没有系统沙箱**，命令能碰到整台机器、也能联网，只靠任务说明约束。两档都不许写项目里的 `.git`、`.claude`、`.gemini`、`.agents`、`.agent`、`_agents`、`_agent` 目录（不分大小写，写法本身和真实路径都查；这些目录是链接、`.git` 是写着 `gitdir:` 的文件时，指向的目录也不许写）：写这些目录等于改 git、Claude Code 或 agy 的配置和钩子。agy 的设置目录、foreman 的状态目录和运行记录也不许写，哪怕它们在项目里。写入路径带 `.` 或 `..` 段、Windows 上有段名以点或空格结尾时，拿不准实际写到哪里，一律拒绝；指向项目外网络共享的路径在访问之前就拒绝。项目目录包含主目录下的 `.gemini` 或 `.claude`（比如项目目录就是主目录），或者本身就在 agy 的设置、foreman 的状态目录或运行记录里面时，不派执行任务。agy 自带的联网工具（搜索、读网页、浏览器）各档都不放行；
+- 讨论和执行时另外放行上网和浏览器工具，审查、报告格式修复和沙箱探针不放行：
+  - `search_web` 搜网页：在 agy 的服务端搜，给出的来源是 Google 的跳转链接（`vertexaisearch.cloud.google.com/grounding-api-redirect/…`）；
+  - 读网页（`read_url_content`）和 `open_browser_url`：守卫放行，但 agy 1.5.16 的命令行版本身没启用，调用会报 not enabled；
+  - 浏览器子 agent（`invoke_subagent` 的 `browser` 类型）和它要用的 chrome_devtools 工具、`send_message`、`schedule`、`manage_subagents`。浏览器子 agent 经 Chrome 的远程调试操作用户自己正在用的 Chrome，带着用户的登录状态；Chrome 没开远程调试（`chrome://inspect/#remote-debugging`）时连不上；
+  - 参数按名字检查（任意层级）：名字里带 `path` 或 `file` 的拒绝（截图存盘、上传文件这类），名字里带 `url` 或 `uri` 的必须是 http/https 网址（`file:///` 这类地址能借浏览器读本机文件）。这样项目文件仍然只读、执行的写入范围不变；但浏览器本身守卫管不住：它下载的文件会落到 Chrome 的下载目录，它能读用户已经打开的标签页（包括本机文件），也能带着用户的登录操作网站、本机服务和内网系统；
+  - 名字可能来自用户自己配的 MCP 服务器的工具一律拒绝：agy 预载工具的名字是 `mcp_<服务器>_<工具>`，`~/.gemini/config/mcp_config.json` 里有服务器名和它撞上（比如名叫 `chrome-devtools`）时，浏览器的这类工具不放行；这个文件读不了时也不放行；
+  - 别的子 agent 类型、用户自己配的 MCP 服务器和 `ask_question` 照旧拒绝；
+- 执行时按 `run_access` 放行，和 pi 的两档相同，不用沙箱（各平台一样，Windows 也支持）：`edit` 再放行写文件，只能写项目目录里的文件（`--add-dir` 给的目录只能读，在项目里面的也一样），不能运行命令，任务说明末尾附上 `git ls-files` 的清单；`shell` 再放行运行命令，**没有系统沙箱**，命令能碰到整台机器、也能联网，只靠任务说明约束。两档都不许写项目里的 `.git`、`.claude`、`.gemini`、`.agents`、`.agent`、`_agents`、`_agent` 目录（不分大小写，写法本身和真实路径都查；这些目录是链接、`.git` 是写着 `gitdir:` 的文件时，指向的目录也不许写）：写这些目录等于改 git、Claude Code 或 agy 的配置和钩子。agy 的设置目录、foreman 的状态目录和运行记录也不许写，哪怕它们在项目里。写入路径带 `.` 或 `..` 段、Windows 上有段名以点或空格结尾时，拿不准实际写到哪里，一律拒绝；指向项目外网络共享的路径在访问之前就拒绝。项目目录包含主目录下的 `.gemini` 或 `.claude`（比如项目目录就是主目录），或者本身就在 agy 的设置、foreman 的状态目录或运行记录里面时，不派执行任务。上网和浏览器工具和讨论时一样放行；
 - 插件升级后，守卫文件和插件里的不一致时，下一次派 agy 或运行 `check` 会自动换成新版（`hooks.json` 不动），不用重装；有别的 agy 任务正在运行时这次不换、也不派（报错写明是哪些任务），等它们结束再派；
 - 启动前去掉密钥类环境变量（只留 agy 自己登录可能用到的 `GEMINI_API_KEY`）；运行期间在 foreman 状态目录写启动标记，同一目录里没有带策略的 agy 会被守卫拒绝工具调用；守卫的每次决定记在 `run_dir` 的 `agy-guard.jsonl`，用了工具却没有决定记录的一轮判失败；
 - 用户自己的 GEMINI.md、skill 照常加载，全局 MCP 服务器会启动但工具被拒绝；会话出现在 agy 的历史里。
@@ -163,6 +172,7 @@
 | 原生审查（`native_review`） | 有 | 没有 | 没有 | 没有 | 没有 |
 | 出图（`images`） | 能 | 不能 | 不能 | 不能 | 不能 |
 | 看图（`reads_images`），决定能不能做 `visual` 审查 | 能（view_image） | 先记为不能（还没验证） | 先记为不能（还没验证） | 先记为不能（还没验证） | 不能 |
+| 上网（讨论和执行时；审查都不能；不在 `capabilities` 里） | 能，用 Codex 自己的网页搜索 | 能读网页（`webfetch`）；在 opencode 里配了网页搜索服务才能搜 | 不能 | 能搜网页；浏览器子 agent 要 Chrome 开远程调试 | 不能 |
 | 讨论和审查的只读保障（结果的 `readonly`） | `sandbox`（配了 `read-only` 沙箱）或 `audited` | `tools` | `tools` | `tools` | `tools` |
 
 ## modules

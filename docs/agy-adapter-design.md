@@ -65,7 +65,8 @@
 ## 2. 范围
 - 第一期：`discuss`、`review`（只读），以及 `check`、`models`、守卫的安装和自检、看板显示。
 - 第二期（2026-11-25 实现）：`run` 的 `edit` / `shell` 两档、续接、返工，连同只在写入档才需要的安全措施（3.5、第 4 节的写入规则、异步命令）。安全措施和功能同一批上线、同一批测试。
-- 不做：图像（agy 有 `generate_image`，以后再评估）、子 agent、浏览器、联网搜索。
+- 第二期之后的补充（2026-11-25，和第二期同一个版本）：讨论和执行放开上网和浏览器工具（第 4 节、第 11 节、第 12 节）。
+- 不做：图像（agy 有 `generate_image`，以后再评估）、浏览器以外的子 agent、用户自己配的 MCP 服务器。
 - 平台：Windows、macOS、Linux 都支持，但只读 shell 依赖 agy 的终端沙箱（第 4 节）。只有 Windows 实测过；其他平台在 `check` 通过守卫自检和沙箱探针之前，不派 agy。
 
 ## 3. 守卫架构
@@ -124,6 +125,8 @@
 - 项目根本身包含用户主目录下的 `.gemini` 或 `.claude`（比如项目根就是用户主目录），或者项目根就在 `~/.gemini`、foreman 的状态目录或运行记录根里面时，直接拒绝派出 edit / shell 任务。
 - 守卫的决定记录（`agy-guard.jsonl`）里，`run_command` 一条带上完整的命令行（`command`）：stream-json 会把 `CommandLine` 截到约 512 个字符，验收时以这里为准。
 - shell 档的命令不受这些限制（和 pi 的 shell 档相同），文档里写明。
+- 2026-11-25 的 3 级审查（计划 `20261125-140515-3iin`）确认、这次没改的已知限制：项目里早就有的、指向网络共享的链接，守卫解析时会先访问它；POSIX 上受保护链接或 `gitdir:` 的目标先经过链接再经过 `..` 时，守卫先按字面合并 `..`，和系统的解析顺序不同；区分大小写的文件系统上，根目录的受保护入口写成 `.AGENTS` 这类大小写时不登记链接目标（写入路径的段名照样不分大小写地拦）；`write_file` 一律记成新增（不在写入前探测路径，避免访问未获准的路径），覆盖已有文件时时间线上也显示新增，验收用的改动快照不受影响。
+- 定向复审（计划 `20261125-150736-4kq2`）之后仍然存在、这次没改的：全局 agy 插件自带的 MCP 服务器不在撞名检查里（守卫只读 `~/.gemini/config/mcp_config.json`，插件的配置放在哪里还没核实）；运行中途改 `mcp_config.json`，守卫看的是磁盘上的新配置，agy 已经加载的工具可能还是旧的；全局 `mcp_config.json` 读不了（没有权限、是目录）时，派出前的自检会让整轮失败，这是这批之前就有的行为。
 
 ## 4. 访问档位
 
@@ -137,7 +140,14 @@
 - 执行的两档在各系统上一样（Windows 也支持），都带 `--dangerously-skip-permissions`、不加 `--sandbox`，不跑沙箱探针、不查 `/permissions`：守卫是唯一的闸门，和没有沙箱的读档一样。Windows 沙箱不拦用户目录以外的读取，不影响执行：edit 档不跑命令，shell 档本来就没有沙箱。
 
 - **每个工具的参数白名单**：`read_file` / `view_file` 只认 `Path`、`StartLine`、`EndLine`、`ByteOffset`（`StartLine`、`EndLine` 第 1 期实测补上，`ByteOffset` 在 agy 1.4.9 的真机测试里补上，见第 12 节）；`edit_file` 只认 `Path`、`Target`、`Replacement`；`write_file` 只认 `Path`、`Content`、`Overwrite`；`run_command` 只认 `CommandLine`、`WaitMsBeforeAsync`、`toolSummary`。出现任何其他参数就拒绝，理由写明参数名。agy 自动升级后如果加了新参数，会先被拒绝，再由维护者核对后补进白名单。只读工具（`read_file`、`view_file`、`run_command`）因为不认识的参数被拒时，适配器记成一条说明，不算要用户决定的权限问题：用户没有什么可放行的，agy 一般会去掉参数重试。
-- 所有档位都拒绝：子 agent 三件套、`send_message`、`schedule`、`search_web`、`ask_question`（无头模式答不了，理由里提示把问题写进报告）、`browser_*`、`call_mcp_tool`、`generate_image`、`notebook_*`。不认识的工具也拒绝。`manage_task` 和 agy 1.5 起的 `update_steps` 只是任务清单，各档放行。
+- **上网和浏览器**（第二期之后的补充）：策略带 `web: true` 时放行。只有讨论（`read`）和执行的两档带这个标记；审查（不带 `web` 的 `read`）、报告修复（`none`）、探针（`probe`）和 `check` 都不带。
+  - 搜网页：`search_web`，参数只认 `query`、`domain`、`toolSummary`。
+  - 读网页：直接调用的 `read_url_content`，参数只认 `Url`、`toolSummary`；经 `call_mcp_tool` 调内置 `web` 服务的 `read_url_content`、`open_browser_url`，`Arguments` 只认 `url`、`Url`。
+  - 浏览器：浏览器子 agent（`invoke_subagent` 只认 `TypeName` 为 `browser`），连同它要用的 `send_message`、`schedule`、`manage_subagents`；内置 chrome_devtools 服务的工具，即 `mcp_chrome_devtools_*`，以及指向 `chrome_devtools` 的 `call_mcp_tool`、`list_resources`、`read_resource`；`browser_*` 一类的浏览器工具和 `open_browser_url`。
+  - 这些调用的参数里（任意层级）有名字含 `path` 或 `file` 的键，或者名字含 `url`、`uri` 的键不是 http(s) 网址，一律拒绝：chrome_devtools 的截图存盘、上传文件这类参数能绕开守卫读写项目外的文件，`file:///` 网址能借浏览器读本机文件。
+  - 名字可能来自用户自己配的 MCP 服务器的一律拒绝：预载工具的名字是 `mcp_<服务器>_<工具>`，守卫读 `~/.gemini/config/mcp_config.json`，服务器名和工具名都规整成小写、非字母数字换成 `_`，工具名落在某个用户服务器的 `mcp_<名字>_` 前缀里、或者通用入口的 `ServerName` 和用户服务器同名时拒绝；这个文件存在却读不了时这几类调用一律拒绝。
+  - 守卫管得住的只有参数。浏览器子 agent 操作的是用户自己的 Chrome：它下载的文件落到 Chrome 的下载目录，它能读用户已经打开的标签页（包括本机文件），也能带着用户的登录操作网站、本机服务和内网系统。这些在参数里看不出来，文档照实写明，用户 2026-11-25 看过审查结论后确认保持放开。
+- 所有档位都拒绝：`define_subagent`、非 `browser` 类型的子 agent、指向其他服务器的 MCP 调用（用户自己配的 MCP 服务器是独立程序，能绕开守卫改文件、跑命令）、`ask_question`（无头模式答不了，理由里提示把问题写进报告）、`generate_image`、`notebook_*`。不认识的工具也拒绝。`manage_task` 和 agy 1.5 起的 `update_steps` 只是任务清单，各档放行。
 - 路径按 agy 自己的规则解析，不照搬 pi 的规则。第 0b 期实测（Windows）：
   - agy 只接受绝对路径和 `file:///` 地址；
   - `@r.txt`、`~/…`、相对路径、`..\…` 都报 "must be an absolute path"；
@@ -338,6 +348,9 @@ stream-json 输入下，模型名无效时退出码是 1（不是 3），`result
 3. **agy 自带的联网工具一律不放行**：`search_web`、`read_url`、`browser_*` 在所有档位都拒绝；shell 档的命令没有沙箱，本来就能联网，这一条管不到。
 4. **守卫自动更新**：插件升级后守卫文件对不上时，派出和 `check` 前自动换成新版（`hooks.json` 不动），不用用户重装；这就是 3.4 自检里现有的重写行为，只把提示改成说明插件升级过。
 
+
+同一天第二期提交以后，用户改了上面的第 3 条：讨论和执行放开 agy 的上网和浏览器工具，理由是用这些工具的人本来就接受了它们的条款；审查、报告修复和探针不放开，pi 和 API 模型不动。浏览器子 agent 实测操作的是用户自己的 Chrome（经远程调试），告诉用户以后，用户选了"浏览器整条链放开"：带本机文件路径或非 http(s) 网址的参数照样拒绝，讨论仍然只读、执行的写入范围不变，别的子 agent 类型、用户自己配的 MCP 服务器和 `ask_question` 照旧拒绝。
+
 ## 12. 第 1 期实现时的实测补充（2026-10-28，Windows 11，agy 1.4.8）
 在真实 agy 上冒烟时发现、前面各节没写到的事实，代码已按这些实现：
 - **事件是嵌套的**：每行是 `{"event":"<名字>","<名字>":{…}}`，比如 `{"event":"step_update","step_update":{…}}`、`{"event":"result","result":{…}}`；`init` 另外在顶层带 `conversation_id`。适配器读行时先归一成平铺对象。
@@ -374,3 +387,12 @@ stream-json 输入下，模型名无效时退出码是 1（不是 3），`result
 - **任务清单工具**：agy 1.5.16 用的是 `update_steps`（参数 `steps`），不是第 1 期见过的 `manage_task`。原来被当作不认识的工具拒绝，每次都多出一条要决定的问题，现在两个都各档放行。
 - **完整命令行**：决定记录里的 `command` 写下了每条命令的原文。
 - **守卫自动更新**：开发版和已装的守卫不一致时，派出前在锁里换成新版，结果的 `notes` 里有一句提示；测完把 `~/.gemini/config` 恢复成测试前的样子，sha256 核对一致。
+
+### 2026-11-25 上网和浏览器的实测（Windows 11，agy 1.5.16，gemini-3.8-flash high）
+摸底用的是插件的临时副本：守卫打了放行这些工具、记下钩子参数的补丁，测完用已安装插件的 `agy-guard install` 换回了正式版。
+- **钩子输入**：顶层多了 `cwd`、`hookEventName` 两个键。
+- **搜网页**：钩子收到 `search_web {"query":"…"}`，在 agy 的服务端搜；结果里的来源是 `vertexaisearch.cloud.google.com/grounding-api-redirect/…` 跳转链接，不是原网页的地址。
+- **读网页**：模型的工具里没有直接的 `read_url_content` 和 `open_browser_url`（init 事件的工具清单里有，但模型看不到）。它会改用 `call_mcp_tool {"ServerName":"web","ToolName":"read_url_content","Arguments":{"url":"…"}}`；守卫放行后 agy 自己报 "tool read_url_content is not enabled for server web"，`open_browser_url` 也一样。
+- **浏览器子 agent**：类型名是 `browser`，`invoke_subagent {"Prompt":"…","Role":"…","TypeName":"browser"}`；写成 `browser_subagent` 时报 "not found or not allowed to be invoked"。子 agent 的动作经过同一个钩子、带同一份策略：`mcp_chrome_devtools_list_pages`、`mcp_chrome_devtools_new_page`、`mcp_chrome_devtools_navigate_page`，以及指向 `chrome_devtools` 的 `call_mcp_tool`、`list_resources`；它用 `send_message {"Message":"…"}` 把结果报回主 agent，主 agent 等它时用 `schedule`、`manage_subagents`。
+- **操作的是用户自己的 Chrome**：内置的 Chrome DevTools MCP 读 `%LOCALAPPDATA%\Google\Chrome\User Data\DevToolsActivePort` 接上正在运行的 Chrome；本机没开远程调试，报 "Could not find DevToolsActivePort"，连不上。
+- **模型会去调别的 MCP 服务器**：全局 `mcp_config.json` 里配的服务器它也看得到（本机有一个），会用 `call_mcp_tool`、`list_resources` 去调；守卫只放行内置的 chrome_devtools 和 web 两个服务。

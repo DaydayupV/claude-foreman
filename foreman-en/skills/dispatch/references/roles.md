@@ -45,9 +45,10 @@ Keep a role card under 10 lines, in this format:
 
 ## What each kind of participant can do in a discussion
 - **The Claude Code seat**: reads code and runs read-only commands, and also sees the whole conversation and the user's preferences. Look up its tier with `tiers --model <the model ID from the system prompt>` (rules in `references/model-tiers.md`).
-- **Codex**: reads code and runs read-only commands.
-- **opencode and pi agents**: only read, search and list files inside the project directory; can't run commands.
-- **agy agents**: read files inside the project directory; when agy's sandbox works on this machine (not on Windows for now) they can also run read-only commands, otherwise they only get a file list (see the result's `notes`).
+- **Codex**: reads code and runs read-only commands, and can search and read web pages.
+- **opencode agents**: read, search and list files inside the project directory, and can read web pages (and search the web when a web search provider is set up in opencode); can't run commands.
+- **pi agents**: only read, search and list files inside the project directory; can't run commands or go online.
+- **agy agents**: read files inside the project directory and can search the web with `search_web`; when agy's sandbox works on this machine (not on Windows for now) they can also run read-only commands, otherwise they only get a file list (see the result's `notes`).
 - **API agents**: see only the brief and the files attached with `--file`.
 
 ## Assigning roles

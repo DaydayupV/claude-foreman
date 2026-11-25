@@ -28,7 +28,7 @@
 
 | 要求 | 文件 | 测试名 |
 |---|---|---|
-| Agy CLI 第 1、2 期 | agy.test.mjs | agy 守卫逐档逐工具校验放行范围，拒绝未知工具和未知参数；执行 edit、shell 两档只写项目、附加目录只读，按写法和真实路径拦截受保护目录（含链接目标和 gitdir），拒绝带 . 或 .. 段、Windows 段名末尾带点或空格的写入路径，项目外网络共享路径不碰文件系统就拒绝，agy 的设置、foreman 的状态目录和运行记录在项目里也不能写；shell 档延长命令的同步等待、决定记录写下完整命令行；执行不跑探针、不查 /permissions，改动按真实路径归属 agent，返工沿用会话和档位，项目根不安全时拒绝派出；任务清单 update_steps 各档放行；agy 自检静态扫描四种目录、祖先、add-dir、插件和大小写，拒绝前不启动 agy；agy check 六步、models 两列、清理密钥环境以及模型身份和价格；项目配置可以调低、调高或改用 agy 默认档位；agy 默认并发准入、排队、status 和看板 channel 共用接线；agy 原文形状的嵌套事件归一后保留时间线、步骤用量和最终回复；agy /hooks 只核对 command.data 的来源和唯一动作，response 不参与判断；agy 查询遇到账号 EOF 等两秒仅重试一次，每次仍有策略并清理标记；agy check 只接受令牌及 read_file allow，额度只读各桶数值 |
+| Agy CLI 第 1、2 期 | agy.test.mjs | agy 守卫逐档逐工具校验放行范围，拒绝未知工具和未知参数；讨论和执行（策略带 web）放行上网工具和浏览器子 agent 整条链，审查、报告修复、探针和 check 不带 web，上网和浏览器参数带本机路径或非 http(s) 网址时拒绝，web 不是布尔值时策略无效，工具名或服务名和 mcp_config.json 里的用户服务器撞上、或者这个文件读不了时拒绝，.git 链接到 gitfile 时按项目根解析 gitdir 并保护 gitfile 本身，没被拒绝的网页步骤才记成 web_search 事件，结构化错误没有原因时也按输出判断命令有没有启动；执行 edit、shell 两档只写项目、附加目录只读，按写法和真实路径拦截受保护目录（含链接目标和 gitdir），拒绝带 . 或 .. 段、Windows 段名末尾带点或空格的写入路径，项目外网络共享路径不碰文件系统就拒绝，agy 的设置、foreman 的状态目录和运行记录在项目里也不能写；shell 档延长命令的同步等待、决定记录写下完整命令行；执行不跑探针、不查 /permissions，改动按真实路径归属 agent，返工沿用会话和档位，项目根不安全时拒绝派出；任务清单 update_steps 各档放行；agy 自检静态扫描四种目录、祖先、add-dir、插件和大小写，拒绝前不启动 agy；agy check 六步、models 两列、清理密钥环境以及模型身份和价格；项目配置可以调低、调高或改用 agy 默认档位；agy 默认并发准入、排队、status 和看板 channel 共用接线；agy 原文形状的嵌套事件归一后保留时间线、步骤用量和最终回复；agy /hooks 只核对 command.data 的来源和唯一动作，response 不参与判断；agy 查询遇到账号 EOF 等两秒仅重试一次，每次仍有策略并清理标记；agy check 只接受令牌及 read_file allow，额度只读各桶数值 |
 | 1 初始配置和提示 | config.test.mjs | 没有用户配置时生成初始配置并提示首次使用；英文覆盖变量使用英文首次提示 |
 | 1 旧结构和备份 | config.test.mjs | 零点十以前的配置自动改写并保留原文备份 |
 | 1 校验错误 | config.test.mjs | 未知协作方类型被拒绝；执行等级不能使用 API 协作方；opencode 模型必须带厂商斜杠；讨论等级不能为空；同一讨论等级不能重复参与方 |
@@ -59,7 +59,7 @@
 | 5 原生审查 | resume-review.test.mjs | 没有审查重点时使用原生 exec review --uncommitted；没有审查重点时使用原生 exec review --base；没有审查重点时使用原生 exec review --commit |
 | 5 带重点审查 | resume-review.test.mjs | 有审查重点时普通 exec 提示词包含 uncommitted 范围；有审查重点时普通 exec 提示词包含 base 范围；有审查重点时普通 exec 提示词包含 commit 范围 |
 | 5 非 Git 审查 | resume-review.test.mjs | 非 Git 目录审查要求说明并使用普通 exec |
-| 6 Codex 讨论 | discuss.test.mjs | Codex 讨论解析报告并传递只读规则和附件范围 |
+| 6 Codex 讨论 | discuss.test.mjs | Codex 讨论解析报告并传递只读规则和附件范围；用户的 config.toml 没写 web_search 时讨论、续接和执行加 live，写了任何值都照用户的（写成 disabled 时提示词不提上网），审查不加 |
 | 6 API 材料、清单、正常 SSE | discuss.test.mjs | API 讨论发送附件行范围和项目清单，保存流式事件与用量 |
 | 6 API 材料上限 | discuss.test.mjs | API 附件超过材料上限时拒绝请求 |
 | 6 API 格式参数重试 | discuss.test.mjs | API 拒绝 response_format 后去掉该字段重试 |
@@ -68,8 +68,8 @@
 | 6 API 排队 | discuss.test.mjs | API 保活注释产生排队事件，放行后继续回答 |
 | 6 API 取消 | discuss.test.mjs | API 取消正在排队的请求并保存取消结果 |
 | 6 API 回答中断 | discuss.test.mjs | API 回答中途断开后重试一次且不拼接残缺回答 |
-| 6 opencode 权限、PWD、事件、用量 | discuss.test.mjs | opencode 注入只读代理、设置 PWD 并翻译工具事件和导出用量（包含最后一步无 step_finish、旧消息排除和 cost_usd） |
-| 6 opencode 修复会话 | discuss.test.mjs | opencode 修复报告时续接同一会话且仍使用只读权限 |
+| 6 opencode 权限、PWD、事件、用量 | discuss.test.mjs | opencode 注入只读代理（讨论放行 webfetch，按 opencode debug config 和用户的 OPENCODE_CONFIG_CONTENT 里最后生效的设置判断配了搜索服务才放行 websearch（环境变量解析不了时不放行），没配时被拒的 websearch 记成说明，网页步骤记成 web_search 事件）、设置 PWD 并翻译工具事件和导出用量（包含最后一步无 step_finish、旧消息排除和 cost_usd） |
+| 6 opencode 修复会话 | discuss.test.mjs | opencode 修复报告时续接同一会话且仍使用只读权限，修复那一轮不放行网页工具 |
 | 6 opencode 导出失败 | discuss.test.mjs | opencode 会话导出失败时保留报告并提示缺少用量 |
 | 6 同组并发及 await-busy | discuss.test.mjs | 同组多方并发，await-busy 列出超过阈值的 API 参与方 |
 | 7 status 列表与汇总 | status-watch.test.mjs | status 列表按记录排序并汇总当前会话的组 |
@@ -92,11 +92,11 @@
 | 13 通用化 | generalization.test.mjs | 多个 Codex、没有 Codex、能力表校验；代号规则；三种任务的 "claude code" 和点名派出；--effort 只覆盖强度且 --level 必填；check 的新结构和总体结果；项目整格替换候选、必选、模型和强度，可以打开格子并延长时长；缺失 gap 时补写 complex 开启；按环境生成 modules（不再生成 max_seats、显式关闭三级补漏）和有 Codex 时的图像默认值；没有协作方时的会话提醒 |
 | 14 审查范围 | review-scope.test.mjs | 未提交范围含暂存、未暂存和未跟踪文件，指纹稳定且不动索引；删除、改名、二进制、非 UTF-8、过大文件；没有提交的仓库；base 从分叉点到工作区、含未提交改动、不含未跟踪文件，分支不存在或没有共同祖先时报错；根提交和合并提交（只比第一个父提交） |
 | 15 通用审查 | review.test.mjs | opencode 审查注入只读的 foreman-review，材料和正文落盘（中英文各一）；材料超限拒绝且不启动，Codex 没有这个限制；非 git 目录要求 brief；空范围不启动任何审查方；审查期间改动变化时警告并标 stale；opencode 审查只收集权限拒绝和终端提示，正文按审查 schema 修复一次 |
-| 16 opencode 执行 | opencode-run.test.mjs | run_access 校验和用户授权（项目 agents 被忽略，引用未授权执行候选时项目配置校验失败）；edit 和 shell 两档注入的权限、改动归属（工具事件为 agent、自报为 reported、其余 unknown）、报告和用量、watch；报告只修复一次且修复阶段没有工具；禁止 --no-snapshot、快照失败不启动；shell 档不判卡死、edit 档按 stall_min；续接同一会话、run_access 变化提示；同组范围重叠；超时、额度和输入看门狗 |
+| 16 opencode 执行 | opencode-run.test.mjs | run_access 校验和用户授权（项目 agents 被忽略，引用未授权执行候选时项目配置校验失败）；edit 和 shell 两档注入的权限（两档都放行 webfetch，配了搜索服务才放行 websearch，执行提示要求网上查来的说法附链接）、改动归属（工具事件为 agent、自报为 reported、其余 unknown）、报告和用量、watch；报告只修复一次且修复阶段没有工具；禁止 --no-snapshot、快照失败不启动；shell 档不判卡死、edit 档按 stall_min；续接同一会话、run_access 变化提示；同组范围重叠；超时、额度和输入看门狗 |
 | 17 拦截 opencode run | hooks.test.mjs | 拦下各种写法的 opencode run（含 npx），放行版本、模型、会话、认证、调试、服务、帮助和文字提及 |
 | 18 模型清单和总表 | catalog.test.mjs | models 列出 Codex、opencode 和 API 的清单并核对配置里的模型，读不到清单时如实报告；check 按 Codex 清单核对推理强度、不发执行请求，模型不在清单里或读不到清单时只提示；opencode 清单外的档位不发请求、修正提示列出支持的档位；模型提供方前缀和 modules 里的代号写错时提示最接近的写法；config 和 check 输出总表，含 required、统一的 modules.*[i] 位置、没用到的协作方、明文 key、shell 权限和失效的旧代号，档位不支持的格子写明原因 |
 | 19 实测补漏 | generalization.test.mjs、review.test.mjs、run.test.mjs、status-watch.test.mjs | 续接到 "claude code" 的等级时不沿用上一轮的协作方；opencode 审查和 check 总是带标题、被厂商限流时提示稍后再试、出错的回复没有 tokens 时照常统计用量；来源不明的改动落在同组其他任务的范围里时标出 group_run；组汇总把已续接的任务记作已续接 |
-| 20 pi 协作方 | pi.test.mjs、generalization.test.mjs | 配置校验（模型写法、run_access、推理强度、执行授权按能力判断）；讨论的隔离参数、只读工具、守卫策略、事件翻译、用量和费用、续接同一会话；审查的补丁材料和不能续接；edit / shell 两档执行的工具、守卫策略、改动归属、被挡的操作、命令计数和 watch；报告修复同会话不开工具；出错、限流、截断、自动重试和推理强度被改；check 按清单核对推理强度并写明会换成哪一档；models 按 pi 的规则算推理强度；守卫扩展按档位放行工具、路径按 pi 的规则解析（@、~、file://、/c/…）并按真实路径判断（符号链接、junction）；拦截钩子按 pi 的参数语义判断；环境检测带隔离参数；check 按覆盖的模型核对；自动压缩的用量；会话头之后才失败时保留 stderr；流式输出期间定期写进度，status 显示思考或回答了多少字 |
+| 20 pi 协作方 | pi.test.mjs、generalization.test.mjs | 讨论和执行的提示词不提上网，和改动前逐字相同；配置校验（模型写法、run_access、推理强度、执行授权按能力判断）；讨论的隔离参数、只读工具、守卫策略、事件翻译、用量和费用、续接同一会话；审查的补丁材料和不能续接；edit / shell 两档执行的工具、守卫策略、改动归属、被挡的操作、命令计数和 watch；报告修复同会话不开工具；出错、限流、截断、自动重试和推理强度被改；check 按清单核对推理强度并写明会换成哪一档；models 按 pi 的规则算推理强度；守卫扩展按档位放行工具、路径按 pi 的规则解析（@、~、file://、/c/…）并按真实路径判断（符号链接、junction）；拦截钩子按 pi 的参数语义判断；环境检测带隔离参数；check 按覆盖的模型核对；自动压缩的用量；会话头之后才失败时保留 stderr；流式输出期间定期写进度，status 显示思考或回答了多少字 |
 | 21 Codex 沙箱 | check.test.mjs、run.test.mjs | check 按各类任务实际用的沙箱模式用 codex sandbox 探测（不调模型），坏了判不通过并给出修法，Windows 上顺带试 unelevated，danger-full-access 不探测；运行时命令因为沙箱失败时 notes 里说明，成功的命令不误判 |
 | 22 watch 启动动画 | intro.test.mjs | 按模型名的关键字认头像（先看最后一段、取最先出现的、没有模型名时 Codex 用 ChatGPT、认不出用 ???）；头像数据的尺寸和调色板下标；按终端大小选大头像加 Claude、只画目标、中头像、轮流登场或文字徽章；每帧不超出终端、窄窗口的徽章和文字折行、名单太长时只写人数；macOS 自带终端没声明支持 24 位色时改用 256 色；中英文笑话齐全、占位符都换掉；任务提前结束马上收尾、接着用备用屏幕时不退出；dispatch.intro 默认开且只接受布尔值 |
 | 23 出图素材 | assets.test.mjs | template 写出模板和按比例的格子坐标；cut 抠品红底、按名单命名、写出部件、manifest 和对照拼图；透明图清理光晕，soft 保留柔边；按格子命名并合并同格碎片；贴边和格外部件判失败、check 退出码为 1；diff 逐格比较；--vector 用自带描图转 SVG（透明的洞留空、轮廓和颜色对得上原图），自带描图的直边是直线、圆是曲线、对称水滴不被压没，两色之间的过渡带并掉、比两侧都深的细线保留、透明里的孤立小点去掉，只出现在细线上的颜色不丢、1 像素宽的线不被压没、相邻两个小块不互换颜色、大量小洞时不慢；参数错误；结果的 image_calls 和没传参考图的提示；名单重名和只差大小写；一个部件都没有时判失败；diff 发现被删掉的部件；出图参数按代码结构解析（字符串里的参数名、显式 null、带引号的键、变量传参、没执行的调用）；任务说明只提到参数名时不误报没传参考图；格子合并后按格子号命名；align 找回部件的缩放和偏移、写出对齐图和对照图、按区域算色差、区域写错时报错，不把部件缩小塞进同色区域、细线也能对齐、缩放上下限是硬约束；patch 只取成片的改动（去掉轮廓位移和外轮廓），--keep 限定区域；trace 分出描边、底色和阴影并写出 SVG，种子不对时报错；layers 从定稿图取出同画布的图层：背景板只写回主体范围并校色，部件按原位置裁出，下层部件穿过自己那段描边往上层下面延长、延长段不露在背景上，矢量部件的位置是整张画布，部件名不合法、重名、叫 static 或 extendUnder 指向不存在的部件时报错，主体占大半张画面时噪声只按背景估计、校色一直铺到主体中心；patch 和 layers 都留下测出的原始对齐；capture 的本地路径可以带 ?参数；capture 和 playback 用假浏览器截图、检查静止区域和首尾衔接、写出 APNG |

@@ -356,7 +356,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 1. **登录**：终端运行 `opencode`，用 `/connect` 登录（OpenCode Go 选 OpenCode Go），再运行 `opencode models` 看能用哪些模型。名字带 `-free` 的免费模型不要配：OpenCode 现在只允许在它自己的界面里用免费模型，从命令行调用会被拒绝（报错 "OpenCode's free tier can only be used from within OpenCode"）。
 2. **加进配置**：每个模型加一项 `{ "type": "opencode cli", "model": "opencode-go/glm-5.3" }`，再加进需要的格子。也可以交给 `/foreman:setup`。
 
-讨论和审查时，插件给它注入一个只读代理，只有读文件、搜索和列目录的工具；审查要看的改动由插件用 git 算好附给它。key 和登录都留在 opencode 里。结果里的费用（`cost_usd`）和其他协作方一样按模型官方 API 价格算；opencode 自己报的费用（OpenCode Go 的额度按它扣）另存在 `reported_cost_usd`。Go 的额度按模型分开算，高档模型额度少，建议只放在复杂讨论里。
+讨论和审查时，插件给它注入一个只读代理，有读文件、搜索和列目录的工具，讨论时还能读网页，你在 opencode 里配了网页搜索服务（`"websearch": {"provider": "random"}`，或者指定一家服务）时还能搜网页；审查要看的改动由插件用 git 算好附给它。key 和登录都留在 opencode 里。结果里的费用（`cost_usd`）和其他协作方一样按模型官方 API 价格算；opencode 自己报的费用（OpenCode Go 的额度按它扣）另存在 `reported_cost_usd`。Go 的额度按模型分开算，高档模型额度少，建议只放在复杂讨论里。
 
 ### 接入 pi
 
@@ -378,6 +378,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 - **守卫对你平时用 agy 的影响**：没有 foreman 运行时，守卫对每次工具调用都回答"按 agy 自己的设置来"，平时用 agy 的体验不变，每次工具调用多约 0.1 秒。foreman 在某个目录里运行 agy 期间，你在同一目录里自己用 agy 会被拦下工具调用，拒绝理由里写明原因和什么时候结束。
 - **哪些情况不派 agy**：项目里（包括 `.agents/` 等目录）有 agy 的钩子、MCP 或插件配置，或者全局 `hooks.json` 里除了 foreman 的条目还有别的钩子时，插件管不住它们，这次不派 agy，结果里写明是哪个文件挡住的。
 - **能读什么、能跑什么**：讨论和审查时只放行读文件，路径限定在项目目录和 `--add-dir` 指定的目录里。agy 的沙箱在本机通过插件的检测时，还能在沙箱里跑只读的命令：检测要求沙箱里的命令改不了项目内外的文件、读不了主目录、上不了网。系统临时目录仍然可写，所以它保证的是项目文件不变、不能联网，不是整台机器只读。Windows 上，agy 的沙箱目前不拦用户目录以外的读取，所以插件在 Windows 上不检测，agy 没有 shell；等 agy 改掉以后会跟着更新。没有 shell 时，插件附上项目的文件清单代替。启动 agy 前，插件会去掉 API key 之类的环境变量（agy 自己登录可能用到的 `GEMINI_API_KEY` 保留，沙箱里的命令也看得到它）。
+- **上网和浏览器**：讨论和执行时，守卫放行 agy 的网页搜索 `search_web`（在 agy 的服务端搜，给出的来源是 Google 的跳转链接）。读网页的 `read_url_content` 和 `open_browser_url` 也放行，但 agy 1.5.16 的命令行版本身没启用它们。浏览器子 agent 也放行：它经 Chrome 的远程调试操作你自己正在用的 Chrome，带着你的登录状态，你在 `chrome://inspect/#remote-debugging` 里开了远程调试才连得上。参数名里带 path、file 的（截图存盘、上传文件），或者参数名里带 url、uri 却不是 http/https 网址的，一律拒绝；名字可能来自你自己配的 MCP 服务器的工具也拒绝。所以项目文件仍然只读、执行的写入范围不变。但浏览器本身守卫管不住：它下载的文件会落到 Chrome 的下载目录，它能读你已经打开的标签页（包括本机文件），也能带着你的登录操作网站、本机服务和内网系统。审查时这些都不放行。
 - 你自己的 GEMINI.md 和 skill 照常加载，全局配置的 MCP 服务器也会启动，但它们的工具会被守卫拒绝。agy 的会话会出现在它的历史里。
 - **卸载**：让 Claude Code 运行 `agy-guard uninstall`，它删掉钩子条目和守卫文件。插件已经卸掉、没法运行这个命令时，手动打开 `~/.gemini/config/hooks.json` 删掉名为 `foreman-guard` 的条目（只剩它时可以删掉整个文件），再删掉同目录下的 `foreman-agy-guard.mjs`、`foreman-agy-guard.cmd` 和 `foreman-agy-guard.sh`。只删文件不删条目的话，agy 的每次工具调用都会被拦下。
 
@@ -390,7 +391,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 
 两档都会先拍改动快照，Claude Code 事后逐个文件审查 diff。
 
-agy 的两档由守卫逐个工具调用执行，各系统一样，Windows 也支持：写文件只能写在项目目录里（`--add-dir` 给的目录只能读，在项目里面的也一样），而且不能写项目里的 `.git`、`.claude`、`.gemini`、`.agents`、`.agent`、`_agents`、`_agent` 目录，写进去等于改 git、Claude Code 或 agy 的配置和钩子；agy 的设置、foreman 的状态目录和运行记录也不能写。写入路径带 `.` 或 `..` 段、Windows 上有段名以点或空格结尾的，一律拒绝；指向项目外网络共享的路径也拒绝。agy 自带的联网工具（搜索、读网页、浏览器）一律不放行。`shell` 档的命令不受这些限制。项目目录包含主目录下的 `.gemini` 或 `.claude`，或者本身就在 agy 的设置、foreman 的状态目录或运行记录里面时，不给 agy 派执行任务。
+agy 的两档由守卫逐个工具调用执行，各系统一样，Windows 也支持：写文件只能写在项目目录里（`--add-dir` 给的目录只能读，在项目里面的也一样），而且不能写项目里的 `.git`、`.claude`、`.gemini`、`.agents`、`.agent`、`_agents`、`_agent` 目录，写进去等于改 git、Claude Code 或 agy 的配置和钩子；agy 的设置、foreman 的状态目录和运行记录也不能写。写入路径带 `.` 或 `..` 段、Windows 上有段名以点或空格结尾的，一律拒绝；指向项目外网络共享的路径也拒绝。agy 的上网和浏览器工具和讨论时一样放行（见上面的“上网和浏览器”）。`shell` 档的命令不受这些限制。项目目录包含主目录下的 `.gemini` 或 `.claude`，或者本身就在 agy 的设置、foreman 的状态目录或运行记录里面时，不给 agy 派执行任务。
 
 ### 完整示例
 
@@ -572,6 +573,7 @@ agy 的两档由守卫逐个工具调用执行，各系统一样，Windows 也�
   - 沙箱以 Codex 的配置为准。是 `danger-full-access` 时，Codex 能读写电脑上的任何目录；任务说明会限定改动范围、Claude Code 事后也会审查 diff，但这些都不是技术上的隔离。想要隔离，把 `agents.<代号>.sandbox` 设成 `workspace-write` 或 `read-only`。讨论和审查推荐设 `read-only`：写入被系统拦下（结果的 `readonly` 为 `sandbox`）；没设时只靠规则约束和事后对比快照（`audited`），发现写入就记为失败。Windows 上的只读沙箱可能连读文件的命令都启动不了，这时按 `check` 的提示改用 `[windows] sandbox = "unelevated"`。
   - Windows 上 Codex 默认的 elevated 沙箱要先以管理员身份完成一次设置，设置坏了每条命令都会失败（报 `windows sandbox failed`）。改了沙箱之后让 Claude Code 运行一次 `check`：它不调模型地测一遍沙箱，坏了会列出修法，比如改用 `[windows] sandbox = "unelevated"`。
   - 审批 `approval` 保持默认的 `never` 就好：派出去的任务没人能批准，沙箱坏了要修沙箱。
+- **讨论和执行时协作方能上网。** Codex、opencode 和 agy 讨论和执行时能上网查资料，审查时不能；pi 和 API 模型不能。Codex 按你的 `~/.codex/config.toml`：没写 `web_search` 时插件让它实时搜索，写了就照你的。agy 的浏览器子 agent 操作的是你自己的 Chrome（要你开了远程调试），带着你的登录状态。
 - **opencode、pi 和 agy 做执行时没有系统沙箱。** `edit` 档写不了项目以外的文件、不能运行命令；`shell` 档的命令能访问整台机器。默认不开放，要你自己在用户配置里写，项目配置开不了。
 - **代码会发给协作方背后的厂商。** 派给 Codex 的发给 OpenAI；opencode、pi 和 API 模型发给对应的厂商，agy 发给 Google，API 模型还会收到 Claude Code 附上的文件。涉及敏感代码的项目先确认没问题，必要时在项目配置里去掉 API 候选，或者把讨论、审查整格写成 `"claude code"`。
 - **项目配置和项目偏好能覆盖你的设置。** 项目里的 `.claude/foreman.json` 能加候选（只能用你在用户配置里定义的协作方）、调高席位、延长时长，`.claude/foreman.md` 能改场景路由；从别人那里克隆来的仓库也一样。打开陌生仓库时先看看这两个文件，`config --cwd` 的 `project_config` 会列出它覆盖了什么。
