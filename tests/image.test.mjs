@@ -70,17 +70,17 @@ test('auto 未写 --route-auto 仍检查弹窗，拒绝时追加提示，匹配�
   assert.equal(Object.hasOwn(p, 'route_decision'), false);
 });
 
-test('自动路线计划启动回查用户开关，改回 ask 后拒绝，恢复 auto 可启动且续接不回查', async (t) => {
-  const h = sandbox(t), c = configure(h); c.dispatch.confirm = { image: 'auto' }; h.config(c);
+test('简写 auto 可建立自动路线计划并启动，改回 ask 拒绝启动，续接不回查', async (t) => {
+  const h = sandbox(t), c = configure(h); c.dispatch.auto = false; c.dispatch.confirm = 'auto'; h.config(c);
   const p = output(await h.bridge([...planArgs(h), '--route-auto', '用户指定混合路线']));
-  c.dispatch.confirm.image = 'ask'; h.config(c);
+  c.dispatch.confirm = 'ask'; h.config(c);
   failed(await h.bridge(launch(p, ['--scope', 'out'])), M.imageRouteAutoOff(p.plan_id));
   assert.equal(h.records().length, 0); assert.equal(h.calls().length, 0);
-  c.dispatch.confirm.image = 'auto'; h.config(c);
+  c.dispatch.confirm = 'auto'; h.config(c);
   const s = h.scenario({ images: ['auto.png'] });
   const first = output(await h.bridge(launch(p, ['--scope', 'out']), { env: s.env }));
   assert.equal(first.status, 'done'); assert.equal(first.plan, p.plan_id);
-  c.dispatch.confirm.image = 'ask'; h.config(c);
+  c.dispatch.confirm = 'ask'; h.config(c);
   const resumed = output(await h.bridge(['resume', '--run', first.run_id, '--brief', '-', '--reason', 'rework'], { env: s.env }));
   assert.equal(resumed.status, 'done'); assert.equal(resumed.parent, first.run_id);
 });

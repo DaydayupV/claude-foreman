@@ -13,6 +13,19 @@ fs.readFileSync = (file, ...args) => file === ${JSON.stringify(path.join(ROOT, '
   ? ${JSON.stringify(JSON.stringify({ language }))} : read(file, ...args);
 await import(${JSON.stringify(pathToFileURL(path.join(ROOT, 'foreman/hooks/session-reminder.mjs')).href)});`), [], { input: JSON.stringify({ cwd: h.cwd }) }).done;
 
+const startText = {
+  zh: {
+    auto: '主动发起的派活、讨论和审查直接做（用户配置里开始前不用确认），派出后在回复正文里告诉用户一句。',
+    ask: '主动发起派活、讨论或审查之前，先问用户要不要做（用户配置里开始前要确认）；用户自己点名的照做。',
+    mixed: (list) => `主动发起派活、讨论或审查之前，按用户配置的开始前确认（dispatch.confirm）：${list}要先问用户；其余直接做，派出后在回复正文里告诉用户一句；用户自己点名的照做。`,
+  },
+  en: {
+    auto: 'Start handoffs, discussions and reviews on your own directly (the user config asks for no confirmation before starting), and once started, say so to the user in one sentence of reply text.',
+    ask: 'Before starting a handoff, discussion or review on your own, ask the user whether to go ahead (the user config asks for confirmation before starting); do what the user names directly.',
+    mixed: (list) => `Before starting a handoff, discussion or review on your own, ask the user first where the user config's confirmation before starting (dispatch.confirm) says so: ${list}; start the rest directly and say so in one sentence of reply text; do what the user names directly.`,
+  },
+};
+
 test('会话提醒首次使用并且不创建配置或迁移目录', async (t) => {
   const h = sandbox(t, { config: false });
   const r = output(await h.hook('session-reminder.mjs')).hookSpecificOutput;
@@ -31,7 +44,7 @@ for (const legacy of [false, true]) {
     const user = write(path.join(h.home, legacy ? '.claude/codex-bridge.md' : '.claude/foreman/preferences.md'), '合成用户偏好');
     const project = h.write(legacy ? '.claude/codex-bridge.md' : '.claude/foreman.md', '合成项目偏好');
     const context = output(await h.hook('session-reminder.mjs')).hookSpecificOutput.additionalContext;
-    assert.ok(context.includes('dispatch.auto 已关闭'));
+    assert.ok(context.includes(startText.zh.ask));
     for (const [file, text, source] of [[user, '合成用户偏好', '用户'], [project, '合成项目偏好', '项目']]) {
       assert.ok(context.includes(`${source}偏好文件 ${file}`));
       assert.ok(context.includes(text));
@@ -80,6 +93,22 @@ for (const lang of ['zh', 'en']) test(`会话在两份偏好之后注入并截�
   assert.equal(await context(), `${baseline}\n\n${title}\n${long}\n${truncated}`);
 });
 
+for (const lang of ['zh', 'en']) test(`会话提醒按开始前确认配置选择问法并按模块顺序列等级 (${lang})`, async (t) => {
+  const h = sandbox(t), c = h.config(), text = startText[lang];
+  const list = lang === 'zh' ? '讨论每次、执行 1 级及以上、审查 2 级及以上'
+    : 'discussions every time, handoffs at level 1 and up, reviews at level 2 and up';
+  const partial = lang === 'zh' ? '执行 3 级、审查每次' : 'handoffs at level 3, reviews every time';
+  for (const [auto, confirm, expected] of [
+    [true, 'ask', text.ask],
+    [true, { review: { start: 'normal' }, run: { start: 'simple' }, discuss: { start: 'ask' } }, text.mixed(list)],
+    [false, { discuss: { start: 'auto' }, run: { start: 'complex' } }, text.mixed(partial)],
+  ]) {
+    c.dispatch.auto = auto; c.dispatch.confirm = confirm; h.config(c);
+    const context = output(await reminder(h, lang)).hookSpecificOutput.additionalContext;
+    assert.ok(context.split('\n').includes(expected), context);
+  }
+});
+
 for (const lang of ['zh', 'en']) test(`图像会话提醒只认用户的 auto，项目配置和偏好不能开启 (${lang})`, async (t) => {
   const h = sandbox(t), context = async () => output(await reminder(h, lang)).hookSpecificOutput.additionalContext;
   const ask = lang === 'zh'
@@ -99,16 +128,22 @@ for (const lang of ['zh', 'en']) test(`图像会话提醒只认用户的 auto，
   c.dispatch.confirm.image = 'auto'; h.config(c);
   const automatic = (await context()).split('\n\n')[0];
   assert.ok(automatic.includes(auto));
+  assert.ok(automatic.includes(startText[lang].auto));
   assert.equal(automatic.includes(lang === 'zh' ? 'dispatch.auto 开着也要弹' : 'even with dispatch.auto on'), false);
   assert.equal(automatic.replace(auto, ask), baseline);
+  c.dispatch.auto = false; c.dispatch.confirm = 'auto'; h.config(c);
+  assert.equal((await context()).split('\n\n')[0], automatic);
 });
 
-test('confirm 的角色值非法或有未知键时，沿用完整 ask 会话提醒', async (t) => {
+test('confirm 有非法值或未知键时，图像照常询问，start 按 dispatch.auto 补齐', async (t) => {
   const h = sandbox(t), c = h.config();
+  c.dispatch.auto = false; h.config(c);
   const context = async () => output(await h.hook('session-reminder.mjs')).hookSpecificOutput.additionalContext;
   const baseline = await context();
   assert.ok(baseline.includes('图形内容走图像模块：每个新的图形交付物开工前先弹窗让用户选路线（dispatch.auto 开着也要弹），不用 run 出图。'));
-  for (const confirm of [{ image: 'auto', roles: 'bogus' }, { image: 'auto', extra: 'ask' }]) {
+  assert.ok(baseline.includes(startText.zh.ask));
+  for (const confirm of [{ image: 'auto', roles: 'bogus' }, { image: 'auto', extra: 'ask' },
+    { image: 'auto', discuss: { start: 'auto' }, run: { adopt: 'ask' } }]) {
     c.dispatch.confirm = confirm; h.config(c);
     assert.equal(await context(), baseline);
   }

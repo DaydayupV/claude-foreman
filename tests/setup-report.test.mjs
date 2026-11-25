@@ -46,15 +46,38 @@ const scripts = path.join(ROOT, 'foreman/skills/dispatch/scripts');
 const isolated = (h, code, options) => h.start(write(path.join(h.home, 'inspect.mjs'), code), [], options).done;
 const urlOf = (file) => pathToFileURL(path.join(scripts, file)).href;
 
-for (const lang of ['zh', 'en']) test(`总配置先列自动发起和两项确认，三行随用户配置变化 (${lang})`, async (t) => {
+for (const lang of ['zh', 'en']) test(`总配置按顺序展示自动发起、四种确认预设及各节点 (${lang})`, async (t) => {
   const h = sandbox(t), c = baseConfig(), m = MESSAGES[lang];
   const file = h.write('.claude/foreman.json', { dispatch: { timeout_min: 20 } });
-  for (const automatic of [false, true]) {
-    const mode = automatic ? 'auto' : 'ask';
-    c.dispatch.auto = !automatic; c.dispatch.confirm = { roles: mode, image: mode }; h.config(c);
+  const labels = lang === 'zh' ? { default: '默认', auto: '全自动', ask: '每步都问', custom: '自定义' }
+    : { default: 'default', auto: 'fully automatic', ask: 'ask at every step', custom: 'custom' };
+  const prefix = lang === 'zh' ? '暂停确认（dispatch.confirm）：' : 'Pause points (dispatch.confirm): ';
+  const custom = { discuss: { start: 'simple', adopt: 'auto' }, run: { start: 'normal' }, review: { adopt: 'ask' } };
+  const customLines = lang === 'zh' ? [
+    '讨论（dispatch.confirm.discuss）：开始前 1 级及以上问；整合前不问',
+    '执行（dispatch.confirm.run）：开始前 2 级及以上问',
+    '审查（dispatch.confirm.review）：开始前每次都问；整合前每次都问',
+  ] : [
+    'Discuss (dispatch.confirm.discuss): before starting: asks at level 1 and up; before acting on the results: no pop-up',
+    'Run (dispatch.confirm.run): before starting: asks at level 2 and up',
+    'Review (dispatch.confirm.review): before starting: always asks; before acting on the results: always asks',
+  ];
+  const modules = ['discuss', 'run', 'review'];
+  for (const [auto, confirm, preset, modes, roles, image] of [
+    [true, undefined, 'default', [['auto', 'complex'], ['auto'], ['auto', 'normal']], 'auto', 'ask'],
+    // 只关了 dispatch.auto、没写 confirm：仍算默认那一套，开始前按 ask 补
+    [false, undefined, 'default', [['ask', 'complex'], ['ask'], ['ask', 'normal']], 'auto', 'ask'],
+    [false, 'auto', 'auto', [['auto', 'auto'], ['auto'], ['auto', 'auto']], 'auto', 'auto'],
+    [true, 'ask', 'ask', [['ask', 'ask'], ['ask'], ['ask', 'ask']], 'ask', 'ask'],
+    [false, custom, 'custom', null, 'auto', 'ask'],
+  ]) {
+    c.dispatch.auto = auto; c.dispatch.confirm = confirm; h.config(c);
     const md = await markdown(h, ['config', '--cwd', h.cwd], { env: { FOREMAN_LANG: lang } });
+    const moduleLines = modes ? modes.map((values, i) => m.reportConfirmModule(modules[i],
+      values.map((mode, j) => m.reportConfirmPoint(['start', 'adopt'][j], mode)))) : customLines;
+    const lines = [m.reportDispatchAuto(auto), prefix + labels[preset], ...moduleLines, m.reportConfirmRoles(roles), m.reportConfirmImage(image)];
     assert.deepEqual(md.split('\n\n').slice(0, 3), [m.reportConfigTitle,
-      [m.reportDispatchTitle, `- ${m.reportDispatchAuto(!automatic)}`, `- ${m.reportConfirmRoles(mode)}`, `- ${m.reportConfirmImage(mode)}`].join('\n'),
+      [m.reportDispatchTitle, ...lines.map((line) => `- ${line}`)].join('\n'),
       m.reportProjectConfig(file, 'dispatch.timeout_min')]);
   }
 });

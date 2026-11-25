@@ -1,5 +1,6 @@
 // setup 的固定 Markdown：环境、总配置和本机模型清单，文字统一从 messages 取。
-import { CLAUDE_CODE, LEVELS, MODULE_CELLS, cellList, readRawConfig } from './config.mjs';
+import { isDeepStrictEqual } from 'node:util';
+import { CLAUDE_CODE, LEVELS, CONFIRM_POINTS, CONFIRM_DEFAULT, MODULE_CELLS, cellList, readRawConfig, resolveConfirm } from './config.mjs';
 import { M, LANGUAGE, isObject } from './util.mjs';
 import { agySandboxInfo } from './adapters/agy-setup.mjs';
 
@@ -159,8 +160,16 @@ const notes = (summary, checks) => {
 };
 
 export const configReport = (cfg, summary, checks = null) => {
-  const blocks = [M.reportConfigTitle, [M.reportDispatchTitle,
-    ...[M.reportDispatchAuto(cfg.dispatch.auto), M.reportConfirmRoles(cfg.dispatch.confirm.roles), M.reportConfirmImage(cfg.dispatch.confirm.image)].map((line) => `- ${line}`)].join('\n'),
+  const { auto, confirm } = cfg.dispatch;
+  const modes = Object.values(confirm).flatMap((value) => isObject(value) ? Object.values(value) : value);
+  const preset = isDeepStrictEqual(confirm, CONFIRM_DEFAULT) || isDeepStrictEqual(confirm, resolveConfirm(undefined, auto)) ? 'default'
+    : modes.every((mode) => mode === 'auto') ? 'auto'
+      : modes.every((mode) => mode === 'ask') ? 'ask' : 'custom';
+  const moduleLines = Object.entries(CONFIRM_POINTS).map(([module, points]) =>
+    M.reportConfirmModule(module, points.map((point) => M.reportConfirmPoint(point, confirm[module][point]))));
+  const dispatchLines = [M.reportDispatchAuto(auto), M.reportConfirmPreset(preset), ...moduleLines,
+    M.reportConfirmRoles(confirm.roles), M.reportConfirmImage(confirm.image)];
+  const blocks = [M.reportConfigTitle, [M.reportDispatchTitle, ...dispatchLines.map((line) => `- ${line}`)].join('\n'),
     `${M.reportCellsTitle}${M.reportHeadingGap}${M.reportCellsIntro}`];
   const suffix = cfg.scenes.names.length ? M.reportDefaultScene : '';
   if (cfg.project_config) blocks.splice(2, 0, M.reportProjectConfig(cfg.project_config.path, M.list(cfg.project_config.cells)));

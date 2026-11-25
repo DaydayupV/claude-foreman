@@ -9,6 +9,14 @@ const baseConfig = () => {
   c.modules.default.review.gap = { simple: false, normal: false, complex: true };
   return c;
 };
+const defaultConfirm = {
+  discuss: { start: 'auto', adopt: 'complex' }, run: { start: 'auto' }, review: { start: 'auto', adopt: 'normal' },
+  roles: 'auto', image: 'ask',
+};
+const askStartConfirm = {
+  ...defaultConfirm,
+  discuss: { start: 'ask', adopt: 'complex' }, run: { start: 'ask' }, review: { start: 'ask', adopt: 'normal' },
+};
 
 test('没有用户配置时生成初始配置并提示首次使用', async (t) => {
   const h = sandbox(t, { config: false });
@@ -20,11 +28,13 @@ test('没有用户配置时生成初始配置并提示首次使用', async (t) =
   assert.equal(c.effective.modules.default.run.normal, 'claude code');
   assert.deepEqual(c.effective.agents, {});
   const saved = json(h.userConfig);
-  assert.deepEqual(c.effective.dispatch.confirm, { roles: 'ask', image: 'ask' });
-  assert.deepEqual(saved.dispatch.confirm, { roles: 'ask', image: 'ask' });
+  assert.deepEqual(c.effective.dispatch.confirm, defaultConfirm);
+  // 生成的文件不写 confirm，按内置默认值补，dispatch.auto 照样管没写的 start
+  assert.equal(Object.hasOwn(saved.dispatch, 'confirm'), false);
   assert.deepEqual(c.effective.dispatch.watch, { terminal: true, web: false });
   assert.equal(Object.hasOwn(saved.dispatch, 'web'), false);
-  assert.deepEqual(saved, c.effective);
+  const { confirm: _confirm, ...savedDispatch } = c.effective.dispatch;
+  assert.deepEqual(saved, { ...c.effective, dispatch: savedDispatch });
   assert.equal(r.stderr.split('\n')[0], `foreman: ${M.starterCreated(h.userConfig, M.starterNoCodex + M.starterNext)}`);
   assert.ok(!(await h.bridge(['config'])).stderr.includes('foreman:'));
   assert.equal(h.calls().length, 0);
@@ -32,18 +42,44 @@ test('没有用户配置时生成初始配置并提示首次使用', async (t) =
 
 test('confirm 缺省和单项配置只在内存补默认值，不改写用户文件', async (t) => {
   const h = sandbox(t), c = baseConfig();
-  for (const confirm of [undefined, { roles: 'auto' }]) {
+  for (const [confirm, expected] of [
+    [undefined, defaultConfirm],
+    [{ roles: 'auto' }, defaultConfirm],
+    [{ discuss: { adopt: 'simple' }, run: { start: 'normal' }, review: {}, roles: 'ask' },
+      { ...defaultConfirm, discuss: { start: 'auto', adopt: 'simple' }, run: { start: 'normal' }, roles: 'ask' }],
+  ]) {
     if (confirm === undefined) delete c.dispatch.confirm; else c.dispatch.confirm = confirm;
     h.config(c); const before = read(h.userConfig);
-    assert.deepEqual(output(await h.bridge(['config'])).effective.dispatch.confirm, { roles: confirm?.roles ?? 'ask', image: 'ask' });
+    assert.deepEqual(output(await h.bridge(['config'])).effective.dispatch.confirm, expected);
     assert.equal(read(h.userConfig), before);
     assert.equal(fs.existsSync(`${h.userConfig}.bak`), false);
   }
 });
 
-for (const lang of ['zh', 'en']) test(`confirm 拒绝无效值、未知键和字符串简写 (${lang})`, async (t) => {
+test('dispatch.auto 关闭时只把没写的 start 补成 ask，简写覆盖所有确认', async (t) => {
   const h = sandbox(t), c = baseConfig();
-  for (const confirm of [{ roles: true }, { image: 'yes' }, { image_route: 'auto' }, 'auto']) {
+  c.dispatch.auto = false; h.config(c);
+  assert.deepEqual(output(await h.bridge(['config'])).effective.dispatch.confirm, askStartConfirm);
+  c.dispatch.confirm = { discuss: { start: 'auto' }, run: { start: 'complex' } }; h.config(c);
+  assert.deepEqual(output(await h.bridge(['config'])).effective.dispatch.confirm, {
+    ...askStartConfirm, discuss: defaultConfirm.discuss, run: { start: 'complex' },
+  });
+  for (const mode of ['ask', 'auto']) {
+    c.dispatch.auto = mode === 'ask'; c.dispatch.confirm = mode; h.config(c);
+    const before = read(h.userConfig);
+    assert.deepEqual(output(await h.bridge(['config'])).effective.dispatch.confirm, {
+      discuss: { start: mode, adopt: mode }, run: { start: mode }, review: { start: mode, adopt: mode },
+      roles: mode, image: mode,
+    });
+    assert.equal(read(h.userConfig), before);
+  }
+});
+
+for (const lang of ['zh', 'en']) test(`confirm 拒绝无效形状、未知键和非法值 (${lang})`, async (t) => {
+  const h = sandbox(t), c = baseConfig();
+  for (const confirm of [null, [], 'simple', { roles: true }, { image: 'yes' }, { image_route: 'auto' },
+    { roles: 'normal' }, { image: 'complex' }, { discuss: 'ask' }, { review: [] }, { run: { adopt: 'ask' } },
+    { review: { start: 'yes' } }]) {
     c.dispatch.confirm = confirm; h.config(c); const before = read(h.userConfig);
     failed(await h.bridge(['config'], { env: { FOREMAN_LANG: lang } }), MESSAGES[lang].confirmShape);
     assert.equal(read(h.userConfig), before);
@@ -63,6 +99,8 @@ test('零点十以前的配置自动改写并保留原文备份', async (t) => {
   assert.equal(migrated.auto_dispatch, undefined);
   assert.equal(migrated.agents['legacy-model'].bin, CODEX);
   assert.equal(c.effective.dispatch.auto, false);
+  assert.deepEqual(c.effective.dispatch.confirm, askStartConfirm);
+  assert.equal(Object.hasOwn(migrated.dispatch, 'confirm'), false);
   assert.deepEqual(c.effective.dispatch.watch, { terminal: false, web: false });
   assert.deepEqual(migrated.dispatch.watch, c.effective.dispatch.watch);
   assert.equal(Object.hasOwn(migrated.dispatch, 'web'), false);
@@ -71,6 +109,13 @@ test('零点十以前的配置自动改写并保留原文备份', async (t) => {
   assert.ok(r.stderr.includes(M.configStructureMigrated(h.userConfig, `${h.userConfig}.bak`, 'codex → legacy-model')));
   await h.bridge(['config']);
   assert.equal(read(`${h.userConfig}.bak`), original);
+});
+
+test('已有的旧结构迁移保留 confirm 原来的写法', async (t) => {
+  const h = sandbox(t), c = baseConfig();
+  c.auto_dispatch = false; c.dispatch.confirm = { roles: 'ask' }; h.config(c);
+  assert.deepEqual(output(await h.bridge(['config'])).effective.dispatch.confirm, { ...askStartConfirm, roles: 'ask' });
+  assert.deepEqual(json(h.userConfig).dispatch.confirm, c.dispatch.confirm);
 });
 
 for (const [name, change, key, reason] of [

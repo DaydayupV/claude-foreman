@@ -17,7 +17,8 @@ const submitArgs = (h, p, extra = []) => ['submit', '--plan', p.plan_id, '--repo
 const status = async (h, p) => output(await h.bridge(['status', '--plan', p.plan_id]));
 
 for (const module of ['discuss', 'review']) test(`${module} 计划把 Claude Code 放在顶层，先给 submit 命令`, async (t) => {
-  const h = sandbox(t), c = baseConfig(); h.config(c);
+  // 角色分配默认不问（roles 默认 auto），这里先显式写 ask，核对弹窗那条路。
+  const h = sandbox(t), c = baseConfig(); c.dispatch.confirm = { roles: 'ask' }; h.config(c);
   const p = output(await h.bridge(planArgs(h, module, ['codex=质疑'], ['--host-role', '方案'])));
   assert.deepEqual(p.host, { seat: 0, role: '方案' });
   assert.deepEqual(json(p.file).host, p.host); assert.equal(p.seats[0].seat, 1);
@@ -33,7 +34,8 @@ for (const module of ['discuss', 'review']) test(`${module} 计划把 Claude Cod
   failed(await h.bridge(simple(['codex'], ['--host-role', '方案'])), M.planRolesLevel1);
   const plain = output(await h.bridge(planArgs(h, module))); assert.equal(plain.host.role, null);
   assert.equal(plain.guidance, M.planGuidance(module));
-  c.dispatch.confirm = { roles: 'auto' }; h.config(c);
+  // 不写 confirm 时按默认的 roles=auto
+  delete c.dispatch.confirm; h.config(c);
   const automatic = output(await h.bridge(planArgs(h, module, ['codex=质疑'], ['--host-role', '方案'])));
   assert.equal(automatic.guidance, M.planRolesAuto + M.planGuidance(module));
 });
