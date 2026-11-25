@@ -597,7 +597,7 @@ async function cmdModels(o) {
   const cfg = load(null);
   const out = { tools: {}, api: {}, agents: {} };
   const readCatalog = catalogReader();
-  for (const type of ['codex cli', 'opencode cli', 'pi cli', 'agy cli']) {
+  for (const type of ['codex cli', 'opencode cli', 'pi cli', 'agy cli', 'codebuddy cli']) {
     out.tools[type] = readCatalog(Object.values(cfg.agents).find((a) => a.type === type) || { type });
   }
   for (const [name, agent] of Object.entries(cfg.agents)) if (agent.type === 'api') out.api[name] = await adapters.api.catalog(agent, name);

@@ -313,7 +313,7 @@ test('没有在用的 Codex 协作方时，环境一节不说沙箱正常', asyn
 test('英文完整环境输出和非法 format；check 成功仍退出 0', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.modules.default.discuss.simple = 'claude code'; h.config(c);
   const r = await h.bridge(['check', '--format', 'md'], { env: { FOREMAN_LANG: 'en', FOREMAN_TEST_MEMORY: '16,4' } }); assert.equal(r.code, 0, r.stderr);
-  assert.equal(r.stdout.split('\n\n## Configuration')[0], '## Environment\n\n✅ Node.js, Git, the live view and the Codex sandbox all work.\n\n| Tool | Status |\n| --- | --- |\n| Codex | installed, logged in |\n| opencode | not installed |\n| pi | not installed |\n| agy | not installed |\n| API key variables | none found |\n| Memory | 16 GB in total, 4 GB available now |\n| Web board | off (enough memory to turn it on) |');
+  assert.equal(r.stdout.split('\n\n## Configuration')[0], '## Environment\n\n✅ Node.js, Git, the live view and the Codex sandbox all work.\n\n| Tool | Status |\n| --- | --- |\n| Codex | installed, logged in |\n| opencode | not installed |\n| pi | not installed |\n| agy | not installed |\n| codebuddy | not installed |\n| API key variables | none found |\n| Memory | 16 GB in total, 4 GB available now |\n| Web board | off (enough memory to turn it on) |');
   has(r.stdout, ['**Cells** ', '| Candidates | simple | normal | complex | Check |', '| Claude Code | no outside model', '**Seats and required agents**', '**Agents**', '**Notes**', 'the only candidate']);
   assert.equal(r.stdout.includes('　'), false); assert.equal(r.stdout.includes('all 1 candidates'), false);
   for (const cmd of ['config', 'check', 'models']) failed(await h.bridge([cmd, '--format', 'yaml']), M.reportFormatInvalid);

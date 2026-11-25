@@ -27,7 +27,7 @@ export const environmentReport = (checks, environment, agents) => {
   // 探测不了（这个版本的 Codex 不支持，ok 为 null）也不算测过
   const codexInUse = Object.entries(checks.agents).filter(([name, agent]) => agent.type === 'codex cli' && checks.summary.agents[name].used_at.length);
   const sandboxChecked = codexInUse.length > 0 && codexInUse.every(([, agent]) => agent.sandbox?.checked.length && agent.sandbox.checked.every((item) => item.ok === true));
-  const { codex, opencode, pi, agy, api_keys } = environment;
+  const { codex, opencode, pi, agy, codebuddy, api_keys } = environment;
   const agyInUse = Object.entries(checks.agents).find(([name, agent]) => agent.type === 'agy cli' && checks.summary.agents[name].used_at.length)?.[1];
   const quota = agyInUse?.quota?.groups.flatMap((g) => g.buckets.filter((b) => isObject(b) && Number.isFinite(b.remaining_fraction))
     .map((b) => `${g.name} ${M.reportAgyWindow(b.window) || b.name || b.window} ${Math.round(b.remaining_fraction * 100)}%`));
@@ -41,6 +41,7 @@ export const environmentReport = (checks, environment, agents) => {
       ['opencode', opencode.found ? M.reportModelsInstalled(opencode.models) : M.reportNotInstalled],
       ['pi', pi.found ? M.reportModelsInstalled(pi.models) : M.reportNotInstalled],
       ['agy', agy?.found ? [M.reportModelsInstalled(agy.models), ...agyStatus].join(' · ') : M.reportNotInstalled],
+      ['codebuddy', codebuddy?.found ? M.reportModelsInstalled(codebuddy.models) : M.reportNotInstalled],
       [M.reportApiVariables, (api_keys.length ? M.reportVariablesFound(M.list(api_keys)) : M.reportNoVariables) + (keys ? M.reportConfigKeys(keys) : '')],
       [M.reportMemoryLabel, M.reportMemory(total_gb, available_gb)],
       [M.reportWebLabel, web ? enough ? M.reportWebOn : M.reportWebOnLow : enough ? M.reportWebOff : M.reportWebOffLow],
@@ -184,14 +185,14 @@ const efforts = (model) => model.efforts?.length ? [...(model.plain ? [dash] : [
   ...model.efforts.map((effort) => effort === model.default_effort ? `**${effort}**` : effort)].join(' / ') : M.reportNoEffort;
 
 export const modelsReport = (catalog) => {
-  const tools = ['codex cli', 'opencode cli', 'pi cli', 'agy cli'];
+  const tools = ['codex cli', 'opencode cli', 'pi cli', 'agy cli', 'codebuddy cli'];
   const visible = Object.fromEntries(tools.map((type) => [type, catalog.tools[type]?.ok ? catalog.tools[type].models.filter((model) =>
     type === 'codex cli' ? !model.hidden : type !== 'opencode cli' || model.enabled !== false) : []]));
   const api = Object.entries(catalog.api), nonChat = (model) => /tts|asr|embedding|rerank|moderation/i.test(model.id);
   const apiRows = api.flatMap(([name, cat]) => cat.ok ? cat.models.filter((model) => !nonChat(model)).map((model) => [name, model]) : []);
   const omitted = api.reduce((n, [, cat]) => n + (cat.ok ? cat.models.filter(nonChat).length : 0), 0);
   const counts = tools.map((type) => visible[type].length), apiCount = apiRows.length;
-  const blocks = [M.reportModelsTitle, M.reportModelsTotal(counts.reduce((a, b) => a + b, apiCount), ...counts.slice(0, 3), api.length, apiCount, counts[3]) + M.reportModelsJoin + M.reportModelsIntro];
+  const blocks = [M.reportModelsTitle, M.reportModelsTotal(counts.reduce((a, b) => a + b, apiCount), ...counts.slice(0, 3), api.length, apiCount, counts[3], counts[4]) + M.reportModelsJoin + M.reportModelsIntro];
   const configured = (type, model) => M.list(Object.entries(catalog.agents).filter(([, agent]) => agent.type === type
     && (agent.configured_models.includes(model.id) || type === 'agy cli' && Object.values(model.ids).some((id) => agent.configured_models.includes(id)))).map(([name]) => name));
   for (const type of tools) {
@@ -203,8 +204,9 @@ export const modelsReport = (catalog) => {
       blocks.push(M.reportAgyTitle, table(M.reportModelHeaders, visible[type].map((model) => [model.id, efforts(model), context(model.context), configured(type, model)])));
       continue;
     }
-    if (type === 'codex cli') {
-      blocks.push(M.reportCodexTitle, table(M.reportModelHeaders, visible[type].map((model) => [model.id, efforts(model), context(model.context), configured(type, model)])));
+    if (type === 'codex cli' || type === 'codebuddy cli') {
+      blocks.push(type === 'codex cli' ? M.reportCodexTitle : M.reportCodebuddyTitle,
+        table(M.reportModelHeaders, visible[type].map((model) => [model.id, efforts(model), context(model.context), configured(type, model)])));
       continue;
     }
     const groups = new Map();

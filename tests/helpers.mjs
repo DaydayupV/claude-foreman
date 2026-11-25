@@ -19,6 +19,7 @@ export const CODEX = path.join(ROOT, 'tests/fake/codex.mjs');
 export const OPENCODE = path.join(ROOT, 'tests/fake/opencode.mjs');
 export const PI = path.join(ROOT, 'tests/fake/pi.mjs');
 export const AGY = path.join(ROOT, 'tests/fake/agy.mjs');
+export const CODEBUDDY = path.join(ROOT, 'tests/fake/codebuddy.mjs');
 export const read = (file) => fs.readFileSync(file, 'utf8');
 export const json = (file) => JSON.parse(read(file));
 // 活动日志可能刚写了一部分，只读取以换行结束的完整记录。
@@ -72,6 +73,7 @@ export const apiAgent = (url) => ({
 });
 export const opencodeAgent = () => ({ type: 'opencode cli', bin: OPENCODE, model: 'fake/model' });
 export const piAgent = () => ({ type: 'pi cli', bin: PI, model: 'fake/model' });
+export const codebuddyAgent = () => ({ type: 'codebuddy cli', bin: CODEBUDDY, model: 'fake-1' });
 
 export function sandbox(t, { config = true } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'foreman-test-'));
