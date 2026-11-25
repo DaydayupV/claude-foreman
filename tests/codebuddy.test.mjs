@@ -27,7 +27,7 @@ const assertGuard = (call, access, cwd, runsDir) => {
   const quote = value => "'" + value.replaceAll('\\', '/').replaceAll("'", "'\\''") + "'";
   const command = [process.execPath, GUARD, access, cwd, runsDir].map(quote).join(' ');
   assert.deepEqual(JSON.parse(argsOf(call, '--settings')), { hooks: {
-    PreToolUse: [{ matcher: 'Read|Glob|Grep|Write|Edit', hooks: [{ type: 'command', command }] }],
+    PreToolUse: [{ matcher: 'Read|Glob|Grep|Write|Edit|WebFetch', hooks: [{ type: 'command', command }] }],
   } });
 };
 let ids = 0;
@@ -64,7 +64,9 @@ test('讨论：只读工具白名单、MCP 隔离、事件翻译、用量和费�
     { type: 'tool_use', id: 'g1', name: 'Grep', input: { pattern: 'x' } }] });
   const r = output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'cb']), { env: s.env, input: '议题' }));
   const call = runs(s)[0];
-  assert.equal(argsOf(call, '--tools'), 'Read,Glob,Grep,StructuredOutput');
+  assert.equal(argsOf(call, '--tools'), 'Read,Glob,Grep,WebFetch,WebSearch,StructuredOutput');
+  assert.equal(argsOf(call, '--allowedTools'), 'WebFetch,WebSearch');
+  assert.ok(call.stdin.includes(M.opencodeDiscussFooter(h.cwd, '', true).split('\n')[2]));
   assert.ok(call.args.includes('--strict-mcp-config'));
   assert.equal(argsOf(call, '--setting-sources'), 'user');
   assert.equal(argsOf(call, '--permission-mode'), 'dontAsk');
@@ -159,6 +161,7 @@ test('审查：补丁材料、只读工具，审查不能续接', async (t) => {
   const r = output(await h.bridge(['review', '--cwd', h.cwd, '--level', 'normal', '--brief', '-'], { env: s.env, input: '重点检查' }));
   const call = runs(s)[0];
   assert.equal(argsOf(call, '--tools'), 'Read,Glob,Grep,StructuredOutput');
+  assert.equal(argsOf(call, '--allowedTools'), null);
   assertGuard(call, 'read', h.cwd, h.runs);
   assert.ok(call.stdin.startsWith(M.opencodeReviewPrompt(h.cwd, M.reviewScopeUncommitted)));
   assert.ok(call.stdin.includes('+after'));
@@ -188,8 +191,8 @@ for (const access of ['edit', 'shell']) test(`执行（${access}）：工具白�
     fs.writeFileSync(settings, JSON.stringify({ permissions: { deny: ['Edit(./private/**)'], ask: ['Write(./private/**)'] } }));
   }
   h.initGit();
-  const editTools = ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'StructuredOutput'];
-  const shellTools = ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash', 'PowerShell', 'StructuredOutput'];
+  const editTools = ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'WebFetch', 'WebSearch', 'StructuredOutput'];
+  const shellTools = ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash', 'PowerShell', 'WebFetch', 'WebSearch', 'StructuredOutput'];
   const calls = [
     { type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: 'source.txt' } },
     { type: 'tool_use', id: 'e1', name: 'Edit', input: { file_path: path.join(h.cwd, 'source.txt') } },
@@ -204,7 +207,7 @@ for (const access of ['edit', 'shell']) test(`执行（${access}）：工具白�
   assertGuard(call, access, h.cwd, h.runs);
   if (access === 'edit') {
     assert.equal(argsOf(call, '--permission-mode'), 'dontAsk');
-    assert.equal(argsOf(call, '--allowedTools'), 'Write(./**),Edit(./**)');
+    assert.equal(argsOf(call, '--allowedTools'), 'Write(./**),Edit(./**),WebFetch,WebSearch');
     assert.ok(!call.args.includes('-y'));
   }
   if (access === 'shell') assert.ok(call.args.includes('-y'));
@@ -236,10 +239,10 @@ test('Windows：外部 junction 限制讨论、审查和 edit 的搜索，shell 
   fs.mkdirSync(path.join(h.cwd, 'nested'));
   fs.symlinkSync(outside, path.join(h.cwd, 'nested/linkdir'), 'junction');
   const cases = [
-    ['discuss', 'edit', 'Read,StructuredOutput'],
+    ['discuss', 'edit', 'Read,WebFetch,WebSearch,StructuredOutput'],
     ['review', 'edit', 'Read,StructuredOutput'],
-    ['run', 'edit', 'Read,Write,Edit,StructuredOutput'],
-    ['run', 'shell', 'Read,Glob,Grep,Write,Edit,Bash,PowerShell,StructuredOutput'],
+    ['run', 'edit', 'Read,Write,Edit,WebFetch,WebSearch,StructuredOutput'],
+    ['run', 'shell', 'Read,Glob,Grep,Write,Edit,Bash,PowerShell,WebFetch,WebSearch,StructuredOutput'],
   ];
   for (const [mode, access, tools] of cases) {
     configure(h, { run_access: access }, c => { c.modules.default[mode].complex = { agent: 'cb' }; });
@@ -260,12 +263,12 @@ test('Windows：内部 junction 保留搜索，外部 junction 仍可在无 Git 
   const s = h.scenario();
   const discuss = () => h.bridge(taskArgs(h, 'discuss', ['--agent', 'cb']), { env: s.env, input: '合成议题' });
   const r = output(await discuss());
-  assert.equal(argsOf(runs(s)[0], '--tools'), 'Read,Glob,Grep,StructuredOutput');
+  assert.equal(argsOf(runs(s)[0], '--tools'), 'Read,Glob,Grep,WebFetch,WebSearch,StructuredOutput');
   assert.ok(!r.notes.includes(M.codebuddyLinksNoSearch('internal')));
   fs.mkdirSync(path.join(h.home, 'outside'));
   fs.symlinkSync(path.join(h.home, 'outside'), path.join(h.cwd, 'external'), 'junction');
   output(await discuss());
-  assert.equal(argsOf(runs(s)[1], '--tools'), 'Read,StructuredOutput');
+  assert.equal(argsOf(runs(s)[1], '--tools'), 'Read,WebFetch,WebSearch,StructuredOutput');
   assert.ok(runs(s)[1].stdin.endsWith(M.codebuddyFileList('')));
 });
 
@@ -357,6 +360,24 @@ test('工具结果：保留拒绝原文和路径，API 错误对象转成 JSON',
   assert.deepEqual(edit.changes, []);
 });
 
+test('上网：讨论里的 WebSearch、WebFetch 记成 web_search，审查的提示词不提上网', async (t) => {
+  const h = sandbox(t);
+  configure(h, {}, c => { c.modules.default.discuss.complex = [{ agent: 'cb' }]; c.modules.default.review.normal = { agent: 'cb' }; });
+  const s = h.scenario({ tool_calls: [
+    { type: 'tool_use', id: 'ws', name: 'WebSearch', input: { query: 'codebuddy release notes' } },
+    { type: 'tool_use', id: 'wf', name: 'WebFetch', input: { url: 'https://example.com/notes', prompt: 'summary' } },
+  ] }, 'web-discuss');
+  const r = output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'cb']), { env: s.env, input: '合成议题' }));
+  const web = h.events(r.run_id).filter(e => e.item?.type === 'web_search').map(e => e.item.query);
+  assert.deepEqual(web, ['codebuddy release notes', 'https://example.com/notes']);
+  h.initGit(); h.write('source.txt', 'after\n');
+  const review = h.scenario({}, 'web-review');
+  output(await h.bridge(['review', '--cwd', h.cwd, '--level', 'normal', '--brief', '-'], { env: review.env, input: '检查' }));
+  const call = runs(review)[0];
+  assert.ok(!call.stdin.includes(M.opencodeDiscussFooter(h.cwd, '', true).split('\n')[2]));
+  assert.ok(!argsOf(call, '--tools').includes('Web'));
+});
+
 test('工具结果：成功的读取里引用了拒绝原话不算被拦；被拦的搜索在问题里写明模式', async (t) => {
   const h = sandbox(t);
   configure(h, {}, c => { c.modules.default.discuss.complex = [{ agent: 'cb' }]; });
@@ -384,7 +405,7 @@ test('执行报告不合格时，同一会话、不给工具修复一次，用�
   const r = output(await h.bridge(taskArgs(h), { env: s.env, input: '任务' }));
   assert.deepEqual(r.report, report);
   const [first, second] = runs(s);
-  assert.equal(argsOf(first, '--tools'), 'Read,Glob,Grep,Write,Edit,StructuredOutput');
+  assert.equal(argsOf(first, '--tools'), 'Read,Glob,Grep,Write,Edit,WebFetch,WebSearch,StructuredOutput');
   assert.equal(argsOf(second, '--tools'), 'StructuredOutput');
   assert.ok(!second.args.includes('--settings'));
   assert.equal(argsOf(second, '--resume'), 'synthetic-codebuddy-session');
@@ -527,6 +548,19 @@ test('守卫决定表：三档的文件工具权限和歧义路径', (t) => {
     assert.deepEqual(grep(path.join(h.home, '**/*')), deny(OUTSIDE));
     assert.deepEqual(grep('{*.js,/etc/*}'), deny(OUTSIDE));
     assert.deepEqual(grep('../outside/**'), deny(AMBIGUOUS));
+    // WebFetch 只能取网页，file: 网址会被拒（它能读本机文件）。网页由守卫放行（-p 的 dontAsk 下 --allowedTools 放行不了它），
+    // shell 档本来就全放行，守卫不表态；用户自己的设置对 WebFetch 写了 deny 或 ask 时也不表态，交给 CodeBuddy 按用户的规则处理。
+    const configDir = path.join(h.home, `cb-config-${mode}`);
+    const fetch = (url, dir = configDir) => toolDecision(mode, h.cwd, { tool_name: 'WebFetch', tool_input: { url, prompt: 'summary' } }, { runsDir: h.runs, configDir: dir });
+    const approved = mode === 'shell' ? { decision: null, reason: null } : { decision: 'allow', reason: 'web page' };
+    assert.deepEqual(fetch('https://example.com/page'), approved);
+    assert.deepEqual(fetch('http://example.com/'), approved);
+    for (const url of [pathToFileURL(path.join(h.home, 'secret.txt')).href, 'ftp://example.com/x', '']) {
+      assert.deepEqual(fetch(url), deny('foreman guard: only http and https web pages can be fetched'), url);
+    }
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, 'settings.json'), JSON.stringify({ permissions: { deny: ['WebFetch(domain:example.com)'] } }));
+    assert.deepEqual(fetch('https://example.com/page'), { decision: null, reason: null });
   }
 });
 

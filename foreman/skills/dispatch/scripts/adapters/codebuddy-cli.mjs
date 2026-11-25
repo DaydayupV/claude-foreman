@@ -81,6 +81,7 @@ const SEARCH_SCAN_LIMIT = 100000;
 const TOOLS = { none: [], read: ['Read', 'Glob', 'Grep'] };
 TOOLS.edit = [...TOOLS.read, 'Write', 'Edit'];
 TOOLS.shell = [...TOOLS.edit, 'Bash', 'PowerShell'];
+const WEB_TOOLS = ['WebFetch', 'WebSearch'];
 const capabilities = { modes: ['run', 'review', 'discuss'], isolation: 'tools', reads_code: true, reads_images: false, native_schema: true,
   native_review: false, images: false, resume: true, command_start_events: false };
 
@@ -144,21 +145,24 @@ function fileList(cwd) {
 }
 
 // --json-schema 只在结构化输出工具可用时才生效：不把它放进白名单，模型拿不到这个工具，只会把 JSON 写在正文里。
-function codebuddyArgs({ model, effort, access, session, schema, ephemeral = false, cwd, search = true }) {
+// web：讨论和执行能上网（WebFetch、WebSearch），审查和修报告格式不能。dontAsk 下这两个工具要预先放行，否则会被拒。
+function codebuddyArgs({ model, effort, access, session, schema, ephemeral = false, cwd, search = true, web = false }) {
   const args = ['-p', '--output-format', 'stream-json', '--strict-mcp-config', '--setting-sources', 'user'];
   if (model) args.push('--model', model);
   if (effort != null && effort !== 'default') args.push('--effort', effort);
   if (schema) args.push('--json-schema', typeof schema === 'string' ? schema : JSON.stringify(schema));
+  const online = web && access !== 'none';
   const tools = (TOOLS[access] ?? TOOLS.read).filter(tool => search || (tool !== 'Grep' && tool !== 'Glob'));
-  args.push('--tools', [...new Set([...tools, ...(schema ? ['StructuredOutput'] : [])])].join(','));
+  args.push('--tools', [...new Set([...tools, ...(online ? WEB_TOOLS : []), ...(schema ? ['StructuredOutput'] : [])])].join(','));
   if (access === 'shell') args.push('-y');
   else args.push('--permission-mode', 'dontAsk');
-  if (access === 'edit') args.push('--allowedTools', 'Write(./**),Edit(./**)');
+  const allowed = [...(access === 'edit' ? ['Write(./**)', 'Edit(./**)'] : []), ...(online && access !== 'shell' ? WEB_TOOLS : [])];
+  if (allowed.length) args.push('--allowedTools', allowed.join(','));
   if (access !== 'none') {
     const quote = value => "'" + value.replaceAll('\\', '/').replaceAll("'", "'\\''") + "'";
     const guard = fileURLToPath(new URL('./codebuddy-guard.mjs', import.meta.url));
     const command = [process.execPath, guard, access, cwd, path.resolve(RUNS_ROOT)].map(quote).join(' ');
-    args.push('--settings', JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Read|Glob|Grep|Write|Edit', hooks: [{ type: 'command', command }] }] } }));
+    args.push('--settings', JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Read|Glob|Grep|Write|Edit|WebFetch', hooks: [{ type: 'command', command }] }] } }));
   }
   if (session) args.push('--resume', session);
   if (ephemeral) args.push('--no-session-persistence');
@@ -326,6 +330,8 @@ async function executeCodebuddy(ctx) {
   const files = readAttachments(opts.file, cwd, false), outside = filesOutside(files, [cwd]);
   if (outside.length) die(M.filesOutsideCwd(ctx.agentName, M.list(outside), false));
   const access = exec ? agent.run_access : 'read';
+  // 讨论和执行能上网，审查不能（用户 2026-11-25 的决定，和其他协作方一致）。
+  const web = !review;
   let prompt;
   if (review) {
     const scope = ctx.reviewScope;
@@ -341,8 +347,8 @@ async function executeCodebuddy(ctx) {
     prompt = [...parts, M.reviewFooter(ctx.reviewTarget), M.reviewSchemaFooter(schemaText)].join('\n\n') + '\n';
   } else if (exec) prompt = ctx.parent
     ? `${brief}${focusFiles(files)}\n\n${M.resumeFooter}\n\n${M.opencodeRunResumeFooter}\n`
-    : `${brief}\n\n${M.footer(cwd, [])}\n\n${M.opencodeRunFooter(schemaText, access)}\n`;
-  else prompt = `${brief}${focusFiles(files)}\n\n${ctx.parent ? M.opencodeResumeFooter : M.opencodeDiscussFooter(cwd, schemaText)}\n`;
+    : `${brief}\n\n${M.footer(cwd, [], web)}\n\n${M.opencodeRunFooter(schemaText, access, web)}\n`;
+  else prompt = `${brief}${focusFiles(files)}\n\n${ctx.parent ? M.opencodeResumeFooter : M.opencodeDiscussFooter(cwd, schemaText, web)}\n`;
 
   let searchNote;
   if (process.platform === 'win32' && (access === 'read' || access === 'edit')) {
@@ -359,16 +365,16 @@ async function executeCodebuddy(ctx) {
   if (exec) return execute(context, {
     capabilities,
     describe: () => ({ sandbox: null, modelShown: model, modelName: model }),
-    run: ({ run }) => codebuddySession(run, schema, access),
+    run: ({ run }) => codebuddySession(run, schema, access, web),
   });
   const run = startRun(context);
   fs.writeFileSync(path.join(dir, 'brief.md'), prompt);
   process.stderr.write(`foreman: ${D.started(mode, modelLabel(run.meta), level, dir)}\n`);
   announceBoard(ctx.cfg, mode, modelLabel(run.meta), level);
-  return finishDiscussion(run, { ...await codebuddySession(run, schema, access), files, changesNote: M.codebuddyNoChanges });
+  return finishDiscussion(run, { ...await codebuddySession(run, schema, access, web), files, changesNote: M.codebuddyNoChanges });
 }
 
-async function codebuddySession(run, schema, access) {
+async function codebuddySession(run, schema, access, web = false) {
   const { ctx, started, meta, writeMeta } = run;
   const { dir, agentName, agent, model, effort, cwd, prompt, searchNote } = ctx;
   const { deadline, stallMin } = runLimits(ctx, started);
@@ -430,6 +436,11 @@ async function codebuddySession(run, schema, access) {
     if (call.name === 'Bash' || call.name === 'PowerShell') {
       event({ type: 'item.completed', item: { id, type: 'command_execution', category: 'shell', command: String(input.command || ''),
         exit_code: exitCode, aggregated_output: resultText.slice(0, 2000) } });
+      return;
+    }
+    // 网页搜索和读网页按 opencode 的写法记成 web_search，看板和实时查看照常显示。
+    if (WEB_TOOLS.includes(call.name) && succeeded) {
+      event({ type: 'item.completed', item: { id, type: 'web_search', query: String(input.query ?? input.url ?? '') } });
       return;
     }
     const args = ['pattern', 'path', 'glob'].filter((key) => input[key] != null)
@@ -510,7 +521,7 @@ async function codebuddySession(run, schema, access) {
     const current = repairing ? 'none' : access;
     emittedUsage.clear();
     pendingUsage.clear();
-    const out = await runCodebuddy({ agent, args: codebuddyArgs({ model, effort, access: current, session: meta.session_id, schema, cwd, search: !searchNote }),
+    const out = await runCodebuddy({ agent, args: codebuddyArgs({ model, effort, access: current, session: meta.session_id, schema, cwd, search: !searchNote, web }),
       access: current, cwd, prompt: nextPrompt, runDir: dir, onEvent: translate, timeoutMs: deadline - Date.now(), stallMin });
     flushUsage();
     finishPendingTools();

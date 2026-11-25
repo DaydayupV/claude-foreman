@@ -24,6 +24,16 @@ export function codebuddyConfigDir() {
   return path.resolve(configured?.trim() ? configured : path.join(os.homedir(), '.codebuddy'));
 }
 
+// Whether the user's CodeBuddy settings deny or ask for WebFetch (any rule naming it). An unreadable
+// file counts as limiting, so the guard never approves over rules it couldn't read.
+function userLimitsWebFetch(configDir = codebuddyConfigDir()) {
+  let settings;
+  try { settings = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8').replace(/^﻿/, '')); }
+  catch (error) { return error.code !== 'ENOENT'; }
+  return ['deny', 'ask'].some(key => (Array.isArray(settings?.permissions?.[key]) ? settings.permissions[key] : [])
+    .some(rule => /^WebFetch\b/.test(String(rule))));
+}
+
 function realPath(target) {
   const suffix = [];
   let current = target, links = 0;
@@ -82,6 +92,13 @@ export function toolDecision(mode, root, event, options) {
   try {
     const tool = event.tool_name, input = event.tool_input;
     const writing = WRITE_TOOLS.has(tool), searching = tool === 'Glob' || tool === 'Grep';
+    // WebFetch could read a local file through a file: URL; only web pages are allowed. CodeBuddy's
+    // --allowedTools doesn't pre-approve WebFetch in -p dontAsk runs, so web pages are approved here,
+    // unless the user's own settings deny or ask for WebFetch: then CodeBuddy's rules decide.
+    if (tool === 'WebFetch' && ['read', 'edit', 'shell'].includes(mode)) {
+      if (!/^https?:\/\//i.test(String(input?.url ?? ''))) return deny('only http and https web pages can be fetched');
+      return mode !== 'shell' && !userLimitsWebFetch(options?.configDir) ? { decision: 'allow', reason: 'web page' } : { decision: null, reason: null };
+    }
     if (!['read', 'edit', 'shell'].includes(mode) || !(writing || READ_TOOLS.has(tool))) return deny('this tool is not allowed in this run');
     if (!path.isAbsolute(root) || !input || typeof input !== 'object' || Array.isArray(input)) return deny(UNRESOLVED);
     const project = path.resolve(root);
