@@ -55,6 +55,17 @@ test('自带的档位表只收身份表里的模型，各接入方式里的模�
   }
 });
 
+test('新模型在各接入方式里的写法都查得到官方价格，Qwen4-Max 的缓存读写按输入价算', () => {
+  for (const [name, input, output] of [
+    ['gpt-6.2-astra', 8, 40], ['openai/gpt-6.2-sol', 2, 10], ['gemini-4-neon-xhigh', 3, 15], ['opencode-go/qwen4-max', 1.5, 4.5],
+  ]) {
+    assert.equal(priceFor(name, { input: 1e6 }, prices), input, name);
+    assert.equal(priceFor(name, { output: 1e6 }, prices), output, name);
+  }
+  // 官方公开页面没有 Qwen4-Max 的缓存价（只写见百炼控制台），缓存读和写都退回输入价
+  assert.equal(priceFor('qwen4-max', { cached: 1e6, cache_write: 1e6 }, prices), 3);
+});
+
 test('模型身份统一前缀、Claude 版本和空白，Fable 与 Mythos 保持独立', () => {
   assert.equal(priceKey, modelKey);
   assert.equal(priceIdentity, modelIdentity);

@@ -82,7 +82,7 @@ test('缓存写入单独计价，不重复计普通输入，总输入小于缓�
 test('新增官方价格精确匹配模型和提供方前缀，不被较短条目抢先', () => {
   for (const [model, input, cached, cache_write, output] of [
     ['deepseek-v4.1-flash', 0.3, 0.006, undefined, 1.2], ['glm-5.3-flash', 0.15, 0.03, undefined, 0.5],
-    ['gemini-4-argon', 2, 0.1, undefined, 10], ['qwen3.8-flash', 0.15, 0.016, 0.2, 0.47], ['minimax-m3', 0.3, 0.06, undefined, 1.2],
+    ['gemini-4-argon', 4, 0.2, undefined, 20], ['qwen3.8-flash', 0.15, 0.016, 0.2, 0.47], ['minimax-m3', 0.3, 0.06, undefined, 1.2],
     ['glm-5.3-flashx', 0.37, 0.075, undefined, 1.25], ['minimax-m3.1-flash', 0.15, 0.015, undefined, 0.6],
   ]) for (const name of [model, `opencode-go/${model}`, `provider/${model.toUpperCase()}`]) {
     const rate = prices.models.find((p) => p.match.includes(model));
@@ -97,7 +97,7 @@ test('模型优先精确匹配，再取连字符前缀中最长的，拒绝相�
   for (const model of ['glm-5.4-flash', 'minimax-m3.2-flash', 'other-gemini-4-argon']) {
     for (const name of [model, `provider/${model.toUpperCase()}`]) assert.equal(priceFor(name, { input: 1e6 }, prices), null);
   }
-  assert.equal(priceFor('google/GEMINI-4-ARGON-contributor', { input: 1e6 }, prices), 2);
+  assert.equal(priceFor('google/GEMINI-4-ARGON-contributor', { input: 1e6 }, prices), 4);
   assert.equal(priceFor('anthropic/claude-opus-5-5-20261001', { input: 1e6 }, prices), 4);
   const overlapping = { models: [
     { match: ['claude-sonnet-5', 'claude-opus-5'], input: 99, output: 0 },
