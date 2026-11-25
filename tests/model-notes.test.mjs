@@ -7,7 +7,7 @@ import { sandbox, baseConfig, apiAgent, opencodeAgent, output, read, write, MESS
 const blank = (file, missing = []) => ({ file, exists: false, created: false, added: [], missing, unwritten: [] });
 const notes = (h, ...args) => h.bridge(['model-notes', ...args]).then(output);
 
-for (const lang of ['zh', 'en']) test(`生成 ${lang} 模型特长，合并别名和接入方式，按场景收录并填写 Claude 主持方默认值`, async (t) => {
+for (const lang of ['zh', 'en']) test(`生成 ${lang} 模型特长，标题只写模型名，合并别名，按场景收录并填写 Claude 主持方默认值`, async (t) => {
   const h = sandbox(t), c = baseConfig(), m = MESSAGES[lang];
   const file = path.join(path.dirname(h.userConfig), 'models.md');
   const host = ['--host-model', 'anthropic/claude-sonnet-4.6'];
@@ -26,13 +26,11 @@ for (const lang of ['zh', 'en']) test(`生成 ${lang} 模型特长，合并别�
   assert.deepEqual(await notes(h, ...host), blank(file, ids));
   assert.equal(fs.existsSync(file), false);
   assert.deepEqual(await notes(h, '--write', ...host), {
-    file, exists: true, created: true, added: ids, missing: [], unwritten: ['deepseek-flash', 'scene-only'],
+    file, exists: true, created: true, added: ids, missing: [], unwritten: ids,
   });
   const text = read(file);
   assert.ok(text.startsWith(m.modelNotes.header + '\n\n'));
-  assert.deepEqual(text.match(/^## .+$/gm), lang === 'zh'
-    ? ['## deepseek-flash（Codex CLI、Opencode CLI）', '## scene-only（API）', '## claude-sonnet-4-6（Claude Code）']
-    : ['## deepseek-flash (Codex CLI, Opencode CLI)', '## scene-only (API)', '## claude-sonnet-4-6 (Claude Code)']);
+  assert.deepEqual(text.match(/^## .+$/gm), ['## deepseek-flash', '## scene-only', '## claude-sonnet-4-6']);
   const liveBench = lang === 'zh' ? '- LiveBench（2026-10-18）：弱档，长处 推理，短处 Agentic（很弱）'
     : '- LiveBench (2026-10-18): weak tier; strong in Reasoning; weak in Agentic (very weak)';
   assert.ok(text.includes([m.modelNotes.notRated, m.modelNotes.strengths, m.modelNotes.weaknesses].join('\n')));
@@ -77,8 +75,8 @@ test('状态跟随 FOREMAN_CONFIG，忽略项目覆盖，只在文末追加缺�
     unwritten: ['deepseek-flash', 'gpt-6-astra', 'gpt-6.1-sol', 'unlisted-host'] });
   const appended = fs.readFileSync(file);
   assert.deepEqual(appended.subarray(0, original.length), original);
-  assert.match(appended.subarray(original.length).toString(), /^\r\n\r\n## gpt-6\.1-sol（Codex CLI）\r\n/);
-  assert.ok(read(file).endsWith('## unlisted-host（Claude Code）\r\n- LiveBench：未评级\r\n- 擅长：\r\n- 短处：\r\n'));
+  assert.match(appended.subarray(original.length).toString(), /^\r\n\r\n## gpt-6\.1-sol\r\n/);
+  assert.ok(read(file).endsWith('## unlisted-host\r\n- LiveBench：未评级\r\n- 擅长：\r\n- 短处：\r\n'));
   assert.deepEqual(await notes(h, '--write', ...host), { ...written, added: [] });
   assert.deepEqual(fs.readFileSync(file), appended);
 });
@@ -92,4 +90,37 @@ test('标题里的模型 ID 带反引号或紧跟半角括号时也能认出', a
   write(path.join(path.dirname(h.userConfig), 'models.md'), '## `gpt-6-astra`（Codex CLI）\n- 擅长：后端\n\n## glm-5.3(Codex CLI)\n- 擅长：前端\n');
   const status = await notes(h);
   assert.deepEqual([status.missing, status.unwritten], [[], []]);
+});
+
+test('标题可以只写一部分或并列几个模型，版本号按前缀比，补节只补哪一节都对不上的模型', async (t) => {
+  const h = sandbox(t), c = baseConfig();
+  const file = path.join(path.dirname(h.userConfig), 'models.md');
+  c.agents.codex.model = 'deepseek-v4.1-flash';
+  c.agents.opus = { ...c.agents.codex, model: 'claude-opus-5-5' };
+  c.agents.old = { ...c.agents.codex, model: 'claude-opus-4-5' };
+  c.agents.fable = { ...c.agents.codex, model: 'claude-fable-5-2' };
+  c.agents.gpt = { ...c.agents.codex, model: 'gpt-6.1-sol' };
+  c.modules.default.run.complex = ['codex', 'opus', 'old', 'fable', 'gpt'].map((agent) => ({ agent }));
+  h.config(c);
+  write(file, '## deepseek-flash, kimi\n- 擅长：快\n\n## claude-opus-5、claude-fable\n- 短处：贵\n\n## qwen，gpt-6-sol（备注）\n- 擅长：\n');
+  const status = await notes(h);
+  assert.deepEqual([status.missing, status.unwritten], [['claude-opus-4-5'], ['gpt-6.1-sol']]);
+  const written = await notes(h, '--write');
+  assert.deepEqual([written.added, written.missing], [['claude-opus-4-5'], []]);
+  assert.deepEqual(read(file).match(/^## .+$/gm), ['## deepseek-flash, kimi', '## claude-opus-5、claude-fable', '## qwen，gpt-6-sol（备注）', '## claude-opus-4-5']);
+  write(file, '## Claude Opus 4.5\n- 擅长：稳\n\n## gpt\n- 短处：啰嗦\n');
+  assert.deepEqual((await notes(h)).missing, ['deepseek-flash', 'claude-opus-5-5', 'claude-fable-5-2']);
+});
+
+test('括号备注里的逗号、标题末尾的 #、多段版本号和数字后面的符号都按规则处理', async (t) => {
+  const h = sandbox(t), c = baseConfig();
+  const file = path.join(path.dirname(h.userConfig), 'models.md');
+  c.agents.codex.model = 'glm-5.3';
+  c.agents.opus = { ...c.agents.codex, model: 'claude-opus-5.5.1' };
+  c.agents.acme = { ...c.agents.codex, model: 'acme-s1+' };
+  c.agents.sonnet = { ...c.agents.codex, model: 'claude-sonnet-4-6' };
+  c.modules.default.run.complex = ['codex', 'opus', 'acme', 'sonnet'].map((agent) => ({ agent }));
+  h.config(c);
+  write(file, '## deepseek-flash (benchmarks, glm, local)\n- 擅长：快\n\n## claude-opus-5.5.1\n- 擅长：稳\n\n## acme-s1\n- 擅长：便宜\n\n## claude-sonnet-4-6 ##\n- 短处：慢\n');
+  assert.deepEqual((await notes(h)).missing, ['glm-5.3', 'acme-s1+']);
 });

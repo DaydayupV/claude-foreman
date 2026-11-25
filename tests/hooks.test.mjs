@@ -77,8 +77,8 @@ for (const lang of ['zh', 'en']) test(`会话在两份偏好之后注入并截�
   h.write('.claude/foreman.md', 'project preferences marker');
   const context = async () => output(await reminder(h, lang)).hookSpecificOutput.additionalContext;
   const title = lang === 'zh'
-    ? `模型特长文档 ${file}（各模型的擅长和短处；挑人、写任务说明、验收、权衡审查和讨论意见时参考，问题成不成立仍以核实为准）：`
-    : `Model notes ${file} (each model's strengths and weaknesses; consult them when picking agents, writing briefs, accepting work and weighing review and discussion points; whether a finding holds still rests on verification):`;
+    ? `模型特长文档 ${file}（各模型的擅长和短处。标题是模型名，可以只写一部分或用逗号并列几个：写出的每一段按顺序出现在模型名里就算对得上，版本号按前缀比；几节都对得上时都读，说法冲突时以更具体的为准。挑人、写任务说明、验收、权衡审查和讨论意见时参考，问题成不成立仍以核实为准）：`
+    : `Model notes ${file} (each model's strengths and weaknesses. Headings are model names, possibly partial or several separated by commas: a heading fits a model when each of its parts appears in the model name in the same order, versions matching by prefix; read every section that fits, and where they disagree the more specific one wins. Consult them when picking agents, writing briefs, accepting work and weighing review and discussion points; whether a finding holds still rests on verification):`;
   const baseline = await context();
   write(file, ' \n');
   assert.equal(await context(), baseline);
