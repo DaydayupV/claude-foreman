@@ -437,6 +437,8 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 
 两档都会先拍改动快照，Claude Code 事后逐个文件审查 diff。
 
+opencode 的两档靠插件注入的权限规则管住写入。opencode 只按字面路径判断写到哪里，所以插件给执行档的写入规则是先允许、再逐个拒绝：项目里所有的符号链接和 junction（不管指向哪里，要改它们指向的文件得用真实路径；派活前插件先扫一遍项目，列不出或没扫完的目录整个拒绝，链接太多时合并成上层目录拒绝，结果里会写明）；`.git`、`.claude`、`.opencode`、`.codebuddy`、`.gemini`、`.agents`、`.agent`、`_agents`、`_agent`、`.pnpm`、`.pnpm-store` 目录，以及 `opencode.json`、`opencode.jsonc`，以及 Git 实际用的元数据和钩子目录、登记在项目里的 Git 工作树，项目里哪一层都算；绝对路径和 `..` 开头的路径；Windows 上含 `~` 或 `:` 的路径，防止用 8.3 短名或 NTFS 流写法绕过。opencode 的工作树工具也一并禁用。`edit` 档还会关掉 opencode 的格式化命令（项目 `opencode.json` 里配的也关），因为它们会在写完文件后运行；`shell` 档照旧。其他硬链接、执行期间才新建的链接管不到，macOS 和 Linux 还没在真机上验证过。
+
 agy 的两档由守卫逐个工具调用执行，各系统一样，Windows 也支持：写文件只能写在项目目录里（`--add-dir` 给的目录只能读，在项目里面的也一样），而且不能写项目里的 `.git`、`.claude`、`.gemini`、`.agents`、`.agent`、`_agents`、`_agent` 目录，写进去等于改 git、Claude Code 或 agy 的配置和钩子；agy 的设置、foreman 的状态目录和运行记录也不能写。写入路径带 `.` 或 `..` 段、Windows 上有段名以点或空格结尾的，一律拒绝；指向项目外网络共享的路径也拒绝。agy 的上网和浏览器工具和讨论时一样放行（见上面的“上网和浏览器”）。`shell` 档的命令不受这些限制。项目目录包含主目录下的 `.gemini` 或 `.claude`，或者本身就在 agy 的设置、foreman 的状态目录或运行记录里面时，不给 agy 派执行任务。
 
 CodeBuddy 的两档由插件注入的守卫钩子检查每一次读写：写文件只能写在项目目录里，不能写项目里的 `.git`、`.codebuddy`、`.claude` 目录和 `.git` 文件指向的 git 目录；CodeBuddy 的设置、foreman 的状态目录和运行记录也不能写，有其他硬链接的文件也不能写。写入路径带 `.` 或 `..` 段、Windows 上有段名以点或空格结尾的，以及 `@`、`file:` 开头和 `/c/` 这类写法，一律拒绝。上网工具和讨论时一样能用。`shell` 档的守卫照样拦这些写入，但命令本身不受限制。CodeBuddy 的用户设置里有 `permissions.deny` 或 `permissions.ask` 规则时不给它派 `edit`，因为守卫的批准会盖过这些规则。

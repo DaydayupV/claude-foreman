@@ -233,7 +233,8 @@ export default {
 ### 5.1 执行（run）
 - **Codex**：和现在一样（原生 schema、沙箱、图片）。
 - **opencode**：
-  - 注入 `foreman-run` 代理。权限默认全部拒绝，只开：read、grep、glob、list、edit、write；`run_access` 为 `shell` 时再开 shell。`external_directory` 拒绝，question、子代理、联网工具都拒绝。
+  - 注入 `foreman-run` 代理。权限默认全部拒绝，只开：read、grep、glob、list、edit、write；`run_access` 为 `shell` 时再开 shell。`external_directory` 拒绝，question、子代理都拒绝；两档都放行 `webfetch`，配了网页搜索服务时再放行 `websearch`。
+  - 写入边界：opencode 2.3.2 只按字面路径判断写入位置，会顺着项目里的链接写到项目外面，也能写进 `.git/hooks`、`.claude` 这些之后会被执行的地方（2026-11-25 实测）。派执行任务前用 `scanLinks` 扫一遍项目（最多 30 万项），在 `edit` 权限里先 `"*": "allow"`，再依次拒绝：受保护的目录和文件（`.git`、`.claude`、`.opencode`、`.codebuddy`、`.gemini`、`.agents`、`.agent`、`_agents`、`_agent`、`.pnpm`、`.pnpm-store`，`opencode.json`、`opencode.jsonc`，哪一层都算，和 agy、CodeBuddy 守卫保护的目录一致）；`/*`、`..`、`../*`（opencode 对项目里的路径用相对 Location 的路径匹配，Location 外、同一 Git 工作树里的是 `../` 开头）；`git rev-parse` 查出的、落在项目里的元数据目录和钩子目录；所有链接本身和 `链接/*`（内部链接的别名也能通到受保护目录或外部链接，所以一律拒绝，纯数字的名字写成 `123*`，因为 opencode 读配置时会把数字键排到最前面）；列不出内容的目录和扫满时没扫到的目录；Windows 上最后加 `*~*` 和 `*:*`，否则 8.3 短名和 NTFS 流写法能绕过。链接和目录规则序列化后超过 12000 字符时合并成父目录，名字没法安全写进规则的（`__proto__` 这类、含花括号、以 `~` 开头）改为拒绝父目录，要合并到项目根时不启动 opencode。权限顶层另外拒绝 `worktree_remove`、`worktree_create`；不过 `worktree_remove` 是按 `edit` 判断权限的，按工具名拒绝管不住它，所以 `git worktree list` 查出的、登记在项目里的工作树也整个拒绝。钩子目录按系统的顺序解析（POSIX 上先展开链接再处理 `..`，经过目标不存在的链接时读出它指向哪里），查不清就不启动。名字含 `$HOME` 的也改为拒绝父目录（opencode 会展开它）。规则预算还要扣掉用户自己的 `OPENCODE_CONFIG_CONTENT`：整份注入配置要装进一个环境变量（Windows 约 3.2 万字符，其他系统约 12 万字节），装不下就不启动。预检拒绝启动时结果记 `not_started`，统计里不算这一席。配置写成有序数组 `permissions` 会被忽略（实测），所以只能用对象。`edit` 档注入 `formatter: false`，关掉写完文件后运行的格式化命令（项目配置盖不过它），`shell` 档照旧。管不到的：其他硬链接、执行期间新建的链接；macOS 和 Linux 没有真机验证。
   - 报告靠提示词附 schema，解析失败修复一次（见 6.3）。
   - 归属：写文件、改文件的工具事件。
   - 卡死检测见 6.4。
