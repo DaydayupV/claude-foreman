@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "as_of": "2026-11-13",
+  "as_of": "2026-11-25",
   "note": "模型身份表：键是规范 id（modelKey 归一化后的写法），aliases 是官方说明或确认过的同一个模型的其他名字（包括同一模型的加速版、免费版、contributor 端点；加速版按同一模型算，宁可把同一模型并成一个，也不把它当成独立证据）。比较不同的基础模型、stats 分行都按这里归并。同价不等于同一个模型（Fable 和 Mythos 各是一条）。family 只用于档位兜底和展示，不当身份。board_names 是评测榜上和 display 不同的名字。",
   "models": {
     "claude-fable-5-2": { "display": "Claude Fable 5.2", "family": "claude", "vendor": "anthropic", "aliases": [], "board_names": ["Claude Fable 5.2 (xhigh)"] },
@@ -22,6 +22,8 @@
     "claude-haiku-5-5": { "display": "Claude Haiku 5.5", "family": "claude", "vendor": "anthropic", "aliases": [] },
     "claude-haiku-4-5": { "display": "Claude Haiku 4.5", "family": "claude", "vendor": "anthropic", "aliases": [] },
 
+    "gpt-6.2-astra": { "display": "GPT-6.2 Astra", "family": "gpt", "vendor": "openai", "aliases": [] },
+    "gpt-6.2-sol": { "display": "GPT-6.2 Sol", "family": "gpt", "vendor": "openai", "aliases": [] },
     "gpt-6.1-sol": { "display": "GPT-6.1 Sol", "family": "gpt", "vendor": "openai", "aliases": [] },
     "gpt-6.1-terra": { "display": "GPT-6.1 Terra", "family": "gpt", "vendor": "openai", "aliases": [] },
     "gpt-6-sol": { "display": "GPT-6 Sol", "family": "gpt", "vendor": "openai", "aliases": [] },
@@ -48,6 +50,7 @@
     "glm-5.3-flashx": { "display": "GLM-5.3 FlashX", "family": "glm", "vendor": "zhipu", "aliases": [] },
     "glm-5.2": { "display": "GLM-5.2", "family": "glm", "vendor": "zhipu", "aliases": [] },
 
+    "gemini-4-neon": { "display": "Gemini 4 Neon", "family": "gemini", "vendor": "google", "aliases": [] },
     "gemini-4-carbon": { "display": "Gemini 4 Carbon", "family": "gemini", "vendor": "google", "aliases": [] },
     "gemini-4-argon": { "display": "Gemini 4 Argon", "family": "gemini", "vendor": "google", "aliases": ["gemini-4-argon-contributor"] },
     "gemini-4-hydrogen": { "display": "Gemini 4 Hydrogen", "family": "gemini", "vendor": "google", "aliases": [] },
@@ -60,6 +63,7 @@
     "grok-4.5": { "display": "Grok 4.5", "family": "grok", "vendor": "xai", "aliases": [] },
     "grok-build-0.1": { "display": "Grok Build 0.1", "family": "grok", "vendor": "xai", "aliases": [] },
 
+    "qwen4-max": { "display": "Qwen4-Max", "family": "qwen", "vendor": "alibaba", "aliases": [] },
     "qwen3.8-max": { "display": "Qwen3.8 Max", "family": "qwen", "vendor": "alibaba", "aliases": [] },
     "qwen3.8-flash": { "display": "Qwen3.8 Flash", "family": "qwen", "vendor": "alibaba", "aliases": [] },
     "qwen3.8-27b": { "display": "Qwen3.8 27B", "family": "qwen", "vendor": "alibaba", "aliases": [] },

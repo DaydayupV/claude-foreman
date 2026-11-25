@@ -5,6 +5,7 @@ import path from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { loadModels, modelKey, modelIdentity, modelInfo } from '../foreman/skills/dispatch/scripts/models.mjs';
 import { loadPrices, priceFor, modelKey as priceKey, modelIdentity as priceIdentity } from '../foreman/skills/dispatch/scripts/prices.mjs';
+import { loadTiers, tierOf } from '../foreman/skills/dispatch/scripts/tiers.mjs';
 import { ROOT, sandbox, write } from './helpers.mjs';
 
 const catalog = loadModels(), prices = loadPrices();
@@ -35,6 +36,22 @@ test('价格表所有 match 都有身份，起始配置模型都有身份和价�
   for (const name of [...starters.map(([, , , model]) => model), 'gpt-6.1-sol', 'gpt-6-astra']) {
     assert.equal(modelInfo(name).known, true, name);
     assert.notEqual(priceFor(name, { input: 1e6 }, prices), null, name);
+  }
+});
+
+test('自带的档位表只收身份表里的模型，各接入方式里的模型名都查得到档位', () => {
+  const tiers = loadTiers();
+  for (const [id, model] of Object.entries(tiers.models)) {
+    assert.ok(Object.hasOwn(catalog.models, id), `档位表里的模型不在身份表：${id}`);
+    assert.ok(Object.hasOwn(tiers.sources, model.source), `来源缺失：${id}`);
+  }
+  // Codex 写身份 ID，agy 把推理强度写在 ID 后缀里，opencode、pi、OpenRouter 带提供方前缀
+  for (const [name, id] of [
+    ['gpt-6.2-astra', 'gpt-6.2-astra'], ['openai/gpt-6.2-sol', 'gpt-6.2-sol'],
+    ['gemini-4-neon-xhigh', 'gemini-4-neon'], ['opencode-go/qwen4-max', 'qwen4-max'],
+  ]) {
+    assert.equal(modelIdentity(name), id, name);
+    assert.equal(tierOf(name, { tiers }).rated, true, name);
   }
 });
 
