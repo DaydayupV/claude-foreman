@@ -2,13 +2,17 @@ import { D as displayText, commandAction } from '../foreman/skills/dispatch/scri
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { outsideLinks } from '../foreman/skills/dispatch/scripts/adapters/codebuddy-cli.mjs';
+import { toolDecision } from '../foreman/skills/dispatch/scripts/adapters/codebuddy-guard.mjs';
 import { plannedSandbox as sandbox, seedRun, baseConfig, codebuddyAgent, taskArgs, output, failed, ROOT, MESSAGES } from './helpers.mjs';
 import { report, discussion } from './fixtures/reports.mjs';
 const M = MESSAGES.zh;
 const D = { ...MESSAGES.en, ...displayText }; // 显示文字中英两个插件一样，用英文那一套
 const SCRIPTS = path.join(ROOT, 'foreman/skills/dispatch/scripts');
+const GUARD = path.join(SCRIPTS, 'adapters/codebuddy-guard.mjs');
 
 const configure = (h, extra = {}, change = () => {}) => {
   const c = baseConfig();
@@ -19,6 +23,13 @@ const configure = (h, extra = {}, change = () => {}) => {
 };
 const runs = (s) => s.calls().filter((c) => c.operation === 'run');
 const argsOf = (call, flag) => { const i = call.args.indexOf(flag); return i < 0 ? null : call.args[i + 1] ?? null; };
+const assertGuard = (call, access, cwd, runsDir) => {
+  const quote = value => "'" + value.replaceAll('\\', '/').replaceAll("'", "'\\''") + "'";
+  const command = [process.execPath, GUARD, access, cwd, runsDir].map(quote).join(' ');
+  assert.deepEqual(JSON.parse(argsOf(call, '--settings')), { hooks: {
+    PreToolUse: [{ matcher: 'Read|Glob|Grep|Write|Edit', hooks: [{ type: 'command', command }] }],
+  } });
+};
 let ids = 0;
 const tool = (name, input, { result = 'synthetic output', isError = false, files } = {}) => {
   const call = { type: 'tool_use', id: `tool-${++ids}`, name, input };
@@ -57,6 +68,7 @@ test('讨论：只读工具白名单、MCP 隔离、事件翻译、用量和费�
   assert.ok(call.args.includes('--strict-mcp-config'));
   assert.equal(argsOf(call, '--setting-sources'), 'user');
   assert.equal(argsOf(call, '--permission-mode'), 'dontAsk');
+  assertGuard(call, 'read', h.cwd, h.runs);
   assert.ok(!call.args.includes('-y'));
   assert.equal(argsOf(call, '--effort'), 'high');
   assert.equal(argsOf(call, '--output-format'), 'stream-json');
@@ -147,6 +159,7 @@ test('审查：补丁材料、只读工具，审查不能续接', async (t) => {
   const r = output(await h.bridge(['review', '--cwd', h.cwd, '--level', 'normal', '--brief', '-'], { env: s.env, input: '重点检查' }));
   const call = runs(s)[0];
   assert.equal(argsOf(call, '--tools'), 'Read,Glob,Grep,StructuredOutput');
+  assertGuard(call, 'read', h.cwd, h.runs);
   assert.ok(call.stdin.startsWith(M.opencodeReviewPrompt(h.cwd, M.reviewScopeUncommitted)));
   assert.ok(call.stdin.includes('+after'));
   assert.ok(call.stdin.includes(M.reviewKinds.diff));
@@ -169,6 +182,11 @@ test('审查：结构化输出收下报告，findings 为空也是合法结果',
 for (const access of ['edit', 'shell']) test(`执行（${access}）：工具白名单、改动归属、命令计数和 watch`, async (t) => {
   const h = sandbox(t);
   configure(h, { run_access: access }, (c) => { c.modules.default.run.complex = { agent: 'cb' }; });
+  if (access === 'shell') {
+    const settings = path.join(h.home, '.codebuddy/settings.json');
+    fs.mkdirSync(path.dirname(settings));
+    fs.writeFileSync(settings, JSON.stringify({ permissions: { deny: ['Edit(./private/**)'], ask: ['Write(./private/**)'] } }));
+  }
   h.initGit();
   const editTools = ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'StructuredOutput'];
   const shellTools = ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash', 'PowerShell', 'StructuredOutput'];
@@ -183,14 +201,11 @@ for (const access of ['edit', 'shell']) test(`执行（${access}）：工具白�
   const execution = await h.bridge(taskArgs(h), { env: s.env, input: '合成执行任务' });
   const r = output(execution), call = runs(s)[0];
   assert.equal(call.args[call.args.indexOf('--tools') + 1], (access === 'shell' ? shellTools : editTools).join(','));
+  assertGuard(call, access, h.cwd, h.runs);
   if (access === 'edit') {
     assert.equal(argsOf(call, '--permission-mode'), 'dontAsk');
     assert.equal(argsOf(call, '--allowedTools'), 'Write(./**),Edit(./**)');
     assert.ok(!call.args.includes('-y'));
-    const hooks = JSON.parse(argsOf(call, '--settings')).hooks.PreToolUse;
-    assert.equal(hooks[0].matcher, 'Write|Edit');
-    assert.ok(hooks[0].hooks[0].command.includes('codebuddy-guard.mjs'));
-    assert.ok(hooks[0].hooks[0].command.includes(h.cwd.replaceAll('\\', '/')));
   }
   if (access === 'shell') assert.ok(call.args.includes('-y'));
   assert.equal(r.status, 'done');
@@ -212,6 +227,57 @@ for (const access of ['edit', 'shell']) test(`执行（${access}）：工具白�
   }
 });
 
+test('Windows：外部 junction 限制讨论、审查和 edit 的搜索，shell 保留搜索', { skip: process.platform !== 'win32' }, async (t) => {
+  const h = sandbox(t);
+  h.initGit();
+  h.write('source.txt', 'after\n');
+  const outside = path.join(h.home, 'outside');
+  fs.mkdirSync(outside);
+  fs.mkdirSync(path.join(h.cwd, 'nested'));
+  fs.symlinkSync(outside, path.join(h.cwd, 'nested/linkdir'), 'junction');
+  const cases = [
+    ['discuss', 'edit', 'Read,StructuredOutput'],
+    ['review', 'edit', 'Read,StructuredOutput'],
+    ['run', 'edit', 'Read,Write,Edit,StructuredOutput'],
+    ['run', 'shell', 'Read,Glob,Grep,Write,Edit,Bash,PowerShell,StructuredOutput'],
+  ];
+  for (const [mode, access, tools] of cases) {
+    configure(h, { run_access: access }, c => { c.modules.default[mode].complex = { agent: 'cb' }; });
+    const s = h.scenario(mode === 'run' ? { structured: report } : {}, mode + '-' + access);
+    const extra = mode === 'discuss' ? ['--agent', 'cb'] : [];
+    const r = output(await h.bridge(taskArgs(h, mode, extra), { env: s.env, input: '合成任务' }));
+    const [call] = runs(s);
+    assert.equal(argsOf(call, '--tools'), tools, mode);
+    assert.equal(call.stdin.endsWith(M.codebuddyFileList('source.txt')), access !== 'shell', mode);
+    assert.equal(r.notes.includes(M.codebuddyLinksNoSearch('nested/linkdir')), access !== 'shell', mode);
+  }
+});
+
+test('Windows：内部 junction 保留搜索，外部 junction 仍可在无 Git 清单时运行', { skip: process.platform !== 'win32' }, async (t) => {
+  const h = sandbox(t);
+  configure(h, {}, c => { c.modules.default.discuss.complex = [{ agent: 'cb' }]; });
+  fs.symlinkSync(h.cwd, path.join(h.cwd, 'internal'), 'junction');
+  const s = h.scenario();
+  const discuss = () => h.bridge(taskArgs(h, 'discuss', ['--agent', 'cb']), { env: s.env, input: '合成议题' });
+  const r = output(await discuss());
+  assert.equal(argsOf(runs(s)[0], '--tools'), 'Read,Glob,Grep,StructuredOutput');
+  assert.ok(!r.notes.includes(M.codebuddyLinksNoSearch('internal')));
+  fs.mkdirSync(path.join(h.home, 'outside'));
+  fs.symlinkSync(path.join(h.home, 'outside'), path.join(h.cwd, 'external'), 'junction');
+  output(await discuss());
+  assert.equal(argsOf(runs(s)[1], '--tools'), 'Read,StructuredOutput');
+  assert.ok(runs(s)[1].stdin.endsWith(M.codebuddyFileList('')));
+});
+
+test('项目树扫描跳过 .git，并在超过条目上限时停止', (t) => {
+  const h = sandbox(t);
+  h.write('.git/ignored.txt', 'synthetic');
+  h.write('nested/a.txt', 'synthetic');
+  h.write('nested/b.txt', 'synthetic');
+  assert.deepEqual(outsideLinks(h.cwd, 3), { links: [], capped: false });
+  assert.deepEqual(outsideLinks(h.cwd, 2), { links: [], capped: true });
+});
+
 test('执行：失败的 Write 带调用 ID 和失败码，不获得改动归属', async (t) => {
   const h = sandbox(t);
   configure(h, { run_access: 'edit' }, (c) => { c.modules.default.run.complex = { agent: 'cb' }; });
@@ -222,7 +288,35 @@ test('执行：失败的 Write 带调用 ID 和失败码，不获得改动归属
   const item = h.events(r.run_id).find((e) => e.item?.id === 'write-failed');
   assert.equal(item.item.exit_code, 1);
   assert.deepEqual(item.item.changes, []);
+  assert.deepEqual(r.errors, []);
   assert.ok(!r.changes.files.some((file) => file.path === 'blocked.txt' && file.by === 'agent'));
+});
+
+test('工具结果：保留拒绝原文和路径，API 错误对象转成 JSON', async (t) => {
+  const h = sandbox(t);
+  configure(h, { run_access: 'edit' }, (c) => { c.modules.default.run.complex = { agent: 'cb' }; });
+  const outside = path.join(h.home, 'outside.txt');
+  const local = path.join(h.cwd, '.claude/config.json');
+  const detail = 'PreToolUse:Edit hook blocked this tool call: foreman guard: path is in a protected location';
+  const tail = 'Use a project file.';
+  const denied = 'Permission to use Read has been denied.';
+  const apiError = { message: 'synthetic API error', code: 'synthetic' };
+  const s = h.scenario({ structured: report, result_errors: [apiError], tool_calls: [
+    { type: 'tool_use', id: 'deny-edit', name: 'Edit', input: { file_path: local } },
+    { type: 'tool_use', id: 'deny-read', name: 'Read', input: { file_path: '../outside.txt' } },
+  ], tool_results: [
+    { is_error: true, content: [{ type: 'text', text: detail }, { type: 'text', text: tail }] },
+    { is_error: true, content: denied },
+  ], denied: [{ id: 'deny-read', tool: 'Read' }] });
+  const r = output(await h.bridge(taskArgs(h), { env: s.env, input: '执行' }));
+  assert.deepEqual(r.questions, [
+    { source: 'permission_denied', question: 'Edit (.claude/config.json)', options: [], recommendation: null, detail: `Edit (.claude/config.json): ${detail}\n${tail}` },
+    { source: 'permission_denied', question: `Read (${outside})`, options: [], recommendation: null, detail: `Read (${outside}): ${denied}` },
+  ]);
+  assert.deepEqual(r.errors, [JSON.stringify(apiError)]);
+  const edit = h.events(r.run_id).find(e => e.item?.id === 'deny-edit').item;
+  assert.equal(edit.aggregated_output, detail + '\n' + tail);
+  assert.deepEqual(edit.changes, []);
 });
 
 test('执行报告不合格时，同一会话、不给工具修复一次，用量累加', async (t) => {
@@ -234,6 +328,7 @@ test('执行报告不合格时，同一会话、不给工具修复一次，用�
   const [first, second] = runs(s);
   assert.equal(argsOf(first, '--tools'), 'Read,Glob,Grep,Write,Edit,StructuredOutput');
   assert.equal(argsOf(second, '--tools'), 'StructuredOutput');
+  assert.ok(!second.args.includes('--settings'));
   assert.equal(argsOf(second, '--resume'), 'synthetic-codebuddy-session');
   assert.equal(r.usage.output_tokens, 10);
 });
@@ -276,6 +371,8 @@ for (const [label, settings] of Object.entries({
   allow: { permissions: { allow: ['Read(~/outside/**)'] } },
   additionalDirectories: { permissions: { additionalDirectories: ['../outside'] } },
   hooks: { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo unsafe' }] }] } },
+  pluginFlag: { enabledPlugins: { 'synthetic@fixture': true } },
+  pluginState: { enabledPlugins: { 'synthetic@fixture': { enabled: true } } },
   malformed: '{broken',
 })) test(`用户设置（${label}）：拒绝扩大目录边界，报错包含文件路径`, async (t) => {
   const h = sandbox(t);
@@ -287,25 +384,32 @@ for (const [label, settings] of Object.entries({
   const r = output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'cb']), { env: s.env, input: '议题' }), 1);
   assert.equal(r.status, 'failed');
   assert.ok(r.errors.some(error => error.includes(file)), JSON.stringify(r.errors));
+  if (settings.enabledPlugins) assert.ok(r.errors.some(error => error.includes('enabledPlugins')));
   assert.equal(runs(s).length, 0);
   const checked = output(await h.bridge(['check', '--agent', 'cb'], { env: s.env }), 1);
   assert.equal(checked.agents.cb.ok, false);
   assert.ok(checked.agents.cb.error.includes(file));
 });
 
-test('独立 CodeBuddy 配置目录同样检查；空权限规则和 deny 可正常运行', async (t) => {
+test('相对配置目录以 foreman 的 cwd 解析，预检和子进程使用同一路径', async (t) => {
   const h = sandbox(t);
   configure(h, {}, (c) => { c.modules.default.discuss.complex = [{ agent: 'cb' }]; });
   const custom = path.join(h.home, 'custom-codebuddy');
   fs.mkdirSync(custom);
   const file = path.join(custom, 'settings.json');
   fs.writeFileSync(file, JSON.stringify({ permissions: { additionalDirectories: ['/outside'] } }));
-  const s = h.scenario();
-  const env = { ...s.env, CODEBUDDY_CONFIG_DIR: custom };
-  const refused = output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'cb']), { env, input: '议题' }), 1);
+  const capture = path.join(h.home, 'config-dir.txt');
+  const s = h.scenario({ config_dir_capture: capture });
+  const options = { cwd: h.home, env: { ...s.env, CODEBUDDY_CONFIG_DIR: path.basename(custom) }, input: '议题' };
+  const discuss = () => h.bridge(taskArgs(h, 'discuss', ['--agent', 'cb']), options);
+  const refused = output(await discuss(), 1);
   assert.ok(refused.errors.some(error => error.includes(file)));
-  fs.writeFileSync(file, JSON.stringify({ permissions: { allow: [], additionalDirectories: [], deny: ['Read(./secret)'] }, hooks: {} }));
-  assert.equal(output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'cb']), { env, input: '议题' })).status, 'done');
+  assert.equal(runs(s).length, 0);
+  fs.writeFileSync(file, JSON.stringify({ permissions: { allow: [], additionalDirectories: [], deny: ['Read(./secret)'] }, hooks: {},
+    enabledPlugins: { disabled: false, disabledWithState: { enabled: false } }, trustedDirectories: [h.home] }));
+  assert.equal(output(await discuss()).status, 'done');
+  assert.equal(runs(s)[0].cwd, h.cwd);
+  assert.equal(fs.readFileSync(capture, 'utf8'), custom);
 });
 
 test('显式 bin：npm 无扩展入口和 node shebang 用 node，原生文件直接启动', async (t) => {
@@ -321,27 +425,118 @@ test('显式 bin：npm 无扩展入口和 node shebang 用 node，原生文件�
   assert.deepEqual(adapter.locate({ bin: native }), { file: native, pre: [] });
 });
 
-test('edit 守卫：限制真实路径，拒绝目录穿越、junction、坏链接和权限配置写入', async (t) => {
+const fileTool = (tool_name, file_path) => ({ tool_name, tool_input: { file_path } });
+const OUTSIDE = 'foreman guard: path is outside the project';
+const PROTECTED = 'foreman guard: path is in a protected location (.git, .codebuddy, .claude, or foreman or CodeBuddy settings)';
+const AMBIGUOUS = 'foreman guard: path has a . or .. segment or a name ending in a dot or space; use a plain path inside the project';
+const UNRESOLVED = 'foreman guard: cannot resolve the path safely';
+
+test('守卫决定表：三档的文件工具权限和歧义路径', (t) => {
   const h = sandbox(t);
-  const { editDecision } = await import(pathToFileURL(path.join(SCRIPTS, 'adapters/codebuddy-guard.mjs')));
-  const decide = file => editDecision(h.cwd, { tool_name: 'Write', tool_input: { file_path: file } }).allow;
-  assert.equal(decide('new.txt'), true);
-  assert.equal(decide(path.join(h.cwd, 'nested/new.txt')), true);
-  assert.equal(decide('../outside.txt'), false);
-  assert.equal(decide(path.join(h.home, 'outside.txt')), false);
-  assert.equal(decide('.git/config'), false);
-  assert.equal(decide('.codebuddy/settings.json'), false);
-  assert.equal(decide(''), false);
-  assert.equal(editDecision(null, {}).allow, false);
+  t.mock.method(os, 'homedir', () => h.home);
+  const outside = path.join(h.home, 'outside.txt');
+  const plain = 'foreman guard: use a plain path; @ references, file: URLs and /c/-style drive paths are not allowed';
+  const notAllowed = 'foreman guard: this tool is not allowed in this run';
+  const deny = reason => ({ decision: 'deny', reason });
+  const undecided = { decision: null, reason: null };
+  for (const mode of ['read', 'edit', 'shell']) {
+    for (const tool of ['Read', 'Glob', 'Grep', 'Write', 'Edit']) {
+      const search = tool === 'Glob' || tool === 'Grep', write = tool === 'Write' || tool === 'Edit';
+      const decide = value => toolDecision(mode, h.cwd, search
+        ? { tool_name: tool, tool_input: { path: value, pattern: '**/*.txt' } }
+        : fileTool(tool, value), { runsDir: h.runs });
+      const allowed = !write || mode === 'shell' ? undecided : mode === 'edit' ? { decision: 'allow', reason: 'project-local edit' } : deny(notAllowed);
+      assert.deepEqual(decide('nested/new.txt'), allowed);
+      assert.deepEqual(decide(outside), deny(write && mode === 'read' ? notAllowed : OUTSIDE));
+      assert.deepEqual(decide('nested/../new.txt'), deny(AMBIGUOUS));
+      assert.deepEqual(decide('./new.txt'), write ? deny(AMBIGUOUS) : undecided);
+      assert.deepEqual(decide('.ClAuDe/new.txt'), write ? deny(mode === 'read' ? notAllowed : PROTECTED) : undecided);
+      for (const value of ['@../outside.txt', 'file:../outside.txt', 'FILE://outside.txt', 'nul\0.txt',
+        ...(process.platform === 'win32' ? ['/c/outside.txt'] : [])]) assert.deepEqual(decide(value), deny(plain));
+      if (search) assert.deepEqual(decide(undefined), undecided);
+      if (!write) for (const value of ['~', '~/outside.txt']) assert.deepEqual(decide(value), deny(OUTSIDE));
+      if (write && process.platform === 'win32') {
+        for (const value of ['name./new.txt', 'name /new.txt']) assert.deepEqual(decide(value), deny(AMBIGUOUS));
+      }
+    }
+    const glob = pattern => toolDecision(mode, h.cwd, { tool_name: 'Glob', tool_input: { pattern } }, { runsDir: h.runs });
+    assert.deepEqual(glob(path.join(h.home, '*.txt')), deny(OUTSIDE));
+    assert.deepEqual(glob('nested/../*.txt'), deny(AMBIGUOUS));
+  }
+});
+
+test('守卫：真实路径、junction、坏链接和项目根别名', (t) => {
+  const h = sandbox(t);
+  const options = { runsDir: h.runs }, decide = file => toolDecision('edit', h.cwd, fileTool('Write', file), options);
+  assert.equal(decide('new.txt').decision, 'allow');
+  assert.equal(decide(path.join(h.cwd, 'nested/new.txt')).decision, 'allow');
+  assert.equal(decide('../outside.txt').reason, AMBIGUOUS);
+  assert.equal(decide(path.join(h.home, 'outside.txt')).reason, OUTSIDE);
+  assert.equal(decide('.git/config').reason, PROTECTED);
+  assert.equal(decide('.codebuddy/settings.json').reason, PROTECTED);
+  assert.equal(decide('').reason, UNRESOLVED);
+  assert.equal(toolDecision('edit', null, fileTool('Write', 'new.txt'), options).reason, UNRESOLVED);
   const outside = path.join(h.home, 'outside');
   fs.mkdirSync(outside);
-  fs.symlinkSync(outside, path.join(h.cwd, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
-  assert.equal(decide('escape/new.txt'), false);
+  const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+  fs.symlinkSync(outside, path.join(h.cwd, 'escape'), linkType);
+  assert.equal(decide('escape/new.txt').reason, OUTSIDE);
+  assert.equal(toolDecision('read', h.cwd, fileTool('Read', 'escape/new.txt'), options).reason, OUTSIDE);
   fs.mkdirSync(path.join(h.cwd, '.codebuddy'));
-  fs.symlinkSync(path.join(h.cwd, '.codebuddy'), path.join(h.cwd, 'settings-alias'), process.platform === 'win32' ? 'junction' : 'dir');
-  assert.equal(decide('settings-alias/settings.json'), false);
-  fs.symlinkSync(path.join(h.home, 'not-created'), path.join(h.cwd, 'dangling'), process.platform === 'win32' ? 'junction' : 'dir');
-  assert.equal(decide('dangling/new.txt'), false);
+  fs.symlinkSync(path.join(h.cwd, '.codebuddy'), path.join(h.cwd, 'settings-alias'), linkType);
+  assert.equal(decide('settings-alias/settings.json').reason, PROTECTED);
+  fs.symlinkSync(path.join(h.home, 'not-created'), path.join(h.cwd, 'dangling'), linkType);
+  assert.equal(decide('dangling/new.txt').decision, 'deny');
+  const rootLink = path.join(h.home, 'project-link');
+  fs.symlinkSync(h.cwd, rootLink, linkType);
+  assert.equal(toolDecision('edit', rootLink, fileTool('Write', path.join(h.cwd, 'new/deep/file.txt')), options).decision, 'allow');
+});
+
+test('守卫：保护目录的链接目标、gitdir 和 foreman 记录，并拒绝硬链接写入', (t) => {
+  const h = sandbox(t);
+  const options = { runsDir: path.join(h.cwd, 'run-records') };
+  const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+  const local = path.join(h.cwd, 'settings-target'), external = path.join(h.home, 'settings-alias');
+  fs.mkdirSync(local);
+  fs.symlinkSync(local, external, linkType);
+  fs.symlinkSync(external, path.join(h.cwd, '.CLAUDE'), linkType);
+  h.write('.git', 'gitdir: git-metadata\r\n');
+  fs.linkSync(h.write('local.txt', 'synthetic'), path.join(h.home, 'linked.txt'));
+  for (const mode of ['edit', 'shell']) {
+    const decide = file => toolDecision(mode, h.cwd, fileTool('Edit', file), options);
+    for (const file of ['.claude/settings.json', '.CLAUDE/settings.json', 'settings-target/settings.json', 'git-metadata/index', 'run-records/meta.json']) {
+      assert.deepEqual(decide(file), { decision: 'deny', reason: PROTECTED }, file);
+    }
+    assert.deepEqual(decide('local.txt'), { decision: 'deny', reason: 'foreman guard: file has other hard links; it may change a file outside the project' });
+  }
+  assert.equal(toolDecision('read', h.cwd, fileTool('Read', 'local.txt'), options).decision, null);
+});
+
+test('守卫：Windows UNC 路径在文件系统调用之前拒绝', { skip: process.platform !== 'win32' }, (t) => {
+  const h = sandbox(t);
+  const fail = () => assert.fail('UNC rejection must precede filesystem calls');
+  const mocks = [t.mock.method(fs.realpathSync, 'native', fail),
+    ...['lstatSync', 'statSync', 'readdirSync', 'readlinkSync', 'readFileSync'].map(name => t.mock.method(fs, name, fail))];
+  for (const mode of ['read', 'edit', 'shell']) for (const name of ['Read', 'Write']) {
+    for (const file of ['\\\\synthetic-server\\share\\file.txt', '//synthetic-server/share/file.txt']) {
+      assert.deepEqual(toolDecision(mode, h.cwd, fileTool(name, file), { runsDir: h.runs }),
+        { decision: 'deny', reason: 'foreman guard: path is on a network share' });
+    }
+  }
+  for (const fn of mocks) assert.equal(fn.mock.callCount(), 0);
+});
+
+test('守卫进程：安全读取不输出，输入错误和配置目录写入输出 deny', async (t) => {
+  const h = sandbox(t);
+  const configDir = path.join(h.cwd, 'custom-settings');
+  const run = (mode, input) => h.start(GUARD, [mode, h.cwd, h.runs], { input, env: { CODEBUDDY_CONFIG_DIR: configDir } }).done;
+  const allowed = await run('read', JSON.stringify(fileTool('Read', 'a.txt')));
+  assert.equal(allowed.code, 0);
+  assert.equal(allowed.stdout, '');
+  for (const [mode, input, reason] of [['read', '{broken', UNRESOLVED], ['shell', JSON.stringify(fileTool('Write', 'custom-settings/settings.json')), PROTECTED]]) {
+    const denial = output(await run(mode, input));
+    assert.deepEqual(denial.hookSpecificOutput, { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason });
+  }
 });
 
 for (const rule of ['deny', 'ask']) test(`edit 守卫不会覆盖用户 ${rule} 规则`, async (t) => {
@@ -359,9 +554,14 @@ for (const rule of ['deny', 'ask']) test(`edit 守卫不会覆盖用户 ${rule} 
 
 test('check：版本、清单、最小请求，推理强度按清单核对', async (t) => {
   const h = sandbox(t);
-  configure(h, { effort: 'high' }, (c) => { c.modules.default.discuss.complex = [{ agent: 'cb', effort: 'high' }]; });
+  const cwd = path.join(h.cwd, 'check project'), runsDir = path.join(h.home, 'check-runs');
+  fs.mkdirSync(cwd);
+  configure(h, { effort: 'high' }, (c) => {
+    c.modules.default.discuss.complex = [{ agent: 'cb', effort: 'high' }];
+    c.dispatch.runs_dir = runsDir;
+  });
   const s = h.scenario({ models: ['fake-1', 'fake-2'] });
-  const r = await h.bridge(['check', '--agent', 'cb'], { env: s.env });
+  const r = await h.bridge(['check', '--agent', 'cb', '--cwd', cwd], { env: s.env });
   const out = output(r, r.code);
   assert.equal(out.agents.cb.type, 'codebuddy cli');
   assert.equal(out.agents.cb.version, '2.180.0');
@@ -374,6 +574,8 @@ test('check：版本、清单、最小请求，推理强度按清单核对', asy
   const probe = list.at(-1);
   assert.ok(probe.args.includes('--no-session-persistence'));
   assert.equal(argsOf(probe, '--tools'), 'Read,Glob,Grep');
+  assert.equal(probe.cwd, cwd);
+  assertGuard(probe, 'read', cwd, runsDir);
   // 配置里的模型不在清单里：报出最接近的写法，不通过
   configure(h, { model: 'fake-9' }, (c) => { c.modules.default.discuss.complex = [{ agent: 'cb' }]; });
   const missing = output(await h.bridge(['check', '--agent', 'cb'], { env: h.scenario({ models: ['fake-1', 'fake-2'] }).env }), 1);
@@ -403,10 +605,30 @@ test('拦截钩子：拦下直接用 codebuddy 跑任务，放行查询和管理
     'node "$APPDATA/npm/node_modules/@tencent-ai/codebuddy-code/bin/codebuddy" -p hi', 'codebuddy > out.txt -p hi',
     "codebuddy model.lp --append-system-prompt '-solve' -p", "cbc model.lp --append-system-prompt '-solve' -p",
     'codebuddy model.lp -solve', 'npx @tencent-ai/codebuddy-code model.lp -solve',
-    'node /npm/node_modules/@tencent-ai/codebuddy-code/bin/codebuddy model.lp -solve', 'cbc -- "run a task"'])
+    'node /npm/node_modules/@tencent-ai/codebuddy-code/bin/codebuddy model.lp -solve', 'cbc -- "run a task"',
+    'cbc "review this diff"', 'cbc model.mps -py hi', 'cbc model.mps --model fake-1', 'cbc -import'])
     assert.equal((await h.hook('guard-direct-calls.mjs', { tool_input: { command } })).code, 2, command);
-  for (const command of ['codebuddy --version', 'codebuddy --help', 'codebuddy -c --help', 'cbc config set -g theme dark', 'codebuddy update', 'codebuddy mcp list', 'cbc model.mps -solve', 'cbc -import model.mps -solve', 'cbc model.mps.gz -solve', 'echo codebuddy -p hi'])
+  for (const command of ['codebuddy --version', 'codebuddy --help', 'codebuddy -c --help', 'cbc config set -g theme dark', 'codebuddy update', 'codebuddy mcp list',
+    'cbc model.mps -solve', 'cbc -import model.mps -solve', 'cbc model.mps.gz -solve', 'echo codebuddy -p hi',
+    'cbc model.mps -preprocess off -solve', 'cbc model.mps -presolve on -priority off -pivot fullDantzig -solve',
+    'cbc model.LP.bz2 -ratioGap 0.01 -solve', 'cbc -import model.data -solve',
+    'codebuddy --resume --help', 'codebuddy --worktree --help', 'codebuddy -r --help', 'codebuddy -w --help'])
     assert.equal((await h.hook('guard-direct-calls.mjs', { tool_input: { command } })).code, 0, command);
+});
+
+test('讨论、审查和执行带 --add-dir 时直接报错', async (t) => {
+  const h = sandbox(t);
+  configure(h, { run_access: 'shell' }, (c) => {
+    c.modules.default.discuss.complex = [{ agent: 'cb' }];
+    c.modules.default.review.normal = { agent: 'cb' };
+    c.modules.default.run.complex = { agent: 'cb' };
+  });
+  h.initGit(); h.write('source.txt', 'after\n');
+  const s = h.scenario();
+  for (const args of [taskArgs(h), taskArgs(h, 'discuss', ['--agent', 'cb']), ['review', '--cwd', h.cwd, '--level', 'normal', '--brief', '-']]) {
+    failed(await h.bridge([...args, '--add-dir', h.home], { env: s.env }), M.codebuddyNoAddDir('cb'));
+  }
+  assert.equal(runs(s).length, 0);
 });
 
 test('status 和看板认得 codebuddy 这个接入方式', async (t) => {

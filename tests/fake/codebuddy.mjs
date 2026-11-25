@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { setup, replay, finish } from './common.mjs';
 import { discussion, review } from '../fixtures/reports.mjs';
 
@@ -6,6 +7,7 @@ import { discussion, review } from '../fixtures/reports.mjs';
 const args = process.argv.slice(2);
 const operation = args.includes('--version') ? 'version' : args.includes('--help') ? 'help' : 'run';
 const { scenario: s, input } = await setup('codebuddy', operation, args);
+if (s.config_dir_capture) fs.writeFileSync(s.config_dir_capture, process.env.CODEBUDDY_CONFIG_DIR ?? '');
 const emit = (event) => console.log(JSON.stringify({ session_id: s.session_id || 'synthetic-codebuddy-session', ...event }));
 const turnUsage = () => ({ input_tokens: s.usage?.input ?? 10, output_tokens: s.usage?.output ?? 5,
   cache_read_input_tokens: s.usage?.cacheRead ?? 3, cache_creation_input_tokens: s.usage?.cacheWrite ?? 0 });
@@ -55,6 +57,7 @@ else if (operation === 'help') {
       const text = s.last_message ?? (structured ? JSON.stringify(structured) : 'OK');
       assistant([{ type: 'text', text }]);
       emit({ type: 'result', subtype: 'success', is_error: false, result: text, ...(totalUsage() ? { usage: totalUsage() } : {}),
+        errors: s.result_errors,
         ...(s.turn_usage ? { _meta: { 'codebuddy.ai/turnUsage': { kind: 'snapshot', total: { usage: s.turn_usage } } } } : {}),
         ...(structured ? { structured_output: structured } : {}),
         permission_denials: (s.denied || []).map((denial, index) => ({ tool_name: denial.tool, tool_use_id: denial.id || `denied-${index}`,
