@@ -34,7 +34,7 @@ A request often goes through several stages: settle the approach (**discuss**), 
 - A discussion is levelled before you give the approach, or before you judge the result of work already done and decide what to do next (also when the user only asks for advice); hands-on work before you start it; a review once the thing under review exists and has passed checking, by its actual risk. When a kind comes up again, level it from 0 as usual. Don't discuss or review just to follow the flow.
 - **None of them go by how much changes** (except the size threshold for reviews). **For discussions and hands-on work, when unsure, go one level up**; for a review you're unsure about, follow "Levels" in `references/review.md`.
 - Claude handles level 0 itself, without calling the script; level 1 `simple`, level 2 `normal` and level 3 `complex` go by `resolved_modules.<kind>.<level>`: pick from its candidates, or Claude does it if it says `"claude code"`. Don't override the config because a task looks big or small, and don't look outside the cell.
-- The numeric thresholds are defaults; if the preference files say otherwise, follow them: the level 0 criteria for hands-on work, the review size (roughly 300 lines or 5 files), 1 rework, and more than 10 minutes per part when splitting work.
+- The numeric thresholds are defaults; if the preference files say otherwise, follow them: the level 0 criteria for hands-on work, the review size in code (roughly 300 lines or 5 files), 1 rework, and more than 10 minutes per part when splitting work.
 
 **Discussion** (by how uncertain the decision is and how costly a wrong choice would be)
 | Level | How to tell |
@@ -61,7 +61,7 @@ Judging something that already exists isn't a discussion: evidence reviews of re
 |---|---|
 | Level 0 | Small changes, docs, comments, styling, copy, pure configuration; one-off scripts or prototypes already run and checked; low-risk changes with test coverage; research conclusions that are cheap to get wrong. Claude's check is enough; no outside review |
 | Level 1 `simple` | Large but mechanical changes, such as bulk renames and replacements or folder migrations |
-| Level 2 `normal` | Larger ordinary features and fixes (roughly 300 lines or 5 files or more); level 3 hands-on work Claude did itself (including when the config gives that level to Claude); evidence reviews of research conclusions that wouldn't be cheap to get wrong |
+| Level 2 `normal` | Larger ordinary features and fixes (roughly 300 lines or 5 files of code or more); level 3 hands-on work Claude did itself (including when the config gives that level to Claude); evidence reviews of research conclusions that wouldn't be cheap to get wrong |
 | Level 3 `complex` | Changes that alter high-risk behaviour, or whose effect on it can't be ruled out: money and billing, deleting or migrating data, concurrency, auth and security, external actions that can't be undone; evidence reviews of research conclusions that such decisions will rest on |
 
 When several levels fit, take the highest. A review goes only by the material under review: it doesn't inherit the hands-on level, who made the change, or how hard the cause was to find. A design critique covers only the decisions the discussion didn't settle and goes by how costly a wrong choice would be (as for discussions), a visual check by how much the deliverable matters.
