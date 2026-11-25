@@ -127,7 +127,7 @@ const usedIn = (used) => {
   }
   return labels.length ? M.list(labels) : M.reportUnused;
 };
-const runAccess = (agent) => agent.type === 'api' ? dash : agent.type === 'agy cli' ? M.agyReadOnly : agent.type === 'codex cli' ? M.reportAccessCodex
+const runAccess = (agent) => agent.type === 'api' ? dash : agent.type === 'codex cli' ? M.reportAccessCodex
   : agent.run_access === 'edit' ? M.reportAccessEdit : agent.run_access === 'shell' ? M.reportAccessShell : M.reportAccessOff;
 
 const notes = (summary, checks) => {

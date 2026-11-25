@@ -1,19 +1,20 @@
-// Agy CLI：只读讨论和审查，全局守卫自检、stream-json 翻译、清单和 check。
+// Agy CLI：执行、只读讨论和审查，全局守卫自检、stream-json 翻译、清单和 check。
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { DISCUSS_SCHEMA, REVIEW_SCHEMA } from '../config.mjs';
+import { fileURLToPath } from 'node:url';
+import { SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA } from '../config.mjs';
 import { MAX_REVIEW_CHARS, reviewPatchText } from '../review-scope.mjs';
 import { newRunDir, isCancelled, cancelSource, announceBoard } from '../records.mjs';
-import { startRun, finishDiscussion, eventWriter, runLimits, reportWithRepair, spawnCli, validateSchema } from '../runner.mjs';
+import { startRun, finishDiscussion, execute, eventWriter, runLimits, reportWithRepair, spawnCli, validateSchema } from '../runner.mjs';
 import { M, die, killTree, readAttachments, filesOutside, focusFiles, relativePath, closestMatches, sleep } from '../util.mjs';
 import { D, modelLabel, toolLabel } from '../format.mjs';
 import { defaultMaxParallel } from './parallel.mjs';
 import { AGY_EFFORTS, splitAgyModel, agyFamilies, agyModelId } from './agy-models.mjs';
-import { agyCommand, guardEnvironment, policyFor, prepareAgyRun, preflightAgy, scanProject, queryAgy, probeSandbox, agySandboxInfo, windowsSandboxSettings, workDir, removeWorkDir, timeLeft } from './agy-setup.mjs';
+import { agyCommand, guardEnvironment, policyFor, prepareAgyRun, preflightAgy, scanProject, unsafeWriteRoot, queryAgy, probeSandbox, agySandboxInfo, windowsSandboxSettings, workDir, removeWorkDir, timeLeft } from './agy-setup.mjs';
 import { spawnSync } from 'node:child_process';
 
-const capabilities = { modes: ['discuss', 'review'], isolation: 'tools', reads_code: true, reads_images: false, native_schema: false,
+const capabilities = { modes: ['run', 'discuss', 'review'], isolation: 'tools', reads_code: true, reads_images: false, native_schema: false,
   native_review: false, images: false, resume: true, command_start_events: true };
 const PROGRESS_MS = Number(process.env.FOREMAN_TEST_PROGRESS_MS) || 5000;
 const modelProblem = (e) => e.code === 'agyModelMissing' ? M.agyModelMissing(e.args[0], closestMatches(e.args[0], e.args[1]).join(', '))
@@ -180,10 +181,12 @@ async function executeAgy(ctx) {
   const { cwd, brief, opts } = ctx;
   if (ctx.parent && !ctx.sessionId) die(M.noSession(ctx.parent));
   ctx = { ...ctx, addDirs: ctx.addDirs || opts['add-dir'].map((d) => path.resolve(d)) };
-  const review = ctx.kind === 'review', schemaText = fs.readFileSync(review ? REVIEW_SCHEMA : DISCUSS_SCHEMA, 'utf8');
+  const review = ctx.kind === 'review', exec = ctx.kind === 'exec';
+  if (exec && unsafeWriteRoot(cwd)) die(M.agyWriteRootUnsafe(cwd));
+  const schemaText = fs.readFileSync(review ? REVIEW_SCHEMA : exec ? SCHEMA : DISCUSS_SCHEMA, 'utf8');
   const files = readAttachments(opts.file, cwd, false), schema = JSON.parse(schemaText), outside = filesOutside(files, [cwd, ...ctx.addDirs]);
   if (outside.length) die(M.filesOutsideCwd(ctx.agentName, M.list(outside), true));
-  let promptFor;
+  let prompt, promptFor;
   if (review) {
     const scope = ctx.reviewScope, opening = { files: M.reviewPromptFiles, claims: M.reviewPromptClaims }[ctx.reviewTarget];
     const parts = opening ? [opening(cwd)] : [];
@@ -195,10 +198,18 @@ async function executeAgy(ctx) {
       parts.push(M.reviewMaterial(material.fileList, material.patch, material.fence, material.note));
     }
     promptFor = (shell) => [M.agyReviewPrompt(cwd, scope?.description || ctx.reviewTarget, shell), ...parts, M.reviewFooter(ctx.reviewTarget), M.reviewSchemaFooter(schemaText)].join('\n\n');
-  } else promptFor = (shell) => `${brief}${focusFiles(files)}\n\n${ctx.parent ? M.opencodeResumeFooter : M.agyDiscussFooter(cwd, schemaText, shell)}\n`;
+  } else if (exec) prompt = ctx.parent
+    ? `${brief}${focusFiles(files)}\n\n${M.resumeFooter}\n\n${M.opencodeRunResumeFooter}\n`
+    // 附加目录对 agy 的执行只能读（守卫拒绝写入），不能照通用写法写成“另可改动”。
+    : `${brief}\n\n${M.footer(cwd, [])}${ctx.addDirs.length ? `\n${M.agyReadOnlyDirs(M.list(ctx.addDirs))}` : ''}\n\n${M.opencodeRunFooter(schemaText, ctx.agent.run_access)}\n`;
+  else promptFor = (shell) => `${brief}${focusFiles(files)}\n\n${ctx.parent ? M.opencodeResumeFooter : M.agyDiscussFooter(cwd, schemaText, shell)}\n`;
   const { id, dir, release } = await newRunDir(ctx);
-  const run = startRun({ ...ctx, id, dir, release, readonly: 'tools' }, { sandbox: 'files-only' });
   const split = splitAgyModel(ctx.model);
+  if (exec) return execute({ ...ctx, id, dir, release, prompt }, {
+    capabilities, describe: () => ({ sandbox: null, modelShown: split.family, modelName: split.family }),
+    run: ({ run }) => agySession(run, schema),
+  });
+  const run = startRun({ ...ctx, id, dir, release, readonly: 'tools' }, { sandbox: 'files-only' });
   run.meta.model = run.meta.model_shown = run.meta.model_name = split.family;
   run.meta.effort = split.effort ?? (ctx.effort === 'default' ? null : ctx.effort);
   run.writeMeta();
@@ -209,14 +220,21 @@ async function executeAgy(ctx) {
 // agy 重试的原因归到 API 重试已有的几类，状态和看板沿用同样的文字；认不出的照原文显示
 const agyRetryReason = (error) => /EOF|stream|connection|reset|timed? ?out/i.test(error) ? 'network'
   : /\b429\b|RESOURCE_EXHAUSTED|rate.?limit/i.test(error) ? 'rate_limit' : /\b5\d\d\b|INTERNAL|UNAVAILABLE/i.test(error) ? 'server' : error;
+// 写工具的 Path：守卫只放行绝对路径和 file:/// 地址；地址解码不了时照原样，归属就对不上快照里的文件，按 unknown 处理。
+const toolPath = (cwd, value) => {
+  if (!/^file:\/\//i.test(value)) return path.resolve(cwd, value);
+  try { return fileURLToPath(value); } catch { return value; }
+};
 async function agySession(run, schema, promptFor) {
   const { ctx, meta, writeMeta, started } = run, { dir, cwd, agent, model, effort, agentName, addDirs } = ctx;
+  const exec = ctx.kind === 'exec', access = exec ? agent.run_access : 'read';
   const split = splitAgyModel(model);
   ctx.model = meta.model;
   ctx.effort = meta.effort;
   const { deadline, stallMin } = runLimits(ctx, started), event = eventWriter(dir);
   const errors = [], notes = [], warnings = [], observed = { messages: [], questions: [] };
-  let usage = null, pending = null, last = '', commands = 0, items = 0, repairing = false, nextPrompt = ctx.brief;
+  const fileChanges = new Set(), realCwd = fs.realpathSync.native(cwd);
+  let usage = null, pending = null, last = '', commands = 0, items = 0, repairing = false, nextPrompt = ctx.prompt ?? ctx.brief;
   let currentTools = new Map(), completed = new Set(), responses = new Map(), usageSteps = new Set(), progressAt = 0;
   const session = (ev) => {
     if (ev.conversation_id && !meta.session_id) { meta.session_id = ev.conversation_id; writeMeta(); event({ type: 'thread.started', thread_id: meta.session_id }); }
@@ -262,10 +280,24 @@ async function agySession(run, schema, promptFor) {
     else if (denial !== undefined) observed.questions.push({ source: 'permission_denied',
       question: `${tool} ${JSON.stringify(args)}`, detail: JSON.stringify({ tool, input: args }) });
     if (['edit_file', 'write_file'].includes(tool)) {
-      event({ type: 'item.completed', item: { id: item.id, tool, type: 'file_change', category: 'edit', changes: [] } });
+      const changes = [];
+      if (exec && ev.state === 'DONE' && !info.error && denial === undefined && typeof args.Path === 'string' && args.Path) {
+        // 归属用写入后的真实路径，再换回项目根原来的写法：经链接写的文件、用别名派出的项目，才能和快照对上。
+        // 守卫已经放行、写入也成功了，这里查的是项目里的本地路径。
+        let target = toolPath(cwd, args.Path);
+        try {
+          const real = fs.realpathSync.native(target), rel = path.relative(realCwd, real);
+          target = rel && (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) ? real : path.join(cwd, rel);
+        } catch { /* 写完又被删了，照原路径记 */ }
+        fileChanges.add(target);
+        changes.push({ path: target, kind: tool === 'write_file' ? 'add' : 'update' });
+      }
+      event({ type: 'item.completed', item: { id: item.id, tool, type: 'file_change', category: 'edit', changes } });
       return;
     }
-    if (tool === 'run_command') commands++;
+    // 被钩子拦下、或者没能启动的命令没有运行，不计数；启动后以非零状态退出的照样算。
+    if (tool === 'run_command' && !/^tool call denied by pre-tool hook/.test(String(info.error || info.output))
+      && !String(info.error || '').startsWith('Command failed to run:')) commands++;
     const category = tool === 'run_command' ? 'shell' : 'read', target = args.Path;
     const shown = target ? relativePath(cwd, target) : '';
     event({ type: 'item.completed', item: { id: item.id, tool, type: 'command_execution', category,
@@ -287,22 +319,26 @@ async function agySession(run, schema, promptFor) {
     meta.agy_model_id = modelId;
     ctx.effort = meta.effort = splitAgyModel(modelId).effort;
     writeMeta();
-    const probe = await probeSandbox({ agent, cwd, addDirs, version: version.stdout.trim(), run: lowLevel, deadline });
-    timeLeft(deadline);
-    sandbox = probe.available;
-    let sandboxReason;
-    if (process.platform === 'win32' && sandbox) {
-      try { windowsSandboxSettings(agent, deadline); }
-      catch { sandbox = false; sandboxReason = M.agySandboxSettingsReason; }
+    if (!exec) {
+      const probe = await probeSandbox({ agent, cwd, addDirs, version: version.stdout.trim(), run: lowLevel, deadline });
+      timeLeft(deadline);
+      sandbox = probe.available;
+      let sandboxReason;
+      if (process.platform === 'win32' && sandbox) {
+        try { windowsSandboxSettings(agent, deadline); }
+        catch { sandbox = false; sandboxReason = M.agySandboxSettingsReason; }
+      }
+      meta.sandbox = sandbox ? 'agy-sandbox' : 'files-only';
+      writeMeta();
+      if (probe.tested) notes.push(probe.results.start_error ? M.agySandboxStartResult(probe.results.start_error) : M.agySandboxResult(probe.results));
+      nextPrompt = promptFor(sandbox);
+      if (!sandbox) {
+        notes.push(M.agyNoSandbox(sandboxReason ?? agySandboxInfo(agentName, probe).reason));
+        if (probe.results.layout === 'cross_volume') notes.push(M.agyNoShellCrossVolume);
+        if (probe.results.network === 'host_offline') notes.push(M.agyNoShellOffline);
+      }
     }
-    meta.sandbox = sandbox ? 'agy-sandbox' : 'files-only';
-    writeMeta();
-    if (probe.tested) notes.push(probe.results.start_error ? M.agySandboxStartResult(probe.results.start_error) : M.agySandboxResult(probe.results));
-    nextPrompt = promptFor(sandbox);
-    if (!sandbox) {
-      notes.push(M.agyNoSandbox(sandboxReason ?? agySandboxInfo(agentName, probe).reason));
-      if (probe.results.layout === 'cross_volume') notes.push(M.agyNoShellCrossVolume);
-      if (probe.results.network === 'host_offline') notes.push(M.agyNoShellOffline);
+    if (exec ? access === 'edit' : !sandbox) {
       const list = spawnSync('git', ['ls-files'], { cwd, encoding: 'utf8', windowsHide: true, timeout: timeLeft(deadline, 60000) });
       nextPrompt += `\n\n${M.agyFileList(list.status === 0 ? list.stdout.trim() : M.agyFileListUnavailable)}`;
     }
@@ -314,7 +350,7 @@ async function agySession(run, schema, promptFor) {
     if (isCancelled(dir)) { meta.status = 'cancelled'; return null; }
     if (Date.now() >= deadline) { meta.status = 'timeout'; return null; }
     currentTools = new Map(); completed = new Set(); responses = new Map(); usageSteps = new Set();
-    const out = await lowLevel({ access: repairing ? 'none' : 'read', runDir: dir, session: meta.session_id, sandbox: !repairing && sandbox,
+    const out = await lowLevel({ access: repairing ? 'none' : access, runDir: dir, session: meta.session_id, sandbox: !repairing && sandbox,
       prompt: nextPrompt, timeoutMs: deadline - Date.now(), stallMin, onEvent: translate,
       onRetry: (retry) => event({ type: 'api.retry', reason: agyRetryReason(retry.error), wait_s: retry.wait_s, attempt: retry.attempt }) });
     errors.push(...out.errors); notes.push(...out.notes);
@@ -329,7 +365,8 @@ async function agySession(run, schema, promptFor) {
   if (meta.status === 'stalled') errors.push(M.stalled(stallMin));
   if (meta.status === 'failed' && /rate.?limit|concurrency|too many requests|\b429\b/i.test(errors.join('\n'))) notes.push(M.rateLimited(model, 'agy'));
   fs.writeFileSync(path.join(dir, 'last-message.txt'), last);
-  return { usage, errors, notes: [...new Set(notes)], warnings, report, last, commands, observed };
+  return { usage, usage_scope: usage ? 'this_run' : null, errors, notes: [...new Set(notes)], warnings, report, last, commands, observed,
+    status: meta.status, code: meta.status === 'done' ? 0 : 1, fileChanges, images: [], ...observed };
 }
 
 function agyCatalog(agent = {}, deadline) {
@@ -402,9 +439,10 @@ async function checkAgy(name, agent, efforts = [], catalog = () => agyCatalog(ag
 }
 export default { type: 'agy cli', capabilities, defaultMaxParallel: defaultMaxParallel('agy cli'), readonlyLevel: () => 'tools', channel: M.channel.agy, efforts: ['default', ...AGY_EFFORTS],
   listModelsArgs: ['models'], validate: (agent, key, check, text) => {
-    check(text(agent.model), `${key}.model`, M.invalid.modelName);
-    check(agent.bin == null || text(agent.bin), `${key}.bin`, M.invalid.stringOrNull);
-    check(agent.run_access === undefined, `${key}.run_access`, M.agyReadOnly);
-  }, status: (agent) => { const { file, pre } = agyCommand(agent); return { bin: agent.bin || pre[0] || file }; },
+    const why = M.invalid;
+    check(text(agent.model), `${key}.model`, why.modelName);
+    check(agent.bin == null || text(agent.bin), `${key}.bin`, why.stringOrNull);
+    check(agent.run_access === undefined || ['edit', 'shell'].includes(agent.run_access), `${key}.run_access`, why.runAccess);
+  }, status: (agent) => { const { file, pre } = agyCommand(agent); return { bin: agent.bin || pre[0] || file, run_access: agent.run_access ?? null }; },
   locate: agyCommand, query: queryAgy, catalog: agyCatalog, check: checkAgy, execute: executeAgy,
   validateResume: (parent) => { if (!parent.meta.session_id) die(M.noSession(parent.id)); } };
