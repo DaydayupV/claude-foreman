@@ -71,6 +71,7 @@
 | 6 opencode 权限、PWD、事件、用量 | discuss.test.mjs | opencode 注入只读代理（讨论放行 webfetch，按 opencode debug config 和用户的 OPENCODE_CONFIG_CONTENT 里最后生效的设置判断配了搜索服务才放行 websearch（环境变量解析不了时不放行），没配时被拒的 websearch 记成说明，网页步骤记成 web_search 事件）、设置 PWD 并翻译工具事件和导出用量（包含最后一步无 step_finish、旧消息排除和 cost_usd） |
 | 6 opencode 修复会话 | discuss.test.mjs | opencode 修复报告时续接同一会话且仍使用只读权限，修复那一轮不放行网页工具 |
 | 6 opencode 导出失败 | discuss.test.mjs | opencode 会话导出失败时保留报告并提示缺少用量 |
+| 6 opencode 代理名 | discuss.test.mjs、opencode-run.test.mjs、check.test.mjs | 注入的代理名带每次运行（每个进程）一个的随机后缀，`--agent` 和注入配置用同一个名字；执行和同会话修复共用同一个后缀，另一个进程续接同一会话时后缀不同；check 用带后缀的讨论代理和它的只读白名单；用户 OPENCODE_CONFIG_CONTENT 里 agents、mode、agent 的同名条目原样保留，插件代理仍是自己的白名单；假 opencode 只接受已经注入、带随机后缀的插件代理 |
 | 6 同组并发及 await-busy | discuss.test.mjs | 同组多方并发，await-busy 列出超过阈值的 API 参与方 |
 | 7 status 列表与汇总 | status-watch.test.mjs | status 列表按记录排序并汇总当前会话的组 |
 | 7 status 活动 | status-watch.test.mjs | status 对正在运行的任务给出当前命令和活动时间 |

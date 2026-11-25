@@ -53,7 +53,7 @@
 | 环境变量 | `CODEX_BRIDGE_CONFIG`、`CODEX_RUNS_DIR`、`CODEX_BRIDGE_LANG` | `FOREMAN_CONFIG`、`FOREMAN_RUNS_DIR`、`FOREMAN_LANG`；`CODEX_BIN` 保留（本来就只管 Codex） |
 | 终端提示前缀 | `bridge:` | `foreman:` |
 | 结果字段 | `changes.codex_total`、文件的 `by: "codex"` | `changes.agent_total`、`by: "agent"`（旧记录读取时转换） |
-| 注入 opencode 的代理名 | `codex-bridge-discuss` | `foreman-discuss`，另加 `foreman-run`、`foreman-repair` |
+| 注入 opencode 的代理名 | `codex-bridge-discuss` | `foreman-discuss`，另加 `foreman-review`、`foreman-run`、`foreman-repair`；每个进程再加 8 位随机后缀 |
 | 打包产物 | `dist/codex-bridge.zip` 等 | `dist/foreman.zip`、`dist/foreman-en.zip` 等 |
 | 同步工具 | `tools/sync-shared.mjs` 的共用清单 | 改成新目录和新文件名；共用范围扩到 `scripts/` 整个目录和 `hooks/*.mjs` |
 | 版本号 | 0.10.6 | 1.0.0 |
@@ -305,6 +305,7 @@ SKILL.md 改成"交给有出图能力的协作方"。配置里没有 `codex cli`
 - 防止卡住：
   - Codex 没配置 `approval` 时默认 `never`；
   - opencode 注入的代理一律"全部拒绝 + 白名单"，不开放 `question` 工具和需要确认的权限。第 4 步的 `foreman-run` 代理同样要遵守。
+  - 注入的代理名每次运行（一个 foreman 进程）加 8 位随机后缀（比如 `foreman-run-1a2b3c4d`），这次运行里的修复轮共用同一个名字，续接是新进程、换新后缀。2026-11-25 用 opencode 2.3.2 实测：用户的 `OPENCODE_CONFIG_CONTENT` 和插件写的代理在同一份配置里，这份配置里同名的 `agents`、`mode` 条目，`{env:}` 展开出来的名字（`{env:}` 的值原样插入，值里带引号还能拼出新条目），顶层 `__proto__` 继承来的条目，都会顶掉插件写的代理；`{file:}` 的内容按源码是转义成字符串插入的，拼不出新结构，但能提供完整的代理名。插件的规则整个丢掉，代理回到 opencode 的默认规则（`*=allow`，另有几条 `.env` 询问），edit 档也能跑命令。按名字过滤堵不全，所以改成随机名字，用户的条目原样保留。别的配置文件（项目的 `opencode.json`、`OPENCODE_CONFIG` 指定的文件、`.opencode/agent/*.md`）里的同名代理和顶层 `permission` 规则排在插件规则前面，按最后匹配生效，本来就盖不过插件。没有覆盖的：管理员下发的配置没有实测；会话里另外存的会话级规则排在代理规则后面，续接时可能放宽权限；项目里的 opencode 插件是代码，能在运行时改代理和工具，随机名字防不住它。
   - 提示词里写明运行中没人回答。
 - 收集：结果里的 `questions`（六种 source）和 `needs_decision`。
 - 看门狗：CLI 打出 `(y/n)` 之类的终端提示后 3 分钟没动静，就结束进程树，状态记 `needs_input`。以后接入的 CLI 自动享有。

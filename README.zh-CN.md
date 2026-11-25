@@ -358,7 +358,7 @@ Claude Code 每次进入讨论、执行或审查时，都按这一类的标准�
 1. **登录**：终端运行 `opencode`，用 `/connect` 登录（OpenCode Go 选 OpenCode Go），再运行 `opencode models` 看能用哪些模型。名字带 `-free` 的免费模型不要配：OpenCode 现在只允许在它自己的界面里用免费模型，从命令行调用会被拒绝（报错 "OpenCode's free tier can only be used from within OpenCode"）。
 2. **加进配置**：每个模型加一项 `{ "type": "opencode cli", "model": "opencode-go/glm-5.3" }`，再加进需要的格子。也可以交给 `/foreman:setup`。
 
-讨论和审查时，插件给它注入一个只读代理，有读文件、搜索和列目录的工具，讨论时还能读网页，你在 opencode 里配了网页搜索服务（`"websearch": {"provider": "random"}`，或者指定一家服务）时还能搜网页；审查要看的改动由插件用 git 算好附给它。key 和登录都留在 opencode 里。结果里的费用（`cost_usd`）和其他协作方一样按模型官方 API 价格算；opencode 自己报的费用（OpenCode Go 的额度按它扣）另存在 `reported_cost_usd`。Go 的额度按模型分开算，高档模型额度少，建议只放在复杂讨论里。
+讨论和审查时，插件给它注入一个只读代理，有读文件、搜索和列目录的工具，讨论时还能读网页，你在 opencode 里配了网页搜索服务（`"websearch": {"provider": "random"}`，或者指定一家服务）时还能搜网页；审查要看的改动由插件用 git 算好附给它。注入的代理名每次运行都带随机后缀，你和项目在 opencode 配置里预先写好的同名代理顶不掉它们的权限。key 和登录都留在 opencode 里。结果里的费用（`cost_usd`）和其他协作方一样按模型官方 API 价格算；opencode 自己报的费用（OpenCode Go 的额度按它扣）另存在 `reported_cost_usd`。Go 的额度按模型分开算，高档模型额度少，建议只放在复杂讨论里。
 
 ### 接入 pi
 

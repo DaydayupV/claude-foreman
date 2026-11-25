@@ -101,6 +101,8 @@
 
 登录和 key 都由 opencode 自己管（比如 OpenCode Go 要先在 opencode 里运行 `/connect` 登录），插件不碰。讨论和审查时，脚本给 opencode 注入一个只读代理，有读文件、搜索和列目录的工具：它能自己翻项目里的代码，但不能运行命令，也不能改文件。讨论时的代理另外放行 opencode 的 `webfetch`（读网页）；你在 opencode 里配了网页搜索服务（配置里写 `"websearch": {"provider": "random"}`，或者指定一家服务）时，再放行 `websearch`（搜网页）。没配时不放行：opencode 会想问你用哪家服务，无头运行答不了，整轮会失败。脚本派活前用 `opencode debug config` 查你配了没有。审查时这些都不放行。审查改动（`diff`）时，要看的改动由脚本用 git 算好附给它；审已有文件时只给路径，由它自己读。
 
+注入的代理名每次运行都带一个随机后缀（比如 `foreman-run-1a2b3c4d`，这次运行里修复报告格式的那一轮也用同一个后缀）。所以你自己的 `OPENCODE_CONFIG_CONTENT`、项目和全局配置里预先写好的同名代理，顶不掉它们的权限；你写的 `foreman-discuss` 之类的条目原样保留，和注入的代理互不相干。
+
 执行时注入的代理按 `run_access` 开放写文件，`shell` 档再开放运行命令，两档都放行 `webfetch`，配了网页搜索服务时再放行 `websearch`。opencode **没有系统沙箱**：
 - `edit` 档写不了项目目录以外的文件，也没有运行命令的工具；
 - `shell` 档的命令以你的账户权限运行，能访问整台机器。
