@@ -19,9 +19,11 @@ const share = value => WINDOWS && /^(?:\\\\|\/\/)[^\\/]+[\\/]+[^\\/]+/.test(valu
 const segments = value => value.split(/[\\/]+/);
 const hasProtectedName = value => value.split(path.sep).some(part => PROTECTED_DIRS.has(part.toLowerCase()));
 
-export function codebuddyConfigDir() {
-  const configured = process.env.CODEBUDDY_CONFIG_DIR;
-  return path.resolve(configured?.trim() ? configured : path.join(os.homedir(), '.codebuddy'));
+export function codebuddyConfigDir(configured = process.env.CODEBUDDY_CONFIG_DIR) {
+  const raw = configured?.trim();
+  if (!raw) return path.resolve(path.join(os.homedir(), '.codebuddy'));
+  if (raw === '~' || /^~[\\/]/.test(raw)) return path.resolve(os.homedir(), raw.slice(2));
+  return path.resolve(raw);
 }
 
 // Whether the user's CodeBuddy settings deny or ask for WebFetch (any rule naming it). An unreadable

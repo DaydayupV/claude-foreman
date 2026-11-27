@@ -165,15 +165,27 @@ function conclusion(r, width = Infinity) {
     .map((text) => ({ ts: r.original_ended_at ?? r.ended_at, cls: 'plain', text }));
 }
 
-// 卡片底行：最新的思考或正在写的回答，过了 90 秒（记录时间）就不再显示
+// 卡片底行：最新的思考或正在写的回答；运行中长耗时思考（如 opencode / 高推理强度）继续显示等待耗时，不因超过 90 秒变空
 function thinkingLine(lane, t) {
+  const r = currentRun(lane, t);
+  const running = r && r.started_at <= t && (r.ended_at == null || r.ended_at > t);
   for (let i = lane.events.length - 1; i >= 0; i--) {
     const ev = lane.events[i];
     if (ev.ts > t) continue;
-    if (t - ev.ts > 90000) return '';
-    if (ev.k === 'think') return ev.t ? `✻ ${ev.t}` : '✻ thinking…';
-    if (ev.k === 'answer') return `✎ writing answer · ${ev.n || 0} chars`;
     if (ev.k === 'msg' || ev.k === 'end' || ev.k === 'report') return '';
+    if (ev.k === 'think') {
+      if (!running && t - ev.ts > 90000) return '';
+      return ev.t ? `✻ ${ev.t}` : '✻ thinking…';
+    }
+    if (ev.k === 'answer') {
+      if (!running && t - ev.ts > 90000) return '';
+      return `✎ writing answer · ${ev.n || 0} chars`;
+    }
+    if (running && (ev.k === 'turn' || ev.k === 'read' || ev.k === 'search' || ev.k === 'web' || ev.k === 'cmd_done' || ev.k === 'edit')) {
+      const wait = Math.max(0, Math.floor((t - ev.ts) / 1000));
+      return wait >= 15 ? `✻ thinking… (${Display.D.duration(wait)})` : '✻ thinking…';
+    }
+    if (!running && t - ev.ts > 90000) return '';
   }
   return '';
 }

@@ -272,16 +272,17 @@ test('opencode 注入只读代理、设置 PWD 并翻译工具事件和导出用
   assert.equal(r.cost_usd, null); assert.equal(r.cost_source, 'unknown'); assert.equal(r.reported_cost_usd, 0.375);
   assert.equal(r.commands_executed, 0);
   const events = h.events(r.run_id);
-  // 流里没有 step_finish：导出的用量整块补成最后一条 step.usage
-  assert.deepEqual(events.map((e) => e.type), ['thread.started', 'item.completed', 'item.completed', 'item.completed', 'item.completed', 'item.completed', 'item.completed', 'step.usage']);
+  // 流里没有 step_finish：导出的用量整块补成最后一条 step.usage；step_start 会发 turn.started 供看板和 status 展示思考状态
+  assert.deepEqual(events.map((e) => e.type), ['thread.started', 'turn.started', 'item.completed', 'item.completed', 'item.completed', 'item.completed', 'item.completed', 'item.completed', 'step.usage']);
   assert.deepEqual(events.at(-1).usage, r.usage); assert.equal(events.at(-1).final, true);
-  assert.deepEqual(events[2].item, { id: 'opencode-1', tool: 'read', category: 'read', type: 'command_execution', command: 'read src/file.mjs', label: 'src/file.mjs', exit_code: 0, aggregated_output: 'synthetic source' });
-  assert.deepEqual(events.slice(3, 5).map((e) => e.item), [
+  assert.deepEqual(events[3].item, { id: 'opencode-1', tool: 'read', category: 'read', type: 'command_execution', command: 'read src/file.mjs', label: 'src/file.mjs', exit_code: 0, aggregated_output: 'synthetic source' });
+  assert.deepEqual(events.slice(4, 6).map((e) => e.item), [
     { id: 'opencode-2', type: 'web_search', query: 'synthetic query' },
     { id: 'opencode-3', type: 'web_search', query: 'https://example.invalid' },
   ]);
-  assert.deepEqual(events[5].item, { id: 'opencode-4', tool: 'webfetch', category: 'read', type: 'command_execution',
+  assert.deepEqual(events[6].item, { id: 'opencode-4', tool: 'webfetch', category: 'read', type: 'command_execution',
     command: 'webfetch', label: 'webfetch', exit_code: 1, aggregated_output: 'synthetic fetch error' });
+  assert.ok(call.stdin.includes('大型原始数据'));
   assert.ok(!read(path.join(r.run_dir, 'opencode.jsonl')).includes('step_finish'));
   assert.equal(r.changes.note, M.opencodeNoChanges);
 });

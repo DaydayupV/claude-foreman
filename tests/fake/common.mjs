@@ -18,7 +18,10 @@ export async function setup(tool, operation, args) {
   const selected = script.calls?.[index] || {};
   const scenario = { ...script, ...selected };
   const record = { tool, operation, args, stdin: input, cwd: process.cwd(), pid: process.pid,
-    env: Object.fromEntries(['OPENCODE_CONFIG_CONTENT', 'PWD', 'HOME', 'USERPROFILE', 'CODEX_HOME', 'APPDATA'].map((key) => [key, process.env[key] ?? null])) };
+    env: {
+      ...Object.fromEntries(['OPENCODE_CONFIG_CONTENT', 'PWD', 'HOME', 'USERPROFILE', 'CODEX_HOME', 'APPDATA'].map((key) => [key, process.env[key] ?? null])),
+      ...(process.env.CODEX_API_KEY !== undefined ? { CODEX_API_KEY: process.env.CODEX_API_KEY } : {}),
+    } };
   fs.appendFileSync(script.capture, JSON.stringify(record) + '\n');
   return { scenario, input, index };
 }

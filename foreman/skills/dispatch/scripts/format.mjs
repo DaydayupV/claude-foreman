@@ -54,8 +54,8 @@ function identityLine(m, style, right, width, no = null) {
 // 定价依赖本地价格表；纯显示函数只接收算好的费用。
 const usageLine = (result, meta) => displayUsageLine({ ...result, ...costOf({ ...meta, ...result }, loadPrices()) }, meta);
 
-// 计划那一行只给状态词上色："计划 <id>："用默认色，完整绿、不完整红、进行中青
-const PLAN_COLOR = { complete: C.green, incomplete: C.red, pending: C.cyan };
+// 计划那一行只给状态词上色："计划 <id>："用默认色，完整绿、降级黄、不完整红、进行中青
+const PLAN_COLOR = { complete: C.green, degraded: C.yellow, incomplete: C.red, pending: C.cyan };
 const paintPlanWord = (line, state) => line.replace(D.planStates[state], (word) => (PLAN_COLOR[state] || plain)(word));
 
 // 组视图结束后的汇总最后写一行回看某一席的命令；路径里有空格或 shell 特殊字符时加双引号，换上 run_id 就能运行

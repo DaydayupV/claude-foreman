@@ -146,7 +146,7 @@ function runCodebuddy({ agent, args, access, cwd, prompt = '', timeoutMs = 12000
     const out = { code: null, status: null, stdout: '', stderrTail: '', text: '', errors: [], events: 0, messages: [], questions: [],
       usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 }, cost: 0,
       structured: null, sessionId: null, isError: false };
-    const configDir = codebuddyConfigDir();
+    const configDir = codebuddyConfigDir(agent?.config_dir || process.env.CODEBUDDY_CONFIG_DIR);
     const settingsError = access == null ? null : unsafeUserSettings(configDir, access);
     if (settingsError) { out.status = 'failed'; out.errors.push(settingsError); resolve(out); return; }
     // foreman's tool list, permission flags and hook are meant to be the whole policy. Plugins listed in
@@ -325,7 +325,7 @@ async function executeCodebuddy(ctx) {
   if (process.platform === 'win32' && (access === 'read' || access === 'edit')) {
     // CodeBuddy 在 Windows 上搜索时会跟随链接，工具钩子只能检查搜索起点。它的 ripgrep 默认遵守 .gitignore，被忽略的目录不会搜，所以扫描时跳过；
     // ignoreGitIgnore 为 true 时 CodeBuddy 也搜被 git 忽略的文件，这时一个目录也不跳过。
-    const skip = readUserSettings(codebuddyConfigDir())?.ignoreGitIgnore === true ? [] : ignoredDirs(cwd);
+    const skip = readUserSettings(codebuddyConfigDir(agent?.config_dir || process.env.CODEBUDDY_CONFIG_DIR))?.ignoreGitIgnore === true ? [] : ignoredDirs(cwd);
     const { links, capped } = outsideLinks(cwd, SEARCH_SCAN_LIMIT, skip);
     if (capped) searchNote = M.codebuddySearchScanCapped(SEARCH_SCAN_LIMIT);
     else if (links.length) searchNote = M.codebuddyLinksNoSearch(M.list(links.slice(0, 3)));
@@ -525,7 +525,7 @@ async function codebuddySession(run, schema, access, web = false) {
 function codebuddyCatalog(agent = {}) {
   const { file, pre } = codebuddyCommand(agent);
   const source = 'codebuddy --help';
-  const env = { ...process.env, CODEBUDDY_CONFIG_DIR: codebuddyConfigDir() };
+  const env = { ...process.env, CODEBUDDY_CONFIG_DIR: codebuddyConfigDir(agent?.config_dir || process.env.CODEBUDDY_CONFIG_DIR) };
   const r = spawnSync(file, [...pre, '--help'], { env, encoding: 'utf8', windowsHide: true, timeout: 60000, maxBuffer: 16 * 1024 * 1024 });
   try {
     if (r.error) throw r.error;
@@ -571,6 +571,7 @@ function validate(agent, key, check, text) {
   const why = M.invalid;
   check(text(agent.model), `${key}.model`, why.modelName);
   check(agent.bin == null || text(agent.bin), `${key}.bin`, why.stringOrNull);
+  check(agent.config_dir == null || text(agent.config_dir), `${key}.config_dir`, why.stringOrNull);
   check(agent.run_access === undefined || RUN_ACCESS.includes(agent.run_access), `${key}.run_access`, why.runAccess);
 }
 
@@ -584,7 +585,7 @@ export default {
   validate,
   status: (agent) => {
     const { file, pre } = codebuddyCommand(agent);
-    return { bin: agent.bin || pre[0] || file, run_access: agent.run_access ?? null, model: agent.model ?? null };
+    return { bin: agent.bin || pre[0] || file, ...(agent.config_dir ? { config_dir: codebuddyConfigDir(agent.config_dir) } : {}), run_access: agent.run_access ?? null, model: agent.model ?? null };
   },
   check: checkCodebuddyAgent,
   catalog: codebuddyCatalog,

@@ -492,6 +492,24 @@ test('相对配置目录以 foreman 的 cwd 解析，预检和子进程使用同
   assert.equal(fs.readFileSync(capture, 'utf8'), custom);
 });
 
+test('agent.config_dir 隔离干净的 CodeBuddy 配置目录，不受默认 ~/.codebuddy 的 hooks/enabledPlugins 阻塞', async (t) => {
+  const h = sandbox(t);
+  const unsafeFile = path.join(h.home, '.codebuddy/settings.json');
+  fs.mkdirSync(path.dirname(unsafeFile), { recursive: true });
+  fs.writeFileSync(unsafeFile, JSON.stringify({ hooks: { SessionEnd: [{ hooks: [{ type: 'command', command: 'echo x' }] }] }, enabledPlugins: { 'p@m': true } }));
+  const cleanDir = path.join(h.home, 'clean-codebuddy');
+  fs.mkdirSync(cleanDir, { recursive: true });
+  fs.writeFileSync(path.join(cleanDir, 'settings.json'), JSON.stringify({ trustedDirectories: [h.home] }));
+  configure(h, { config_dir: cleanDir }, (c) => { c.modules.default.discuss.complex = [{ agent: 'cb' }]; });
+  const capture = path.join(h.home, 'config-dir-agent.txt');
+  const s = h.scenario({ config_dir_capture: capture });
+  const checked = output(await h.bridge(['check', '--agent', 'cb'], { env: s.env }));
+  assert.equal(checked.agents.cb.ok, true);
+  const r = output(await h.bridge(taskArgs(h, 'discuss', ['--agent', 'cb']), { env: s.env, input: '议题' }));
+  assert.equal(r.status, 'done');
+  assert.equal(fs.readFileSync(capture, 'utf8'), cleanDir);
+});
+
 test('显式 bin：npm 无扩展入口和 node shebang 用 node，原生文件直接启动', async (t) => {
   const h = sandbox(t);
   const { default: adapter } = await import(pathToFileURL(path.join(SCRIPTS, 'adapters/codebuddy-cli.mjs')));

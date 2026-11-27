@@ -101,10 +101,51 @@ for (const loggedIn of [true, false]) {
     assert.equal(r.git.ok, true);
     assert.equal(r.agents.codex.version, 'codex-cli synthetic-1.0');
     assert.equal(r.agents.codex.fix, loggedIn ? null : M.fixCodexLogin);
-    // 已登录时还会读一次模型清单，核对配置的推理强度
-    assert.deepEqual(s.calls().map((c) => c.args), loggedIn ? [['--version'], ['login', 'status'], ['debug', 'models'], sandboxProbe('read-only')] : [['--version'], ['login', 'status']]);
+    // 已登录时还会读一次模型清单、探测沙箱并发一次最小真实请求，避免假阳性
+    assert.deepEqual(s.calls().map((c) => c.args), loggedIn
+      ? [['--version'], ['login', 'status'], ['debug', 'models'], sandboxProbe('read-only'),
+        ['exec', '--json', '--skip-git-repo-check', '--ephemeral', '-m', 'fake-codex', '-c', 'model_reasoning_effort="low"', '-c', 'approval_policy="never"', '-']]
+      : [['--version'], ['login', 'status']]);
   });
 }
+
+test('check Codex 真实探测发现 401 认证失败并给出修复提示，不再假阳性', async (t) => {
+  const h = sandbox(t);
+  const authMsg = 'unexpected status 401 Unauthorized: CC Switch local proxy failed. cause: 认证失败: 当前 Codex 会话未加载所选 ChatGPT 账号';
+  const s = h.scenario({ logged_in: true, exit_code: 1, steps: [{ event: { type: 'turn.failed', error: { message: authMsg } } }] });
+  const r = output(await h.bridge(['check', '--agent', 'codex'], { env: s.env }), 1);
+  assert.equal(r.ok, false);
+  assert.equal(r.agents.codex.ok, false);
+  assert.equal(r.agents.codex.auth_error, true);
+  assert.equal(r.agents.codex.error, authMsg);
+  assert.ok(r.agents.codex.fix.includes('401'));
+});
+
+test('Codex ChatGPT 登录态自动清理残留 CODEX_API_KEY；401 派发归为 auth_failed', async (t) => {
+  const h = sandbox(t);
+  const codexHome = path.join(h.home, '.codex');
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, 'auth.json'), JSON.stringify({ auth_mode: 'chatgpt', OPENAI_API_KEY: null, tokens: { access_token: 'tok' } }));
+  fs.writeFileSync(path.join(codexHome, 'config.toml'), 'model_provider = "custom"\n[model_providers.custom]\nrequires_openai_auth = true\n');
+  const s = h.scenario({ last_message: 'OK' });
+  const checked = output(await h.bridge(['check', '--agent', 'codex'], { env: { ...s.env, CODEX_API_KEY: 'sk-stale-key' } }));
+  assert.equal(checked.agents.codex.ok, true);
+  const execCall = s.calls().find((c) => c.operation === 'exec');
+  assert.equal(execCall.env.CODEX_API_KEY, undefined);
+
+  // provider 显式声明 env_key = "CODEX_API_KEY" 时保留 CODEX_API_KEY
+  fs.writeFileSync(path.join(codexHome, 'config.toml'), 'model_provider = "custom"\n[model_providers.custom]\nenv_key = "CODEX_API_KEY"\n');
+  const s2 = h.scenario({ last_message: 'OK' });
+  output(await h.bridge(['check', '--agent', 'codex'], { env: { ...s2.env, CODEX_API_KEY: 'sk-custom-key' } }));
+  const execCall2 = s2.calls().filter((c) => c.operation === 'exec').at(-1);
+  assert.equal(execCall2.env.CODEX_API_KEY, 'sk-custom-key');
+
+  // 派发遇到 401 归类为 auth_failed 并附带修复提示
+  const s3 = h.scenario({ exit_code: 1, steps: [{ event: { type: 'turn.failed', error: { message: 'unexpected status 401 Unauthorized: Incorrect API key provided: sk-bad, auth error code: invalid_api_key' } } }] });
+  const run = output(await h.bridge(['run', '--cwd', h.cwd, '--level', 'complex', '--brief', '-'], { env: s3.env, input: 'test' }), 1);
+  assert.equal(run.status, 'auth_failed');
+  assert.ok(run.errors.some((e) => e.includes('401') && e.includes('codex login')), JSON.stringify(run.errors));
+});
 
 test('check 找不到指定 Codex 时提示安装且不调用真实 CLI', async (t) => {
   const h = sandbox(t), c = baseConfig();
