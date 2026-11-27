@@ -304,6 +304,30 @@ test('无必选计划要每席结束且至少一席有效，review 允许非空�
   const out = await status(); assert.equal(out.state, 'incomplete'); assert.deepEqual(out.missing_required, []);
 });
 
+test('无必选讨论席位失败导致有效席数低于 seat_target 时报 degraded 而非 complete', async (t) => {
+  const h = sandbox(t), c = baseConfig();
+  c.agents.second = { ...c.agents.codex };
+  c.agents.third = { ...c.agents.codex };
+  c.agents.fourth = { ...c.agents.codex };
+  c.modules.default.discuss.complex = [{ agent: 'codex' }, { agent: 'second' }, { agent: 'third' }, { agent: 'fourth' }];
+  c.modules.default.discuss.seats = { simple: 2, normal: 2, complex: 4 };
+  h.config(c);
+  const p = output(await h.bridge([...planArgs(h, 'discuss', ['codex', 'second', 'third']), '--count-why', '只启动 3 席']));
+  assert.equal(p.seat_target, 4);
+  output(await h.bridge(hostArgs(h, p)));
+  const meta = { plan: p.plan_id, group: p.group, kind: 'discuss', mode: 'discuss' };
+  seedRun(h, '20000101-seat-1', { ...meta, seat: 1, agent: 'codex', status: 'auth_failed' }, { status: 'auth_failed' });
+  seedRun(h, '20000101-seat-2', { ...meta, seat: 2, agent: 'second', status: 'failed' }, { status: 'failed' });
+  seedRun(h, '20000101-seat-3', { ...meta, seat: 3, agent: 'third', status: 'done' }, { status: 'done', report: discussion });
+  const st = output(await h.bridge(['status', '--plan', p.plan_id]));
+  assert.equal(st.state, 'degraded');
+  assert.equal(st.valid_seats, 1);
+  assert.equal(st.failed_seats.length, 2);
+  const groupOut = await h.bridge(['status', '--group', p.group]);
+  assert.equal(groupOut.code, 0, groupOut.stderr);
+  assert.ok(groupOut.stdout.includes(`Plan ${p.plan_id}: degraded; 1/4 seats valid; failed: codex (seat 1, auth failed), second (seat 2, failed)`), groupOut.stdout);
+});
+
 test('旧计划 status --plan 列出未启动的补漏和 gap 席，跑完后清空且不改变 state 算法', async (t) => {
   const h = sandbox(t), c = baseConfig(); c.agents.second = { ...c.agents.codex };
   c.modules.default.discuss.complex = [{ agent: 'codex', required: true }, { agent: 'second' }]; h.config(c);

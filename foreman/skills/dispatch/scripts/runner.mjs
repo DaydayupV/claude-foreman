@@ -510,7 +510,8 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
       if (tail) r.errors.push(M.exitCode(r.code, tail));
     }
     const quotaExhausted = !ok && (r.quotaExhausted || r.errors.some((e) => /usage limit|quota/i.test(e)));
-    meta.status = r.status || (ok ? 'done' : r.cancelled ? 'cancelled' : r.needsInput ? 'needs_input' : quotaExhausted ? 'quota_exhausted' : r.stalled ? 'stalled' : r.timedOut ? 'timeout' : 'failed');
+    const authFailed = !ok && !quotaExhausted && !!r.authFailed;
+    meta.status = r.status || (ok ? 'done' : r.cancelled ? 'cancelled' : r.needsInput ? 'needs_input' : quotaExhausted ? 'quota_exhausted' : authFailed ? 'auth_failed' : r.stalled ? 'stalled' : r.timedOut ? 'timeout' : 'failed');
     if (r.cancelled) r.errors = [M.runCancelled(modelOf(meta), cancelSource(dir))];
     meta.session_id = r.sessionId || meta.session_id;
     meta.ended_at = new Date().toISOString();
@@ -528,6 +529,8 @@ async function execute(ctx, { run: runAgent, stats: sessionStats = () => null, d
       const pad = (n) => String(n).padStart(2, '0');
       const local = date && `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
       r.errors.push(M.quotaExhausted(modelShown, local));
+    } else if (authFailed && !r.status) {
+      r.errors.push(M.codexAuthFailed(modelShown, Object.keys(process.env).some((k) => k.toUpperCase() === 'CODEX_API_KEY' && process.env[k])));
     }
 
     const result = {

@@ -505,7 +505,7 @@ ${brief}`,
   codebuddyFileList: (files) => files ? `这次没有搜索工具。项目的 git ls-files 清单：\n${files}` : '这次没有搜索工具，也没有可用的 git 文件清单。',
   codebuddyFileListTruncated: (shown, total) => `（清单太长，只列出前 ${shown} 个，一共 ${total} 个）`,
   codebuddyNeedsGitBash: '在 Windows 上找不到 Git Bash。CodeBuddy 要用 Git Bash 才能运行 foreman 的守卫钩子，找不到时它会改用 PowerShell，守卫就不起作用，所以这次拒绝启动。请安装 Git for Windows，或者把环境变量 CODEBUDDY_CODE_GIT_BASH_PATH 设成 bash.exe 的完整路径',
-  codebuddyUnsafeSettings: (file, rules) => `CodeBuddy 的设置 ${file} 里有会放宽工具权限、或者核实不了的配置（${rules}），为了守住项目目录的边界，这次拒绝启动。可以单独准备一份没有这些规则、钩子和插件的 CodeBuddy 配置目录给 foreman 用（用环境变量 CODEBUDDY_CONFIG_DIR 指过去，第一次要在里面重新登录），或者换别的协作方。foreman 不会替你改这个文件`,
+  codebuddyUnsafeSettings: (file, rules) => `CodeBuddy 的设置 ${file} 里有会放宽工具权限、或者核实不了的配置（${rules}），为了守住项目目录的边界，这次拒绝启动。可以单独准备一份没有这些规则、钩子和插件的 CodeBuddy 配置目录给 foreman 用（在配置里设 agents.<名称>.config_dir 或环境变量 CODEBUDDY_CONFIG_DIR 指过去，第一次要在里面重新登录），或者换别的协作方。foreman 不会替你改这个文件`,
   runAccessRequired: (name, type) => `${name}（${type}）要做执行任务，需要在用户配置里给它写 run_access："edit"（只能改项目里的文件）或 "shell"（还能运行命令，没有系统沙箱）`,
   unsandboxedRun: (access) => access === 'edit'
     ? '这次执行没有系统沙箱，只靠工具权限：只能读写项目目录里的文件，不能运行命令'
@@ -562,6 +562,7 @@ ${web === 'read'
 ${web
     ? '- 每个观点都要有依据：代码位置（文件路径和行号）、数据、网页链接或清楚的推理；从网上查到的说法要附上链接。拿不准的明确标出来；没看过的代码不要假装看过。'
     : '- 每个观点都要有依据：代码位置（文件路径和行号）、数据或清楚的推理。拿不准的明确标出来；没看过的代码不要假装看过。'}
+- 遇到大型原始数据、日志、字符串表或导出文件（例如超过几百 KB）时，先用搜索工具按关键词定向查证，不要整份或大段连续通读，避免无谓消耗上下文和费用。
 - 用议题的语言回答。
 - 最后只输出一个 JSON 对象，符合下面的 JSON schema。不要输出 JSON 以外的文字，也不要用代码块包起来。
 
@@ -593,6 +594,8 @@ ${schema}`,
   fixGit: (v) => `${v ? `${v} 太旧` : '没有找到 git'}，改动追踪用不了。请安装 Git 2.25 或更高版本：https://git-scm.com`,
   fixCodexMissing: '没有找到 Codex CLI。在终端运行 npm install -g @openai/codex 安装，再运行 codex login 登录；装在别的位置时，在配置的 agents.codex.bin 里写上路径',
   fixCodexLogin: 'Codex 还没有登录：在终端运行 codex login',
+  fixCodexAuth: (name, error, hasEnvKey) => `Codex 调用 ${name} 认证失败（401）：${error}。请检查：① 本机 Codex 登录状态（运行 codex login）；② 若经由本地代理/网关（如 CC Switch），确认代理已加载对应 ChatGPT 账号并重启会话；${hasEnvKey ? '③ 当前环境变量中存在 CODEX_API_KEY，可能会覆盖 ChatGPT 登录态或指向无效 key，请核查' : '③ 确认使用的 API key 或代理配置有效'}`,
+  fixCodexRun: (name, error) => `Codex 调用 ${name} 的模型失败：${error}。先在终端里用 codex exec "hi" 试一下`,
   fixCodexSandbox: (name, error, usedIn, unelevatedOk) => `Codex 的沙箱在这台电脑上启动不了命令（${error}），${name} 做 ${usedIn} 时任何命令都会失败；审批是 never，Codex 也没法申请放开。选一种修法：${unelevatedOk ? '① 推荐：在 ~/.codex/config.toml 的 [windows] 里写 sandbox = "unelevated"（刚在这台电脑上试过，能用）；' : process.platform === 'win32' ? '① 按 Codex 的 Windows 沙箱说明重新完成设置（通常要管理员权限），或者在 ~/.codex/config.toml 的 [windows] 里改成 sandbox = "unelevated" 再运行一次 check；' : '① 按 Codex 的文档修好本机的沙箱；'}② 在 foreman 配置里把 agents.${name}.sandbox 里对应的任务设成 "danger-full-access"：不用沙箱，Codex 能读写整台电脑，靠任务说明约束、事后看 diff 把关；③ 把用到 ${name} 的等级改成 "claude code" 或别的协作方。不要靠改 approval 解决：派出去的任务没人能批准`,
   fixApiKey: (name, env) => `还没有 API key：在 ~/.claude/foreman/config.json 的 agents.${name}.api_key 里填上（立即生效）${env ? `，或者设置环境变量 ${env}（设置后要重启 Claude Code）` : ''}，方法见 /foreman:setup。不打算用这个模型的话可以不管`,
   fixApiAuth: (name, source, env) => `key 无效或没有权限，检查${source === 'config' ? `配置里 agents.${name}.api_key` : `环境变量 ${env}`} 的值`,
@@ -766,6 +769,7 @@ ${schema}`,
   outsideCwdInScope: (who, paths) => `${who} 改了工作目录外、但在它写入范围里的文件：${paths}。这些改动不在快照和补丁里`,
   unstableFiles: (paths, total, phase, list) => `${phase === 'before' ? '开工' : '结束'}快照有 ${total} 个文件没能确认稳定，可能正在改写、暂时读不出，或已到快照时限：${paths.join('、')}${total > paths.length ? `等（只列出前 ${paths.length} 个${list ? `，完整列表在 ${list}` : ''}）` : ''}。这些文件没法比较，已从两份补丁和改动统计中排除，不能据此认定它们没有改动`,
   quotaExhausted: (who, resets) => `${who} 的额度已用完${resets ? `，预计 ${resets} 恢复` : ''}。不要重试；会话已保留，额度恢复后可以用 resume 继续`,
+  codexAuthFailed: (who, hasEnvKey) => `${who} 认证失败（401）：请检查本机 Codex 登录（codex login）、本地代理/CC Switch 是否加载了正确的 ChatGPT 账号${hasEnvKey ? '，以及环境变量 CODEX_API_KEY 是否与当前登录模式冲突' : ''}。修好后运行 foreman check 确认，再用 resume 续接或重新派出`,
   lastMessageTruncated: (file) => `last_message 只保留了前 8000 字，全文见 ${file}`,
   badReport: '最终报告不是合法 JSON，见 last_message',
   trackNote: '只追踪工作目录内的改动；diff.patch 包含本任务有证据或归属不明的改动，diff.all.patch 包含两次快照间可比较的全部改动；unstable_files 列出的文件不参与比较和统计',
@@ -803,6 +807,7 @@ ${web
 ${web
     ? '- 每个观点都要有依据：代码位置、数据、网页链接或清楚的推理；从网上查到的说法要附上链接。拿不准的明确标出来。'
     : '- 每个观点都要有依据：代码位置、数据或清楚的推理。拿不准的明确标出来。'}
+- 遇到大型原始数据、日志、字符串表或导出文件（例如超过几百 KB）时，先用搜索命令按关键词定向查证，不要整份或大段连续通读，避免无谓消耗上下文和费用。
 - 最后按给定的 JSON schema 输出。`,
   discussResumeFooter: `---
 （调度方提示：前面的讨论规则仍然有效：只读、不迎合、说人话、有依据，运行中没人回答。最后同样按 JSON schema 输出。）`,
@@ -1444,7 +1449,7 @@ ${brief}`,
   codebuddyFileList: (files) => files ? `No search tools are available this time. Project git ls-files list:\n${files}` : 'No search tools are available this time, and no git file list is available.',
   codebuddyFileListTruncated: (shown, total) => `(The list is long; showing the first ${shown} of ${total})`,
   codebuddyNeedsGitBash: "Couldn't find Git Bash on Windows. CodeBuddy needs it to run foreman's guard hook; without it CodeBuddy runs hooks in PowerShell and the guard doesn't work, so this run was refused. Install Git for Windows, or set CODEBUDDY_CODE_GIT_BASH_PATH to the full path of bash.exe",
-  codebuddyUnsafeSettings: (file, rules) => `Refusing to start CodeBuddy: ${file} has settings that widen tool permissions or can't be checked (${rules}), so the project boundary can't be kept. Give foreman a separate CodeBuddy config folder without these rules, hooks and plugins (point CODEBUDDY_CONFIG_DIR at it and sign in there once), or choose another agent. foreman doesn't change this file for you`,
+  codebuddyUnsafeSettings: (file, rules) => `Refusing to start CodeBuddy: ${file} has settings that widen tool permissions or can't be checked (${rules}), so the project boundary can't be kept. Give foreman a separate CodeBuddy config folder without these rules, hooks and plugins (set agents.<name>.config_dir in config.json or point CODEBUDDY_CONFIG_DIR at it and sign in there once), or choose another agent. foreman doesn't change this file for you`,
   opencodeExportFailed: (err) => `Couldn't read token usage from the opencode session (${err}), so there are no token counts this time`,
   opencodeWebsearchUnconfigured: `opencode has no web search provider configured, so the model's websearch call was refused (reading web pages still works). To let it search the web, add "websearch": {"provider": "random"} to opencode's config, or name a specific provider.`,
   opencodeLinksDenied: (list) => `The project has symbolic links or junctions, so this run can't write through them: ${list}. To change the files they point to, write to the real paths.`,
@@ -1502,6 +1507,7 @@ ${web === 'read'
 ${web
     ? "- Back every point up: a code location (file path and line number), data, a web link, or clear reasoning; give the link for anything you found on the web. Flag anything you're unsure about; don't pretend you've read code you haven't seen."
     : "- Back every point up: a code location (file path and line number), data, or clear reasoning. Flag anything you're unsure about; don't pretend you've read code you haven't seen."}
+- For large raw data, logs, string dumps, or generated files (e.g. hundreds of KB or more), use targeted search by keyword instead of reading the whole file or paging through large chunks.
 - Answer in the language of the topic.
 - Finish with a single JSON object that matches the JSON schema below. No text outside the JSON, and don't wrap it in a code block.
 
@@ -1540,6 +1546,8 @@ ${schema}`,
   fixGit: (v) => `${v ? `${v} is too old` : "git wasn't found"}, so change tracking won't work. Install Git 2.25 or later: https://git-scm.com`,
   fixCodexMissing: "The Codex CLI wasn't found. Install it by running npm install -g @openai/codex in a terminal, then sign in with codex login. If it's installed elsewhere, put its path in agents.codex.bin in the config",
   fixCodexLogin: "Codex isn't signed in: run codex login in a terminal",
+  fixCodexAuth: (name, error, hasEnvKey) => `Codex authentication failed for ${name} (401): ${error}. Check: (1) local Codex login (run codex login); (2) if using a local proxy/gateway such as CC Switch, make sure it has the selected ChatGPT account loaded and restart the session; ${hasEnvKey ? '(3) CODEX_API_KEY is set in the environment and may override ChatGPT auth or point to an invalid key' : '(3) verify the configured API key or proxy settings'}`,
+  fixCodexRun: (name, error) => `Codex failed to call ${name}: ${error}. Try running codex exec "hi" in a terminal first`,
   fixCodexSandbox: (name, error, usedIn, unelevatedOk) => `Codex's sandbox can't start commands on this machine (${error}), so every command fails when ${name} does ${usedIn}; with approval set to never, Codex can't ask to lift it either. Pick one fix: ${unelevatedOk ? '1) recommended: set sandbox = "unelevated" under [windows] in ~/.codex/config.toml (just tried on this machine, and it works); ' : process.platform === 'win32' ? '1) redo the setup per Codex\'s Windows sandbox instructions (usually needs administrator rights), or set sandbox = "unelevated" under [windows] in ~/.codex/config.toml and run check again; ' : '1) fix this machine\'s sandbox per the Codex docs; '}2) in the foreman config, set the matching task under agents.${name}.sandbox to "danger-full-access": no sandbox, Codex can read and write the whole machine, held only by the brief and the diff review afterwards; 3) change the levels that use ${name} to "claude code" or another agent. Don't fix it by changing approval: nobody can approve requests in a handed-off task`,
   fixApiKey: (name, env) => `No API key yet: fill in agents.${name}.api_key in ~/.claude/foreman/config.json (takes effect immediately)${env ? `, or set environment variable ${env} (then restart Claude Code)` : ''}; see /foreman-en:setup for how. If you don't plan to use this model, you can leave it`,
   fixApiAuth: (name, source, env) => `The key is invalid or lacks permission; check ${source === 'config' ? `agents.${name}.api_key in the config` : `environment variable ${env}`}`,
@@ -1724,6 +1732,7 @@ ${schema}`,
   outsideCwdInScope: (who, paths) => `${who} changed files outside the working directory but inside its write scope: ${paths}. These changes are not in the snapshots or patches`,
   unstableFiles: (paths, total, phase, list) => `${total} files could not be confirmed stable in the ${phase === 'before' ? 'starting' : 'ending'} snapshot because they were being rewritten, unreadable, or the deadline was reached: ${paths.join(', ')}${total > paths.length ? ` and more (only the first ${paths.length} are listed${list ? `; the full list is in ${list}` : ''})` : ''}. They cannot be compared and are excluded from both patches and change statistics; this does not establish that they were unchanged`,
   quotaExhausted: (who, resets) => `The quota for ${who} is used up${resets ? `; it should reset at ${resets}` : ''}. Don't retry; the session is kept and can be resumed once the quota resets`,
+  codexAuthFailed: (who, hasEnvKey) => `Authentication failed for ${who} (401): check local Codex login (codex login), verify any local proxy/CC Switch has the expected ChatGPT account loaded${hasEnvKey ? ', and check whether CODEX_API_KEY in the environment conflicts with your login mode' : ''}. Run foreman check to verify before resuming or re-dispatching`,
   lastMessageTruncated: (file) => `last_message keeps only the first 8000 characters; the full text is in ${file}`,
   badReport: 'The final report is not valid JSON; see last_message',
   trackNote: 'Only changes inside the working directory are tracked; diff.patch contains changes evidenced for this run or unattributed changes, diff.all.patch contains all comparable changes between the snapshots, and unstable_files lists files excluded from comparison and statistics',
@@ -1761,6 +1770,7 @@ ${web
 ${web
     ? "- Back every point with evidence: a code location, data, a web link or clear reasoning; give the link for anything you found on the web. Mark anything you're unsure about."
     : "- Back every point with evidence: a code location, data or clear reasoning. Mark anything you're unsure about."}
+- For large raw data, logs, string dumps, or generated files (e.g. hundreds of KB or more), use targeted search by keyword instead of reading the whole file or paging through large chunks.
 - Finish with output in the given JSON schema, in English.`,
   discussResumeFooter: `---
 (Note from the dispatcher: the discussion rules above still apply: read-only, don't just agree, speak plainly, back it up; nobody can answer you while you run. Finish with output in the same JSON schema.)`,
@@ -1849,6 +1859,7 @@ ${schema}`,
   stepCommandDone: 'Command just finished, deciding what to do next',
   stepReadDone: 'Just read a file, deciding what to do next',
   stepSearchDone: 'Just searched, deciding what to do next',
+  stepModelThinking: 'Model is thinking / generating a reply',
   stepLastEvent: (ev) => `Last event: ${ev}`,
   // The parts of a line are separated by " · "
   dots: (parts) => parts.filter(Boolean).join(' · '),
@@ -1861,7 +1872,7 @@ ${schema}`,
   // ---------- watch ----------
   modeNames: { run: 'run', resume: 'resume', discuss: 'discussion', review: 'review', image: 'image' },
   // The start of the timeline: the title line (mode and level as they are), then the detail lines; a model with a provider prefix is written in full here
-  statusNames: { running: 'running', done: 'done', submitted: 'submitted', completed: 'done', partial: 'partly done', blocked: 'questions returned', needs_input: 'waiting for an answer, stopped', failed: 'failed', stalled: 'stalled, stopped', timeout: 'timed out', quota_exhausted: 'out of quota', interrupted: 'interrupted', cancelled: 'stopped', no_result: 'no valid result', not_started: 'not started' },
+  statusNames: { running: 'running', done: 'done', submitted: 'submitted', completed: 'done', partial: 'partly done', blocked: 'questions returned', needs_input: 'waiting for an answer, stopped', failed: 'failed', auth_failed: 'auth failed', stalled: 'stalled, stopped', timeout: 'timed out', quota_exhausted: 'out of quota', interrupted: 'interrupted', cancelled: 'stopped', no_result: 'no valid result', not_started: 'not started' },
   statusName: (s) => en.statusNames[s] ?? s,
   duration: (sec) => {
     const s = Math.round(sec), m = Math.floor(s / 60);
@@ -1889,9 +1900,10 @@ ${schema}`,
   timeoutUsagePartial: "Usage only counts requests that finished before the time limit; the provider reports no usage for the request that was in flight, so it isn't counted",
   apiUsageMissing: "The provider didn't report usage for every request, so this round's usage is incomplete and recorded as null",
   cancelledUsagePartial: "Usage only counts requests that finished before the cancel; the provider reports no usage for the request that was in flight, so it isn't counted",
-  planStates: { complete: 'complete', pending: 'in progress', incomplete: 'incomplete' },
+  planStates: { complete: 'complete', degraded: 'degraded', pending: 'in progress', incomplete: 'incomplete' },
   watchPlanState: (id, state, detail) => `Plan ${id}: ${en.planStates[state]}${detail ? `; ${detail}` : ''}`,
   watchPlanMissing: (list) => `missing required: ${list}`,
+  watchPlanDegraded: (valid, target, list) => `${valid}/${target} seats valid${list ? `; failed: ${list}` : ''}`,
   watchPlanNotStarted: (list) => `required seats not started yet: ${list}`,
   watchPlanSeat: (agent, seat, label) => `${agent} (seat ${seat}${label ? `, ${label}` : ''})`,
   watchPlanNoResult: 'no valid result',

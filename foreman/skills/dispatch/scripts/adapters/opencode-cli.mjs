@@ -410,8 +410,11 @@ async function opencodeSession(run, schema, agentId, web) {
       writeMeta();
       event({ type: 'thread.started', thread_id: ev.sessionID });
     }
-    // 修复请求仍可能没有 step_finish，最早未结算的生成起点必须保留。
-    if (ev.type === 'step_start') pendingStepAt ??= Date.now();
+    // 修复请求仍可能没有 step_finish，最早未结算的生成起点必须保留；同时发 turn.started 让看板和 status 知道模型正在思考/生成。
+    if (ev.type === 'step_start') {
+      pendingStepAt ??= Date.now();
+      event({ type: 'turn.started' });
+    }
     if (ev.type === 'reasoning' || ev.type === 'text') {
       if (ev.type === 'text') last = ev.part?.text || '';
       event({ type: 'item.completed', item: { type: ev.type === 'reasoning' ? 'reasoning' : 'agent_message', text: ev.part?.text || '' } });

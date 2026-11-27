@@ -65,7 +65,7 @@ const D = {
   watchFallback: 'No run in progress; showing the most recent one:',
   watchWaiting: 'Waiting for a run to start…',
   watchHeaderLines: (mode, title, level, cwd, dir, model) => [`${mode} · ${title}${level ? ` · level ${level}` : ''}`, ...(model ? [`Model ${model}`] : []), `Working dir ${cwd}`, `Run dir ${dir}`],
-  statusNames: { running: 'running', done: 'done', submitted: 'submitted', completed: 'done', partial: 'partly done', blocked: 'questions returned', needs_input: 'waiting for an answer, stopped', failed: 'failed', stalled: 'stalled, stopped', timeout: 'timed out', quota_exhausted: 'out of quota', interrupted: 'interrupted', cancelled: 'stopped', no_result: 'no valid result', not_started: 'not started' },
+  statusNames: { running: 'running', done: 'done', submitted: 'submitted', completed: 'done', partial: 'partly done', blocked: 'questions returned', needs_input: 'waiting for an answer, stopped', failed: 'failed', auth_failed: 'auth failed', stalled: 'stalled, stopped', timeout: 'timed out', quota_exhausted: 'out of quota', interrupted: 'interrupted', cancelled: 'stopped', no_result: 'no valid result', not_started: 'not started' },
   statusName: (s) => D.statusNames[s] ?? s,
   duration: (sec) => {
     const s = Math.round(sec), m = Math.floor(s / 60);
@@ -112,9 +112,10 @@ const D = {
   watchKeysQueued: '↑↓ scroll · x stop · q quit',
   watchCancelConfirm: (model) => `Press x again to stop ${model}, or any other key to cancel`,
   watchCancelSent: 'Asked it to stop; waiting…',
-  planStates: { complete: 'complete', pending: 'in progress', incomplete: 'incomplete' },
+  planStates: { complete: 'complete', degraded: 'degraded', pending: 'in progress', incomplete: 'incomplete' },
   hostNotSubmitted: "Claude Code seat hasn't submitted",
   watchPlanMissing: (list) => `missing required: ${list}`,
+  watchPlanDegraded: (valid, target, list) => `${valid}/${target} seats valid${list ? `; failed: ${list}` : ''}`,
   watchPlanNotStarted: (list) => `required seats not started yet: ${list}`,
   watchPlanSeat: (agent, seat, label) => `${agent} (seat ${seat}${label ? `, ${label}` : ''})`,
   watchPlanStale: (list) => `material changed during the review (stale): ${list}`,
@@ -501,11 +502,19 @@ function planNotes(plans, all) {
     let state = needed.length ? needed.every((s) => s.ok === true) ? 'complete'
       : needed.some((s) => ended(s) && !s.ok) ? 'incomplete' : 'pending'
       : seats.every(ended) ? seats.some((s) => s.ok) ? 'complete' : 'incomplete' : 'pending';
+    const mainSeats = seats.filter((s) => !GAP_ROLE.test(s.role?.trim() || ''));
+    const validMain = mainSeats.filter((s) => s.ok === true).length;
+    const failedMain = mainSeats.filter((s) => ended(s) && s.ok !== true);
+    if (state === 'complete' && ['discuss', 'review'].includes(plan.module)
+      && plan.seat_target != null && validMain < plan.seat_target && failedMain.length > 0) {
+      state = 'degraded';
+    }
     const missing = needed.filter((s) => s.ok !== true), stopped = missing.filter(ended), waiting = missing.filter((s) => s.status === 'not_started');
     const labels = (list, detail = false) => D.list(list.map((s) => D.watchPlanSeat(s.agent, s.seat, detail ? s.label : null)));
     const host = plan.host && !runs.some((r) => r.meta.participant === 'host');
-    if (host && state === 'complete') state = 'pending';
+    if (host && (state === 'complete' || state === 'degraded')) state = 'pending';
     const detail = state === 'incomplete' && stopped.length ? D.watchPlanMissing(labels(stopped, true))
+      : state === 'degraded' && plan.seat_target != null ? D.watchPlanDegraded(validMain, plan.seat_target, failedMain.length ? labels(failedMain, true) : '')
       : state === 'pending' && waiting.length ? D.watchPlanNotStarted(labels(waiting)) : '';
     const stale = seats.filter((s) => s.stale), gap = seats.filter((s) => GAP_ROLE.test(s.role?.trim() || '') && s.ok !== true);
     const details = [host && D.hostNotSubmitted, detail, stale.length && D.watchPlanStale(labels(stale)), gap.length && D.watchPlanGap(labels(gap, true))].filter(Boolean).join('; ');

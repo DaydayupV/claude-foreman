@@ -236,7 +236,7 @@ async function watchGroup(group, o, loadCfg) {
   const groupPlanNotes = () => {
     return displayPlanNotes(groupPlans, planRuns.filter((r) => groupPlans.some((p) => p.plan_id === r.meta.plan)).map((r) => ({ ...r, outcome: runOutcome(r) })));
   };
-  const planNotes = (width, wrap) => groupPlanNotes().filter((p) => p.details || p.state === 'incomplete').flatMap((p) => {
+  const planNotes = (width, wrap) => groupPlanNotes().filter((p) => p.details || p.state === 'incomplete' || p.state === 'degraded').flatMap((p) => {
     const text = p.line;
     const color = p.state === 'incomplete' ? C.red : C.yellow;
     return (wrap ? wrapWidth(text, width) : [fitWidth(text, width)]).map((l, i) => (i === 0 ? color(l) : l));

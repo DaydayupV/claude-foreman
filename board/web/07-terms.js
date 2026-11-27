@@ -347,7 +347,7 @@ function fillGroup(col, u, t) {
   let noteBox = col.querySelector('.plan-notes');
   if (!noteBox) { noteBox = document.createElement('div'); noteBox.className = 'plan-notes'; col.insertBefore(noteBox, col.querySelector('.seats')); }
   noteBox.replaceChildren();
-  for (const p of notes.filter((p) => p.details || p.state === 'incomplete')) { const line = document.createElement('div'); line.textContent = p.line; noteBox.append(line); }
+  for (const p of notes.filter((p) => p.details || p.state === 'incomplete' || p.state === 'degraded')) { const line = document.createElement('div'); line.textContent = p.line; noteBox.append(line); }
   const count = col.querySelector('.cnt'); count.replaceChildren();
   for (const p of Display.countParts([...states, ...queue.map(() => ({ kind: 'queued' }))])) {
     if (count.children.length) count.append(' ');

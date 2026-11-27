@@ -481,7 +481,7 @@ const D = {
   watchFallback: 'No run in progress; showing the most recent one:',
   watchWaiting: 'Waiting for a run to start…',
   watchHeaderLines: (mode, title, level, cwd, dir, model) => [`${mode} · ${title}${level ? ` · level ${level}` : ''}`, ...(model ? [`Model ${model}`] : []), `Working dir ${cwd}`, `Run dir ${dir}`],
-  statusNames: { running: 'running', done: 'done', submitted: 'submitted', completed: 'done', partial: 'partly done', blocked: 'questions returned', needs_input: 'waiting for an answer, stopped', failed: 'failed', stalled: 'stalled, stopped', timeout: 'timed out', quota_exhausted: 'out of quota', interrupted: 'interrupted', cancelled: 'stopped', no_result: 'no valid result', not_started: 'not started' },
+  statusNames: { running: 'running', done: 'done', submitted: 'submitted', completed: 'done', partial: 'partly done', blocked: 'questions returned', needs_input: 'waiting for an answer, stopped', failed: 'failed', auth_failed: 'auth failed', stalled: 'stalled, stopped', timeout: 'timed out', quota_exhausted: 'out of quota', interrupted: 'interrupted', cancelled: 'stopped', no_result: 'no valid result', not_started: 'not started' },
   statusName: (s) => D.statusNames[s] ?? s,
   duration: (sec) => {
     const s = Math.round(sec), m = Math.floor(s / 60);
@@ -528,9 +528,10 @@ const D = {
   watchKeysQueued: '↑↓ scroll · x stop · q quit',
   watchCancelConfirm: (model) => `Press x again to stop ${model}, or any other key to cancel`,
   watchCancelSent: 'Asked it to stop; waiting…',
-  planStates: { complete: 'complete', pending: 'in progress', incomplete: 'incomplete' },
+  planStates: { complete: 'complete', degraded: 'degraded', pending: 'in progress', incomplete: 'incomplete' },
   hostNotSubmitted: "Claude Code seat hasn't submitted",
   watchPlanMissing: (list) => `missing required: ${list}`,
+  watchPlanDegraded: (valid, target, list) => `${valid}/${target} seats valid${list ? `; failed: ${list}` : ''}`,
   watchPlanNotStarted: (list) => `required seats not started yet: ${list}`,
   watchPlanSeat: (agent, seat, label) => `${agent} (seat ${seat}${label ? `, ${label}` : ''})`,
   watchPlanStale: (list) => `material changed during the review (stale): ${list}`,
@@ -917,11 +918,19 @@ function planNotes(plans, all) {
     let state = needed.length ? needed.every((s) => s.ok === true) ? 'complete'
       : needed.some((s) => ended(s) && !s.ok) ? 'incomplete' : 'pending'
       : seats.every(ended) ? seats.some((s) => s.ok) ? 'complete' : 'incomplete' : 'pending';
+    const mainSeats = seats.filter((s) => !GAP_ROLE.test(s.role?.trim() || ''));
+    const validMain = mainSeats.filter((s) => s.ok === true).length;
+    const failedMain = mainSeats.filter((s) => ended(s) && s.ok !== true);
+    if (state === 'complete' && ['discuss', 'review'].includes(plan.module)
+      && plan.seat_target != null && validMain < plan.seat_target && failedMain.length > 0) {
+      state = 'degraded';
+    }
     const missing = needed.filter((s) => s.ok !== true), stopped = missing.filter(ended), waiting = missing.filter((s) => s.status === 'not_started');
     const labels = (list, detail = false) => D.list(list.map((s) => D.watchPlanSeat(s.agent, s.seat, detail ? s.label : null)));
     const host = plan.host && !runs.some((r) => r.meta.participant === 'host');
-    if (host && state === 'complete') state = 'pending';
+    if (host && (state === 'complete' || state === 'degraded')) state = 'pending';
     const detail = state === 'incomplete' && stopped.length ? D.watchPlanMissing(labels(stopped, true))
+      : state === 'degraded' && plan.seat_target != null ? D.watchPlanDegraded(validMain, plan.seat_target, failedMain.length ? labels(failedMain, true) : '')
       : state === 'pending' && waiting.length ? D.watchPlanNotStarted(labels(waiting)) : '';
     const stale = seats.filter((s) => s.stale), gap = seats.filter((s) => GAP_ROLE.test(s.role?.trim() || '') && s.ok !== true);
     const details = [host && D.hostNotSubmitted, detail, stale.length && D.watchPlanStale(labels(stale)), gap.length && D.watchPlanGap(labels(gap, true))].filter(Boolean).join('; ');
@@ -2071,15 +2080,27 @@ function conclusion(r, width = Infinity) {
     .map((text) => ({ ts: r.original_ended_at ?? r.ended_at, cls: 'plain', text }));
 }
 
-// 卡片底行：最新的思考或正在写的回答，过了 90 秒（记录时间）就不再显示
+// 卡片底行：最新的思考或正在写的回答；运行中长耗时思考（如 opencode / 高推理强度）继续显示等待耗时，不因超过 90 秒变空
 function thinkingLine(lane, t) {
+  const r = currentRun(lane, t);
+  const running = r && r.started_at <= t && (r.ended_at == null || r.ended_at > t);
   for (let i = lane.events.length - 1; i >= 0; i--) {
     const ev = lane.events[i];
     if (ev.ts > t) continue;
-    if (t - ev.ts > 90000) return '';
-    if (ev.k === 'think') return ev.t ? `✻ ${ev.t}` : '✻ thinking…';
-    if (ev.k === 'answer') return `✎ writing answer · ${ev.n || 0} chars`;
     if (ev.k === 'msg' || ev.k === 'end' || ev.k === 'report') return '';
+    if (ev.k === 'think') {
+      if (!running && t - ev.ts > 90000) return '';
+      return ev.t ? `✻ ${ev.t}` : '✻ thinking…';
+    }
+    if (ev.k === 'answer') {
+      if (!running && t - ev.ts > 90000) return '';
+      return `✎ writing answer · ${ev.n || 0} chars`;
+    }
+    if (running && (ev.k === 'turn' || ev.k === 'read' || ev.k === 'search' || ev.k === 'web' || ev.k === 'cmd_done' || ev.k === 'edit')) {
+      const wait = Math.max(0, Math.floor((t - ev.ts) / 1000));
+      return wait >= 15 ? `✻ thinking… (${Display.D.duration(wait)})` : '✻ thinking…';
+    }
+    if (!running && t - ev.ts > 90000) return '';
   }
   return '';
 }
@@ -4015,7 +4036,7 @@ function fillGroup(col, u, t) {
   let noteBox = col.querySelector('.plan-notes');
   if (!noteBox) { noteBox = document.createElement('div'); noteBox.className = 'plan-notes'; col.insertBefore(noteBox, col.querySelector('.seats')); }
   noteBox.replaceChildren();
-  for (const p of notes.filter((p) => p.details || p.state === 'incomplete')) { const line = document.createElement('div'); line.textContent = p.line; noteBox.append(line); }
+  for (const p of notes.filter((p) => p.details || p.state === 'incomplete' || p.state === 'degraded')) { const line = document.createElement('div'); line.textContent = p.line; noteBox.append(line); }
   const count = col.querySelector('.cnt'); count.replaceChildren();
   for (const p of Display.countParts([...states, ...queue.map(() => ({ kind: 'queued' }))])) {
     if (count.children.length) count.append(' ');

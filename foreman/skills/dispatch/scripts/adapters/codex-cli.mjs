@@ -30,15 +30,52 @@ function codexCommand(agent) {
 }
 
 // 读 Codex 的 config.toml 里的一个字符串值：不给表名时只看第一个 [表] 之前的顶层键。读不到返回 null。
+function codexHome() {
+  return process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+}
+
 function codexConfigValue(key, table = null) {
-  const file = path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'config.toml');
+  const file = path.join(codexHome(), 'config.toml');
   let text;
   try { text = fs.readFileSync(file, 'utf8'); } catch { return null; }
-  const part = table == null ? text.split(/^\s*\[/m)[0] : (text.split(new RegExp(`^\\s*\\[${table}\\]\\s*$`, 'm'))[1] || '').split(/^\s*\[/m)[0];
+  const escaped = table == null ? null : table.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const part = escaped == null ? text.split(/^\s*\[/m)[0] : (text.split(new RegExp(`^\\s*\\[${escaped}\\]\\s*$`, 'm'))[1] || '').split(/^\s*\[/m)[0];
   return new RegExp(`^\\s*${key}\\s*=\\s*["']([^"']+)["']`, 'm').exec(part)?.[1] || null;
 }
 
-const codexConfigFile = () => path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'config.toml');
+// 当本机 Codex 使用 ChatGPT 账号登录（auth.json 含 chatgpt / OAuth tokens 且当前 provider 未显式指定 env_key = "CODEX_API_KEY"）时，
+// 环境变量里残留的 CODEX_API_KEY 会覆盖 ChatGPT 登录态并导致 401（走本地代理/CC Switch 或直连都会失败）。
+function codexUsesChatgptAuth() {
+  const provider = codexConfigValue('model_provider');
+  if (provider) {
+    const envKey = codexConfigValue('env_key', `model_providers.${provider}`);
+    if (envKey && envKey.toUpperCase() === 'CODEX_API_KEY') return false;
+  }
+  try {
+    const auth = JSON.parse(fs.readFileSync(path.join(codexHome(), 'auth.json'), 'utf8'));
+    if (auth?.auth_mode === 'chatgpt') return true;
+    if (auth?.tokens?.access_token && !auth?.OPENAI_API_KEY) return true;
+  } catch { /* 没有 auth.json 或读不到，保持原有环境变量 */ }
+  return false;
+}
+
+function hasEnvCodexApiKey() {
+  return Object.keys(process.env).some((k) => k.toUpperCase() === 'CODEX_API_KEY' && process.env[k]);
+}
+
+function codexEnv() {
+  const env = { ...process.env };
+  if (codexUsesChatgptAuth()) {
+    for (const key of Object.keys(env)) {
+      if (key.toUpperCase() === 'CODEX_API_KEY') delete env[key];
+    }
+  }
+  return env;
+}
+
+const CODEX_AUTH_ERROR = /\b401\b(?:\s+Unauthorized)?|invalid_api_key|incorrect api key|authentication_error|auth error:\s*401|认证失败|未加载所选\s*ChatGPT\s*账号|not logged in|token.?expired/i;
+
+const codexConfigFile = () => path.join(codexHome(), 'config.toml');
 
 function codexWebSearch() {
   let text;
@@ -114,7 +151,7 @@ function probeSandbox(agent, mode, extra = []) {
   const { file, pre } = codexCommand(agent);
   const command = process.platform === 'win32' ? ['cmd', '/c', 'echo', SANDBOX_MARK] : ['echo', SANDBOX_MARK];
   const r = spawnSync(file, [...pre, 'sandbox', ...extra, '-c', `sandbox_mode="${mode}"`, '--', ...command],
-    { encoding: 'utf8', windowsHide: true, timeout: 60000, cwd: os.tmpdir() });
+    { encoding: 'utf8', env: codexEnv(), windowsHide: true, timeout: 60000, cwd: os.tmpdir() });
   if ((r.stdout || '').includes(SANDBOX_MARK)) return { ok: true, error: null };
   const error = r.error?.message || (r.stderr || '').trim().split(/\r?\n/).pop() || `exit ${r.status}`;
   return { ok: /unrecognized subcommand|unexpected argument|invalid value/i.test(error) ? null : false, error };
@@ -168,7 +205,7 @@ function runCodex({ agent, args, cwd, prompt, runDir, timeoutMin, stallMin, sess
     const events = fs.createWriteStream(path.join(runDir, 'events.jsonl'), { flags: 'a' });
     const errLog = fs.createWriteStream(path.join(runDir, 'stderr.log'));
     const event = eventWriter(runDir, events);
-    const out = { code: null, sessionId: null, usage: null, errors: [], warnings: [], notes: [], sandboxError: null, fileChanges: new Set(), images: [], imageCalls: [], viewedImages: [], quotaExhausted: false, timedOut: false, stalled: false, cancelled: false, commands: 0, messages: [], questions: [] };
+    const out = { code: null, sessionId: null, usage: null, errors: [], warnings: [], notes: [], sandboxError: null, fileChanges: new Set(), images: [], imageCalls: [], viewedImages: [], quotaExhausted: false, authFailed: false, timedOut: false, stalled: false, cancelled: false, commands: 0, messages: [], questions: [] };
     const startedAt = Date.now();
     const runningCommands = new Set();
     let lastEventAt = Date.now();
@@ -179,8 +216,9 @@ function runCodex({ agent, args, cwd, prompt, runDir, timeoutMin, stallMin, sess
     if (viewedFile) {
       try { usageState.offset = viewedState.offset = fs.statSync(viewedFile).size; } catch { /* 会话文件暂时读不到，稍后再扫 */ }
     }
+    const env = codexEnv();
     const child = spawnCli(file, [...pre, ...args], {
-      cwd, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32',
+      cwd, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32',
     }, {
       busy: () => runningCommands.size > 0,
       onInput: (line, min) => {
@@ -209,8 +247,16 @@ function runCodex({ agent, args, cwd, prompt, runDir, timeoutMin, stallMin, sess
       }
       if (ev.type === 'thread.started') { out.sessionId = ev.thread_id; onSession?.(ev.thread_id); }
       else if (ev.type === 'turn.completed') out.usage = ev.usage;
-      else if (ev.type === 'turn.failed') out.errors.push(ev.error?.message || JSON.stringify(ev));
-      else if (ev.type === 'error') (isReconnect(ev.message) ? out.warnings : out.errors).push(ev.message || JSON.stringify(ev));
+      else if (ev.type === 'turn.failed') {
+        const msg = ev.error?.message || JSON.stringify(ev);
+        if (CODEX_AUTH_ERROR.test(msg)) out.authFailed = true;
+        out.errors.push(msg);
+      }
+      else if (ev.type === 'error') {
+        const msg = ev.message || JSON.stringify(ev);
+        if (!isReconnect(ev.message) && CODEX_AUTH_ERROR.test(msg)) out.authFailed = true;
+        (isReconnect(ev.message) ? out.warnings : out.errors).push(msg);
+      }
       else if (ev.type === 'item.completed' && ev.item?.type === 'error') out.warnings.push(ev.item.message);
       else if (ev.type === 'item.completed' && ev.item?.type === 'command_execution') {
         out.commands++;
@@ -241,6 +287,7 @@ function runCodex({ agent, args, cwd, prompt, runDir, timeoutMin, stallMin, sess
     child.stderr.on('data', (c) => {
       const text = (out.stderrTail || '') + c;
       if (/usage limit|quota/i.test(text)) out.quotaExhausted = true;
+      if (CODEX_AUTH_ERROR.test(text)) out.authFailed = true;
       out.stderrTail = text.slice(-4000);
     });
 
@@ -423,7 +470,7 @@ function validate(agent, key, check, text) {
 // 本机 Codex 的模型清单：每个模型支持的推理强度、默认档位、上下文窗口。读不到时返回 ok: false，不影响其他检查。
 function codexCatalog(agent = {}) {
   const { file, pre } = codexCommand(agent);
-  const r = spawnSync(file, [...pre, 'debug', 'models'], { encoding: 'utf8', windowsHide: true, timeout: 60000, maxBuffer: 64 * 1024 * 1024 });
+  const r = spawnSync(file, [...pre, 'debug', 'models'], { encoding: 'utf8', env: codexEnv(), windowsHide: true, timeout: 60000, maxBuffer: 64 * 1024 * 1024 });
   try {
     if (r.error || r.status !== 0) throw new Error(r.error?.message || (r.stderr || '').trim().split('\n').pop() || `exit ${r.status}`);
     const models = JSON.parse(r.stdout).models.map((m) => ({
@@ -454,9 +501,45 @@ function codexEfforts(name, agent, efforts, catalog) {
   return out;
 }
 
-function checkCodex(name, agent, efforts = [], catalog = () => codexCatalog(agent), modes = []) {
+// 发一次最小的真实请求，避免只查 login status 和本地清单产生假阳性（比如代理未加载账号或 key 无效）。
+function probeCodexModel(agent, model, effort, cwd) {
   const { file, pre } = codexCommand(agent);
-  const codex = (args) => spawnSync(file, [...pre, ...args], { encoding: 'utf8', windowsHide: true, timeout: 60000 });
+  const env = codexEnv();
+  const attempt = (ephemeral) => {
+    const args = ['exec', '--json', '--skip-git-repo-check', ...(ephemeral ? ['--ephemeral'] : []),
+      ...(model ? ['-m', model] : []),
+      ...(effort ? ['-c', `model_reasoning_effort="${effort}"`] : []),
+      '-c', 'approval_policy="never"', '-'];
+    const r = spawnSync(file, [...pre, ...args], {
+      encoding: 'utf8', env, cwd, windowsHide: true, timeout: 60000, input: 'Reply with the single word OK.',
+    });
+    let reply = '';
+    const errors = [];
+    for (const line of String(r.stdout || '').split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      let ev;
+      try { ev = JSON.parse(line); } catch { continue; }
+      if (ev.type === 'item.completed' && ev.item?.type === 'agent_message' && ev.item.text) reply = ev.item.text;
+      else if (ev.type === 'turn.failed') errors.push(ev.error?.message || JSON.stringify(ev));
+      else if (ev.type === 'error' && !isReconnect(ev.message)) errors.push(ev.message || JSON.stringify(ev));
+    }
+    const stderrTail = String(r.stderr || '').trim().split(/\r?\n/).filter(Boolean).slice(-3).join('\n');
+    const error = r.error?.message || errors[0] || (r.status !== 0 ? (stderrTail || `exit ${r.status}`) : null);
+    const ok = !r.error && r.status === 0 && !errors.length;
+    return { ok, reply: reply.trim().slice(0, 40), error, stderrTail };
+  };
+  let result = attempt(true);
+  if (!result.ok && result.error && /(?:unexpected|unrecognized|unknown).*(?:--ephemeral|ephemeral)/i.test(`${result.error}\n${result.stderrTail}`)) {
+    result = attempt(false);
+  }
+  return result;
+}
+
+function checkCodex(name, agent, efforts = [], catalog = () => codexCatalog(agent), modes = [], cwd = process.cwd()) {
+  const started = Date.now();
+  const { file, pre } = codexCommand(agent);
+  const env = codexEnv();
+  const codex = (args) => spawnSync(file, [...pre, ...args], { encoding: 'utf8', env, windowsHide: true, timeout: 60000 });
   const version = codex(['--version']);
   const installed = !version.error && version.status === 0;
   const login = installed ? codex(['login', 'status']) : null;
@@ -481,6 +564,21 @@ function checkCodex(name, agent, efforts = [], catalog = () => codexCatalog(agen
     if (broken.length) {
       out.ok = false;
       out.fix = [out.fix, M.fixCodexSandbox(name, broken[0].error, M.list(broken.flatMap((c) => c.used_in).map((m) => M.modeNames[m])), sandbox.unelevated_ok)].filter(Boolean).join('\n');
+    }
+  }
+  if (out.ok) {
+    const cat = checked.catalog?.ok ? catalog() : null;
+    const entry = cat?.ok && out.model ? cat.models.find((m) => m.id === out.model) : null;
+    const probeEffort = entry ? (entry.efforts.includes('low') ? 'low' : entry.efforts[0] || null) : 'low';
+    const probe = probeCodexModel(agent, out.model, probeEffort, cwd || process.cwd());
+    out.seconds = Number(((Date.now() - started) / 1000).toFixed(1));
+    out.reply = probe.reply;
+    if (!probe.ok) {
+      out.ok = false;
+      out.error = probe.error;
+      const isAuth = CODEX_AUTH_ERROR.test(`${probe.error || ''}\n${probe.stderrTail || ''}`);
+      if (isAuth) out.auth_error = true;
+      out.fix = isAuth ? M.fixCodexAuth(name, probe.error, hasEnvCodexApiKey()) : M.fixCodexRun(name, probe.error);
     }
   }
   return out;

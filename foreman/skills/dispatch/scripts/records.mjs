@@ -10,7 +10,7 @@ import { acquireLock } from './locks.mjs';
 // 终止标记：cancel 命令和实时查看里按 x 时写进任务的记录目录，运行中的任务看到就停下。
 const CANCEL_FILE = 'cancel';
 // 没有正常结束的几种状态：会话开始的提醒会列出这样的执行任务，对它们运行 cancel 表示已经处理，不再提醒
-const UNFINISHED_STATUSES = ['interrupted', 'quota_exhausted', 'stalled', 'timeout', 'needs_input'];
+const UNFINISHED_STATUSES = ['interrupted', 'quota_exhausted', 'auth_failed', 'stalled', 'timeout', 'needs_input'];
 
 // 派活的 Claude 会话：Claude Code 运行命令时会带上会话 ID，记进任务元数据。
 // 不同会话可能起了同一个组名（比如同一天讨论同一个话题），按组查看时只算同一会话派出的那一批。
@@ -409,6 +409,7 @@ function describeActivity(dir) {
     // opencode 和 pi 的读文件、搜索不算命令
     step = last.item.category === 'read' ? D.stepReadDone : last.item.category === 'search' ? D.stepSearchDone : D.stepCommandDone;
   }
+  else if (last?.type === 'turn.started') step = D.stepModelThinking;
   else step = last ? D.stepLastEvent(`${last.type}${last.item?.type ? `/${last.item.type}` : ''}`) : D.noEvents;
   return { idle_min: Number(((Date.now() - st.mtimeMs) / 60000).toFixed(1)), step };
 }

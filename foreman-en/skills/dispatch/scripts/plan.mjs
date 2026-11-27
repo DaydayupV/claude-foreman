@@ -215,11 +215,17 @@ function planStatus(id, runs = null, plan = readPlan(id)) {
   let state = needed.length ? needed.every((seat) => seat.ok === true) ? 'complete'
     : needed.some((seat) => ended(seat) && !seat.ok) ? 'incomplete' : 'pending'
     : seats.every(ended) ? seats.some((seat) => seat.ok) ? 'complete' : 'incomplete' : 'pending';
+  const isGapRole = (role) => ['补漏', 'gap'].includes(role?.trim().toLowerCase());
+  const mainSeats = seats.filter((seat) => !isGapRole(seat.role));
+  const validMain = mainSeats.filter((seat) => seat.ok === true).length;
+  const failedMain = mainSeats.filter((seat) => ended(seat) && seat.ok !== true);
+  // 讨论/审查有外部席失败导致有效席数低于 seat_target 时标为 degraded，避免误报 complete。
+  if (state === 'complete' && ['discuss', 'review'].includes(plan.module)
+    && plan.seat_target != null && validMain < plan.seat_target && failedMain.length > 0) {
+    state = 'degraded';
+  }
   // 补漏席还没交回有效结果（没启动、还在跑、失败或结果无效）都算没跑完。
-  const gap = seats.filter((seat) => {
-    const role = seat.role?.trim().toLowerCase();
-    return (role === '补漏' || role === 'gap') && seat.ok !== true;
-  });
+  const gap = seats.filter((seat) => isGapRole(seat.role) && seat.ok !== true);
   const missing = needed.filter((seat) => seat.ok !== true).map(({ seat, agent, status }) => ({ seat, agent, status, label: labels.get(seat) ?? D.statusName(status) }));
   let host;
   if (plan.host) {
@@ -230,15 +236,16 @@ function planStatus(id, runs = null, plan = readPlan(id)) {
       rounds: answers.map(({ id: run_id, meta: m }) => ({ round: m.round, run_id, submitted_at: m.submitted_at, report_sha256: m.report_sha256, model: m.model, author: m.author })),
       before_external_start: !external.length ? null : !!first && Date.parse(first) < Math.min(...external.map((run) => Date.parse(run.meta.started_at))) };
     if (!answers.length) {
-      if (state === 'complete') state = 'pending';
+      if (state === 'complete' || state === 'degraded') state = 'pending';
       missing.unshift({ seat: 0, agent: 'claude-code', status: 'not_submitted', label: D.hostNotSubmitted });
     }
   }
   return { plan_id: id, module: plan.module, cell: plan.cell, ...(plan.module === 'image' ? { route: plan.route } : {}), group: plan.group, created_at: plan.created_at, state, seats,
-    seat_target: plan.seat_target ?? null, count_why: plan.count_why ?? null,
+    seat_target: plan.seat_target ?? null, valid_seats: validMain, count_why: plan.count_why ?? null,
     scene: plan.scene ?? null, scene_why: plan.scene_why ?? null, gap: plan.gap ?? null, required: plan.required ?? [],
     ...(host ? { host } : {}), missing,
     missing_required: required.filter((seat) => seat.ok !== true).map(({ seat, agent, status }) => ({ seat, agent, status })),
+    failed_seats: failedMain.map(({ seat, agent, status }) => ({ seat, agent, status, label: labels.get(seat) ?? D.statusName(status) })),
     gap_unfinished: gap.map(({ seat, agent, status }) => ({ seat, agent, status })),
     // state 只看要交回有效结果的席位：complete 时非必选的席位可能还在跑，单独列出来，免得以为全都结束了
     running: seats.filter((seat) => seat.status === 'running').map(({ seat, agent }) => ({ seat, agent })) };
@@ -249,11 +256,12 @@ function describePlans(runs, all = runs.all ?? runs) {
   return [...new Set(runs.map((run) => run.meta?.plan).filter(Boolean))].flatMap((id) => {
     const plan = loadPlan(id);
     if (!plan) return [];
-    const { state, missing, seats: statuses, gap_unfinished: gap } = planStatus(id, all, plan);
+    const { state, missing, seats: statuses, gap_unfinished: gap, seat_target: target, valid_seats: valid, failed_seats: failed } = planStatus(id, all, plan);
     const seats = (list, label) => D.list(list.map((s) => D.watchPlanSeat(s.agent, s.seat, label(s))));
     const ended = missing.filter((s) => !['not_started', 'running', 'not_submitted'].includes(s.status));
     const waiting = missing.filter((s) => s.status === 'not_started');
     const detail = state === 'incomplete' && ended.length ? D.watchPlanMissing(seats(ended, (s) => s.label))
+      : state === 'degraded' && target != null ? D.watchPlanDegraded(valid, target, failed.length ? seats(failed, (s) => s.label) : '')
       : state === 'pending' && waiting.length ? D.watchPlanNotStarted(seats(waiting, () => null)) : '';
     const stale = statuses.filter((s) => s.stale === true);
     const gapLabel = (s) => {
