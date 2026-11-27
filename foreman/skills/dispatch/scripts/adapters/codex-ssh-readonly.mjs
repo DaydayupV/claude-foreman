@@ -144,4 +144,3 @@ try {
   console.error('Foreman read-only desktop worker:', e.message);
   process.exitCode = 1;
 }
-
