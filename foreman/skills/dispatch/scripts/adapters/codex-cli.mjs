@@ -1,6 +1,7 @@
 // Codex CLI：参数、进程事件、会话用量、生成图片和环境检查。
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 import { SCHEMA, DISCUSS_SCHEMA, REVIEW_SCHEMA } from '../config.mjs';
@@ -16,7 +17,8 @@ function codexOptions(agent, { model, effort, mode, webSearch }) {
   const args = [];
   if (model) args.push('-m', model);
   if (effort != null) args.push('-c', `model_reasoning_effort="${effort}"`);
-  if (agent.sandbox?.[mode]) args.push('-c', `sandbox_mode="${agent.sandbox[mode]}"`);
+  const policy = agent.sandbox?.[mode] || (windowsSsh() && codexConfigValue('sandbox_mode') === 'read-only' ? 'read-only' : null);
+  if (policy) args.push('-c', `sandbox_mode="${policy}"`);
   args.push('-c', `approval_policy="${agent.approval ?? 'never'}"`);
   if ((mode === 'discuss' || mode === 'run') && webSearch === null) args.push('-c', 'web_search="live"');
   return args;
@@ -36,6 +38,17 @@ function codexConfigValue(key, table = null) {
   try { text = fs.readFileSync(file, 'utf8'); } catch { return null; }
   const part = table == null ? text.split(/^\s*\[/m)[0] : (text.split(new RegExp(`^\\s*\\[${table}\\]\\s*$`, 'm'))[1] || '').split(/^\s*\[/m)[0];
   return new RegExp(`^\\s*${key}\\s*=\\s*["']([^"']+)["']`, 'm').exec(part)?.[1] || null;
+}
+
+function windowsSsh() {
+  return process.platform === 'win32' && (process.env.SSH_CONNECTION || process.env.SSH_CLIENT);
+}
+
+function commandForSandbox(agent, mode) {
+  const command = codexCommand(agent);
+  if (mode !== 'read-only' || !windowsSsh()) return command;
+  const script = fileURLToPath(new URL('./codex-ssh-readonly.mjs', import.meta.url));
+  return { file: process.execPath, pre: [script, JSON.stringify(command)] };
 }
 
 const codexConfigFile = () => path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'config.toml');
@@ -110,19 +123,21 @@ const SANDBOX_ERROR = /^(?:error:\s*)?(?:windows sandbox failed|helper_unknown_e
 const SANDBOX_MARK = 'foreman-sandbox-ok';
 
 // 用 codex sandbox 在沙箱里跑一条 echo，不调用模型。ok 为 null 表示这个版本的 Codex 没法这样探测。
-function probeSandbox(agent, mode, extra = []) {
-  const { file, pre } = codexCommand(agent);
-  const command = process.platform === 'win32' ? ['cmd', '/c', 'echo', SANDBOX_MARK] : ['echo', SANDBOX_MARK];
+function probeSandbox(agent, mode, cwd, extra = []) {
+  const { file, pre } = commandForSandbox(agent, mode);
+  const command = process.platform === 'win32'
+    ? ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', 'Get-Location -ErrorAction Stop | Out-Null; Write-Output ' + SANDBOX_MARK]
+    : ['echo', SANDBOX_MARK];
   const r = spawnSync(file, [...pre, 'sandbox', ...extra, '-c', `sandbox_mode="${mode}"`, '--', ...command],
-    { encoding: 'utf8', windowsHide: true, timeout: 60000, cwd: os.tmpdir() });
-  if ((r.stdout || '').includes(SANDBOX_MARK)) return { ok: true, error: null };
+    { encoding: 'utf8', windowsHide: true, timeout: 60000, cwd });
+  if (r.status === 0 && (r.stdout || '').includes(SANDBOX_MARK)) return { ok: true, error: null };
   const error = r.error?.message || (r.stderr || '').trim().split(/\r?\n/).pop() || `exit ${r.status}`;
   return { ok: /unrecognized subcommand|unexpected argument|invalid value/i.test(error) ? null : false, error };
 }
 
 // 这个协作方在各类任务里实际用的沙箱：foreman 配置里写了就用它，否则用 Codex 自己的 sandbox_mode。
 // danger-full-access 不进沙箱，不用探测；都没写时按只读探测，沙箱本身坏了任何模式都起不来。
-function checkSandbox(agent, modes) {
+function checkSandbox(agent, modes, cwd) {
   const configured = codexConfigValue('sandbox_mode');
   const byMode = new Map();
   for (const mode of modes) {
@@ -132,11 +147,11 @@ function checkSandbox(agent, modes) {
     byMode.set(key, [...(byMode.get(key) || []), mode]);
   }
   if (!byMode.size) return null;
-  const checked = [...byMode].map(([mode, used_in]) => ({ mode, used_in, ...probeSandbox(agent, mode) }));
+  const checked = [...byMode].map(([mode, used_in]) => ({ mode, used_in, ...probeSandbox(agent, mode, cwd) }));
   const windows = process.platform === 'win32' ? codexConfigValue('sandbox', 'windows') : null;
   // Windows 默认的 elevated 沙箱要先以管理员身份完成设置，坏了的时候 unelevated 往往还能用，顺带试一下。
   const unelevated = process.platform === 'win32' && windows !== 'unelevated' && checked.some((c) => c.ok === false)
-    ? probeSandbox(agent, checked.find((c) => c.ok === false).mode, ['-c', 'windows.sandbox="unelevated"']).ok : null;
+    ? probeSandbox(agent, checked.find((c) => c.ok === false).mode, cwd, ['-c', 'windows.sandbox="unelevated"']).ok : null;
   return { checked, windows_sandbox: windows, unelevated_ok: unelevated };
 }
 
@@ -163,13 +178,15 @@ const images = {
 
 function runCodex({ agent, args, cwd, prompt, runDir, timeoutMin, stallMin, sessionId, onSession }) {
   return new Promise((resolve) => {
-    const { file, pre } = codexCommand(agent);
+    const enforced = args.includes('sandbox_mode="read-only"');
+    const { file, pre } = commandForSandbox(agent, enforced ? 'read-only' : null);
     // 追加写：开工前 runner 已经记下了拍快照的事件，不能清掉
     const events = fs.createWriteStream(path.join(runDir, 'events.jsonl'), { flags: 'a' });
     const errLog = fs.createWriteStream(path.join(runDir, 'stderr.log'));
     const event = eventWriter(runDir, events);
     const out = { code: null, sessionId: null, usage: null, errors: [], warnings: [], notes: [], sandboxError: null, fileChanges: new Set(), images: [], imageCalls: [], viewedImages: [], quotaExhausted: false, timedOut: false, stalled: false, cancelled: false, commands: 0, messages: [], questions: [] };
     const startedAt = Date.now();
+    let initializationFailure = false, successfulCommand = false;
     const runningCommands = new Set();
     let lastEventAt = Date.now();
     const scanner = imageScanner({ images, previousSessionId: sessionId, emit: (ev) => { lastEventAt = Date.now(); event(ev); } });
@@ -214,6 +231,11 @@ function runCodex({ agent, args, cwd, prompt, runDir, timeoutMin, stallMin, sess
       else if (ev.type === 'item.completed' && ev.item?.type === 'error') out.warnings.push(ev.item.message);
       else if (ev.type === 'item.completed' && ev.item?.type === 'command_execution') {
         out.commands++;
+        successfulCommand ||= ev.item.exit_code === 0;
+        if (process.platform === 'win32' && enforced && (ev.item.exit_code >>> 0) === 0xC0000142) {
+          initializationFailure = true;
+          out.sandboxError ||= '0xC0000142 (STATUS_DLL_INIT_FAILED)';
+        }
         const first = String(ev.item.aggregated_output || '').trim().split(/\r?\n/, 1)[0];
         if (ev.item.exit_code !== 0 && SANDBOX_ERROR.test(first) && !out.sandboxError) out.sandboxError = first.slice(0, 300);
       }
@@ -299,6 +321,10 @@ function runCodex({ agent, args, cwd, prompt, runDir, timeoutMin, stallMin, sess
       if (out.sandboxError) out.notes.push(M.codexSandboxFailed(out.sandboxError));
       events.end();
       errLog.end();
+      if (initializationFailure && !successfulCommand && code === 0 && !out.cancelled && !out.timedOut) {
+        out.errors.push(M.codexSandboxFailed(out.sandboxError));
+        code = 1;
+      }
       out.code = code;
       resolve(out);
     };
@@ -454,7 +480,7 @@ function codexEfforts(name, agent, efforts, catalog) {
   return out;
 }
 
-function checkCodex(name, agent, efforts = [], catalog = () => codexCatalog(agent), modes = []) {
+function checkCodex(name, agent, efforts = [], catalog = () => codexCatalog(agent), modes = [], cwd = process.cwd()) {
   const { file, pre } = codexCommand(agent);
   const codex = (args) => spawnSync(file, [...pre, ...args], { encoding: 'utf8', windowsHide: true, timeout: 60000 });
   const version = codex(['--version']);
@@ -474,7 +500,7 @@ function checkCodex(name, agent, efforts = [], catalog = () => codexCatalog(agen
     out.ok = false;
     out.fix = M.fixEffortUnsupported(name, M.list(unsupported.map((u) => M.effortAt(u.variant, M.list(u.used_at), u.model, M.list(u.supported)))));
   }
-  const sandbox = checkSandbox(agent, modes);
+  const sandbox = checkSandbox(agent, modes, cwd || process.cwd());
   if (sandbox) {
     out.sandbox = sandbox;
     const broken = sandbox.checked.filter((c) => c.ok === false);
