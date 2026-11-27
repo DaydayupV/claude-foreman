@@ -132,3 +132,14 @@ for (const lang of ['zh', 'en']) test(`watch 非 TTY 显示审查结论、问题
     assert.ok(shown.stdout.includes(m.watchReview[verdict](0, '')));
   }
 });
+
+test('Windows read-only review fails when all shells fail to initialize', { skip: process.platform !== 'win32' }, async (t) => {
+  const h = sandbox(t), c = baseConfig();
+  c.agents.codex.sandbox = { review: 'read-only' };
+  h.config(c);
+  const s = h.scenario({ last_message: review, steps: [{ event: { type: 'item.completed',
+    item: { type: 'command_execution', exit_code: -1073741502, aggregated_output: '' } } }] });
+  const result = output(await h.bridge(taskArgs(h, 'review'), { env: s.env }), 1);
+  assert.equal(result.status, 'failed');
+  assert.ok(result.errors.some((error) => error.includes('0xC0000142')));
+});

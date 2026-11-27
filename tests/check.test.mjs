@@ -5,7 +5,7 @@ import path from 'node:path';
 import { sandbox, output, baseConfig, apiAgent, opencodeAgent, MESSAGES } from './helpers.mjs';
 import { apiServer } from './fake/api-server.mjs';
 const M = MESSAGES.zh;
-const sandboxProbe = (mode, extra = []) => ['sandbox', ...extra, '-c', `sandbox_mode="${mode}"`, '--', ...(process.platform === 'win32' ? ['cmd', '/c', 'echo'] : ['echo']), 'foreman-sandbox-ok'];
+const sandboxProbe = (mode, extra = []) => ['sandbox', ...extra, '-c', `sandbox_mode="${mode}"`, '--', ...(process.platform === 'win32' ? ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', 'Get-Location -ErrorAction Stop | Out-Null; Write-Output foreman-sandbox-ok'] : ['echo', 'foreman-sandbox-ok'])];
 
 for (const lang of ['zh', 'en']) {
   test(`check opencode 检查两个档位并报告拒绝项 (${lang})`, async (t) => {
